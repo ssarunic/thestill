@@ -4,14 +4,12 @@ import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 import { useEpisodeEntities } from '../hooks/useApi'
-import { useFollowPlayback } from '../hooks/useFollowPlayback'
 import { abovePlayer, MEDIA_HOST_ATTR } from '../constants/layers'
 import { selectTopEntities } from '../utils/mentionDensity'
 import { entityStyle } from '../utils/entityColors'
 import { formatClock } from '../utils/formatClock'
 import Artwork from './Artwork'
 import Button, { CloseIcon, PauseIcon, PlayIcon } from './Button'
-import { buttonClassName } from './buttonStyles'
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
@@ -29,17 +27,25 @@ const FOCUSABLE_SELECTOR =
 // Swipe-down on the phone sheet's drag handle closes past this travel.
 const SWIPE_CLOSE_PX = 80
 
+// Material "replay" / "forward" rings (Apache-2.0) with the skip length set
+// inside, so the buttons read as ±15 s without a caption. Rendered as button
+// children rather than through ``icon`` so the glyph can be 32 px — the
+// ``icon`` wrapper's 20 px is too small for the digits.
 const SkipBackIcon = () => (
-  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
-    <path d="M11 17l-5-5 5-5" />
-    <path d="M18 17l-5-5 5-5" />
+  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
+    <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
   </svg>
 )
 
 const SkipForwardIcon = () => (
-  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
-    <path d="M13 17l5-5-5-5" />
-    <path d="M6 17l5-5-5-5" />
+  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
+    <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
   </svg>
 )
 
@@ -49,6 +55,36 @@ const VolumeIcon = ({ muted }: { muted: boolean }) => (
     {muted ? <path d="M22 9l-6 6M16 9l6 6" /> : <path d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13" />}
   </svg>
 )
+
+const TranscriptIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <path d="M7 4h7l5 5v11a1 1 0 01-1 1H7a1 1 0 01-1-1V5a1 1 0 011-1z" />
+    <path d="M14 4v5h5M9 13h6M9 17h6" />
+  </svg>
+)
+
+const VideoIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <rect x="3" y="6" width="13" height="12" rx="2" />
+    <path d="M16 10l5-3v10l-5-3z" />
+  </svg>
+)
+
+const PipIcon = () => (
+  <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="h-6 w-6" aria-hidden="true">
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <rect x="11" y="11" width="8" height="6" rx="1" fill="currentColor" stroke="none" />
+  </svg>
+)
+
+// One slot of the utility row (spec #72 §6): a 24 px glyph over an 11 px
+// label, 44 px+ tall, ghost at rest and tinted when the action is "on".
+function utilityClass(on = false): string {
+  return [
+    'flex min-h-[52px] min-w-[64px] flex-col items-center justify-center gap-1 rounded-lg px-2 py-1.5 transition-colors',
+    on ? 'bg-primary-50 text-primary-900' : 'text-gray-600 hover:bg-gray-100 hover:text-ink active:bg-gray-200',
+  ].join(' ')
+}
 
 /**
  * Spec #72 — the expanded Now Playing surface. One component, two forms
@@ -68,7 +104,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const panelRef = useRef<HTMLDivElement>(null)
   const isPhone = !isSmUp
   const active = isOpen && track !== null
-  const [followPlayback, setFollowPlayback] = useFollowPlayback()
 
   // Spec #72 2c — on a phone there is no floating tile, so when the session
   // has a visual rendition and nothing presents it, the sheet's header hosts
@@ -207,11 +242,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const busy = isLoading && !isPlaying
 
-  const handleStop = () => {
-    player.stop()
-    onClose()
-  }
-
   const panel = (
     <div
       ref={panelRef}
@@ -243,7 +273,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2 sm:px-5 sm:pt-4">
+      <div className="flex-1 overflow-y-auto px-5 pb-4 pt-1 sm:pt-4">
         {hostVideo && (
           <div
             ref={videoSlotRef}
@@ -252,26 +282,29 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           />
         )}
 
-        {/* Header */}
-        <div className="flex items-start gap-4">
-          {!hostVideo && <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />}
-          <div className="min-w-0 flex-1">
-            <Link
-              to={episodePath}
-              state={linkState}
-              onClick={(e) => {
-                if (alreadyHere) {
-                  e.preventDefault()
-                  onClose()
-                }
-              }}
-              className="block text-base font-semibold leading-snug text-ink hover:underline line-clamp-2"
-            >
-              {track.title}
-            </Link>
-            {track.podcastTitle ? <p className="mt-0.5 truncate text-sm text-muted">{track.podcastTitle}</p> : null}
+        {/* Header. The close button top-aligns; artwork and titles centre on
+            each other so a two-line title sits level with the artwork. */}
+        <div className="flex items-start gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-4">
+            {!hostVideo && <Artwork role={isPhone ? 'card' : 'sheet'} sources={[track.artworkUrl]} loading="eager" />}
+            <div className="min-w-0 flex-1">
+              <Link
+                to={episodePath}
+                state={linkState}
+                onClick={(e) => {
+                  if (alreadyHere) {
+                    e.preventDefault()
+                    onClose()
+                  }
+                }}
+                className="line-clamp-2 text-base font-semibold leading-snug text-ink hover:underline"
+              >
+                {track.title}
+              </Link>
+              {track.podcastTitle ? <p className="mt-1 truncate text-sm text-muted">{track.podcastTitle}</p> : null}
+            </div>
           </div>
-          <Button size="icon" variant="ghost" icon={<CloseIcon />} onClick={onClose} aria-label="Close now playing">
+          <Button size="icon" variant="ghost" icon={<CloseIcon />} onClick={onClose} aria-label="Close now playing" className="-mr-2">
             <span className="sr-only">Close</span>
           </Button>
         </div>
@@ -283,27 +316,28 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         )}
 
         {/* Scrubber */}
-        <div className="mt-4">
+        <div className="mt-5">
           <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
         </div>
 
         {/* Current line (spec #72 §3) — what is being said right now, with the
-            #38 wipe. Rendered only while the sheet is open (data fetch is
-            gated on `active`). */}
-        <div className="mt-1 min-h-[1.25rem]">
+            #38 wipe. Reserved at two lines so the transport below does not
+            jump as the segment changes length or drops out. Rendered only
+            while the sheet is open (data fetch is gated on `active`). */}
+        <div className="mt-3 min-h-[2.875rem] text-center">
           <NowPlayingKaraokeLine track={track} enabled={active} />
         </div>
 
         {/* Transport */}
-        <div className="mt-2 flex items-center justify-center gap-6">
+        <div className="mt-3 flex items-center justify-center gap-8">
           <Button
             size="icon"
             variant="ghost"
-            icon={<SkipBackIcon />}
             onClick={() => player.skip(-15)}
             disabled={!hasDuration}
             aria-label="Back 15 seconds"
           >
+            <SkipBackIcon />
             <span className="sr-only">Back 15 seconds</span>
           </Button>
           <Button
@@ -319,58 +353,74 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           <Button
             size="icon"
             variant="ghost"
-            icon={<SkipForwardIcon />}
             onClick={() => player.skip(15)}
             disabled={!hasDuration}
             aria-label="Forward 15 seconds"
           >
+            <SkipForwardIcon />
             <span className="sr-only">Forward 15 seconds</span>
           </Button>
         </div>
 
-        {/* Speed */}
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted">Speed</span>
-          <NowPlayingSpeedControl rate={playbackRate} availableRates={availableRates} onChange={player.setRate} />
-        </div>
-
-        {/* Secondary actions (spec #72 §6) */}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
+        {/* Utility row (spec #72 §5–6) — the small stuff, evenly spaced and
+            secondary in weight: speed steps on tap; Transcript is the one
+            way out to the reader; video and PiP appear only when a visual
+            rendition exists. Stop is not here: Pause is the way to stop, the
+            desktop bar keeps its ✕, and the bar otherwise persists like any
+            player's. Follow-playback lives with the transcript, where its
+            effect is visible. */}
+        <div className="mt-4 flex items-start justify-evenly">
+          <NowPlayingSpeedControl
+            rate={playbackRate}
+            availableRates={availableRates}
+            onChange={player.setRate}
+            className={utilityClass()}
+          />
           <Link
             to={{ pathname: episodePath, search: `?view=transcript&t=${Math.floor(currentTime)}` }}
             state={linkState}
             onClick={onClose}
-            className={buttonClassName({ variant: 'secondary', size: 'sm' })}
+            aria-label="Open transcript here"
+            className={utilityClass()}
           >
-            Open transcript here
+            <TranscriptIcon />
+            <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+              Transcript
+            </span>
           </Link>
-          <Button
-            size="sm"
-            variant={followPlayback ? 'tonal' : 'secondary'}
-            aria-pressed={followPlayback}
-            onClick={() => setFollowPlayback(!followPlayback)}
-          >
-            {followPlayback ? 'Following playback' : 'Follow playback'}
-          </Button>
           {hasVisualRendition && (
-            <Button
-              size="sm"
-              variant="secondary"
+            <button
+              type="button"
               onClick={() => player.setVideoPreference(videoPreference === 'shown' ? 'audio-only' : 'shown')}
+              aria-pressed={videoPreference === 'shown'}
+              aria-label={videoPreference === 'shown' ? 'Hide video' : 'Show video'}
+              className={utilityClass(videoPreference === 'shown')}
             >
-              {videoPreference === 'shown' ? 'Hide video' : 'Show video'}
-            </Button>
+              <VideoIcon />
+              <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+                Video
+              </span>
+            </button>
           )}
           {pipSupported && videoPresentable && (
-            <Button size="sm" variant="secondary" onClick={player.requestPip}>
-              {pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
-            </Button>
+            <button
+              type="button"
+              onClick={player.requestPip}
+              aria-pressed={pipActive}
+              aria-label={pipActive ? 'Exit picture-in-picture' : 'Picture-in-picture'}
+              className={utilityClass(pipActive)}
+            >
+              <PipIcon />
+              <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+                Pop out
+              </span>
+            </button>
           )}
         </div>
 
         {/* Volume — pointer devices only; phones use the hardware rocker. */}
         {!isPhone && (
-          <div className="mt-4 flex items-center gap-3">
+          <div className="mt-2 flex items-center gap-2">
             <Button
               size="icon"
               variant="ghost"
@@ -393,13 +443,6 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             />
           </div>
         )}
-
-        {/* Stop */}
-        <div className="mt-5 flex justify-center border-t border-hairline pt-3">
-          <Button size="sm" variant="danger" onClick={handleStop}>
-            Stop playback
-          </Button>
-        </div>
       </div>
     </div>
   )

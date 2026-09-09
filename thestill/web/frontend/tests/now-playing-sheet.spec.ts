@@ -49,9 +49,10 @@ test.describe('Now Playing sheet on a phone', () => {
     await expect(seek).toHaveAttribute('aria-valuetext', '0:00 of 58:25')
     await expect(sheet.getByText('58:25', { exact: true })).toBeVisible()
 
-    await sheet.getByRole('radio', { name: '1.5×', exact: true }).click()
-    await expect(sheet.getByRole('radio', { name: '1.5×', exact: true })).toHaveAttribute('aria-checked', 'true')
-    expect(await page.evaluate((k) => localStorage.getItem(k), RATE_KEY)).toBe('1.5')
+    // The speed chip steps 1× → 1.2× on tap and persists.
+    await sheet.getByRole('button', { name: 'Speed 1×' }).click()
+    await expect(sheet.getByRole('button', { name: 'Speed 1.2×' })).toBeVisible()
+    expect(await page.evaluate((k) => localStorage.getItem(k), RATE_KEY)).toBe('1.2')
 
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
@@ -78,6 +79,43 @@ test.describe('Now Playing sheet on a phone', () => {
   })
 })
 
+test.describe('Mini player on a phone', () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true })
+
+  // Playwright's mouse cannot stand in for a finger here: a mouse pointer is
+  // not implicitly captured, so a drag that leaves the bar delivers its
+  // pointerup elsewhere. Dispatch real touch points over CDP instead.
+  async function swipe(page: Page, x: number, fromY: number, toY: number) {
+    const cdp = await page.context().newCDPSession(page)
+    const at = (y: number) => [{ x, y, radiusX: 1, radiusY: 1, force: 1 }]
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(fromY) })
+    for (const y of [fromY + (toY - fromY) / 2, toY]) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(y) })
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await cdp.detach()
+  }
+
+  test('a swipe down on the bar stops and dismisses the player', async ({ page }) => {
+    await startPlayback(page)
+    const bar = page.getByRole('region', { name: 'Audio player' })
+    const box = await bar.boundingBox()
+    expect(box).not.toBeNull()
+    const x = box!.x + box!.width / 2
+
+    // The seek slider owns its own drag: a scrub that drifts downward past
+    // the dismiss travel must scrub, not stop the session.
+    const seek = await page.getByLabel('Seek').boundingBox()
+    await swipe(page, x, seek!.y + seek!.height / 2, seek!.y + 80)
+    await expect(bar).toHaveCount(1)
+
+    // Anywhere else on the bar, the same travel dismisses.
+    const y = box!.y + box!.height / 2
+    await swipe(page, x, y, y + 80)
+    await expect(bar).toHaveCount(0)
+  })
+})
+
 test.describe('Now Playing card on desktop', () => {
   test.use({ viewport: { width: 1280, height: 800 } })
 
@@ -94,14 +132,14 @@ test.describe('Now Playing card on desktop', () => {
     expect(card && bar && card.y + card.height <= bar.y + 1).toBe(true)
 
     // Speed persists across a reopen.
-    await sheet.getByRole('radio', { name: '2×', exact: true }).click()
+    await sheet.getByRole('button', { name: 'Speed 1×' }).click()
     await page.mouse.click(640, 100)
     await expect(sheet).toBeHidden()
     await openSheet(page)
-    await expect(page.getByRole('radio', { name: '2×', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByRole('button', { name: 'Speed 1.2×' })).toBeVisible()
 
-    // Stop clears the session: bar gone, sheet gone.
-    await page.getByRole('button', { name: 'Stop playback' }).click()
+    // The bar's ✕ clears the session: sheet gone with it.
+    await page.getByRole('button', { name: 'Close player' }).click()
     await expect(page.getByRole('dialog', { name: 'Now playing' })).toBeHidden()
     await expect(page.getByRole('region', { name: 'Audio player' })).toHaveCount(0)
   })

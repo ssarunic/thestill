@@ -85,8 +85,9 @@ fallback is explicit and the value is assertable in jsdom.
 1. **Transport on phones.** Back 15 / forward 15 were `hidden sm:flex`; the
    phone bar showed play/pause and Close only. Now both skips render at every
    size (44 px targets below `sm`), artwork shows at every size, and Close —
-   stop-and-dismiss, destructive next to Play — is hidden below `sm`. It
-   moves into the expanded sheet in #72. The time readout stays desktop-only.
+   stop-and-dismiss, destructive next to Play — is hidden below `sm`. On
+   phones a swipe down on the bar stops and dismisses instead (#72). The
+   time readout stays desktop-only.
 2. **Space toggles playback** whenever a track is loaded, unless the event
    target is an input, textarea, select, button, contenteditable, slider or
    iframe. Mirrors the Media Session handlers for the keyboard.

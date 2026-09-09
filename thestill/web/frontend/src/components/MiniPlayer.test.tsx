@@ -9,6 +9,13 @@ import { PlayerProvider, usePlayer, type PlayerContextValue, type PlayerTrack } 
 import MiniPlayer from './MiniPlayer'
 import { PLAYER_HEIGHT_VAR } from '../constants/layers'
 
+// The swipe-to-dismiss gesture is phone-only; drive the breakpoint per test.
+const isSmUp = { current: true }
+vi.mock('../hooks/useMediaQuery', () => ({
+  useIsSmUp: () => isSmUp.current,
+  useMediaQuery: () => false,
+}))
+
 const ctxHolder: { current: PlayerContextValue | null } = { current: null }
 const ctx = new Proxy({} as PlayerContextValue, {
   get: (_target, prop) => ctxHolder.current![prop as keyof PlayerContextValue],
@@ -86,6 +93,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  isSmUp.current = true
   document.documentElement.style.removeProperty(PLAYER_HEIGHT_VAR)
 })
 
@@ -132,6 +140,80 @@ describe('MiniPlayer (spec #71)', () => {
     expect(screen.getByRole('button', { name: 'Back 15 seconds' })).not.toHaveClass('hidden')
     expect(screen.getByRole('button', { name: 'Forward 15 seconds' })).not.toHaveClass('hidden')
     expect(screen.getByRole('button', { name: 'Close player' })).toHaveClass('hidden')
+  })
+
+  it('phone: a swipe down on the bar stops and dismisses; a short drag or a tap does not (spec #72)', async () => {
+    isSmUp.current = false
+    renderPlayer()
+    act(() => ctx.play(track))
+    const bar = screen.getByRole('region', { name: 'Audio player' })
+    const play = screen.getByRole('button', { name: 'Pause' })
+
+    // Short drag: released, nothing happens, and the tap it started as is
+    // swallowed rather than landing on the button under the finger.
+    fireEvent.pointerDown(play, { pointerId: 1, clientX: 300, clientY: 700 })
+    fireEvent.pointerMove(play, { pointerId: 1, clientX: 300, clientY: 720 })
+    expect(bar.style.transform).toBe('translateY(20px)')
+    fireEvent.pointerUp(play, { pointerId: 1, clientX: 300, clientY: 720 })
+    fireEvent.click(play)
+    expect(ctx.track).not.toBeNull()
+    expect(ctx.isPlaying).toBe(true)
+    expect(bar.style.transform).toBe('')
+
+    // A plain tap still reaches the control.
+    fireEvent.pointerDown(play, { pointerId: 2, clientX: 300, clientY: 700 })
+    fireEvent.pointerUp(play, { pointerId: 2, clientX: 300, clientY: 700 })
+    await userEvent.click(play)
+    expect(ctx.isPlaying).toBe(false)
+
+    // A sideways drag is not a swipe down.
+    fireEvent.pointerDown(bar, { pointerId: 3, clientX: 100, clientY: 700 })
+    fireEvent.pointerMove(bar, { pointerId: 3, clientX: 200, clientY: 760 })
+    fireEvent.pointerUp(bar, { pointerId: 3, clientX: 200, clientY: 760 })
+    expect(ctx.track).not.toBeNull()
+
+    // Past the threshold: the session is cleared and the bar is gone.
+    fireEvent.pointerDown(bar, { pointerId: 4, clientX: 100, clientY: 700 })
+    fireEvent.pointerMove(bar, { pointerId: 4, clientX: 100, clientY: 760 })
+    fireEvent.pointerUp(bar, { pointerId: 4, clientX: 100, clientY: 760 })
+    expect(ctx.track).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Audio player' })).toBeNull()
+  })
+
+  it('phone: scrubbing the seek slider never dismisses, and an unclosed gesture does not wedge the bar (spec #72)', async () => {
+    isSmUp.current = false
+    renderPlayer()
+    act(() => ctx.play(track))
+    const bar = screen.getByRole('region', { name: 'Audio player' })
+    const seek = screen.getByLabelText('Seek')
+
+    // A scrub that drifts downward past the dismiss travel is still a scrub.
+    fireEvent.pointerDown(seek, { pointerId: 1, clientX: 100, clientY: 690 })
+    fireEvent.pointerMove(seek, { pointerId: 1, clientX: 100, clientY: 760 })
+    fireEvent.pointerUp(seek, { pointerId: 1, clientX: 100, clientY: 760 })
+    expect(ctx.track).not.toBeNull()
+    expect(bar.style.transform).toBe('')
+
+    // A mouse press that ends off the bar leaves no pointerup behind; the
+    // next press starts clean rather than finding the bar wedged.
+    fireEvent.pointerDown(bar, { pointerId: 2, clientX: 100, clientY: 700 })
+    fireEvent.pointerMove(bar, { pointerId: 2, clientX: 100, clientY: 730 })
+    expect(bar.style.transform).toBe('translateY(30px)')
+    fireEvent.pointerDown(bar, { pointerId: 3, clientX: 100, clientY: 700 })
+    expect(bar.style.transform).toBe('')
+    fireEvent.pointerMove(bar, { pointerId: 3, clientX: 100, clientY: 760 })
+    fireEvent.pointerUp(bar, { pointerId: 3, clientX: 100, clientY: 760 })
+    expect(ctx.track).toBeNull()
+  })
+
+  it('desktop: dragging the bar does nothing', () => {
+    renderPlayer()
+    act(() => ctx.play(track))
+    const bar = screen.getByRole('region', { name: 'Audio player' })
+    fireEvent.pointerDown(bar, { pointerId: 1, clientX: 100, clientY: 700 })
+    fireEvent.pointerMove(bar, { pointerId: 1, clientX: 100, clientY: 800 })
+    fireEvent.pointerUp(bar, { pointerId: 1, clientX: 100, clientY: 800 })
+    expect(ctx.track).not.toBeNull()
   })
 
   it('the artwork/title block is the expand affordance (spec #72)', async () => {
