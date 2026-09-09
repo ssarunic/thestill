@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
+import { useIsSmUp } from '../hooks/useMediaQuery'
 import { PLAYER_HEIGHT_VAR } from '../constants/layers'
 import Artwork from './Artwork'
 import { ChevronUpIcon } from './Button'
@@ -23,6 +24,12 @@ function formatTime(seconds: number): string {
 const SPACE_OWNER_SELECTOR =
   'input, textarea, select, button, [contenteditable=""], [contenteditable="true"], [role="slider"], iframe'
 
+// Spec #72 — swipe-down on the phone bar stops and dismisses the player.
+// Past this travel the release dismisses; past DRAG_SLOP_PX the gesture is a
+// drag, so the tap that would otherwise land on a control is swallowed.
+const DISMISS_PX = 48
+const DRAG_SLOP_PX = 8
+
 interface MiniPlayerProps {
   /** Spec #72 — whether the expanded Now Playing surface is open. */
   isOpen?: boolean
@@ -37,6 +44,8 @@ interface MiniPlayerProps {
  * and every bottom-anchored pill can inset above it instead of being
  * covered by it. Spec #72 — the artwork/title block is the expand
  * affordance for the Now Playing sheet; the link to the episode lives there.
+ * On phones, where the bar has no ✕, a swipe down on it stops and dismisses
+ * the player (the sheet's drag handle closes only the sheet).
  */
 export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps) {
   const {
@@ -57,6 +66,42 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
   const hasTrack = track != null
   const episodePath = track ? `/podcasts/${track.podcastSlug}/episodes/${track.episodeSlug}` : ''
   const { state: linkState } = useEpisodeLinkState(episodePath)
+  const isPhone = !useIsSmUp()
+
+  // Swipe-down to dismiss (phone). Touch pointers are implicitly captured
+  // by their pointerdown target, so move/up bubble here from any control
+  // in the bar without explicit capture — which would also steal the click
+  // from a tapped button.
+  const [dragY, setDragY] = useState(0)
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; dragged: boolean } | null>(null)
+  const swallowClickRef = useRef(false)
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isPhone || dragRef.current) return
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, dragged: false }
+  }
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const dy = e.clientY - drag.startY
+    const dx = e.clientX - drag.startX
+    if (!drag.dragged && Math.abs(dy) > DRAG_SLOP_PX && Math.abs(dy) > Math.abs(dx)) drag.dragged = true
+    if (drag.dragged) setDragY(Math.max(0, dy))
+  }
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    dragRef.current = null
+    setDragY(0)
+    if (!drag.dragged) return
+    swallowClickRef.current = true
+    if (e.type === 'pointerup' && e.clientY - drag.startY >= DISMISS_PX) stop()
+  }
+  const onClickCapture = (e: React.MouseEvent) => {
+    if (!swallowClickRef.current) return
+    swallowClickRef.current = false
+    e.preventDefault()
+    e.stopPropagation()
+  }
 
   // Publish the bar's height (0 when hidden). ResizeObserver covers the
   // sm/lg padding changes and safe-area insets; the resize fallback is for
@@ -106,7 +151,13 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
       ref={barRef}
       role="region"
       aria-label="Audio player"
-      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-50 bg-surface border-t border-hairline shadow-lg pb-[env(safe-area-inset-bottom)]"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onClickCapture={onClickCapture}
+      style={dragY ? { transform: `translateY(${dragY}px)`, opacity: Math.max(0.3, 1 - dragY / 160) } : undefined}
+      className="fixed bottom-0 left-0 right-0 sm:left-16 lg:left-64 z-50 bg-surface border-t border-hairline shadow-lg pb-[env(safe-area-inset-bottom)] touch-none sm:touch-auto"
     >
       <div className="relative">
         <input

@@ -170,7 +170,9 @@ Built from the #76 primitives, no hand-rolled controls:
    whose effect is invisible from the player; it stays with the transcript
    viewer (the shared `thestill:transcript:followPlayback` store is
    unchanged). **Stop** — Pause is how you stop; the desktop bar keeps its
-   ✕, and on a phone the bar persists across pauses like any player's.
+   ✕, and on a phone a swipe down on the bar itself (≥ 48 px, mostly
+   vertical; the bar follows the finger) stops and dismisses the player.
+   The sheet's drag handle closes only the sheet.
 
 ### Deep link and the navigation contract
 
@@ -342,6 +344,6 @@ Seven commits on `feat/72-now-playing-sheet`, each green on its own
 | Date | Decision |
 |---|---|
 | 2026-09-03 | Drafted from the player/overlay design review. Sheet is transient (`z-[70]`) rather than a fourth long-lived surface. Entity timeline relocates onto the scrubber instead of being repositioned as a floating strip. Rate persistence added to the provider rather than to the sheet so it survives engine switches. |
-| 2026-09-08 | Hierarchy rework after the first phone review. The title's `block` class was overriding `line-clamp-2` (Tailwind emits `.block` after `.line-clamp-2`), so long titles ran to six lines; removed. Speed is a tap-to-step chip, not a segmented control. Stop is gone (Pause stops; the desktop bar keeps ✕). Follow-playback left the sheet for the transcript viewer, where its effect is visible. Everything below the transport is one evenly spaced utility row. The current line reserves two lines so the transport never jumps; the skips use a ring glyph with the seconds inside. |
+| 2026-09-08 | Hierarchy rework after the first phone review. The title's `block` class was overriding `line-clamp-2` (Tailwind emits `.block` after `.line-clamp-2`), so long titles ran to six lines; removed. Speed is a tap-to-step chip, not a segmented control. Stop is gone (Pause stops; the desktop bar keeps ✕). Follow-playback left the sheet for the transcript viewer, where its effect is visible. Everything below the transport is one evenly spaced utility row. Swipe down on the phone bar stops and dismisses the player. The current line reserves two lines so the transport never jumps; the skips use a ring glyph with the seconds inside. |
 | 2026-09-08 | Built. `hasTheaterSlot()` getter chosen over a `presentation === 'hidden'` gate for the phone video slot (reactive gate oscillates; resting state on a phone is `floating`). Speed control extracted as its own component so engine-constrained rendering is unit-testable without YouTube. The navigation-contract check for "Open transcript here" lives in the sheet's own Playwright spec because the contract table cannot express "open a sheet first". |
 | 2026-09-07 | v2 after #73/#74/#76 and the navigation contract landed. Card over side panel (video already has theater + tile on desktop; karaoke belongs to the transcript). One global rate. Follow lifted into a shared `useSyncExternalStore` store over the existing key. All three phases plus a current-line karaoke strip on this branch. Built from #76 primitives (`Button`, `Artwork`, tokens) with two additive sizes. Deep link: `t` wins on push, reading position wins on pop; route joins the navigation-contract table. `useIsSmUp` reused rather than extracted. Pragmatic blueprint chosen over minimal (ad hoc rate handling, rewriting a component slated for deletion) and clean (refactors of the transcript tracker and key-entities strip that widen review without changing behaviour). |

@@ -79,6 +79,25 @@ test.describe('Now Playing sheet on a phone', () => {
   })
 })
 
+test.describe('Mini player on a phone', () => {
+  test.use({ viewport: PHONE, isMobile: true, hasTouch: true })
+
+  test('a swipe down on the bar stops and dismisses the player', async ({ page }) => {
+    await startPlayback(page)
+    const bar = page.getByRole('region', { name: 'Audio player' })
+    const box = await bar.boundingBox()
+    expect(box).not.toBeNull()
+    const x = box!.x + box!.width / 2
+    const y = box!.y + 8
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x, y + 30, { steps: 5 })
+    await page.mouse.move(x, y + 80, { steps: 5 })
+    await page.mouse.up()
+    await expect(bar).toHaveCount(0)
+  })
+})
+
 test.describe('Now Playing card on desktop', () => {
   test.use({ viewport: { width: 1280, height: 800 } })
 
