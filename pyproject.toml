@@ -55,7 +55,7 @@ dependencies = [
     # >=1.8 for StreamableHTTPSessionManager (spec #78 remote MCP endpoint);
     # <2.0 because mcp 2.x removed the low-level Server decorator API that
     # thestill/mcp/{tools,resources}.py are built on.
-    "mcp>=1.8.0,<2.0.0",
+    "mcp>=1.8.0,<3.0.0",
     "tenacity>=8.2.0",
     "python-slugify>=8.0.0",
     "requests-toolbelt>=1.0.0",
