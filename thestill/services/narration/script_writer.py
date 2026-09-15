@@ -227,7 +227,12 @@ class ScriptWriter:
             lines.append(f"  - episode_id={eid} | podcast={brief.podcast_title}" f" | title={brief.episode_title}")
             if brief.guests:
                 lines.append(f"    guests: {', '.join(brief.guests)}")
-            if brief.gist:
+            # Spec #77 §2: the writer sees the concrete material when the
+            # summary has it; legacy summaries fall back to the gist.
+            if brief.material:
+                lines.append("    material:")
+                lines.extend(f"      {line}" for line in brief.material.splitlines())
+            elif brief.gist:
                 lines.append(f"    gist: {brief.gist}")
         return "\n".join(lines)
 

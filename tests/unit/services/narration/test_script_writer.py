@@ -20,15 +20,9 @@ from typing import Any, Dict, List, Optional, Type
 import pytest
 from pydantic import BaseModel
 
-from thestill.services.narration.models import (
-    EpisodeBrief,
-    QuoteCandidate,
-    Segment,
-    ThemePlan,
-)
-from thestill.services.narration.script_writer import ScriptResult, ScriptWriter
-
 from tests.conftest import MockLLMProvider
+from thestill.services.narration.models import EpisodeBrief, QuoteCandidate, Segment, ThemePlan
+from thestill.services.narration.script_writer import ScriptResult, ScriptWriter
 
 _SYSTEM_PROMPT = "TEST ANCHOR PROMPT"
 
@@ -216,3 +210,28 @@ def test_zero_budget_short_circuits_without_calling_llm() -> None:
     assert provider.call_count == 0
     assert result.blocks == ()
     assert any(f.reason == "empty_blocks" for f in result.failures)
+
+
+def test_segment_prompt_prefers_material_and_falls_back_to_gist() -> None:
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    briefs = {
+        "ep-1": EpisodeBrief(
+            episode_id="ep-1",
+            podcast_title="Pod",
+            episode_title="Lead Episode",
+            gist="Compact gist.",
+            material="Gist:\nHost talks to Guest.\nDrama (disagreements, anecdotes, tense moments):\n- Round 1: The row",
+        )
+    }
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=briefs, quotes=[_quote()], narration_word_budget=100
+    )
+    user_prompt = provider.last_messages[1]["content"]
+    assert "material:" in user_prompt and "- Round 1: The row" in user_prompt
+    assert "gist: Compact gist." not in user_prompt
+
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "gist: Compact gist." in provider.last_messages[1]["content"]

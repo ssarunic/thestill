@@ -145,6 +145,10 @@ class EpisodeBrief:
     topics: Tuple[str, ...] = ()
     sponsors: Tuple[str, ...] = ()
     gist: Optional[str] = None
+    # Spec #77 §2 — Gist + Key Takeaways + The Drama, de-marked and
+    # capped. Read by the script writer only; the theme clusterer keeps
+    # working from ``gist`` so its call stays cheap.
+    material: Optional[str] = None
 
 
 @dataclass(frozen=True)

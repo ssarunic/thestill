@@ -44,8 +44,9 @@ from ...core.facts_manager import FactsManager
 from ...core.llm_provider import LLMProvider
 from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager, _validate_slug
+from ...utils.text_sanitizer import sanitize_text
 from ...utils.url_generator import UrlGenerator
-from ..briefing_script_generator import BriefingScriptGenerator, extract_gist
+from ..briefing_script_generator import BriefingScriptGenerator, extract_gist, extract_summary_material
 
 if TYPE_CHECKING:
     from ...utils.file_storage import FileStorage
@@ -77,6 +78,8 @@ DEFAULT_BOUNDARY_TRIM_FRACTION = 0.05
 DEFAULT_TAIL_SHARE = 0.15
 DEFAULT_OPENER_SHARE = 0.05
 DEFAULT_SIGNOFF_SHARE = 0.03
+# Spec #77 §2 — per-episode cap on the summary material fed to the writer.
+DEFAULT_MATERIAL_MAX_WORDS = 400
 
 
 @dataclass
@@ -170,6 +173,7 @@ class NarrationGenerator:
         script_generator: Optional[BriefingScriptGenerator] = None,
         url_generator: Optional[UrlGenerator] = None,
         anchor_prompt: Optional[str] = None,
+        material_max_words: int = DEFAULT_MATERIAL_MAX_WORDS,
     ):
         self.path_manager = path_manager
         self.file_storage = file_storage
@@ -188,6 +192,7 @@ class NarrationGenerator:
         )
         self.llm_provider = llm_provider
         self._anchor_prompt = anchor_prompt
+        self._material_max_words = material_max_words
         self.clusterer = clusterer
         self.script_writer = script_writer
 
@@ -497,7 +502,7 @@ class NarrationGenerator:
 
     def _build_episode_brief(self, podcast: Podcast, episode: Episode) -> EpisodeBrief:
         facts = self.loader.load_episode_facts(podcast, episode)
-        gist = self._read_gist(episode)
+        summary = self._read_summary(episode)
         return EpisodeBrief(
             episode_id=episode.id,
             podcast_title=podcast.title,
@@ -505,8 +510,29 @@ class NarrationGenerator:
             guests=tuple(facts.guests) if facts and facts.guests else (),
             topics=tuple(facts.topics_keywords) if facts and facts.topics_keywords else (),
             sponsors=tuple(facts.ad_sponsors) if facts and facts.ad_sponsors else (),
-            gist=gist,
+            gist=extract_gist(summary) if summary else None,
+            material=self._material_from_summary(summary, episode),
         )
+
+    def _material_from_summary(self, summary: Optional[str], episode: Episode) -> Optional[str]:
+        """Writer material (spec #77 §2), sanitised before it re-enters a prompt.
+
+        The summary is LLM output; the control-byte guard from spec #42
+        applies whenever such text is fed back to a model.
+        """
+        if not summary:
+            return None
+        material = extract_summary_material(summary, max_words=self._material_max_words)
+        if not material:
+            return None
+        clean, removed = sanitize_text(material)
+        if removed:
+            logger.warning(
+                "narration.material_sanitized",
+                episode_id=episode.id,
+                removed_count=removed,
+            )
+        return clean or None
 
     def _read_summary(self, episode: Episode) -> Optional[str]:
         if not episode.summary_path:
@@ -520,12 +546,6 @@ class NarrationGenerator:
             return self.file_storage.read_text(self.path_manager.to_relative(path))
         except FileNotFoundError:
             return None
-
-    def _read_gist(self, episode: Episode) -> Optional[str]:
-        text = self._read_summary(episode)
-        if not text:
-            return None
-        return extract_gist(text)
 
     @staticmethod
     def _build_stats(

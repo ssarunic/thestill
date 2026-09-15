@@ -443,3 +443,39 @@ def test_pool_stats_survive_the_narrated_path(storage: PathManager, file_storage
     assert content.mode == "narrated"
     assert content.stats.quote_pool_size == 1
     assert content.stats.episodes_with_sidecar == 1
+
+
+def test_episode_brief_carries_sanitised_material_and_gist(storage: PathManager, file_storage) -> None:
+    """Spec #77 §2: material = Gist + Takeaways + Drama, control bytes stripped."""
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    ep1.summary_path = "ep-one_summary.md"
+    summary = (
+        "## 1. 🎙️ The Gist\nHost talks to Guest.\n\nA second gist sentence here.\n\n"
+        "## 3. 🧠 Key Takeaways\n* Models are four months behind. [02:46](?t=166&cite=c5)\n\n"
+        "## 4. 🌶️ The Drama\n* **Round 1: The row** [07:04](?t=424&cite=c9)\n"
+        "  * **What happened:** Someone left\x00 the party.\n"
+    )
+    file_storage.write_text(storage.to_relative(storage.summary_file(ep1.summary_path)), summary)
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=_StaticLoader({}))
+    brief = gen._build_episode_brief(podcast, ep1)
+    assert brief.gist is not None and "Host talks to Guest." in brief.gist
+    assert brief.material is not None
+    assert brief.material.startswith("Gist:")
+    assert "Key takeaways:" in brief.material and "- Round 1: The row" in brief.material
+    assert "\x00" not in brief.material and "Someone left the party." in brief.material
+    assert "cite=" not in brief.material
+
+
+def test_episode_brief_material_respects_cap(storage: PathManager, file_storage) -> None:
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    ep1.summary_path = "ep-one_summary.md"
+    bullets = "\n".join(f"* Takeaway number {i} with several words in it." for i in range(20))
+    summary = f"## 1. The Gist\nShort gist.\n\n## 3. Key Takeaways\n{bullets}\n"
+    file_storage.write_text(storage.to_relative(storage.summary_file(ep1.summary_path)), summary)
+    gen = NarrationGenerator(
+        path_manager=storage, file_storage=file_storage, loader=_StaticLoader({}), material_max_words=40
+    )
+    brief = gen._build_episode_brief(podcast, ep1)
+    assert brief.material is not None and len(brief.material.split()) <= 40
