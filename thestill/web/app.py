@@ -54,6 +54,7 @@ from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
 from ..services.narration import NarrationGenerator, NarrationRunner
+from ..services.narration_prompts import load_anchor_prompt
 from ..services.refresh_on_open import RefreshOnOpenService
 from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
 from ..utils.path_manager import PathManager
@@ -120,6 +121,10 @@ def _build_narration_runner(
         return None
     from ..core.llm_provider import create_llm_provider_from_config
 
+    # Spec #77 §7 — a misnamed voice file is a deployment error: fail the
+    # boot loudly rather than narrate in the wrong voice or silently
+    # disable narration.
+    anchor_prompt = load_anchor_prompt(config.narration_anchor_prompt)
     try:
         llm_provider = create_llm_provider_from_config(config)
     except Exception as exc:  # noqa: BLE001 — surface the gate, don't crash the server
@@ -129,6 +134,9 @@ def _build_narration_runner(
         path_manager=path_manager,
         file_storage=config.file_storage,
         llm_provider=llm_provider,
+        anchor_prompt=anchor_prompt,
+        material_max_words=config.narration_material_max_words,
+        stated_target_ratio=config.narration_stated_target_ratio,
     )
     return NarrationRunner(
         generator=generator,

@@ -313,6 +313,9 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 |----------|-------------|---------|
 | `NARRATION_ENABLED` | Enable text-to-speech narration of briefings | `false` |
 | `NARRATION_DEFAULT_DURATION_SECONDS` | Target narration length | `300` |
+| `NARRATION_ANCHOR_PROMPT` | Anchor voice file under `thestill/services/narration_prompts/` (basename): `conversational_anchor` (one narrator talking to a friend) or `newsroom_anchor` (measured news-anchor). Spec #77 | `conversational_anchor` |
+| `NARRATION_STATED_TARGET_RATIO` | Share of the narration word budget the writer is told to aim for; validation keeps the full budget (+15 %). Range `0.5`–`1.0`. Spec #77 | `0.8` |
+| `NARRATION_MATERIAL_MAX_WORDS` | Per-episode cap on summary material (Gist + Key Takeaways + The Drama) fed to the writer. Spec #77 | `400` |
 | `INBOX_SEED_ON_FOLLOW` | Recent episodes seeded into the inbox when following a podcast | `2` |
 | `BRIEFING_MIN_INTERVAL_SECONDS` | Minimum gap between briefings per user | `21600` (6h) |
 | `BRIEFING_READINESS_GRACE_MINUTES` | How long to wait for in-flight episodes before generating anyway | `60` |

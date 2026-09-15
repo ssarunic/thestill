@@ -2381,11 +2381,16 @@ def _resolve_target_seconds_or_warn(config, target_duration: Optional[str], *, p
 def _build_narration_runner(ctx, *, llm_provider):
     """Construct a ``NarrationRunner`` from the CLI context."""
     from .services.narration import NarrationGenerator, NarrationRunner
+    from .services.narration_prompts import load_anchor_prompt
 
+    config = ctx.obj.config
     generator = NarrationGenerator(
         path_manager=ctx.obj.path_manager,
-        file_storage=ctx.obj.config.file_storage,
+        file_storage=config.file_storage,
         llm_provider=llm_provider,
+        anchor_prompt=load_anchor_prompt(config.narration_anchor_prompt),
+        material_max_words=config.narration_material_max_words,
+        stated_target_ratio=config.narration_stated_target_ratio,
     )
     return NarrationRunner(
         generator=generator,
@@ -2471,7 +2476,12 @@ def narrate(ctx, briefing_id, target_duration, slug, dry_run):
     else:
         click.echo("🔍 Dry run — quote selection + theme clustering only.")
 
-    runner = _build_narration_runner(ctx, llm_provider=llm_provider)
+    try:
+        runner = _build_narration_runner(ctx, llm_provider=llm_provider)
+    except ValueError as exc:  # bad NARRATION_ANCHOR_PROMPT (spec #77 §7)
+        click.echo(f"❌ {exc}", err=True)
+        ctx.exit(2)
+    click.echo(f"✓ Anchor voice: {config.narration_anchor_prompt}")
     try:
         run = runner.run(
             briefing_id=briefing_id,
