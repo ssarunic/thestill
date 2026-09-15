@@ -38,9 +38,11 @@ Format the body as:
 
 ## Hard constraints
 
-- Stay within the supplied narration word budget (±15%). Words are
-  counted across `text` of all narration blocks — quote blocks do not
-  count.
+- The narration word budget is a hard ceiling, not a target to fill. You
+  will be given more material than fits; pick the best beats and leave
+  the rest out. Going over the budget (+15%) fails validation.
+- Words are counted across `text` of all narration blocks — quote blocks
+  do not count.
 - Never invent facts. If a fact is not in the inputs, do not say it.
   If two sources disagree, name the disagreement and attribute both.
 - Never type a quote's text into a narration block. The renderer
