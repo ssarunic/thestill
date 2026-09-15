@@ -179,6 +179,11 @@ class Segment:
     angle: str
     episode_ids: Tuple[str, ...]
     rank: int
+    # Spec #77 Phase 2b — how the episodes in a multi-episode segment relate
+    # (``consensus`` / ``debate`` / ``contradiction`` / ``extension``), or
+    # ``none`` when they were merely co-grouped or the segment has one
+    # episode. The writer may bridge between shows only when this is set.
+    relationship: str = "none"
 
 
 @dataclass(frozen=True)

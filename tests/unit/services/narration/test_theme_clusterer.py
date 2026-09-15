@@ -19,10 +19,9 @@ from typing import List
 
 import pytest
 
+from tests.conftest import MockLLMProvider
 from thestill.services.narration.models import EpisodeBrief
 from thestill.services.narration.theme_clusterer import ThemeClusterer
-
-from tests.conftest import MockLLMProvider
 
 
 def _briefs(*ids: str) -> List[EpisodeBrief]:
@@ -148,3 +147,56 @@ def test_falls_back_to_tail_only_on_llm_error() -> None:
     )
     assert plan.segments == ()
     assert set(plan.tail_ids) == {"ai-1", "ai-2"}
+
+
+def test_relationship_is_kept_normalised_and_forced_to_none_for_single_episode_segments() -> None:
+    """Spec #77 Phase 2b: the writer bridges only on a typed relationship."""
+    provider = MockLLMProvider()
+    provider.add_response(
+        "target spoken duration",
+        _theme_response(
+            {
+                "segments": [
+                    {
+                        "theme": "Open weights",
+                        "angle": "Baseten and Chai disagree on open models",
+                        "episode_ids": ["ai-1", "ai-2"],
+                        "rank": 1,
+                        "relationship": " Debate ",
+                    },
+                    {
+                        "theme": "Markets",
+                        "angle": "Q1 recap",
+                        "episode_ids": ["finance-1"],
+                        "rank": 2,
+                        "relationship": "consensus",  # single episode → none
+                    },
+                    {
+                        "theme": "Misc",
+                        "angle": "Two loosely related shows",
+                        "episode_ids": ["misc-1", "misc-2"],
+                        "rank": 3,
+                        "relationship": "sort-of-related",  # off-list → none
+                    },
+                ],
+                "tail": [],
+            }
+        ),
+    )
+    plan = ThemeClusterer(provider).cluster(
+        briefs=_briefs("ai-1", "ai-2", "finance-1", "misc-1", "misc-2"),
+        target_duration_seconds=300,
+    )
+    assert [s.relationship for s in plan.segments] == ["debate", "none", "none"]
+
+
+def test_relationship_defaults_to_none_when_model_omits_it() -> None:
+    provider = MockLLMProvider()
+    provider.add_response(
+        "target spoken duration",
+        _theme_response(
+            {"segments": [{"theme": "T", "angle": "A", "episode_ids": ["ai-1", "ai-2"], "rank": 1}], "tail": []}
+        ),
+    )
+    plan = ThemeClusterer(provider).cluster(briefs=_briefs("ai-1", "ai-2"), target_duration_seconds=300)
+    assert plan.segments[0].relationship == "none"

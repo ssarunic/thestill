@@ -36,11 +36,17 @@ _MAX_SEGMENTS = 4
 _MIN_SEGMENTS = 1  # spec allows single-episode lead segments on light news days
 
 
+SEGMENT_RELATIONSHIPS: Tuple[str, ...] = ("none", "consensus", "debate", "contradiction", "extension")
+
+
 class _ThemeSegmentOut(BaseModel):
     theme: str = Field(..., min_length=1, max_length=120)
     angle: str = Field(..., min_length=1, max_length=240)
     episode_ids: List[str] = Field(default_factory=list, min_length=1)
     rank: int = Field(..., ge=1)
+    # Free string on purpose: an off-list value must not fail the whole
+    # plan; ``_reconcile`` normalises unknowns to "none".
+    relationship: str = "none"
 
 
 class _ThemePlanOut(BaseModel):
@@ -66,8 +72,14 @@ Rules:
 - Every input episode_id must appear exactly once across segments and
   tail. Do not invent ids; do not skip episodes.
 - Segments are ranked 1..N with 1 the lead.
+- For a segment with two or more episodes, set "relationship" to how they
+  genuinely relate on the same question: "consensus" (they agree),
+  "debate" (they take opposing positions), "contradiction" (their facts
+  conflict), "extension" (one builds on the other). Use "none" when they
+  merely share a topic — that is the common case, and it is not a
+  failure. Single-episode segments are always "none".
 
-Output schema: {"segments": [{"theme":..., "angle":..., "episode_ids":[…], "rank":N}], "tail": [...]}
+Output schema: {"segments": [{"theme":..., "angle":..., "episode_ids":[…], "rank":N, "relationship":"none"|"consensus"|"debate"|"contradiction"|"extension"}], "tail": [...]}
 """
 
 
@@ -94,9 +106,7 @@ class ThemeClusterer:
     def __init__(self, provider: LLMProvider):
         self.provider = provider
 
-    def cluster(
-        self, briefs: Sequence[EpisodeBrief], target_duration_seconds: int
-    ) -> ThemePlan:
+    def cluster(self, briefs: Sequence[EpisodeBrief], target_duration_seconds: int) -> ThemePlan:
         """Group ``briefs`` into segments + tail.
 
         On any LLM error, an empty plan is returned (every episode goes
@@ -110,8 +120,7 @@ class ThemeClusterer:
 
         user_prompt = (
             f"Target spoken duration: {target_duration_seconds}s.\n"
-            f"Episodes ({len(briefs)}):\n\n"
-            + "\n\n".join(_format_episode_brief(b) for b in briefs)
+            f"Episodes ({len(briefs)}):\n\n" + "\n\n".join(_format_episode_brief(b) for b in briefs)
         )
         try:
             result = self.provider.generate_structured(
@@ -131,9 +140,7 @@ class ThemeClusterer:
 
         return self._reconcile(result, briefs)
 
-    def _reconcile(
-        self, result: _ThemePlanOut, briefs: Sequence[EpisodeBrief]
-    ) -> ThemePlan:
+    def _reconcile(self, result: _ThemePlanOut, briefs: Sequence[EpisodeBrief]) -> ThemePlan:
         """Fold the LLM output back onto the input set.
 
         Every input episode_id appears exactly once in the returned plan
@@ -154,6 +161,9 @@ class ThemeClusterer:
                 kept_ids.append(eid)
             if not kept_ids:
                 continue
+            relationship = (raw.relationship or "none").strip().lower()
+            if relationship not in SEGMENT_RELATIONSHIPS or len(kept_ids) < 2:
+                relationship = "none"
             segments.append(
                 (
                     raw.rank,
@@ -162,6 +172,7 @@ class ThemeClusterer:
                         angle=raw.angle.strip(),
                         episode_ids=tuple(kept_ids),
                         rank=raw.rank,
+                        relationship=relationship,
                     ),
                 )
             )
@@ -184,12 +195,11 @@ class ThemeClusterer:
                     angle=seg.angle,
                     episode_ids=seg.episode_ids,
                     rank=new_rank,
+                    relationship=seg.relationship,
                 )
             )
 
-        tail_ids: List[str] = [
-            eid for eid in result.tail if eid in valid_ids and eid not in kept_ids
-        ]
+        tail_ids: List[str] = [eid for eid in result.tail if eid in valid_ids and eid not in kept_ids]
         for eid in valid_ids:
             if eid not in kept_ids and eid not in tail_ids:
                 tail_ids.append(eid)
