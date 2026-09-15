@@ -122,6 +122,108 @@ def extract_gist(summary_text: str) -> Optional[str]:
     return description or None
 
 
+# Spec #54 citation markup as it appears in summaries: a timestamp label
+# (single or range) linking to ``?t=...&cite=...``, or a bare label.
+_CITATION_LINK_RE = re.compile(r"\[[^\]]*\]\(\?[^)]*\)")
+_BARE_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*(?:\d{1,2}:\d{2}(?::\d{2})?|End))?\]")
+_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_MATERIAL_SECTIONS: Tuple[Tuple[int, str], ...] = (
+    (1, "Gist:"),
+    (3, "Key takeaways:"),
+    (4, "Drama (disagreements, anecdotes, tense moments):"),
+)
+
+
+def _summary_section(summary_text: str, number: int) -> Optional[str]:
+    """Body of numbered section ``## <number>. …`` (spec #58: numbers are the stable anchor)."""
+    pattern = rf"^##\s*{number}\.?\s*[^\n]*\n(.*?)(?=^##\s*\d|\Z)"
+    match = re.search(pattern, summary_text, re.DOTALL | re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _strip_summary_markup(text: str) -> List[str]:
+    """Return non-empty lines with citations, timestamps and bold removed."""
+    text = _CITATION_LINK_RE.sub("", text)
+    text = _BARE_TIMESTAMP_RE.sub("", text)
+    text = _BOLD_RE.sub(r"\1", text)
+    lines: List[str] = []
+    for raw in text.splitlines():
+        indent = len(raw) - len(raw.lstrip())
+        body = re.sub(r"^[*\-]\s+", "- ", raw.strip())
+        body = re.sub(r"[ \t]+", " ", body).strip()
+        if body:
+            lines.append(("  " if indent else "") + body)
+    return lines
+
+
+def _group_items(lines: List[str]) -> List[List[str]]:
+    """Group a section's lines into bullets: a top-level bullet plus its indented lines."""
+    items: List[List[str]] = []
+    for line in lines:
+        if items and line.startswith("  "):
+            items[-1].append(line)
+        else:
+            items.append([line])
+    return items
+
+
+def extract_summary_material(summary_text: str, *, max_words: int = 400) -> Optional[str]:
+    """Gist + Key Takeaways + The Drama, de-marked and capped, for the script writer.
+
+    Spec #77 §2. The two-sentence gist is enough for theme clustering but
+    starves the writer of the concrete beats (anecdotes, numbers, rows)
+    that live in the takeaways and drama sections. Returns ``None`` when
+    the summary has no numbered sections (legacy layout) so callers fall
+    back to :func:`extract_gist`.
+
+    The cap drops whole bullets from the end: Drama first, then
+    Takeaways; the Gist is only trimmed when nothing else is left.
+    """
+    sections: List[Tuple[str, List[List[str]]]] = []
+    for number, label in _MATERIAL_SECTIONS:
+        body = _summary_section(summary_text, number)
+        if not body:
+            continue
+        items = _group_items(_strip_summary_markup(body))
+        if items:
+            sections.append((label, items))
+    if not sections:
+        return None
+
+    def total_words() -> int:
+        # Labels are sent to the model too, so they count against the cap.
+        return sum(
+            len(label.split()) + sum(len(line.split()) for item in items for line in item)
+            for label, items in sections
+            if items
+        )
+
+    while total_words() > max_words:
+        # Trim the last section that still has more than one item; the
+        # gist (first section) only loses items once everything else is gone.
+        trimmed = False
+        for label, items in reversed(sections[1:]):
+            if items:
+                items.pop()
+                trimmed = True
+                break
+        if not trimmed:
+            gist_items = sections[0][1]
+            if len(gist_items) > 1:
+                gist_items.pop()
+            else:
+                keep = max(1, max_words - len(sections[0][0].split()))
+                gist_items[0] = [" ".join(" ".join(gist_items[0]).split()[:keep])]
+                break
+    rendered: List[str] = []
+    for label, items in sections:
+        if not items:
+            continue
+        rendered.append(label)
+        rendered.extend(line for item in items for line in item)
+    return "\n".join(rendered)
+
+
 def _split_sentences(text: str) -> List[str]:
     sentences = re.split(r"(?<=[.!?])\s+", text)
     return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]

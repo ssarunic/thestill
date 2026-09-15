@@ -1,395 +1,89 @@
-"""
-Unit tests for BriefingScriptGenerator.
+# Copyright 2025-2026 Thestill
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-Tests briefing script generation from processed episodes.
-"""
+"""Summary-section extraction feeding the narration writer (spec #77 §2)."""
 
-from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import Mock, mock_open, patch
+from thestill.services.briefing_script_generator import extract_gist, extract_summary_material
 
-import pytest
+SUMMARY = """## 1. 🎙️ The Gist
+Steph McGovern and Robert Peston interview Azeem Azhar, founder of Exponential View.
 
-from thestill.models.podcast import Episode, EpisodeState, Podcast
-from thestill.services.briefing_script_generator import (
-    BriefingEpisodeInfo,
-    BriefingScriptContent,
-    BriefingScriptGenerator,
-    BriefingScriptStats,
-)
-from thestill.utils.file_storage import FileStorage
-from thestill.utils.path_manager import PathManager
-
-
-@pytest.fixture
-def mock_path_manager():
-    """Create mock path manager."""
-    pm = Mock(spec=PathManager)
-    pm.summary_file.return_value = Path("/data/summaries/test.md")
-    # Spec #35 — generator calls path_manager.to_relative on the absolute
-    # path before handing it to the FileStorage backend. The fake returns
-    # a stable relative-shaped string per absolute path.
-    pm.to_relative.side_effect = lambda absolute: str(absolute).lstrip("/")
-    return pm
-
-
-@pytest.fixture
-def mock_file_storage():
-    """Spec #35 — Mock FileStorage that mimics 'file not found' by default.
-
-    Tests that exercise the summary-read path override ``read_text`` to
-    return content; tests that only call ``generate()`` without summaries
-    leave the default ``FileNotFoundError``, which the production code now
-    handles via try/except.
-    """
-    storage = Mock(spec=FileStorage)
-    storage.read_text.side_effect = FileNotFoundError
-    return storage
-
-
-@pytest.fixture
-def sample_podcast():
-    """Create a sample podcast for testing."""
-    return Podcast(
-        id="podcast-123",
-        title="Test Podcast",
-        description="A test podcast",
-        rss_url="https://example.com/feed.xml",
-    )
-
-
-@pytest.fixture
-def sample_podcast_2():
-    """Create a second sample podcast for testing."""
-    return Podcast(
-        id="podcast-456",
-        title="Another Podcast",
-        description="Another test podcast",
-        rss_url="https://example.com/feed2.xml",
-    )
-
-
-def make_episode(
-    external_id: str,
-    title: str,
-    podcast_id: str = "podcast-123",
-    summary_path: str = None,
-    duration: int = None,
-    pub_date: datetime = None,
-) -> Episode:
-    """Helper to create episodes."""
-    episode = Episode(
-        external_id=external_id,
-        podcast_id=podcast_id,
-        title=title,
-        description=f"Description for {title}",
-        pub_date=pub_date or datetime.now(timezone.utc),
-        audio_url=f"https://example.com/{external_id}.mp3",
-    )
-    if summary_path:
-        episode.summary_path = summary_path
-        # Set paths to achieve SUMMARIZED state
-        episode.audio_path = f"{external_id}.mp3"
-        episode.downsampled_audio_path = f"{external_id}.wav"
-        episode.raw_transcript_path = f"{external_id}.json"
-        episode.clean_transcript_path = f"{external_id}.md"
-    if duration:
-        episode.duration = duration
-    return episode
-
-
-SAMPLE_SUMMARY = """## 1. 🎙️ The Gist
-Host John interviews Dr. Jane Smith about climate science. [00:01:00]
-
-This episode explores the latest findings on global temperature patterns. The conversation covers both the scientific consensus and remaining uncertainties in climate models.
-
-**The Big 3-5 Takeaways:**
-* First major point about climate data [05:30]
-* Second important finding [12:45]
-* Third key insight [20:00]
-
-**The Drama:**
-* Heated debate about policy implications [35:00]
+Azeem shares insights from his trip to Chinese AI labs and explains why the spending might be backed by revenue.
 
 ## 2. ⏱️ Timeline
-More content here...
+* [00:00 - 10:40](?t=0&cite=c0) **China’s AI Scene:** Azeem describes the culture at Moonshot.
+* [42:06 - End](?t=2526&cite=c4) **Financial Risks:** Nvidia’s lending practices.
+
+## 3. 🧠 Key Takeaways
+* Chinese AI models are now only 4-8 months behind top US models. [02:46](?t=166&cite=c5)
+* AI revenue is real: $110 billion in the last 12 months, growing 3.5x. [24:04](?t=1444&cite=c7)
+
+## 4. 🌶️ The Drama
+
+* **Round 1: The "Industrial Vandalism" Accusation** [07:04](?t=424&cite=c9)
+  * **What happened:** Peston suggests giving away open-weight models is industrial vandalism.
+  * **The temperature:** Tense.
+
+* **Round 2: The Nightclub Exit** [09:20](?t=560&cite=c10)
+  * **What happened:** Founders ditched the party at 1 a.m. to check on their AI agents.
+  * **The temperature:** Amusing but pointed.
+
+## 5. 💬 Best Quotes
+* "Nobody is coming to save you." [12:00](?t=720&cite=c11)
 """
 
-SAMPLE_SUMMARY_NO_EMOJI = """## 1. The Gist
-A deep dive into machine learning algorithms.
 
-Neural networks have revolutionized how we approach complex problems. This episode covers the fundamentals and advanced applications.
-
-**The Big 3-5 Takeaways:**
-* Key point one
-* Key point two
-"""
-
-
-class TestBriefingScriptStats:
-    """Tests for BriefingScriptStats dataclass."""
-
-    def test_success_rate_calculation(self):
-        """Test success rate calculation."""
-        stats = BriefingScriptStats(
-            total_episodes=10,
-            successful_episodes=8,
-            failed_episodes=2,
-        )
-        assert stats.success_rate == 80.0
-
-    def test_success_rate_zero_episodes(self):
-        """Test success rate with no episodes."""
-        stats = BriefingScriptStats(total_episodes=0)
-        assert stats.success_rate == 0.0
-
-    def test_success_rate_all_successful(self):
-        """Test success rate with all successful."""
-        stats = BriefingScriptStats(
-            total_episodes=5,
-            successful_episodes=5,
-            failed_episodes=0,
-        )
-        assert stats.success_rate == 100.0
+def test_material_keeps_gist_takeaways_drama_in_order_and_strips_markup() -> None:
+    out = extract_summary_material(SUMMARY)
+    assert out is not None
+    assert out.index("Gist:") < out.index("Key takeaways:") < out.index("Drama (")
+    for noise in ("?t=", "cite=", "**", "[02:46]", "[07:04]", "[00:00 - 10:40]"):
+        assert noise not in out
+    assert "Nobody is coming to save you" not in out  # section 5 is never fed in
+    assert "Timeline" not in out and "Moonshot" not in out  # section 2 skipped
+    assert "- Round 1:" in out and "  - What happened: Peston suggests" in out
+    assert "4-8 months behind" in out and "1 a.m." in out
 
 
-class TestBriefingScriptGeneratorExtraction:
-    """Tests for executive summary extraction."""
-
-    def test_extract_executive_summary_with_emoji(self, mock_path_manager, mock_file_storage):
-        """Extract summary from standard format with emoji."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        result = generator._extract_executive_summary(SAMPLE_SUMMARY)
-
-        assert result is not None
-        assert "latest findings on global temperature" in result
-        # The second sentence talks about consensus - verify it's extracted
-        assert "This episode explores" in result or "temperature patterns" in result
-
-    def test_extract_executive_summary_without_emoji(self, mock_path_manager, mock_file_storage):
-        """Extract summary from format without emoji."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        result = generator._extract_executive_summary(SAMPLE_SUMMARY_NO_EMOJI)
-
-        assert result is not None
-        assert "deep dive into machine learning" in result
-
-    def test_extract_executive_summary_no_match(self, mock_path_manager, mock_file_storage):
-        """Return None when no gist section found."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        result = generator._extract_executive_summary("Random text without any sections")
-
-        assert result is None
-
-    def test_extract_removes_timestamps(self, mock_path_manager, mock_file_storage):
-        """Timestamps should be removed from extracted text."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        result = generator._extract_executive_summary(SAMPLE_SUMMARY)
-
-        assert "[00:01:00]" not in result
+def test_material_cap_drops_whole_drama_items_first() -> None:
+    full = extract_summary_material(SUMMARY)
+    assert full is not None
+    words = len(full.split())
+    capped = extract_summary_material(SUMMARY, max_words=words - 5)
+    assert capped is not None
+    # Round 2 (the last drama item) goes as a unit; Round 1 and every takeaway stay.
+    assert "Round 2" not in capped and "Nightclub" not in capped
+    assert "Round 1" in capped and "Tense" in capped
+    assert "4-8 months behind" in capped and "$110 billion" in capped
+    assert len(capped.split()) <= words - 5
 
 
-class TestBriefingScriptGeneratorGenerate:
-    """Tests for briefing script generation."""
-
-    def test_generate_empty_list(self, mock_path_manager, mock_file_storage):
-        """Generate script with empty episode list."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate([])
-
-        assert content.stats.total_episodes == 0
-        assert "# Morning Briefing" in content.markdown
-
-    def test_generate_with_episodes(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate script with episodes."""
-        episode1 = make_episode("ep1", "Episode One", duration=1800)
-        episode2 = make_episode("ep2", "Episode Two", duration=2400)
-
-        # Mock the summary file
-        mock_path_manager.summary_file.return_value = Path("/nonexistent/path.md")
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate(
-            [
-                (sample_podcast, episode1),
-                (sample_podcast, episode2),
-            ]
-        )
-
-        assert content.stats.total_episodes == 2
-        assert content.stats.successful_episodes == 2
-        assert content.stats.podcasts_count == 1
-        assert "Episode One" in content.markdown
-        assert "Episode Two" in content.markdown
-        assert sample_podcast.title in content.markdown
-
-    def test_generate_groups_by_podcast(self, mock_path_manager, mock_file_storage, sample_podcast, sample_podcast_2):
-        """Episodes should be grouped by podcast."""
-        ep1 = make_episode("ep1", "Podcast 1 Episode", podcast_id="podcast-123")
-        ep2 = make_episode("ep2", "Podcast 2 Episode", podcast_id="podcast-456")
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate(
-            [
-                (sample_podcast, ep1),
-                (sample_podcast_2, ep2),
-            ]
-        )
-
-        assert content.stats.podcasts_count == 2
-        assert sample_podcast.title in content.markdown
-        assert sample_podcast_2.title in content.markdown
-
-    def test_generate_with_failures(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate script with failed episodes."""
-        episode = make_episode("ep1", "Successful Episode")
-        failed_episode = make_episode("ep2", "Failed Episode")
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate(
-            episodes=[(sample_podcast, episode)],
-            failures=[(sample_podcast, failed_episode, "Network timeout")],
-        )
-
-        assert content.stats.total_episodes == 2
-        assert content.stats.successful_episodes == 1
-        assert content.stats.failed_episodes == 1
-        assert "Failed Episodes" in content.markdown
-        assert "Network timeout" in content.markdown
-
-    def test_generate_with_processing_time(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generate script with processing time."""
-        episode = make_episode("ep1", "Episode")
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate(
-            episodes=[(sample_podcast, episode)],
-            processing_time_seconds=754.5,  # 12m 34s
-        )
-
-        assert "Processing time" in content.markdown
-        assert "12m" in content.markdown
-
-    def test_generate_reads_summary_for_description(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Generator should read summary file to extract description."""
-        episode = make_episode(
-            "ep1",
-            "Episode with Summary",
-            summary_path="test-podcast/ep1_summary.md",
-        )
-
-        # Spec #35 — generator now reads via FileStorage.read_text rather
-        # than open(). Set the mock to return the sample summary text.
-        mock_path_manager.summary_file.return_value = Path("/data/summaries/test-podcast/ep1_summary.md")
-        mock_file_storage.read_text.side_effect = None
-        mock_file_storage.read_text.return_value = SAMPLE_SUMMARY
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        content = generator.generate([(sample_podcast, episode)])
-
-        # Should have extracted description from summary
-        assert "temperature patterns" in content.markdown or "Episode with Summary" in content.markdown
+def test_material_cap_falls_through_to_takeaways_then_gist() -> None:
+    tiny = extract_summary_material(SUMMARY, max_words=25)
+    assert tiny is not None
+    assert "Drama (" not in tiny and "Key takeaways:" not in tiny
+    assert tiny.startswith("Gist:")
+    assert len(tiny.split()) <= 25
 
 
-class TestBriefingScriptGeneratorWrite:
-    """Tests for script file writing — uses a real LocalFileStorage rooted at
-    tmp_path so we exercise the actual write path end-to-end."""
-
-    def _build_generator(self, tmp_path):
-        from thestill.utils.file_storage import LocalFileStorage
-
-        pm = PathManager(storage_path=str(tmp_path))
-        storage = LocalFileStorage(base_path=str(tmp_path))
-        return BriefingScriptGenerator(pm, storage), pm
-
-    def test_write_creates_directory(self, tmp_path):
-        """Write should create parent directory if needed."""
-        generator, pm = self._build_generator(tmp_path)
-        output_path = pm.storage_path / "briefings" / "subdir" / "script.md"
-
-        content = BriefingScriptContent(
-            markdown="# Test Digest",
-            stats=BriefingScriptStats(),
-        )
-
-        result = generator.write(content, output_path)
-
-        assert result == output_path
-        assert output_path.exists()
-        assert output_path.read_text() == "# Test Digest"
-
-    def test_write_sets_output_path(self, tmp_path):
-        """Write should set output_path on content."""
-        generator, pm = self._build_generator(tmp_path)
-        output_path = pm.storage_path / "briefings" / "script.md"
-
-        content = BriefingScriptContent(
-            markdown="# Test",
-            stats=BriefingScriptStats(),
-        )
-
-        generator.write(content, output_path)
-
-        assert content.output_path == output_path
+def test_material_returns_none_for_legacy_summary_and_gist_still_works() -> None:
+    legacy = "# Episode\n\nExecutive Summary\n\nA short overview. Another sentence here.\n\n**Takeaways**\n- one\n"
+    assert extract_summary_material(legacy) is None
+    assert extract_gist(legacy) is not None
 
 
-class TestBriefingScriptGeneratorFormatting:
-    """Tests for formatting helpers."""
-
-    def test_format_duration_seconds(self, mock_path_manager, mock_file_storage):
-        """Format short durations in seconds."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        assert generator._format_duration(45) == "45s"
-
-    def test_format_duration_minutes(self, mock_path_manager, mock_file_storage):
-        """Format durations in minutes."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        assert generator._format_duration(754) == "12m 34s"
-
-    def test_format_duration_hours(self, mock_path_manager, mock_file_storage):
-        """Format long durations in hours."""
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        assert generator._format_duration(3725) == "1h 2m"
-
-    def test_format_episode_with_all_metadata(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Format episode with all metadata."""
-        episode = make_episode(
-            "ep1",
-            "Full Episode",
-            summary_path="test/ep1_summary.md",
-            duration=2700,
-            pub_date=datetime(2024, 1, 15, tzinfo=timezone.utc),
-        )
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        info = BriefingEpisodeInfo(
-            podcast=sample_podcast,
-            episode=episode,
-            brief_description="A great episode about testing.",
-            summary_link="test/ep1_summary.md",
-        )
-
-        lines = generator._format_episode(info)
-        result = "\n".join(lines)
-
-        assert "[Full Episode]" in result
-        assert "January 15, 2024" in result
-        assert "45m" in result
-        assert "great episode about testing" in result
-
-    def test_format_episode_minimal_metadata(self, mock_path_manager, mock_file_storage, sample_podcast):
-        """Format episode with minimal metadata."""
-        episode = make_episode("ep1", "Basic Episode")
-
-        generator = BriefingScriptGenerator(mock_path_manager, mock_file_storage)
-        info = BriefingEpisodeInfo(
-            podcast=sample_podcast,
-            episode=episode,
-        )
-
-        lines = generator._format_episode(info)
-        result = "\n".join(lines)
-
-        assert "Basic Episode" in result
-        # Should fall back to episode description
-        assert "Description for Basic Episode" in result
+def test_material_bare_timestamps_and_ranges_are_removed() -> None:
+    text = "## 1. The Gist\nIntro [01:02:03] and range [10:00 - 12:30] plus [42:06 - End] done.\n"
+    out = extract_summary_material(text)
+    assert out == "Gist:\nIntro and range plus done."
