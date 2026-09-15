@@ -62,3 +62,12 @@ def test_colour_is_capped_to_whole_sentences_within_the_word_budget() -> None:
     assert chosen is not None and chosen.colour is not None
     assert chosen.colour.endswith("words.") and len(chosen.colour.split()) <= 20
     assert chosen.colour.count("Sentence number") == 2  # 3 claim words + 2×6 ≤ 20, a third would not fit
+
+
+def test_quote_fits_claim_needs_two_shared_content_tokens() -> None:
+    from thestill.services.narration.claim_selector import quote_fits_claim
+
+    claim = "Chinese AI models are only four months behind top US models."
+    assert quote_fits_claim("The Chinese models are catching up fast.", claim)
+    assert not quote_fits_claim("Founders left the party at one in the morning.", claim)
+    assert not quote_fits_claim("Anything at all.", None)

@@ -33,7 +33,7 @@ from structlog import get_logger
 from ...core.llm_provider import LLMProvider
 from ...utils.text_sanitizer import sanitize_text
 from ..narration_prompts import count_noise_phrase_hits, find_noise_phrases
-from .claim_selector import select_claim
+from .claim_selector import quote_fits_claim, select_claim
 from .models import (
     REACTION_MAX_WORDS,
     EpisodeBrief,
@@ -142,6 +142,11 @@ class ScriptWriter:
         stated = max(1, int(narration_word_budget * self.stated_target_ratio))
         user_prompt = self._build_user_prompt(plan, briefs_by_id, quotes, stated)
         attempts: List[Tuple[Tuple[ScriptBlock, ...], Tuple[ValidationFailure, ...], int]] = []
+        # An attempt that failed only soft rules is a usable script. Keep
+        # the first one so a retry that trips a hard rule (the old voice
+        # overshooting the budget while fixing a soft miss) falls back to
+        # it instead of to the link index.
+        soft_only: Optional[Tuple[List[ScriptBlock], int, List[ValidationFailure]]] = None
         for attempt in range(MAX_REGENERATIONS + 1):
             try:
                 result = self.provider.generate_structured(
@@ -179,8 +184,8 @@ class ScriptWriter:
             last_attempt = attempt >= MAX_REGENERATIONS
             # Soft failures (the reaction rule) get the retry but never the
             # fallback: a briefing without a reaction beats no briefing.
+            soft = [f for f in failures if f.soft]
             if not failures or (not hard and last_attempt):
-                soft = [f for f in failures if f.soft]
                 if soft:
                     logger.info(
                         "narration: script accepted with soft failures",
@@ -188,6 +193,8 @@ class ScriptWriter:
                         failures=[f.reason for f in soft],
                     )
                 return self._accept(blocks, raw_words, stated, soft)
+            if not hard and soft_only is None:
+                soft_only = (blocks, raw_words, soft)
 
             logger.info(
                 "narration: script validation failed",
@@ -198,6 +205,13 @@ class ScriptWriter:
             if attempt < MAX_REGENERATIONS:
                 user_prompt = self._tighten_prompt(user_prompt, failures, stated)
 
+        if soft_only is not None:
+            blocks, raw_words, soft = soft_only
+            logger.info(
+                "narration: retry failed a hard rule; keeping the earlier soft-only attempt",
+                failures=[f.reason for f in soft],
+            )
+            return self._accept(blocks, raw_words, stated, soft)
         # Both attempts failed (or LLM error path). Surface the latest
         # failure list to the caller — the generator will trigger the
         # link-index fallback and log a ``narration.fallback`` event.
@@ -229,19 +243,30 @@ class ScriptWriter:
         quotes: Sequence[QuoteCandidate],
         narration_word_budget: int,
     ) -> str:
+        # Spec #77 Phase 2b: one claim per episode, chosen against its
+        # segment angle; quotes are marked by whether they illustrate it.
+        claims: Dict[str, str] = {}
+        for seg in plan.segments:
+            for eid in seg.episode_ids:
+                brief = briefs_by_id.get(eid)
+                chosen = select_claim(brief, seg.angle, max_words=self.material_max_words) if brief else None
+                if chosen is not None:
+                    claims[eid] = chosen.claim + (" " + chosen.colour if chosen.colour else "")
         parts: List[str] = [
             f"Narration word budget: aim for {narration_word_budget} words"
             f" (hard cap: +{int(WORD_BUDGET_TOLERANCE_HIGH * 100)}% — going over"
             " blows the spoken-duration budget; counts only narration block text,"
             " quote blocks are excluded).",
             "",
-            "Quote pool (verbatim — do not retype these in your narration):",
+            "Quote pool (verbatim — do not retype these in your narration;"
+            " cue a quote only when fits_claim=yes, or skip the clip for that show):",
         ]
         if quotes:
             for q in quotes:
+                fit = "yes" if quote_fits_claim(q.text, claims.get(q.episode_id)) else "no"
                 parts.append(
                     f"- quote_id={q.quote_id} | speaker={q.speaker} ({q.speaker_role})"
-                    f" | podcast={q.podcast_title} | episode_id={q.episode_id}"
+                    f" | podcast={q.podcast_title} | episode_id={q.episode_id} | fits_claim={fit}"
                 )
                 parts.append(f"  text: {q.text}")
         else:

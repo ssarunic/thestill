@@ -97,6 +97,22 @@ def _best(candidates: Sequence[str], against: str) -> Optional[str]:
     return best
 
 
+# Content tokens a quote must share with the claim (plus colour) before
+# the writer is told it illustrates that claim.
+_FIT_MIN_OVERLAP = 2
+
+
+def quote_fits_claim(quote_text: str, claim_text: Optional[str]) -> bool:
+    """True when ``quote_text`` shares enough content tokens with the claim.
+
+    A tail episode (no claim) never fits; the writer cues those clips on
+    the gist alone, as before.
+    """
+    if not claim_text:
+        return False
+    return len(_tokens(quote_text) & _tokens(claim_text)) >= _FIT_MIN_OVERLAP
+
+
 def _first_sentence(text: str) -> str:
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
     return parts[0] if parts and parts[0] else text.strip()

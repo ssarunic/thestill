@@ -15,6 +15,7 @@
 """Tests for the anchor-prose script writer (spec #33 Phase 2 stage 4)."""
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Type
 
 import pytest
@@ -266,12 +267,12 @@ def test_segment_prompt_names_a_typed_relationship() -> None:
 
 def test_stated_target_is_below_the_validated_budget() -> None:
     """Spec #77 §4: the model hears 80 % of the budget; validation keeps the ceiling."""
-    provider = _ScriptedProvider([_good_response(narration_words=105)])
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
     result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
     )
     assert "aim for 80 words" in provider.last_messages[1]["content"]
-    # 105 narration + 7 reaction words = 112 ≤ 115: over the stated target, under the ceiling.
+    # 100 narration + 11 reaction words = 111 ≤ 115: over the stated target, under the ceiling.
     assert result.failures == () and result.stated_word_target == 80
     provider = _ScriptedProvider([_good_response(narration_words=100)])
     ScriptWriter(provider, _SYSTEM_PROMPT, stated_target_ratio=1.0).write(
@@ -423,4 +424,49 @@ def test_scare_quotes_are_dropped_from_model_text() -> None:
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=50
     )
     text = result.blocks[1].text
-    assert "the one in, one out policy and it's fine." in text and "'" not in text.replace("it's", "")
+    assert "the one in, one out policy and it's fine." in text
+    assert re.search(r"(?<!\w)'|'(?!\w)", text) is None  # apostrophes inside words stay
+
+
+def test_soft_only_first_attempt_wins_over_a_retry_that_hard_fails() -> None:
+    """The old voice overshot while fixing a soft miss; keep the usable first attempt."""
+    soft_only = _v2_response(first_person=False)  # only segment_no_first_person
+    overshoot = _good_response(narration_words=200)  # word_budget_high on a 40-word budget
+    provider = _ScriptedProvider([soft_only, overshoot])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    assert provider.call_count == 2
+    assert result.failures == () and result.blocks
+    assert result.blocks[1].text.startswith("Tom says the fear")  # the first attempt, not the overshoot
+
+
+def test_quote_pool_marks_whether_each_quote_fits_the_claim() -> None:
+    from thestill.services.narration.models import QuoteCandidate
+
+    fitting = _quote()  # text about shipping / pipelines; the claim below shares its tokens
+    off_topic = QuoteCandidate(
+        quote_id="q2",
+        episode_id="ep-1",
+        podcast_title="Pod",
+        speaker="Someone",
+        speaker_role="guest",
+        text="Completely unrelated words about breakfast cereal and the weather in Lisbon.",
+        start_seconds=10.0,
+        duration_seconds=8.0,
+    )
+    briefs = {
+        "ep-1": EpisodeBrief(
+            episode_id="ep-1",
+            podcast_title="Pod",
+            episode_title="Lead Episode",
+            takeaways=(fitting.text,),
+        )
+    }
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=briefs, quotes=[fitting, off_topic], narration_word_budget=100
+    )
+    user_prompt = provider.last_messages[1]["content"]
+    assert "quote_id=q1 " in user_prompt and "fits_claim=yes" in user_prompt
+    assert "quote_id=q2 " in user_prompt and user_prompt.count("fits_claim=no") == 1
