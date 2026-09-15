@@ -34,7 +34,7 @@ import re
 from pathlib import Path
 from typing import List
 
-from .noise_phrases import NOISE_PHRASES, count_noise_phrase_hits, render_noise_phrases
+from .noise_phrases import NOISE_PHRASES, count_noise_phrase_hits, find_noise_phrases, render_noise_phrases
 
 PROMPTS_DIR = Path(__file__).parent
 DEFAULT_ANCHOR_PROMPT_NAME = "conversational_anchor"
@@ -51,6 +51,7 @@ __all__ = [
     "PROMPTS_DIR",
     "available_anchor_prompts",
     "count_noise_phrase_hits",
+    "find_noise_phrases",
     "load_anchor_prompt",
     "load_default_anchor_prompt",
 ]

@@ -83,3 +83,17 @@ def test_classify_transition_examples() -> None:
 def test_empty_script_measures_zero() -> None:
     m = measure_register([])
     assert m.sentences == 0 and m.first_person_ratio == 0.0 and m.transitions == {}
+
+
+def test_helpers_first_person_listener_and_unquote() -> None:
+    from thestill.services.narration.register import addresses_listener, has_first_person, unquote_scare_quotes
+
+    assert has_first_person("Not sure I buy this.") and not has_first_person("He is sure.")
+    assert addresses_listener("You'd care because it's your money.") and not addresses_listener("They care.")
+    assert (
+        unquote_scare_quotes("the 'open everything' crowd don't 'get' it") == "the open everything crowd don't get it"
+    )
+    assert (
+        unquote_scare_quotes("a 'very long quoted span of many words here' stays")
+        == "a 'very long quoted span of many words here' stays"
+    )

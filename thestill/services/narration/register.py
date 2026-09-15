@@ -28,6 +28,8 @@ from .models import ScriptBlock, ThemePlan
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _FIRST_PERSON = re.compile(r"\b(I|I'm|I’m|I'd|I’d|I've|I’ve|I'll|I’ll|me|my|myself)\b")
+# The listener being addressed: the "why you'd care" line is written to "you".
+_LISTENER = re.compile(r"\b(you|your|you'd|you’d|you're|you’re|you'll|you’ll|yours)\b", re.IGNORECASE)
 _REPORTAGE = re.compile(
     r"\b(he|she|they|the (?:host|guest)s?)\s+(?:told|explained|discussed|described|argued|said that|"
     r"talked about|walked through|mentioned|noted)\b|\bexplained how\b|\baccording to\b",
@@ -76,6 +78,19 @@ class RegisterMetrics:
 
 def split_sentences(text: str) -> List[str]:
     return [s.strip() for s in _SENTENCE_SPLIT.split(text.strip()) if s.strip()]
+
+
+def has_first_person(text: str) -> bool:
+    return bool(_FIRST_PERSON.search(text or ""))
+
+
+def addresses_listener(text: str) -> bool:
+    return bool(_LISTENER.search(text or ""))
+
+
+def unquote_scare_quotes(text: str) -> str:
+    """Drop single quotes around short spans: own the phrase or lose the quotes."""
+    return _SCARE_QUOTE.sub(lambda m: m.group(1) if len(m.group(1).split()) <= 4 else m.group(0), text or "")
 
 
 def _percentile(values: Sequence[int], pct: float) -> float:

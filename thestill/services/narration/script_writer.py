@@ -32,7 +32,7 @@ from structlog import get_logger
 
 from ...core.llm_provider import LLMProvider
 from ...utils.text_sanitizer import sanitize_text
-from ..narration_prompts import count_noise_phrase_hits
+from ..narration_prompts import count_noise_phrase_hits, find_noise_phrases
 from .claim_selector import select_claim
 from .models import (
     REACTION_MAX_WORDS,
@@ -45,6 +45,7 @@ from .models import (
     ValidationFailure,
     word_count,
 )
+from .register import addresses_listener, has_first_person, unquote_scare_quotes
 
 logger = get_logger(__name__)
 
@@ -307,7 +308,9 @@ class ScriptWriter:
                 # script block (the 2026-07-02 control-byte incident).
                 clean, removed = sanitize_text(raw.text or "")
                 removed_total += removed
-                text = clean.strip() or None
+                # Spec #77 Phase 2b req. 5: scare quotes never reach the
+                # page; the phrase is owned or the quotes are dropped.
+                text = unquote_scare_quotes(clean).strip() or None
                 duration = word_count(text) / wpm * 60.0 if text and wpm else 0.0
                 blocks.append(
                     ScriptBlock(
@@ -401,7 +404,49 @@ class ScriptWriter:
             )
 
         failures.extend(self._validate_reactions(blocks))
+        failures.extend(self._validate_register(blocks))
         return tuple(failures)
+
+    @staticmethod
+    def _validate_register(blocks: Sequence[ScriptBlock]) -> List[ValidationFailure]:
+        """Spec #77 Phase 2b register rules the code can check. All soft."""
+        out: List[ValidationFailure] = []
+        sections: Dict[str, List[str]] = {}
+        for b in blocks:
+            if b.kind in ("narration", "reaction") and b.text and b.section.startswith("segment-"):
+                sections.setdefault(b.section, []).append(b.text)
+        for section, texts in sections.items():
+            joined = " ".join(texts)
+            if not has_first_person(joined):
+                out.append(
+                    ValidationFailure(
+                        reason="segment_no_first_person",
+                        detail=(
+                            f"{section} has no first-person sentence; add one specific reaction"
+                            ' of your own ("this one surprised me", "not sure I buy this")'
+                        ),
+                        soft=True,
+                    )
+                )
+            if not addresses_listener(joined):
+                out.append(
+                    ValidationFailure(
+                        reason="segment_no_stakes",
+                        detail=f"{section} never addresses the listener; end it with one why-you'd-care line said to 'you'",
+                        soft=True,
+                    )
+                )
+        spoken = " ".join(b.text for b in blocks if b.kind in ("narration", "reaction") and b.text)
+        hits = find_noise_phrases(spoken)
+        if hits:
+            out.append(
+                ValidationFailure(
+                    reason="noise_phrases",
+                    detail="remove these phrases: " + ", ".join(f"'{h}'" for h in sorted(set(hits))),
+                    soft=True,
+                )
+            )
+        return out
 
     @staticmethod
     def _validate_reactions(blocks: Sequence[ScriptBlock]) -> List[ValidationFailure]:

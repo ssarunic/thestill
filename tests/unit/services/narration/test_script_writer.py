@@ -98,7 +98,7 @@ def _good_response(
     narration_words: int = 100,
     cue_quote: bool = True,
     quote_id: str = "q1",
-    reaction: str | None = "Which, honestly, is the bit worth stealing.",
+    reaction: str | None = "Which, honestly, I think is the bit you'd want to steal.",
 ) -> dict:
     body = (" ".join(["word"] * narration_words)).strip()
     blocks: List[Dict[str, Any]] = [
@@ -291,14 +291,14 @@ def test_retry_restates_the_stated_target() -> None:
     assert "RETRY" in retry_prompt and "Aim for 80 narration words" in retry_prompt
 
 
-def test_noise_phrase_hits_are_counted_not_failed() -> None:
+def test_noise_phrase_hits_earn_one_retry_then_are_counted_not_failed() -> None:
     body = "The landscape is shifting, and it's worth noting that, notably, nobody can navigate it. " * 3
     response = {"blocks": [{"kind": "narration", "section": "opener", "text": body}]}
-    provider = _ScriptedProvider([response])
+    provider = _ScriptedProvider([response, response])
     result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
         plan=_plan(), briefs_by_id=_briefs(), quotes=[], narration_word_budget=50
     )
-    assert result.failures == ()
+    assert provider.call_count == 2 and result.failures == ()
     assert result.noise_phrase_hits == 12  # four phrases × three repeats
 
 
@@ -368,3 +368,59 @@ def test_reaction_words_count_toward_budget_and_leak_check() -> None:
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
     )
     assert result.blocks == () and "verbatim_leak" in [f.reason for f in result.failures]
+
+
+def _spoken(section: str, text: str, kind: str = "narration") -> dict:
+    return {"kind": kind, "section": section, "text": text}
+
+
+def _v2_response(*, first_person: bool = True, stakes: bool = True, noise: bool = False, quotes: bool = True) -> dict:
+    seg = "Tom says the fear never goes away. " + ("I think that's right. " if first_person else "That is right. ")
+    if noise:
+        seg += "It's a reality check. "
+    blocks = [_spoken("opener", "So, a thing happened."), _spoken("segment-1", seg)]
+    if quotes:
+        blocks.append({"kind": "quote", "section": "segment-1", "quote_id": "q1"})
+        blocks.append(_spoken("segment-1", "Which, honestly, is the bit worth stealing.", kind="reaction"))
+    blocks.append(
+        _spoken(
+            "segment-1",
+            "You'd care because it makes the violence feel human." if stakes else "It makes the violence feel human.",
+        )
+    )
+    blocks.append(_spoken("signoff", "Catch you tomorrow."))
+    return {"blocks": blocks}
+
+
+def test_register_rules_are_soft_and_named_in_the_retry() -> None:
+    bad = _v2_response(first_person=False, stakes=False, noise=True)
+    provider = _ScriptedProvider([bad, _v2_response()])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    retry = provider.last_messages[1]["content"]
+    for reason in ("segment_no_first_person", "segment_no_stakes", "noise_phrases"):
+        assert reason in retry
+    assert "'a reality check'" in retry
+    assert result.failures == () and result.blocks and provider.call_count == 2
+
+
+def test_register_rules_never_fall_back() -> None:
+    bad = _v2_response(first_person=False, stakes=False, noise=True)
+    provider = _ScriptedProvider([bad, bad])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    assert result.blocks and result.failures == ()
+    assert result.noise_phrase_hits == 1
+
+
+def test_scare_quotes_are_dropped_from_model_text() -> None:
+    response = _v2_response()
+    response["blocks"][1]["text"] += " He calls it the 'one in, one out' policy and it's 'fine'."
+    provider = _ScriptedProvider([response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=50
+    )
+    text = result.blocks[1].text
+    assert "the one in, one out policy and it's fine." in text and "'" not in text.replace("it's", "")

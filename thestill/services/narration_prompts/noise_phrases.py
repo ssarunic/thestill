@@ -24,7 +24,7 @@ different entries.
 """
 
 import re
-from typing import Tuple
+from typing import List, Tuple
 
 NOISE_PHRASES: Tuple[str, ...] = (
     "the conversation is moving",
@@ -68,9 +68,21 @@ def render_noise_phrases() -> str:
     return ", ".join(f'"{p}"' for p in NOISE_PHRASES)
 
 
+def _normalise(text: str) -> str:
+    return " ".join(_WORD_RE.sub(" ", text.lower()).split())
+
+
+def find_noise_phrases(text: str) -> List[str]:
+    """The noise phrases present in ``text``, each repeated once per occurrence."""
+    if not text:
+        return []
+    haystack = _normalise(text)
+    hits: List[str] = []
+    for phrase in NOISE_PHRASES:
+        hits.extend([phrase] * haystack.count(_normalise(phrase)))
+    return hits
+
+
 def count_noise_phrase_hits(text: str) -> int:
     """Occurrences of any noise phrase in ``text`` (case- and punctuation-insensitive)."""
-    if not text:
-        return 0
-    haystack = " ".join(_WORD_RE.sub(" ", text.lower()).split())
-    return sum(haystack.count(" ".join(_WORD_RE.sub(" ", p.lower()).split())) for p in NOISE_PHRASES)
+    return len(find_noise_phrases(text))
