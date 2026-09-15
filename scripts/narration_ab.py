@@ -204,7 +204,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             stated_target_ratio=config.narration_stated_target_ratio,
         )
         for run in range(1, args.runs + 1):
-            cfg = NarrationConfig(target_duration_seconds=args.target, slug=f"{voice}-{run}", basename=f"{voice}-{run}")
+            slug = f"{voice.replace('_', '-')}-{run}"
+            cfg = NarrationConfig(target_duration_seconds=args.target, slug=slug, basename=slug)
             content = gen.generate(episodes, cfg)
             judged = _judge(judge, content, titles) if judge and content.mode == "narrated" else None
             m = _metrics(content, judged)
@@ -217,7 +218,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _say(
                 f"{voice} run {run}: mode={content.mode} words={content.stats.narration_words} "
                 f"clips={content.stats.quote_count} reactions={content.stats.reaction_count}",
-                file=sys.stderr,
+                err=True,
             )
 
     # Table: metric | gate | per voice mean [min–max]
