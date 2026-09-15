@@ -479,3 +479,34 @@ def test_episode_brief_material_respects_cap(storage: PathManager, file_storage)
     )
     brief = gen._build_episode_brief(podcast, ep1)
     assert brief.material is not None and len(brief.material.split()) <= 40
+
+
+def test_reaction_blocks_render_in_italics_and_serialise_with_their_kind(storage: PathManager, file_storage) -> None:
+    from thestill.services.narration.models import Segment, ThemePlan
+    from thestill.services.narration.script_writer import ScriptResult
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    loader = _StaticLoader({"e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex Anchor")]})
+    plan = ThemePlan(segments=(Segment(theme="T", angle="A", episode_ids=("e1",), rank=1),), tail_ids=())
+    blocks = [
+        ScriptBlock(kind="narration", section="opener", text="Lead in."),
+        ScriptBlock(kind="quote", section="segment-1", quote_id="q1", duration_seconds=12.0),
+        ScriptBlock(kind="reaction", section="segment-1", text="Which, fair.", duration_seconds=1.0),
+        ScriptBlock(kind="narration", section="signoff", text="Bye."),
+    ]
+    result = ScriptResult(blocks=tuple(blocks), failures=(), raw_word_count=5, reaction_count=1)
+    gen = NarrationGenerator(
+        path_manager=storage,
+        file_storage=file_storage,
+        loader=loader,
+        selector=QuoteSelector(),
+        clusterer=_StubClusterer(plan),
+        script_writer=_StubScriptWriter(result),
+    )
+    content = gen.generate([(podcast, ep1)])
+    assert "*Which, fair.*" in (content.markdown or "")
+    assert content.stats.reaction_count == 1 and content.stats.narration_words == 5
+    payload = json.loads(gen.write_json_script(content).read_text(encoding="utf-8"))
+    assert [b["kind"] for b in payload["blocks"]] == ["narration", "quote", "reaction", "narration"]
+    assert payload["reaction_count"] == 1 and payload["reactions_missing"] == 0

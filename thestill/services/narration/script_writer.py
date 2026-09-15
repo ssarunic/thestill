@@ -34,6 +34,7 @@ from ...core.llm_provider import LLMProvider
 from ...utils.text_sanitizer import sanitize_text
 from ..narration_prompts import count_noise_phrase_hits
 from .models import (
+    REACTION_MAX_WORDS,
     EpisodeBrief,
     QuoteCandidate,
     ScriptBlock,
@@ -87,6 +88,8 @@ class ScriptResult:
     raw_word_count: int
     noise_phrase_hits: int = 0
     stated_word_target: int = 0
+    reaction_count: int = 0
+    reactions_missing: int = 0
 
 
 class ScriptWriter:
@@ -167,16 +170,20 @@ class ScriptWriter:
 
             blocks = self._normalise_blocks(result.blocks, quotes_by_id, self.wpm)
             failures = self._validate(blocks, quotes_by_id, narration_word_budget)
-            raw_words = sum(word_count(b.text) for b in blocks if b.kind == "narration" and b.text)
-            if not failures:
-                narration_text = " ".join(b.text for b in blocks if b.kind == "narration" and b.text)
-                return ScriptResult(
-                    blocks=tuple(blocks),
-                    failures=(),
-                    raw_word_count=raw_words,
-                    noise_phrase_hits=count_noise_phrase_hits(narration_text),
-                    stated_word_target=stated,
-                )
+            raw_words = sum(word_count(b.text) for b in blocks if b.kind in ("narration", "reaction") and b.text)
+            hard = [f for f in failures if not f.soft]
+            last_attempt = attempt >= MAX_REGENERATIONS
+            # Soft failures (the reaction rule) get the retry but never the
+            # fallback: a briefing without a reaction beats no briefing.
+            if not failures or (not hard and last_attempt):
+                soft = [f for f in failures if f.soft]
+                if soft:
+                    logger.info(
+                        "narration: script accepted with soft failures",
+                        attempt=attempt,
+                        failures=[f.reason for f in soft],
+                    )
+                return self._accept(blocks, raw_words, stated, soft)
 
             logger.info(
                 "narration: script validation failed",
@@ -192,6 +199,24 @@ class ScriptWriter:
         # link-index fallback and log a ``narration.fallback`` event.
         last = attempts[-1] if attempts else ((), (), 0)
         return ScriptResult(blocks=(), failures=last[1], raw_word_count=last[2])
+
+    @staticmethod
+    def _accept(
+        blocks: Sequence[ScriptBlock],
+        raw_words: int,
+        stated: int,
+        soft: Sequence[ValidationFailure],
+    ) -> ScriptResult:
+        spoken = " ".join(b.text for b in blocks if b.kind in ("narration", "reaction") and b.text)
+        return ScriptResult(
+            blocks=tuple(blocks),
+            failures=(),
+            raw_word_count=raw_words,
+            noise_phrase_hits=count_noise_phrase_hits(spoken),
+            stated_word_target=stated,
+            reaction_count=sum(1 for b in blocks if b.kind == "reaction"),
+            reactions_missing=sum(1 for f in soft if f.reason == "reaction_missing"),
+        )
 
     def _build_user_prompt(
         self,
@@ -270,7 +295,7 @@ class ScriptWriter:
         blocks: List[ScriptBlock] = []
         removed_total = 0
         for raw in out_blocks:
-            if raw.kind == "narration":
+            if raw.kind in ("narration", "reaction"):
                 # Spec #42 guard at the seam where model text becomes a
                 # script block (the 2026-07-02 control-byte incident).
                 clean, removed = sanitize_text(raw.text or "")
@@ -279,7 +304,7 @@ class ScriptWriter:
                 duration = word_count(text) / wpm * 60.0 if text and wpm else 0.0
                 blocks.append(
                     ScriptBlock(
-                        kind="narration",
+                        kind=raw.kind,
                         section=raw.section,
                         text=text,
                         duration_seconds=duration,
@@ -329,7 +354,7 @@ class ScriptWriter:
         # An 8-word slice that appears verbatim in any quote is the
         # paraphrase-leak signal — the model copied a quote into the
         # narration instead of cueing it. Spec #33 §"Script Generation".
-        narration_text = " ".join(b.text for b in blocks if b.kind == "narration" and b.text)
+        narration_text = " ".join(b.text for b in blocks if b.kind in ("narration", "reaction") and b.text)
         leaked_quote_id = self._first_verbatim_leak(narration_text, quotes_by_id)
         if leaked_quote_id is not None:
             failures.append(
@@ -368,7 +393,52 @@ class ScriptWriter:
                 )
             )
 
+        failures.extend(self._validate_reactions(blocks))
         return tuple(failures)
+
+    @staticmethod
+    def _validate_reactions(blocks: Sequence[ScriptBlock]) -> List[ValidationFailure]:
+        """Spec #77 Phase 2b: every quote cue is followed by one short reaction.
+
+        Soft failures: they earn the retry, never the fallback.
+        """
+        out: List[ValidationFailure] = []
+        for idx, b in enumerate(blocks):
+            if b.kind != "quote":
+                continue
+            nxt = blocks[idx + 1] if idx + 1 < len(blocks) else None
+            if nxt is None or nxt.kind != "reaction" or not nxt.text:
+                out.append(
+                    ValidationFailure(
+                        reason="reaction_missing",
+                        detail=(
+                            f"quote {b.quote_id} (block {idx}) must be followed by one"
+                            " kind=reaction block: a single spoken sentence reacting to the clip"
+                        ),
+                        soft=True,
+                    )
+                )
+                continue
+            if nxt.section != b.section:
+                out.append(
+                    ValidationFailure(
+                        reason="reaction_section_mismatch",
+                        detail=f"reaction after quote {b.quote_id} must share section {b.section!r}",
+                        soft=True,
+                    )
+                )
+            if word_count(nxt.text) > REACTION_MAX_WORDS:
+                out.append(
+                    ValidationFailure(
+                        reason="reaction_too_long",
+                        detail=(
+                            f"reaction after quote {b.quote_id} is {word_count(nxt.text)} words;"
+                            f" keep it to one sentence under {REACTION_MAX_WORDS}"
+                        ),
+                        soft=True,
+                    )
+                )
+        return out
 
     @staticmethod
     def _first_verbatim_leak(narration: str, quotes_by_id: Mapping[str, QuoteCandidate]) -> Optional[str]:

@@ -98,6 +98,7 @@ def _good_response(
     narration_words: int = 100,
     cue_quote: bool = True,
     quote_id: str = "q1",
+    reaction: str | None = "Which, honestly, is the bit worth stealing.",
 ) -> dict:
     body = (" ".join(["word"] * narration_words)).strip()
     blocks: List[Dict[str, Any]] = [
@@ -105,6 +106,8 @@ def _good_response(
     ]
     if cue_quote:
         blocks.append({"kind": "quote", "section": "segment-1", "quote_id": quote_id})
+        if reaction:
+            blocks.append({"kind": "reaction", "section": "segment-1", "text": reaction})
     return {"blocks": blocks}
 
 
@@ -239,12 +242,13 @@ def test_segment_prompt_prefers_material_and_falls_back_to_gist() -> None:
 
 def test_stated_target_is_below_the_validated_budget() -> None:
     """Spec #77 §4: the model hears 80 % of the budget; validation keeps the ceiling."""
-    provider = _ScriptedProvider([_good_response(narration_words=110)])
+    provider = _ScriptedProvider([_good_response(narration_words=105)])
     result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
     )
     assert "aim for 80 words" in provider.last_messages[1]["content"]
-    assert result.failures == () and result.stated_word_target == 80  # 110 ≤ 115 passes
+    # 105 narration + 7 reaction words = 112 ≤ 115: over the stated target, under the ceiling.
+    assert result.failures == () and result.stated_word_target == 80
     provider = _ScriptedProvider([_good_response(narration_words=100)])
     ScriptWriter(provider, _SYSTEM_PROMPT, stated_target_ratio=1.0).write(
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
@@ -283,3 +287,60 @@ def test_control_bytes_in_model_output_are_stripped() -> None:
     )
     assert result.failures == ()
     assert "\x00" not in result.blocks[0].text and result.blocks[0].text.startswith("So here is the thing.")
+
+
+def test_quote_without_reaction_retries_then_is_accepted_with_a_miss_recorded() -> None:
+    """Spec #77 Phase 2b: the reaction rule earns the retry, never the fallback."""
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, reaction=None), _good_response(narration_words=100, reaction=None)]
+    )
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2
+    assert "reaction_missing" in provider.last_messages[1]["content"]
+    assert result.failures == () and result.blocks  # accepted, not fallen back
+    assert result.reactions_missing == 1 and result.reaction_count == 0
+
+
+def test_reaction_on_retry_clears_the_miss() -> None:
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, reaction=None), _good_response(narration_words=100)]
+    )
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2
+    assert result.reactions_missing == 0 and result.reaction_count == 1
+    assert [b.kind for b in result.blocks] == ["narration", "quote", "reaction"]
+
+
+def test_overlong_or_misplaced_reaction_is_soft() -> None:
+    long_reaction = " ".join(["word"] * 40)
+    response = _good_response(narration_words=60, reaction=long_reaction)  # 100 spoken words total
+    response["blocks"][-1]["section"] = "segment-2"
+    provider = _ScriptedProvider([response, response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2 and result.blocks
+    retry = provider.last_messages[1]["content"]
+    assert "reaction_too_long" in retry and "reaction_section_mismatch" in retry
+
+
+def test_hard_failure_still_falls_back_even_when_reaction_is_fine() -> None:
+    provider = _ScriptedProvider([_good_response(narration_words=200), _good_response(narration_words=200)])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert result.blocks == () and [f.reason for f in result.failures] == ["word_budget_high"]
+
+
+def test_reaction_words_count_toward_budget_and_leak_check() -> None:
+    leak = _quote().text
+    response = _good_response(narration_words=60, reaction=leak)
+    provider = _ScriptedProvider([response, response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert result.blocks == () and "verbatim_leak" in [f.reason for f in result.failures]

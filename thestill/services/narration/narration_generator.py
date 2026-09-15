@@ -146,6 +146,8 @@ class _Pipeline:
     # Filled by the script stage on success (spec #77 §3/§4 stats).
     noise_phrase_hits: int = 0
     stated_word_target: int = 0
+    reaction_count: int = 0
+    reactions_missing: int = 0
 
     @property
     def quote_pool_size(self) -> int:
@@ -266,6 +268,8 @@ class NarrationGenerator:
             "narration_words": content.stats.narration_words,
             "stated_word_target": content.stats.stated_word_target,
             "noise_phrase_hits": content.stats.noise_phrase_hits,
+            "reaction_count": content.stats.reaction_count,
+            "reactions_missing": content.stats.reactions_missing,
         }
         # Spec #35 — go through FileStorage so artefacts land on the
         # configured backend (was Path.write_text, missing S3 entirely).
@@ -370,6 +374,8 @@ class NarrationGenerator:
             return None
         pipeline.noise_phrase_hits = result.noise_phrase_hits
         pipeline.stated_word_target = result.stated_word_target
+        pipeline.reaction_count = result.reaction_count
+        pipeline.reactions_missing = result.reactions_missing
         return result.blocks
 
     # --- Outputs --------------------------------------------------------
@@ -413,6 +419,8 @@ class NarrationGenerator:
             narration_words=stats.narration_words,
             stated_word_target=stats.stated_word_target,
             noise_phrase_hits=stats.noise_phrase_hits,
+            reaction_count=stats.reaction_count,
+            reactions_missing=stats.reactions_missing,
             target_seconds=stats.target_duration_seconds,
             actual_seconds=round(stats.actual_duration_seconds, 1),
         )
@@ -581,7 +589,7 @@ class NarrationGenerator:
         # pool: the LLM may drop a quote (or repeat one) and the stats
         # have to match what's actually in the script for downstream
         # TTS budgeting / UI display.
-        narration_words = sum(word_count(b.text) for b in blocks if b.kind == "narration" and b.text)
+        narration_words = sum(word_count(b.text) for b in blocks if b.kind in ("narration", "reaction") and b.text)
         quote_blocks = [b for b in blocks if b.kind == "quote"]
         quote_seconds = sum(b.duration_seconds for b in quote_blocks)
         narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
@@ -598,6 +606,8 @@ class NarrationGenerator:
             episodes_with_sidecar=pipeline.episodes_with_sidecar,
             noise_phrase_hits=pipeline.noise_phrase_hits,
             stated_word_target=pipeline.stated_word_target,
+            reaction_count=pipeline.reaction_count,
+            reactions_missing=pipeline.reactions_missing,
         )
 
     @staticmethod
@@ -710,9 +720,9 @@ class NarrationGenerator:
 
     @staticmethod
     def _block_to_dict(block: ScriptBlock, quotes: List[QuoteCandidate]) -> dict:
-        if block.kind == "narration":
+        if block.kind in ("narration", "reaction"):
             return {
-                "kind": "narration",
+                "kind": block.kind,
                 "section": block.section,
                 "text": block.text or "",
                 "duration_seconds": round(block.duration_seconds, 2),

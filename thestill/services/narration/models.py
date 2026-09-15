@@ -21,7 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
-ScriptBlockKind = Literal["narration", "quote"]
+# ``reaction`` (spec #77 Phase 2b): one spoken sentence that directly follows
+# a quote cue and shares its section. Structural so the validator can
+# require it, the renderer can set it apart, and TTS can pause on it.
+ScriptBlockKind = Literal["narration", "quote", "reaction"]
+# Spoken-sentence ceiling for a reaction block; longer means the model
+# resumed narrating instead of reacting.
+REACTION_MAX_WORDS = 30
 SpeakerRole = Literal["host", "guest", "unknown"]
 NarrationMode = Literal["narrated", "fallback"]
 
@@ -100,6 +106,10 @@ class NarrationStats:
     # writer was told, which sits below the validation ceiling.
     noise_phrase_hits: int = 0
     stated_word_target: int = 0
+    # Spec #77 Phase 2b — reaction blocks emitted, and quote cues that were
+    # still missing one after the retry (accepted, not failed).
+    reaction_count: int = 0
+    reactions_missing: int = 0
 
 
 @dataclass
@@ -197,3 +207,7 @@ class ValidationFailure:
 
     reason: str
     detail: str
+    # Soft failures trigger the single retry but never the fallback: on the
+    # last attempt the script is accepted and the miss is recorded as a
+    # stat (spec #77 Phase 2b, reaction rule).
+    soft: bool = False
