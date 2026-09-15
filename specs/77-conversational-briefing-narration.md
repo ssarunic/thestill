@@ -1,7 +1,8 @@
 # Conversational Briefing Narration
 
-> **Status:** 📝 Draft (2026-09-07)
+> **Status:** 🚧 Phases 1–2 implemented on `feat/77-conversational-briefing-narration` (2026-09-15); Phase 3 pending
 > **Created:** 2026-09-07
+> **Updated:** 2026-09-15
 > **Author:** Product & Engineering
 > **Related:** [#33 narrated-digest](33-narrated-digest.md) (pipeline this spec amends), [#36 per-user-digest-from-inbox](36-per-user-digest-from-inbox.md) (briefing → inbox window), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) (consumes the script; unchanged), [#54 summary-segment-citations](54-summary-segment-citations.md) (citation markup stripped from the new inputs), [#58 original-language-summaries](58-original-language-summaries.md) (section-number anchors), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md) (FM checklist), [#53 eval-runs-and-summary-rubric](53-eval-runs-and-summary-rubric.md) (no narration rubric yet)
 
@@ -252,8 +253,8 @@ Manual, before merge: rerun briefing `3572399c` (or the current day's) through `
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 1 | §1 loader fixes, §6 warning + stats, loader tests | `thestill narrate` on a live briefing reports `quote_count > 0`; warning fires on a fixture with sidecars and no candidates |
-| 2 | §2 material, §3 prompts + lint, §4 ratio, §7 config, docs | Same briefing narrates with the conversational prompt within budget on first attempt in ≥ 4 of 5 runs; `newsroom` still works |
+| 1 | §1 loader fixes, §6 warning + stats, loader tests | ✅ 2026-09-15. Live run on briefing `3572399c`: `quote_pool_size=6`, `episodes_with_sidecar=7`, 4 clips cued; warning covered by unit test |
+| 2 | §2 material, §3 prompts + lint, §4 ratio, §7 config, docs | ✅ 2026-09-15. Same briefing, conversational voice: narrated on first attempt, 4m40s against 5:00, 508 narration words on a stated 372, `noise_phrase_hits=0`. The 4-of-5 gate is left to the merge PR |
 | 3 | §5 reranker and stage reorder | On the test briefing, each lead segment's clips share ≥ 1 content token with the segment angle or takeaways; reproducibility test passes |
 | 4 (deferred) | #53 narration rubric using `noise_phrase_hits` plus an LLM judge for "sounds spoken" | After #34 audio, per #53's own note |
 
@@ -290,3 +291,19 @@ Phases 1 and 2 are one branch (`feat/77-conversational-briefing-narration`); Pha
 | 2026-09-07 | Fix budget by stating a lower target, not by loosening validation | The +15 % ceiling protects TTS runtime (#34); the writer's overshoot is a prompt behaviour, so correct it in the prompt |
 | 2026-09-07 | Quote relevance as a deterministic rerank after clustering, not LLM choice | Keeps #33's reproducibility rule and the validator simple; embedding upgrade slots into the same interface |
 | 2026-09-07 | Ban-list hits are a stat, not a validation failure | A cliché is cheaper than a link-index fallback (#33 O7) |
+
+---
+
+## Implementation notes (2026-09-15)
+
+Phases 1 and 2 landed as seven commits on `feat/77-conversational-briefing-narration`, in the build order from §"Phases":
+
+1. Loader: sidecar resolved through `clean_transcript_file`; speakers resolved by label and by name via `_resolve_speaker`; `sidecar_exists`. Loader fixture rewritten to the production shape.
+2. `narration.quote_pool_empty` warning; `quote_pool_size` / `episodes_with_sidecar` in stats, JSON header and log lines; fallback log carries the validator detail.
+3. `extract_summary_material` beside `extract_gist`.
+4. `EpisodeBrief.material`, sanitised through `sanitize_text` before it re-enters a prompt; writer renders it per segment episode, gist fallback.
+5. `narration_prompts`: `conversational_anchor.md` (default), `newsroom_anchor.md` (renamed from `default_anchor.md`), `load_anchor_prompt(name)`, `noise_phrases.py` as the single source of the ban list, spliced into `{{noise_phrases}}` at load.
+6. Writer: `stated_target_ratio` (0.8) for the number the model hears, validation unchanged; `noise_phrase_hits` and `stated_word_target` on the result and in stats; model output through the control-byte guard where blocks are built.
+7. Config keys with bounds, wired in `web/app.py` and `cli.py`; `docs/configuration.md`.
+
+Deviation from the draft: the ban list is not duplicated by hand in the prompt file. The loader fills a placeholder from the code constant, so the lint and the instruction share one list (decided with the user, 2026-09-15). Model output is sanitised as well as the material going in, closing the same gap as the 2026-07-02 incident.
