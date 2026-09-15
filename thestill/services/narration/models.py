@@ -95,6 +95,11 @@ class NarrationStats:
     # loader drift for months, so it is logged and persisted.
     quote_pool_size: int = 0
     episodes_with_sidecar: int = 0
+    # Spec #77 §3/§4 — register metric (hits against the shared noise
+    # list; a stat, never a validation failure) and the word target the
+    # writer was told, which sits below the validation ceiling.
+    noise_phrase_hits: int = 0
+    stated_word_target: int = 0
 
 
 @dataclass

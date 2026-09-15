@@ -235,3 +235,51 @@ def test_segment_prompt_prefers_material_and_falls_back_to_gist() -> None:
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
     )
     assert "gist: Compact gist." in provider.last_messages[1]["content"]
+
+
+def test_stated_target_is_below_the_validated_budget() -> None:
+    """Spec #77 §4: the model hears 80 % of the budget; validation keeps the ceiling."""
+    provider = _ScriptedProvider([_good_response(narration_words=110)])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "aim for 80 words" in provider.last_messages[1]["content"]
+    assert result.failures == () and result.stated_word_target == 80  # 110 ≤ 115 passes
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT, stated_target_ratio=1.0).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "aim for 100 words" in provider.last_messages[1]["content"]
+
+
+def test_retry_restates_the_stated_target() -> None:
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, quote_id="q-nope"), _good_response(narration_words=100)]
+    )
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    retry_prompt = provider.last_messages[1]["content"]
+    assert "RETRY" in retry_prompt and "Aim for 80 narration words" in retry_prompt
+
+
+def test_noise_phrase_hits_are_counted_not_failed() -> None:
+    body = "The landscape is shifting, and it's worth noting that, notably, nobody can navigate it. " * 3
+    response = {"blocks": [{"kind": "narration", "section": "opener", "text": body}]}
+    provider = _ScriptedProvider([response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[], narration_word_budget=50
+    )
+    assert result.failures == ()
+    assert result.noise_phrase_hits == 12  # four phrases × three repeats
+
+
+def test_control_bytes_in_model_output_are_stripped() -> None:
+    body = "So here is\x00 the thing. " + " ".join(["word"] * 60)
+    response = {"blocks": [{"kind": "narration", "section": "opener", "text": body}]}
+    provider = _ScriptedProvider([response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[], narration_word_budget=60
+    )
+    assert result.failures == ()
+    assert "\x00" not in result.blocks[0].text and result.blocks[0].text.startswith("So here is the thing.")

@@ -31,6 +31,8 @@ from pydantic import BaseModel, Field
 from structlog import get_logger
 
 from ...core.llm_provider import LLMProvider
+from ...utils.text_sanitizer import sanitize_text
+from ..narration_prompts import count_noise_phrase_hits
 from .models import (
     EpisodeBrief,
     QuoteCandidate,
@@ -55,6 +57,11 @@ WORD_BUDGET_TOLERANCE_HIGH = 0.15  # +15% cap (strict — overruns hurt TTS)
 WORD_BUDGET_TOLERANCE_LOW = 0.50  # -50% floor (lenient — short briefing > fallback)
 VERBATIM_LEAK_NGRAM = 8  # an 8-word verbatim slice from a quote in narration → leak
 MAX_REGENERATIONS = 1  # one retry, then fall back
+# Spec #77 §4 — the writer is told a target below the validation ceiling.
+# With the richer material it lands at 105–125 % of the number it is
+# given; stating 80 % keeps the result inside the +15 % window without
+# loosening what TTS budgets against.
+DEFAULT_STATED_TARGET_RATIO = 0.8
 
 
 class _ScriptBlockOut(BaseModel):
@@ -78,6 +85,8 @@ class ScriptResult:
     blocks: Tuple[ScriptBlock, ...]
     failures: Tuple[ValidationFailure, ...]
     raw_word_count: int
+    noise_phrase_hits: int = 0
+    stated_word_target: int = 0
 
 
 class ScriptWriter:
@@ -90,10 +99,17 @@ class ScriptWriter:
     fallback signal.
     """
 
-    def __init__(self, provider: LLMProvider, system_prompt: str, wpm: float = 150.0):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        system_prompt: str,
+        wpm: float = 150.0,
+        stated_target_ratio: float = DEFAULT_STATED_TARGET_RATIO,
+    ):
         self.provider = provider
         self.system_prompt = system_prompt
         self.wpm = wpm
+        self.stated_target_ratio = stated_target_ratio
 
     def write(
         self,
@@ -115,7 +131,9 @@ class ScriptWriter:
             )
 
         quotes_by_id = {q.quote_id: q for q in quotes}
-        user_prompt = self._build_user_prompt(plan, briefs_by_id, quotes, narration_word_budget)
+        # The model is told ``stated``; ``_validate`` keeps the real budget.
+        stated = max(1, int(narration_word_budget * self.stated_target_ratio))
+        user_prompt = self._build_user_prompt(plan, briefs_by_id, quotes, stated)
         attempts: List[Tuple[Tuple[ScriptBlock, ...], Tuple[ValidationFailure, ...], int]] = []
         for attempt in range(MAX_REGENERATIONS + 1):
             try:
@@ -151,7 +169,14 @@ class ScriptWriter:
             failures = self._validate(blocks, quotes_by_id, narration_word_budget)
             raw_words = sum(word_count(b.text) for b in blocks if b.kind == "narration" and b.text)
             if not failures:
-                return ScriptResult(blocks=tuple(blocks), failures=(), raw_word_count=raw_words)
+                narration_text = " ".join(b.text for b in blocks if b.kind == "narration" and b.text)
+                return ScriptResult(
+                    blocks=tuple(blocks),
+                    failures=(),
+                    raw_word_count=raw_words,
+                    noise_phrase_hits=count_noise_phrase_hits(narration_text),
+                    stated_word_target=stated,
+                )
 
             logger.info(
                 "narration: script validation failed",
@@ -160,7 +185,7 @@ class ScriptWriter:
             )
             attempts.append((tuple(blocks), tuple(failures), raw_words))
             if attempt < MAX_REGENERATIONS:
-                user_prompt = self._tighten_prompt(user_prompt, failures, narration_word_budget)
+                user_prompt = self._tighten_prompt(user_prompt, failures, stated)
 
         # Both attempts failed (or LLM error path). Surface the latest
         # failure list to the caller — the generator will trigger the
@@ -243,9 +268,14 @@ class ScriptWriter:
         wpm: float,
     ) -> List[ScriptBlock]:
         blocks: List[ScriptBlock] = []
+        removed_total = 0
         for raw in out_blocks:
             if raw.kind == "narration":
-                text = (raw.text or "").strip() or None
+                # Spec #42 guard at the seam where model text becomes a
+                # script block (the 2026-07-02 control-byte incident).
+                clean, removed = sanitize_text(raw.text or "")
+                removed_total += removed
+                text = clean.strip() or None
                 duration = word_count(text) / wpm * 60.0 if text and wpm else 0.0
                 blocks.append(
                     ScriptBlock(
@@ -265,6 +295,8 @@ class ScriptWriter:
                         duration_seconds=quote.duration_seconds if quote else 0.0,
                     )
                 )
+        if removed_total:
+            logger.warning("narration.script_output_sanitized", removed_count=removed_total)
         return blocks
 
     def _validate(

@@ -80,6 +80,9 @@ DEFAULT_OPENER_SHARE = 0.05
 DEFAULT_SIGNOFF_SHARE = 0.03
 # Spec #77 §2 — per-episode cap on the summary material fed to the writer.
 DEFAULT_MATERIAL_MAX_WORDS = 400
+# Spec #77 §4 — fraction of the word budget the writer is told (see
+# script_writer.DEFAULT_STATED_TARGET_RATIO for the reasoning).
+DEFAULT_STATED_TARGET_RATIO = 0.8
 
 
 @dataclass
@@ -140,6 +143,9 @@ class _Pipeline:
     # counts of a budget overrun) so the fallback is diagnosable from
     # the log line alone (spec #77 §6).
     fallback_detail: Optional[str] = None
+    # Filled by the script stage on success (spec #77 §3/§4 stats).
+    noise_phrase_hits: int = 0
+    stated_word_target: int = 0
 
     @property
     def quote_pool_size(self) -> int:
@@ -174,6 +180,7 @@ class NarrationGenerator:
         url_generator: Optional[UrlGenerator] = None,
         anchor_prompt: Optional[str] = None,
         material_max_words: int = DEFAULT_MATERIAL_MAX_WORDS,
+        stated_target_ratio: float = DEFAULT_STATED_TARGET_RATIO,
     ):
         self.path_manager = path_manager
         self.file_storage = file_storage
@@ -193,6 +200,7 @@ class NarrationGenerator:
         self.llm_provider = llm_provider
         self._anchor_prompt = anchor_prompt
         self._material_max_words = material_max_words
+        self._stated_target_ratio = stated_target_ratio
         self.clusterer = clusterer
         self.script_writer = script_writer
 
@@ -255,6 +263,9 @@ class NarrationGenerator:
             # header with ``.get`` so the schema version stays "phase2".
             "quote_pool_size": content.stats.quote_pool_size,
             "episodes_with_sidecar": content.stats.episodes_with_sidecar,
+            "narration_words": content.stats.narration_words,
+            "stated_word_target": content.stats.stated_word_target,
+            "noise_phrase_hits": content.stats.noise_phrase_hits,
         }
         # Spec #35 — go through FileStorage so artefacts land on the
         # configured backend (was Path.write_text, missing S3 entirely).
@@ -357,6 +368,8 @@ class NarrationGenerator:
             pipeline.fallback_reason = self._summarise_failures(result.failures)
             pipeline.fallback_detail = "; ".join(f.detail for f in result.failures) or None
             return None
+        pipeline.noise_phrase_hits = result.noise_phrase_hits
+        pipeline.stated_word_target = result.stated_word_target
         return result.blocks
 
     # --- Outputs --------------------------------------------------------
@@ -397,6 +410,9 @@ class NarrationGenerator:
             quote_count=stats.quote_count,
             quote_pool_size=stats.quote_pool_size,
             episodes_with_sidecar=stats.episodes_with_sidecar,
+            narration_words=stats.narration_words,
+            stated_word_target=stats.stated_word_target,
+            noise_phrase_hits=stats.noise_phrase_hits,
             target_seconds=stats.target_duration_seconds,
             actual_seconds=round(stats.actual_duration_seconds, 1),
         )
@@ -474,7 +490,12 @@ class NarrationGenerator:
         if self.llm_provider is None:
             return None
         prompt = self._anchor_prompt or load_default_anchor_prompt()
-        return ScriptWriter(self.llm_provider, system_prompt=prompt, wpm=DEFAULT_WPM)
+        return ScriptWriter(
+            self.llm_provider,
+            system_prompt=prompt,
+            wpm=DEFAULT_WPM,
+            stated_target_ratio=self._stated_target_ratio,
+        )
 
     def _select_quotes_for_episode(
         self,
@@ -575,6 +596,8 @@ class NarrationGenerator:
             fallback_reason=fallback_reason,
             quote_pool_size=pipeline.quote_pool_size,
             episodes_with_sidecar=pipeline.episodes_with_sidecar,
+            noise_phrase_hits=pipeline.noise_phrase_hits,
+            stated_word_target=pipeline.stated_word_target,
         )
 
     @staticmethod
