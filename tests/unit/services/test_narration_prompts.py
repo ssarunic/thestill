@@ -26,8 +26,8 @@ from thestill.services.narration_prompts import (
 )
 
 
-def test_both_voices_ship_and_default_is_conversational() -> None:
-    assert {"conversational_anchor", "newsroom_anchor"} <= set(available_anchor_prompts())
+def test_all_voices_ship_and_default_is_conversational() -> None:
+    assert {"conversational_anchor", "conversational_v2", "newsroom_anchor"} <= set(available_anchor_prompts())
     assert DEFAULT_ANCHOR_PROMPT_NAME == "conversational_anchor"
     assert load_default_anchor_prompt() == load_anchor_prompt("conversational_anchor")
 
@@ -58,3 +58,11 @@ def test_noise_phrase_hits_are_case_and_punctuation_insensitive() -> None:
     assert count_noise_phrase_hits(text) == 5
     assert count_noise_phrase_hits("Azeem said the models are four months behind.") == 0
     assert count_noise_phrase_hits("") == 0
+
+
+def test_v2_prompt_carries_the_reaction_contract_and_noise_list() -> None:
+    text = load_anchor_prompt("conversational_v2")
+    assert "{{noise_phrases}}" not in text
+    assert '"reaction"' in text and "exactly one reaction block" in text
+    assert "transition:" in text and '"great point"' in text
+    assert "`blocks`" in text and "quote_id" in text

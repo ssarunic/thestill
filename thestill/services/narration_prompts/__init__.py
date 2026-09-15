@@ -20,6 +20,9 @@ code changes (spec #33 O5). ``NARRATION_ANCHOR_PROMPT`` picks the file
 by basename (spec #77 §7):
 
 - ``conversational_anchor`` — one narrator talking to a friend (default)
+- ``conversational_v2`` — the same narrator with a point of view: one claim
+  per show, a ``reaction`` block after every clip, honest transitions
+  (spec #77 Phase 2b; becomes the default once the A/B gate passes)
 - ``newsroom_anchor`` — the original measured news-anchor voice
 
 A voice file may contain ``{{noise_phrases}}``; the loader replaces it

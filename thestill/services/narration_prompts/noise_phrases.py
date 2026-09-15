@@ -47,6 +47,17 @@ NOISE_PHRASES: Tuple[str, ...] = (
     "notably",
     "arguably",
     "a stark reminder",
+    # NotebookLM-style filler (spec #77 Phase 2b): uniform enthusiasm and
+    # fake astonishment read as synthetic even when the facts are right.
+    "great point",
+    "fascinating",
+    "incredible",
+    "mind-blowing",
+    "let's dive in",
+    "what's interesting is",
+    "i love that",
+    "i love the idea",
+    "i love this",
 )
 
 _WORD_RE = re.compile(r"[^\w\s]+", re.UNICODE)
