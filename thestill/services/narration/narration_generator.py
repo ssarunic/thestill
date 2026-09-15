@@ -64,6 +64,7 @@ from .models import (
     word_count,
 )
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
+from .register import measure_register
 from .script_writer import ScriptWriter
 from .theme_clusterer import ThemeClusterer
 from .transcript_loader import TranscriptTurnLoader
@@ -270,6 +271,12 @@ class NarrationGenerator:
             "noise_phrase_hits": content.stats.noise_phrase_hits,
             "reaction_count": content.stats.reaction_count,
             "reactions_missing": content.stats.reactions_missing,
+            "first_person_sentences": content.stats.first_person_sentences,
+            "reportage_sentences": content.stats.reportage_sentences,
+            "scare_quote_count": content.stats.scare_quote_count,
+            "sentence_len_p50": content.stats.sentence_len_p50,
+            "sentence_len_p90": content.stats.sentence_len_p90,
+            "bridges_unearned": content.stats.bridges_unearned,
         }
         # Spec #35 — go through FileStorage so artefacts land on the
         # configured backend (was Path.write_text, missing S3 entirely).
@@ -421,6 +428,10 @@ class NarrationGenerator:
             noise_phrase_hits=stats.noise_phrase_hits,
             reaction_count=stats.reaction_count,
             reactions_missing=stats.reactions_missing,
+            first_person_sentences=stats.first_person_sentences,
+            reportage_sentences=stats.reportage_sentences,
+            scare_quote_count=stats.scare_quote_count,
+            bridges_unearned=stats.bridges_unearned,
             target_seconds=stats.target_duration_seconds,
             actual_seconds=round(stats.actual_duration_seconds, 1),
         )
@@ -608,6 +619,7 @@ class NarrationGenerator:
         quote_blocks = [b for b in blocks if b.kind == "quote"]
         quote_seconds = sum(b.duration_seconds for b in quote_blocks)
         narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
+        register = measure_register(blocks, pipeline.plan)
         return NarrationStats(
             target_duration_seconds=cfg.target_duration_seconds,
             actual_duration_seconds=narration_seconds + quote_seconds,
@@ -623,6 +635,12 @@ class NarrationGenerator:
             stated_word_target=pipeline.stated_word_target,
             reaction_count=pipeline.reaction_count,
             reactions_missing=pipeline.reactions_missing,
+            first_person_sentences=register.first_person_sentences,
+            reportage_sentences=register.reportage_sentences,
+            scare_quote_count=register.scare_quotes,
+            sentence_len_p50=register.sentence_len_p50,
+            sentence_len_p90=register.sentence_len_p90,
+            bridges_unearned=register.bridges_unearned,
         )
 
     @staticmethod

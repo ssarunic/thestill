@@ -110,6 +110,13 @@ class NarrationStats:
     # still missing one after the retry (accepted, not failed).
     reaction_count: int = 0
     reactions_missing: int = 0
+    # Deterministic register metrics (``register.measure_register``).
+    first_person_sentences: int = 0
+    reportage_sentences: int = 0
+    scare_quote_count: int = 0
+    sentence_len_p50: float = 0.0
+    sentence_len_p90: float = 0.0
+    bridges_unearned: int = 0
 
 
 @dataclass
