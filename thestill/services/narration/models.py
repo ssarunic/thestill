@@ -88,6 +88,13 @@ class NarrationStats:
     episodes_in_tail: int
     quote_count: int
     fallback_reason: Optional[str] = None
+    # Spec #77 §6 — pool diagnostics. ``quote_pool_size`` is the pool
+    # handed to the writer after the share cap; ``episodes_with_sidecar``
+    # is how many episodes had a transcript to quote from at all. A zero
+    # pool with sidecars present is the silent failure that hid the
+    # loader drift for months, so it is logged and persisted.
+    quote_pool_size: int = 0
+    episodes_with_sidecar: int = 0
 
 
 @dataclass

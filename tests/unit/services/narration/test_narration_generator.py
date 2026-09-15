@@ -45,6 +45,10 @@ class _StaticLoader:
     def load_episode_facts(self, podcast: Podcast, episode: Episode):
         return self._facts.get(episode.id)
 
+    def sidecar_exists(self, podcast: Podcast, episode: Episode) -> bool:
+        # A static episode "has a transcript" exactly when turns were staged for it.
+        return episode.id in self._turns
+
 
 def _make_episode(
     *,
@@ -356,3 +360,86 @@ def test_run_is_deterministic(storage: PathManager, file_storage) -> None:
     assert [b.section for b in content_a.blocks] == [b.section for b in content_b.blocks]
     assert [q.quote_id for q in content_a.quotes] == [q.quote_id for q in content_b.quotes]
     assert [q.text for q in content_a.quotes] == [q.text for q in content_b.quotes]
+
+
+class _RecordingLogger:
+    """Minimal structlog stand-in that records ``warning`` calls."""
+
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, dict]] = []
+
+    def warning(self, event: str, **kw) -> None:
+        self.warnings.append((event, kw))
+
+    def info(self, event: str, **kw) -> None:  # pragma: no cover - noise
+        pass
+
+    def debug(self, event: str, **kw) -> None:  # pragma: no cover - noise
+        pass
+
+
+def test_empty_quote_pool_with_sidecars_warns_and_is_recorded(storage: PathManager, file_storage, monkeypatch) -> None:
+    """Spec #77 §6: transcripts present but nothing selected is never silent."""
+    from thestill.services.narration import narration_generator as ng
+
+    rec = _RecordingLogger()
+    monkeypatch.setattr(ng, "logger", rec)
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    # A sidecar exists (turns staged) but every turn is unresolved → ineligible.
+    unresolved = _good_turn(episode_id="e1", segment_id=1, start=60.0, speaker=None)  # type: ignore[arg-type]
+    loader = _StaticLoader(turns_by_episode={"e1": [unresolved]})
+    gen = NarrationGenerator(path_manager=storage, file_storage=file_storage, loader=loader, selector=QuoteSelector())
+    content = gen.generate([(podcast, ep1)])
+
+    assert content.stats.quote_pool_size == 0
+    assert content.stats.episodes_with_sidecar == 1
+    events = [e for e, _ in rec.warnings]
+    assert events == ["narration.quote_pool_empty"]
+    assert rec.warnings[0][1]["episodes_with_sidecar"] == 1
+    payload = json.loads(gen.write_json_script(content).read_text(encoding="utf-8"))
+    assert payload["quote_pool_size"] == 0
+    assert payload["episodes_with_sidecar"] == 1
+    assert payload["schema_version"] == "phase2"
+
+
+def test_empty_quote_pool_without_sidecars_is_quiet(storage: PathManager, file_storage, monkeypatch) -> None:
+    from thestill.services.narration import narration_generator as ng
+
+    rec = _RecordingLogger()
+    monkeypatch.setattr(ng, "logger", rec)
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    gen = NarrationGenerator(
+        path_manager=storage, file_storage=file_storage, loader=_StaticLoader({}), selector=QuoteSelector()
+    )
+    content = gen.generate([(podcast, ep1)])
+    assert content.stats.episodes_with_sidecar == 0
+    assert rec.warnings == []
+
+
+def test_pool_stats_survive_the_narrated_path(storage: PathManager, file_storage) -> None:
+    from thestill.services.narration.models import Segment, ThemePlan
+    from thestill.services.narration.script_writer import ScriptResult
+
+    podcast = _make_podcast(id_="p1", title="Test Podcast", slug="test-podcast")
+    ep1 = _make_episode(id_="e1", podcast_id="p1", slug="ep-one")
+    loader = _StaticLoader({"e1": [_good_turn(episode_id="e1", segment_id=1, start=60.0, speaker="Alex Anchor")]})
+    plan = ThemePlan(segments=(Segment(theme="T", angle="A", episode_ids=("e1",), rank=1),), tail_ids=())
+    blocks = [
+        ScriptBlock(kind="narration", section="opener", text="Lead in."),
+        ScriptBlock(kind="quote", section="segment-1", quote_id="q1", duration_seconds=12.0),
+        ScriptBlock(kind="narration", section="signoff", text="Bye."),
+    ]
+    gen = NarrationGenerator(
+        path_manager=storage,
+        file_storage=file_storage,
+        loader=loader,
+        selector=QuoteSelector(),
+        clusterer=_StubClusterer(plan),
+        script_writer=_StubScriptWriter(ScriptResult(blocks=tuple(blocks), failures=(), raw_word_count=3)),
+    )
+    content = gen.generate([(podcast, ep1)])
+    assert content.mode == "narrated"
+    assert content.stats.quote_pool_size == 1
+    assert content.stats.episodes_with_sidecar == 1

@@ -121,6 +121,7 @@ class _PerEpisodeBucket:
     episode: Episode
     picked: List[QuoteCandidate]
     brief: EpisodeBrief
+    has_sidecar: bool = False
 
 
 @dataclass
@@ -132,6 +133,18 @@ class _Pipeline:
     buckets: List[_PerEpisodeBucket] = field(default_factory=list)
     plan: ThemePlan = field(default_factory=lambda: ThemePlan(segments=(), tail_ids=()))
     fallback_reason: Optional[str] = None
+    # Human-readable detail behind ``fallback_reason`` (e.g. the word
+    # counts of a budget overrun) so the fallback is diagnosable from
+    # the log line alone (spec #77 §6).
+    fallback_detail: Optional[str] = None
+
+    @property
+    def quote_pool_size(self) -> int:
+        return sum(len(b.picked) for b in self.buckets)
+
+    @property
+    def episodes_with_sidecar(self) -> int:
+        return sum(1 for b in self.buckets if b.has_sidecar)
 
 
 class NarrationGenerator:
@@ -233,6 +246,10 @@ class NarrationGenerator:
             "blocks": [self._block_to_dict(b, content.quotes) for b in content.blocks],
             "episodes_covered": list(content.episode_ids_covered),
             "episodes_in_tail": list(content.episode_ids_in_tail),
+            # Spec #77 §6 — additive diagnostics; consumers read the
+            # header with ``.get`` so the schema version stays "phase2".
+            "quote_pool_size": content.stats.quote_pool_size,
+            "episodes_with_sidecar": content.stats.episodes_with_sidecar,
         }
         # Spec #35 — go through FileStorage so artefacts land on the
         # configured backend (was Path.write_text, missing S3 entirely).
@@ -284,6 +301,7 @@ class NarrationGenerator:
                     episode=episode,
                     picked=picked,
                     brief=self._build_episode_brief(podcast, episode),
+                    has_sidecar=self.loader.sidecar_exists(podcast, episode),
                 )
             )
         kept_ids = self._enforce_quote_share_cap(
@@ -293,6 +311,16 @@ class NarrationGenerator:
         )
         for bucket in pipeline.buckets:
             bucket.picked = [q for q in bucket.picked if q.quote_id in kept_ids]
+        if pipeline.episodes_with_sidecar and not pipeline.quote_pool_size:
+            # Transcripts were there to quote from and nothing survived
+            # selection. Spec #77 §6: this must never be silent — it is
+            # the exact shape of the loader drift that produced quote-less
+            # briefings for months.
+            logger.warning(
+                "narration.quote_pool_empty",
+                episodes_total=len(pipeline.buckets),
+                episodes_with_sidecar=pipeline.episodes_with_sidecar,
+            )
 
     def _stage_theme_clustering(self, pipeline: _Pipeline) -> None:
         clusterer = self._theme_clusterer()
@@ -322,6 +350,7 @@ class NarrationGenerator:
         )
         if not result.blocks:
             pipeline.fallback_reason = self._summarise_failures(result.failures)
+            pipeline.fallback_detail = "; ".join(f.detail for f in result.failures) or None
             return None
         return result.blocks
 
@@ -331,7 +360,7 @@ class NarrationGenerator:
         all_quotes = [q for b in pipeline.buckets for q in b.picked]
         episode_ids_covered, episode_ids_in_tail = self._covered_and_tail(pipeline.plan, pipeline)
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks,
             episode_ids_covered,
             episode_ids_in_tail,
@@ -361,6 +390,8 @@ class NarrationGenerator:
             episodes_covered=stats.episodes_covered,
             episodes_in_tail=stats.episodes_in_tail,
             quote_count=stats.quote_count,
+            quote_pool_size=stats.quote_pool_size,
+            episodes_with_sidecar=stats.episodes_with_sidecar,
             target_seconds=stats.target_duration_seconds,
             actual_seconds=round(stats.actual_duration_seconds, 1),
         )
@@ -372,7 +403,7 @@ class NarrationGenerator:
         episode_ids_in_tail = [b.episode.id for b in pipeline.buckets if not b.picked]
         blocks = self._render_skeleton_blocks(pipeline)
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks,
             episode_ids_covered,
             episode_ids_in_tail,
@@ -395,7 +426,7 @@ class NarrationGenerator:
             " instead._\n\n" + digest_content.markdown
         )
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks=(),
             episode_ids_covered=[],
             episode_ids_in_tail=episode_ids_in_tail,
@@ -404,8 +435,11 @@ class NarrationGenerator:
         logger.warning(
             "narration.fallback",
             reason=stats.fallback_reason,
+            detail=pipeline.fallback_detail,
             episodes_total=len(pipeline.buckets),
             quote_count=stats.quote_count,
+            quote_pool_size=stats.quote_pool_size,
+            episodes_with_sidecar=stats.episodes_with_sidecar,
         )
         return NarrationContent(
             blocks=[],
@@ -495,12 +529,13 @@ class NarrationGenerator:
 
     @staticmethod
     def _build_stats(
-        cfg: NarrationConfig,
+        pipeline: _Pipeline,
         blocks: Sequence[ScriptBlock],
         episode_ids_covered: Sequence[str],
         episode_ids_in_tail: Sequence[str],
         fallback_reason: Optional[str] = None,
     ) -> NarrationStats:
+        cfg = pipeline.cfg
         # Derive stats from the emitted blocks rather than the selected
         # pool: the LLM may drop a quote (or repeat one) and the stats
         # have to match what's actually in the script for downstream
@@ -518,6 +553,8 @@ class NarrationGenerator:
             episodes_in_tail=len(episode_ids_in_tail),
             quote_count=len(quote_blocks),
             fallback_reason=fallback_reason,
+            quote_pool_size=pipeline.quote_pool_size,
+            episodes_with_sidecar=pipeline.episodes_with_sidecar,
         )
 
     @staticmethod
