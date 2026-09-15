@@ -38,9 +38,9 @@ def clean_env(monkeypatch, tmp_path):
     return monkeypatch
 
 
-def test_defaults_are_conversational_voice_and_spec_values(clean_env) -> None:
+def test_defaults_are_conversational_v2_voice_and_spec_values(clean_env) -> None:
     config = load_config()
-    assert config.narration_anchor_prompt == "conversational_anchor"
+    assert config.narration_anchor_prompt == "conversational_v2"
     assert config.narration_stated_target_ratio == 0.8
     assert config.narration_material_max_words == 400
 

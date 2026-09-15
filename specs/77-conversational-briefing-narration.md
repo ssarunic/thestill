@@ -1,6 +1,6 @@
 # Conversational Briefing Narration
 
-> **Status:** 🚧 Phases 1–2 and 2b (register rewrite) implemented on `feat/77-conversational-briefing-narration` (2026-09-15); default voice flip pending decision; Phase 3 pending
+> **Status:** 🚧 Phases 1–2 and 2b (register rewrite) implemented on `feat/77-conversational-briefing-narration` (2026-09-15); `conversational_v2` is the default voice; Phase 3 pending
 > **Created:** 2026-09-07
 > **Updated:** 2026-09-15
 > **Author:** Product & Engineering
@@ -336,8 +336,8 @@ Soft rules earn the single retry with the miss named and never fall back;
 a retry that trips a hard rule falls back to the earlier soft-only
 attempt, not to the link index. Noise-phrase hits are also a soft rule.
 
-New voice `conversational_v2.md`; `conversational_anchor` stays the
-default until the flip decision below. Register metrics
+New voice `conversational_v2.md`, the default since 2026-09-15;
+`conversational_anchor` is kept as the A/B baseline. Register metrics
 (`services/narration/register.py`) land in stats and the JSON header.
 `scripts/narration_ab.py` runs the rubric.
 
@@ -387,8 +387,10 @@ fewer clips (2 per script) and a shorter runtime (3:26 on a 5:00
 target), because the pool is still chosen before the claim is known;
 the Phase 3 rerank against the claim is the fix.
 
-Decision pending: flip `NARRATION_ANCHOR_PROMPT` default to
-`conversational_v2` on this evidence, or hold for a gate pass.
+Decision (2026-09-15, with the user): flip the default to
+`conversational_v2` on this evidence. The remaining misses are single-run
+and within variance, the structural gates pass 3/3, and the previous
+default is one env var away. The strict gate stays as the Phase 3 target.
 
 ### Follow-ups
 

@@ -26,10 +26,10 @@ from thestill.services.narration_prompts import (
 )
 
 
-def test_all_voices_ship_and_default_is_conversational() -> None:
+def test_all_voices_ship_and_default_is_conversational_v2() -> None:
     assert {"conversational_anchor", "conversational_v2", "newsroom_anchor"} <= set(available_anchor_prompts())
-    assert DEFAULT_ANCHOR_PROMPT_NAME == "conversational_anchor"
-    assert load_default_anchor_prompt() == load_anchor_prompt("conversational_anchor")
+    assert DEFAULT_ANCHOR_PROMPT_NAME == "conversational_v2"
+    assert load_default_anchor_prompt() == load_anchor_prompt("conversational_v2")
 
 
 def test_conversational_prompt_embeds_the_noise_list_from_code() -> None:

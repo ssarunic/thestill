@@ -85,8 +85,8 @@ and is picked by basename with `NARRATION_ANCHOR_PROMPT` (spec #77):
 
 | Voice | File | Character |
 |---|---|---|
-| `conversational_anchor` (default) | [`conversational_anchor.md`](../thestill/services/narration_prompts/conversational_anchor.md) | One narrator talking to a friend: spoken English, concrete beat first, reacts to clips, story-shaped segments |
-| `conversational_v2` | [`conversational_v2.md`](../thestill/services/narration_prompts/conversational_v2.md) | Same narrator with a point of view: one claim per show, a `reaction` block after every clip, a why-you'd-care line per segment, honest transitions (spec #77 Phase 2b) |
+| `conversational_v2` (default) | [`conversational_v2.md`](../thestill/services/narration_prompts/conversational_v2.md) | One narrator with a point of view: one claim per show, a `reaction` block after every clip, a why-you'd-care line per segment, honest transitions (spec #77 Phase 2b) |
+| `conversational_anchor` | [`conversational_anchor.md`](../thestill/services/narration_prompts/conversational_anchor.md) | The Phase 2 conversational voice: spoken English, concrete beat first, story-shaped segments; kept as the A/B baseline |
 | `newsroom_anchor` | [`newsroom_anchor.md`](../thestill/services/narration_prompts/newsroom_anchor.md) | The original spec #33 voice: informed, slightly wry, news-anchor pacing |
 
 The prompt is **read on every run** (no in-process caching) so an

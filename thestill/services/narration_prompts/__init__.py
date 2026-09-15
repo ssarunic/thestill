@@ -19,10 +19,11 @@ prompts can be diffed, shipped, and overridden per environment without
 code changes (spec #33 O5). ``NARRATION_ANCHOR_PROMPT`` picks the file
 by basename (spec #77 §7):
 
-- ``conversational_anchor`` — one narrator talking to a friend (default)
-- ``conversational_v2`` — the same narrator with a point of view: one claim
+- ``conversational_v2`` — one narrator with a point of view: one claim
   per show, a ``reaction`` block after every clip, honest transitions
-  (spec #77 Phase 2b; becomes the default once the A/B gate passes)
+  (spec #77 Phase 2b; default since 2026-09-15)
+- ``conversational_anchor`` — the Phase 2 conversational voice, kept as
+  the A/B baseline
 - ``newsroom_anchor`` — the original measured news-anchor voice
 
 A voice file may contain ``{{noise_phrases}}``; the loader replaces it
@@ -37,7 +38,7 @@ from typing import List
 from .noise_phrases import NOISE_PHRASES, count_noise_phrase_hits, find_noise_phrases, render_noise_phrases
 
 PROMPTS_DIR = Path(__file__).parent
-DEFAULT_ANCHOR_PROMPT_NAME = "conversational_anchor"
+DEFAULT_ANCHOR_PROMPT_NAME = "conversational_v2"
 NOISE_PHRASES_PLACEHOLDER = "{{noise_phrases}}"
 
 # Basename only: no separators, no dots, so a config value can never
@@ -89,5 +90,5 @@ def load_anchor_prompt(name: str) -> str:
 
 
 def load_default_anchor_prompt() -> str:
-    """The default voice (spec #77: conversational)."""
+    """The default voice (spec #77 Phase 2b: conversational_v2)."""
     return load_anchor_prompt(DEFAULT_ANCHOR_PROMPT_NAME)

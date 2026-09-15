@@ -415,11 +415,11 @@ class Config(BaseModel):
     narration_default_duration_seconds: int = 300
     # Spec #77 — anchor voice and writer tuning. ``narration_anchor_prompt``
     # is the basename of a file under ``services/narration_prompts``
-    # (``conversational_anchor`` | ``newsroom_anchor``); the stated-target
+    # (``conversational_v2`` | ``conversational_anchor`` | ``newsroom_anchor``); the stated-target
     # ratio is the share of the word budget the writer is told (validation
     # keeps the full budget); the material cap bounds per-episode summary
     # text fed to the writer.
-    narration_anchor_prompt: str = "conversational_anchor"
+    narration_anchor_prompt: str = "conversational_v2"
     narration_stated_target_ratio: float = 0.8
     narration_material_max_words: int = 400
 
@@ -772,7 +772,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
-        "narration_anchor_prompt": os.getenv("NARRATION_ANCHOR_PROMPT", "conversational_anchor").strip(),
+        "narration_anchor_prompt": os.getenv("NARRATION_ANCHOR_PROMPT", "conversational_v2").strip(),
         "narration_stated_target_ratio": float(os.getenv("NARRATION_STATED_TARGET_RATIO", "0.8")),
         "narration_material_max_words": int(os.getenv("NARRATION_MATERIAL_MAX_WORDS", "400")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
