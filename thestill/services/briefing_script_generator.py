@@ -190,37 +190,35 @@ def extract_summary_material(summary_text: str, *, max_words: int = 400) -> Opti
     if not sections:
         return None
 
-    def total_words() -> int:
-        # Labels are sent to the model too, so they count against the cap.
-        return sum(
-            len(label.split()) + sum(len(line.split()) for item in items for line in item)
-            for label, items in sections
-            if items
-        )
+    def item_words(item: List[str]) -> int:
+        return sum(len(line.split()) for line in item)
 
-    while total_words() > max_words:
-        # Trim the last section that still has more than one item; the
-        # gist (first section) only loses items once everything else is gone.
-        trimmed = False
-        for label, items in reversed(sections[1:]):
-            if items:
-                items.pop()
-                trimmed = True
-                break
-        if not trimmed:
-            gist_items = sections[0][1]
-            if len(gist_items) > 1:
-                gist_items.pop()
-            else:
-                keep = max(1, max_words - len(sections[0][0].split()))
-                gist_items[0] = [" ".join(" ".join(gist_items[0]).split()[:keep])]
-                break
+    # One flat list in document order with a running total (labels count:
+    # they are sent to the model too). Trimming pops from the end, skipping
+    # the gist until nothing else is left.
+    kept: List[Tuple[int, List[str]]] = [(idx, item) for idx, (_, items) in enumerate(sections) for item in items]
+    total = sum(len(sections[idx][0].split()) for idx in {idx for idx, _ in kept})
+    total += sum(item_words(item) for _, item in kept)
+    while total > max_words:
+        pos = next((i for i in range(len(kept) - 1, -1, -1) if kept[i][0] != 0), None)
+        if pos is None and len(kept) > 1:
+            pos = len(kept) - 1
+        if pos is None:
+            # Only one gist item left: hard-trim its words and stop.
+            keep = max(1, max_words - len(sections[0][0].split()))
+            kept[0] = (0, [" ".join(" ".join(kept[0][1]).split()[:keep])])
+            break
+        idx, item = kept.pop(pos)
+        total -= item_words(item)
+        if all(i != idx for i, _ in kept):
+            total -= len(sections[idx][0].split())
+
     rendered: List[str] = []
-    for label, items in sections:
-        if not items:
-            continue
-        rendered.append(label)
-        rendered.extend(line for item in items for line in item)
+    for idx, (label, _) in enumerate(sections):
+        section_items = [item for i, item in kept if i == idx]
+        if section_items:
+            rendered.append(label)
+            rendered.extend(line for item in section_items for line in item)
     return "\n".join(rendered)
 
 
@@ -383,13 +381,6 @@ class BriefingScriptGenerator:
     def _extract_executive_summary(self, summary_text: str) -> Optional[str]:
         """Backwards-compat shim. Prefer ``extract_gist`` directly."""
         return extract_gist(summary_text)
-
-    def _split_sentences(self, text: str) -> List[str]:
-        """Split text into sentences."""
-        # Simple sentence splitting on common end punctuation
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        # Filter out empty strings and very short fragments
-        return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
 
     def _generate_markdown(self, episode_infos: List[BriefingEpisodeInfo], stats: BriefingScriptStats) -> str:
         """Generate the markdown content for the briefing script."""
