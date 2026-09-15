@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Summary-section extraction feeding the narration writer (spec #77 §2)."""
+"""Summary-section extraction feeding the narration writer (spec #77 §2 / Phase 2b)."""
 
-from thestill.services.briefing_script_generator import extract_gist, extract_summary_material
+from thestill.services.briefing_script_generator import extract_gist, extract_summary_sections
 
 SUMMARY = """## 1. 🎙️ The Gist
 Steph McGovern and Robert Peston interview Azeem Azhar, founder of Exponential View.
@@ -23,11 +23,11 @@ Azeem shares insights from his trip to Chinese AI labs and explains why the spen
 
 ## 2. ⏱️ Timeline
 * [00:00 - 10:40](?t=0&cite=c0) **China’s AI Scene:** Azeem describes the culture at Moonshot.
-* [42:06 - End](?t=2526&cite=c4) **Financial Risks:** Nvidia’s lending practices.
 
 ## 3. 🧠 Key Takeaways
 * Chinese AI models are now only 4-8 months behind top US models. [02:46](?t=166&cite=c5)
 * AI revenue is real: $110 billion in the last 12 months, growing 3.5x. [24:04](?t=1444&cite=c7)
+* He calls them 'spaghetti' org charts and the 'Oreo' problem. [30:00](?t=1800&cite=c8)
 
 ## 4. 🌶️ The Drama
 
@@ -44,46 +44,38 @@ Azeem shares insights from his trip to Chinese AI labs and explains why the spen
 """
 
 
-def test_material_keeps_gist_takeaways_drama_in_order_and_strips_markup() -> None:
-    out = extract_summary_material(SUMMARY)
-    assert out is not None
-    assert out.index("Gist:") < out.index("Key takeaways:") < out.index("Drama (")
-    for noise in ("?t=", "cite=", "**", "[02:46]", "[07:04]", "[00:00 - 10:40]"):
-        assert noise not in out
-    assert "Nobody is coming to save you" not in out  # section 5 is never fed in
-    assert "Timeline" not in out and "Moonshot" not in out  # section 2 skipped
-    assert "- Round 1:" in out and "  - What happened: Peston suggests" in out
-    assert "4-8 months behind" in out and "1 a.m." in out
+def test_sections_split_takeaways_and_drama_rounds_and_strip_markup() -> None:
+    sections = extract_summary_sections(SUMMARY)
+    assert sections is not None
+    assert sections.gist.startswith("Steph McGovern and Robert Peston")
+    assert len(sections.takeaways) == 3 and len(sections.drama) == 2
+    assert sections.takeaways[0] == "Chinese AI models are now only 4-8 months behind top US models."
+    assert sections.drama[1].startswith("Round 2: The Nightclub Exit")
+    assert "1 a.m. to check on their AI agents" in sections.drama[1]
+    joined = "\n".join(sections.takeaways + sections.drama) + sections.gist
+    for noise in ("?t=", "cite=", "**", "[02:46]", "[07:04]"):
+        assert noise not in joined
+    assert "Nobody is coming to save you" not in joined  # section 5 never fed in
+    assert "Moonshot" not in joined  # timeline skipped
 
 
-def test_material_cap_drops_whole_drama_items_first() -> None:
-    full = extract_summary_material(SUMMARY)
-    assert full is not None
-    words = len(full.split())
-    capped = extract_summary_material(SUMMARY, max_words=words - 5)
-    assert capped is not None
-    # Round 2 (the last drama item) goes as a unit; Round 1 and every takeaway stay.
-    assert "Round 2" not in capped and "Nightclub" not in capped
-    assert "Round 1" in capped and "Tense" in capped
-    assert "4-8 months behind" in capped and "$110 billion" in capped
-    assert len(capped.split()) <= words - 5
+def test_scare_quoted_terms_are_unquoted() -> None:
+    sections = extract_summary_sections(SUMMARY)
+    assert sections is not None
+    assert sections.takeaways[2] == "He calls them spaghetti org charts and the Oreo problem."
+    # Double-quoted titles in drama headers are left alone: only single-quoted terms are scare quotes.
+    assert '"Industrial Vandalism"' in sections.drama[0]
 
 
-def test_material_cap_falls_through_to_takeaways_then_gist() -> None:
-    tiny = extract_summary_material(SUMMARY, max_words=25)
-    assert tiny is not None
-    assert "Drama (" not in tiny and "Key takeaways:" not in tiny
-    assert tiny.startswith("Gist:")
-    assert len(tiny.split()) <= 25
-
-
-def test_material_returns_none_for_legacy_summary_and_gist_still_works() -> None:
+def test_sections_return_none_for_legacy_summary_and_gist_still_works() -> None:
     legacy = "# Episode\n\nExecutive Summary\n\nA short overview. Another sentence here.\n\n**Takeaways**\n- one\n"
-    assert extract_summary_material(legacy) is None
+    assert extract_summary_sections(legacy) is None
     assert extract_gist(legacy) is not None
 
 
-def test_material_bare_timestamps_and_ranges_are_removed() -> None:
-    text = "## 1. The Gist\nIntro [01:02:03] and range [10:00 - 12:30] plus [42:06 - End] done.\n"
-    out = extract_summary_material(text)
-    assert out == "Gist:\nIntro and range plus done."
+def test_sections_tolerate_missing_drama() -> None:
+    text = "## 1. The Gist\nIntro [01:02:03] and range [10:00 - 12:30] done.\n\n## 3. Key Takeaways\n* Only one. [00:10](?t=10&cite=c1)\n"
+    sections = extract_summary_sections(text)
+    assert sections is not None
+    assert sections.gist == "Intro and range done."
+    assert sections.takeaways == ("Only one.",) and sections.drama == ()

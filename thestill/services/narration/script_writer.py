@@ -33,6 +33,7 @@ from structlog import get_logger
 from ...core.llm_provider import LLMProvider
 from ...utils.text_sanitizer import sanitize_text
 from ..narration_prompts import count_noise_phrase_hits
+from .claim_selector import select_claim
 from .models import (
     REACTION_MAX_WORDS,
     EpisodeBrief,
@@ -108,11 +109,13 @@ class ScriptWriter:
         system_prompt: str,
         wpm: float = 150.0,
         stated_target_ratio: float = DEFAULT_STATED_TARGET_RATIO,
+        material_max_words: int = 400,
     ):
         self.provider = provider
         self.system_prompt = system_prompt
         self.wpm = wpm
         self.stated_target_ratio = stated_target_ratio
+        self.material_max_words = material_max_words
 
     def write(
         self,
@@ -247,7 +250,7 @@ class ScriptWriter:
         if plan.segments:
             parts.append("Segment plan:")
             for seg in plan.segments:
-                parts.append(self._format_segment(seg, briefs_by_id))
+                parts.append(self._format_segment(seg, briefs_by_id, self.material_max_words))
         else:
             parts.append("Segment plan: (empty — emit opener, tail-only narration, signoff)")
 
@@ -263,12 +266,13 @@ class ScriptWriter:
         return "\n".join(parts)
 
     @staticmethod
-    def _format_segment(seg: Segment, briefs_by_id: Mapping[str, EpisodeBrief]) -> str:
+    def _format_segment(seg: Segment, briefs_by_id: Mapping[str, EpisodeBrief], material_max_words: int = 400) -> str:
         lines = [
             "",
             f"Segment {seg.rank}: {seg.theme}",
             f"  angle: {seg.angle}",
             f"  section: segment-{seg.rank}",
+            f"  transition: {_transition_instruction(seg)}",
         ]
         for eid in seg.episode_ids:
             brief = briefs_by_id.get(eid)
@@ -277,11 +281,14 @@ class ScriptWriter:
             lines.append(f"  - episode_id={eid} | podcast={brief.podcast_title}" f" | title={brief.episode_title}")
             if brief.guests:
                 lines.append(f"    guests: {', '.join(brief.guests)}")
-            # Spec #77 §2: the writer sees the concrete material when the
-            # summary has it; legacy summaries fall back to the gist.
-            if brief.material:
-                lines.append("    material:")
-                lines.extend(f"      {line}" for line in brief.material.splitlines())
+            # Spec #77 Phase 2b: one claim per show, chosen against the
+            # angle, plus one piece of colour. Legacy summaries fall back
+            # to the gist.
+            chosen = select_claim(brief, seg.angle, max_words=material_max_words)
+            if chosen is not None:
+                lines.append(f"    claim: {chosen.claim}")
+                if chosen.colour:
+                    lines.append(f"    colour: {chosen.colour}")
             elif brief.gist:
                 lines.append(f"    gist: {brief.gist}")
         return "\n".join(lines)
@@ -480,6 +487,19 @@ class ScriptWriter:
 
 
 _PUNCTUATION_RE = re.compile(r"[\W_]+", re.UNICODE)
+
+
+def _transition_instruction(seg: Segment) -> str:
+    """How the writer may move between the shows in ``seg`` (spec #77 Phase 2b)."""
+    if len(seg.episode_ids) < 2 or seg.relationship == "none":
+        return (
+            "these shows are not related; do not bridge them. Use a hard cut or"
+            " one of: 'completely different thing', 'okay, <topic>', 'meanwhile'"
+        )
+    return (
+        f"relationship={seg.relationship}: name it plainly in one sentence"
+        " (e.g. 'X and Y basically disagree on this'), then continue"
+    )
 
 
 def _normalise_for_match(text: str) -> str:

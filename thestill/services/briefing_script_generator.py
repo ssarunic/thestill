@@ -127,11 +127,6 @@ def extract_gist(summary_text: str) -> Optional[str]:
 _CITATION_LINK_RE = re.compile(r"\[[^\]]*\]\(\?[^)]*\)")
 _BARE_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*(?:\d{1,2}:\d{2}(?::\d{2})?|End))?\]")
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
-_MATERIAL_SECTIONS: Tuple[Tuple[int, str], ...] = (
-    (1, "Gist:"),
-    (3, "Key takeaways:"),
-    (4, "Drama (disagreements, anecdotes, tense moments):"),
-)
 
 
 def _summary_section(summary_text: str, number: int) -> Optional[str]:
@@ -167,59 +162,59 @@ def _group_items(lines: List[str]) -> List[List[str]]:
     return items
 
 
-def extract_summary_material(summary_text: str, *, max_words: int = 400) -> Optional[str]:
-    """Gist + Key Takeaways + The Drama, de-marked and capped, for the script writer.
+@dataclass(frozen=True)
+class SummarySections:
+    """The parts of a summary the narration writer can use (spec #77 §2 / Phase 2b).
 
-    Spec #77 §2. The two-sentence gist is enough for theme clustering but
-    starves the writer of the concrete beats (anecdotes, numbers, rows)
-    that live in the takeaways and drama sections. Returns ``None`` when
-    the summary has no numbered sections (legacy layout) so callers fall
-    back to :func:`extract_gist`.
-
-    The cap drops whole bullets from the end: Drama first, then
-    Takeaways; the Gist is only trimmed when nothing else is left.
+    ``takeaways`` are the Key Takeaways bullets, one string each;
+    ``drama`` are The Drama rounds, each round (header plus its indented
+    what-happened / why-it-matters / temperature lines) joined into one
+    string. Citation links, bare timestamps, bold and scare-quoted terms
+    are already removed.
     """
-    sections: List[Tuple[str, List[List[str]]]] = []
-    for number, label in _MATERIAL_SECTIONS:
-        body = _summary_section(summary_text, number)
-        if not body:
-            continue
-        items = _group_items(_strip_summary_markup(body))
-        if items:
-            sections.append((label, items))
-    if not sections:
+
+    gist: str
+    takeaways: Tuple[str, ...]
+    drama: Tuple[str, ...]
+
+
+# A guest's term the summary rubric put in single quotes ('spaghetti',
+# 'Oreo'): unquote it so the writer owns the phrase instead of copying
+# the scare quotes (spec #77 Phase 2b, requirement 5).
+_SCARE_QUOTE_RE = re.compile(r"(?<!\w)[\u2018']([^'\u2019\n]{1,40}?)[\u2019'](?!\w)")
+
+
+def _unquote_terms(text: str) -> str:
+    return _SCARE_QUOTE_RE.sub(r"\1", text)
+
+
+def _items_as_strings(section_text: Optional[str]) -> Tuple[str, ...]:
+    if not section_text:
+        return ()
+    items = _group_items(_strip_summary_markup(section_text))
+    out: List[str] = []
+    for item in items:
+        joined = " ".join(line.strip() for line in item)
+        joined = re.sub(r"^- ", "", joined)
+        joined = joined.replace(" - ", " ")  # flatten nested bullet markers
+        if joined:
+            out.append(_unquote_terms(joined))
+    return tuple(out)
+
+
+def extract_summary_sections(summary_text: str) -> Optional[SummarySections]:
+    """Gist, Key Takeaways and The Drama by section number (spec #58 anchors).
+
+    Returns ``None`` when the summary has no numbered sections (legacy
+    layout) so callers fall back to :func:`extract_gist`.
+    """
+    gist_body = _summary_section(summary_text, 1)
+    takeaways = _items_as_strings(_summary_section(summary_text, 3))
+    drama = _items_as_strings(_summary_section(summary_text, 4))
+    if gist_body is None and not takeaways and not drama:
         return None
-
-    def item_words(item: List[str]) -> int:
-        return sum(len(line.split()) for line in item)
-
-    # One flat list in document order with a running total (labels count:
-    # they are sent to the model too). Trimming pops from the end, skipping
-    # the gist until nothing else is left.
-    kept: List[Tuple[int, List[str]]] = [(idx, item) for idx, (_, items) in enumerate(sections) for item in items]
-    total = sum(len(sections[idx][0].split()) for idx in {idx for idx, _ in kept})
-    total += sum(item_words(item) for _, item in kept)
-    while total > max_words:
-        pos = next((i for i in range(len(kept) - 1, -1, -1) if kept[i][0] != 0), None)
-        if pos is None and len(kept) > 1:
-            pos = len(kept) - 1
-        if pos is None:
-            # Only one gist item left: hard-trim its words and stop.
-            keep = max(1, max_words - len(sections[0][0].split()))
-            kept[0] = (0, [" ".join(" ".join(kept[0][1]).split()[:keep])])
-            break
-        idx, item = kept.pop(pos)
-        total -= item_words(item)
-        if all(i != idx for i, _ in kept):
-            total -= len(sections[idx][0].split())
-
-    rendered: List[str] = []
-    for idx, (label, _) in enumerate(sections):
-        section_items = [item for i, item in kept if i == idx]
-        if section_items:
-            rendered.append(label)
-            rendered.extend(line for item in section_items for line in item)
-    return "\n".join(rendered)
+    gist = _unquote_terms(" ".join(_strip_summary_markup(gist_body or "")))
+    return SummarySections(gist=gist, takeaways=takeaways, drama=drama)
 
 
 def _split_sentences(text: str) -> List[str]:

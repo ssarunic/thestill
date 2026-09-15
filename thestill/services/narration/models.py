@@ -160,10 +160,13 @@ class EpisodeBrief:
     topics: Tuple[str, ...] = ()
     sponsors: Tuple[str, ...] = ()
     gist: Optional[str] = None
-    # Spec #77 §2 — Gist + Key Takeaways + The Drama, de-marked and
-    # capped. Read by the script writer only; the theme clusterer keeps
+    # Spec #77 Phase 2b — Key Takeaways bullets and The Drama rounds, one
+    # string each, de-marked and unquoted. The script writer picks one
+    # claim and one piece of colour per episode from these against the
+    # segment angle (``claim_selector``); the theme clusterer keeps
     # working from ``gist`` so its call stays cheap.
-    material: Optional[str] = None
+    takeaways: Tuple[str, ...] = ()
+    drama: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

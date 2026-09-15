@@ -215,7 +215,7 @@ def test_zero_budget_short_circuits_without_calling_llm() -> None:
     assert any(f.reason == "empty_blocks" for f in result.failures)
 
 
-def test_segment_prompt_prefers_material_and_falls_back_to_gist() -> None:
+def test_segment_prompt_carries_one_claim_and_colour_and_falls_back_to_gist() -> None:
     provider = _ScriptedProvider([_good_response(narration_words=100)])
     briefs = {
         "ep-1": EpisodeBrief(
@@ -223,21 +223,45 @@ def test_segment_prompt_prefers_material_and_falls_back_to_gist() -> None:
             podcast_title="Pod",
             episode_title="Lead Episode",
             gist="Compact gist.",
-            material="Gist:\nHost talks to Guest.\nDrama (disagreements, anecdotes, tense moments):\n- Round 1: The row",
+            takeaways=("AI revenue is real.", "The angle point about shipping."),
+            drama=("Round 1: The row over shipping. Tense.",),
         )
     }
     ScriptWriter(provider, _SYSTEM_PROMPT).write(
         plan=_plan(), briefs_by_id=briefs, quotes=[_quote()], narration_word_budget=100
     )
     user_prompt = provider.last_messages[1]["content"]
-    assert "material:" in user_prompt and "- Round 1: The row" in user_prompt
+    assert "claim: The angle point about shipping." in user_prompt  # picked against the angle
+    assert "colour: Round 1: The row over shipping." in user_prompt
+    assert "AI revenue is real." not in user_prompt  # the other takeaway is dropped, not listed
     assert "gist: Compact gist." not in user_prompt
+    assert "transition: these shows are not related; do not bridge" in user_prompt
 
     provider = _ScriptedProvider([_good_response(narration_words=100)])
     ScriptWriter(provider, _SYSTEM_PROMPT).write(
         plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
     )
-    assert "gist: Compact gist." in provider.last_messages[1]["content"]
+    assert "claim: Compact gist." in provider.last_messages[1]["content"]  # gist fallback becomes the claim
+
+
+def test_segment_prompt_names_a_typed_relationship() -> None:
+    from thestill.services.narration.models import Segment, ThemePlan
+
+    plan = ThemePlan(
+        segments=(
+            Segment(theme="T", angle="two shows disagree", episode_ids=("ep-1", "ep-2"), rank=1, relationship="debate"),
+        ),
+        tail_ids=(),
+    )
+    briefs = {
+        "ep-1": EpisodeBrief(episode_id="ep-1", podcast_title="A", episode_title="One", gist="One gist."),
+        "ep-2": EpisodeBrief(episode_id="ep-2", podcast_title="B", episode_title="Two", gist="Two gist."),
+    }
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=plan, briefs_by_id=briefs, quotes=[_quote()], narration_word_budget=100
+    )
+    assert "transition: relationship=debate: name it plainly" in provider.last_messages[1]["content"]
 
 
 def test_stated_target_is_below_the_validated_budget() -> None:

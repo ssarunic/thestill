@@ -46,7 +46,7 @@ from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager, _validate_slug
 from ...utils.text_sanitizer import sanitize_text
 from ...utils.url_generator import UrlGenerator
-from ..briefing_script_generator import BriefingScriptGenerator, extract_gist, extract_summary_material
+from ..briefing_script_generator import BriefingScriptGenerator, extract_gist, extract_summary_sections
 
 if TYPE_CHECKING:
     from ...utils.file_storage import FileStorage
@@ -503,6 +503,7 @@ class NarrationGenerator:
             system_prompt=prompt,
             wpm=DEFAULT_WPM,
             stated_target_ratio=self._stated_target_ratio,
+            material_max_words=self._material_max_words,
         )
 
     def _select_quotes_for_episode(
@@ -532,6 +533,7 @@ class NarrationGenerator:
     def _build_episode_brief(self, podcast: Podcast, episode: Episode) -> EpisodeBrief:
         facts = self.loader.load_episode_facts(podcast, episode)
         summary = self._read_summary(episode)
+        takeaways, drama = self._writer_material(summary, episode)
         return EpisodeBrief(
             episode_id=episode.id,
             podcast_title=podcast.title,
@@ -540,28 +542,41 @@ class NarrationGenerator:
             topics=tuple(facts.topics_keywords) if facts and facts.topics_keywords else (),
             sponsors=tuple(facts.ad_sponsors) if facts and facts.ad_sponsors else (),
             gist=extract_gist(summary) if summary else None,
-            material=self._material_from_summary(summary, episode),
+            takeaways=takeaways,
+            drama=drama,
         )
 
-    def _material_from_summary(self, summary: Optional[str], episode: Episode) -> Optional[str]:
-        """Writer material (spec #77 §2), sanitised before it re-enters a prompt.
+    def _writer_material(self, summary: Optional[str], episode: Episode) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+        """Takeaways and drama rounds for the writer (spec #77 Phase 2b).
 
         The summary is LLM output; the control-byte guard from spec #42
         applies whenever such text is fed back to a model.
         """
         if not summary:
-            return None
-        material = extract_summary_material(summary, max_words=self._material_max_words)
-        if not material:
-            return None
-        clean, removed = sanitize_text(material)
-        if removed:
+            return (), ()
+        sections = extract_summary_sections(summary)
+        if sections is None:
+            return (), ()
+        removed_total = 0
+
+        def clean_all(items: Tuple[str, ...]) -> Tuple[str, ...]:
+            nonlocal removed_total
+            out = []
+            for item in items:
+                clean, removed = sanitize_text(item)
+                removed_total += removed
+                if clean.strip():
+                    out.append(clean.strip())
+            return tuple(out)
+
+        takeaways, drama = clean_all(sections.takeaways), clean_all(sections.drama)
+        if removed_total:
             logger.warning(
                 "narration.material_sanitized",
                 episode_id=episode.id,
-                removed_count=removed,
+                removed_count=removed_total,
             )
-        return clean or None
+        return takeaways, drama
 
     def _read_summary(self, episode: Episode) -> Optional[str]:
         if not episode.summary_path:
