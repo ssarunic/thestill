@@ -147,6 +147,15 @@ def is_queue_auto_heal_enabled() -> bool:
     return _env_bool("QUEUE_AUTO_HEAL", True)
 
 
+def get_related_incremental_pool_k() -> int:
+    """Seed-pool size for the incremental related-episodes update (spec #56).
+
+    Fixed and corpus-independent: the rail keeps 5 of this many candidates
+    per leg. ``DEFAULT_CANDIDATE_CAP`` remains the full rebuild's knob.
+    """
+    return max(1, _env_int("RELATED_INCREMENTAL_POOL_K", 150))
+
+
 def is_queue_exit_on_degraded_enabled() -> bool:
     """When true (default), a worker that leaks past ``QUEUE_ABANDONED_THREAD_BUDGET``
     asks its process to exit so the container supervisor restarts it. A failed

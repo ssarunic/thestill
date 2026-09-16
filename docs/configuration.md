@@ -373,6 +373,12 @@ Each briefing is emailed at most once — deliveries are tracked in the
 `briefing_deliveries` table with bounded retries, and a failed send never
 blocks briefing generation.
 
+## Related Episodes (spec #46, #56)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RELATED_INCREMENTAL_POOL_K` | Seed-pool size per leg for the incremental `compute-related` update: one vector and one lexical query of this many candidates per new episode, and pool members rescored against the pool plus their stored rail. Fixed, so work per episode never grows with the corpus (spec #56 Phase 1). The full rebuild (`thestill related build`) keeps its own 2,000 cap | `150` |
+
 ## Corpus Search (sqlite-vec)
 
 Hybrid lexical + semantic search over transcript chunks lives in the
