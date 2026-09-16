@@ -1046,7 +1046,7 @@ class TaskWorker:
     def _reset_stale_tasks(self) -> None:
         """Reset any stale processing tasks from previous runs."""
         try:
-            reset_count = self.queue_manager.reset_stale_tasks(self.stale_timeout_minutes)
+            reset_count = self.queue_manager.reset_stale_tasks(self.stale_timeout_minutes * 60.0)
             if reset_count > 0:
                 logger.info(f"Reset {reset_count} stale tasks on startup")
         except Exception as e:
