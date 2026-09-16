@@ -147,6 +147,22 @@ def is_queue_auto_heal_enabled() -> bool:
     return _env_bool("QUEUE_AUTO_HEAL", True)
 
 
+def get_stale_timeout_seconds_per_stage() -> Dict["TaskStage", float]:  # noqa: F821
+    """Per-stage window after which a ``processing`` row is presumed orphaned.
+
+    At least the stage's handler watchdog plus a margin wherever a watchdog
+    exists, and never below the global ``QUEUE_STALE_TIMEOUT_SECONDS``.
+    Before 2026-09-16 the window was a flat 30 minutes while compute-related
+    was allowed two hours, so a healthy handler had its row requeued under it.
+    """
+    global_window = float(max(60, _env_int("QUEUE_STALE_TIMEOUT_SECONDS", 1800)))
+    margin = float(max(0, _env_int("QUEUE_STALE_TIMEOUT_MARGIN_SECONDS", 600)))
+    return {
+        stage: (max(global_window, watchdog + margin) if watchdog else global_window)
+        for stage, watchdog in get_stage_watchdog_seconds().items()
+    }
+
+
 def get_related_incremental_pool_k() -> int:
     """Seed-pool size for the incremental related-episodes update (spec #56).
 
