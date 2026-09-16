@@ -45,6 +45,8 @@ Usage:
 
 import asyncio
 import concurrent.futures
+import os
+import signal
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
@@ -109,6 +111,7 @@ class TaskWorker:
         circuit_window_seconds: float = 120.0,
         circuit_cooldown_seconds: float = 60.0,
         watchdog_timeout_per_stage: Optional[Dict[TaskStage, Optional[float]]] = None,
+        on_degraded: Optional[Callable[[], None]] = None,
     ):
         """
         Initialize task worker.
@@ -124,6 +127,10 @@ class TaskWorker:
                 explicit entry in ``parallel_jobs_per_stage``.
             parallel_jobs_per_stage: Per-stage capacity overrides. Any stage
                 omitted from this dict falls back to ``parallel_jobs``.
+            on_degraded: Called exactly once when leaked handler threads reach
+                ``abandoned_thread_budget``. The server passes
+                :func:`request_process_exit` so the container restarts
+                (see ``is_degraded``); ``None`` only logs and stops claiming.
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
@@ -181,6 +188,7 @@ class TaskWorker:
         from ..utils.config import _env_int
 
         self.abandoned_thread_budget: int = _env_int("QUEUE_ABANDONED_THREAD_BUDGET", 8)
+        self._on_degraded = on_degraded
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -288,8 +296,12 @@ class TaskWorker:
 
         Rather than silently degrade again, the worker stops claiming and says
         so. Recovery is a process restart (the only thing that reclaims the
-        threads); the deployment's ``restart: unless-stopped`` plus a readiness
-        probe that consults this makes that visible and actionable.
+        threads). Failing ``/health/ready`` alone does not get one: Docker's
+        restart policies act on process exit, never on an unhealthy check, so
+        production sat unready for days on 2026-09-16 with a dead pipeline
+        behind a green web server. The server therefore wires ``on_degraded``
+        to :func:`request_process_exit`, which turns the transition into an
+        exit that ``restart: unless-stopped`` recovers within seconds.
         """
         with self._active_lock:
             return sum(self._abandoned_threads.values()) >= self.abandoned_thread_budget
@@ -687,9 +699,18 @@ class TaskWorker:
                             "Only a process restart reclaims these threads."
                         ),
                     )
+                    self._fire_on_degraded()
             finally:
                 with self._active_lock:
                     self._active_by_stage[stage].pop(self._task_key(task), None)
+
+    def _fire_on_degraded(self) -> None:
+        if self._on_degraded is None:
+            return
+        try:
+            self._on_degraded()
+        except Exception as exc:  # noqa: BLE001 — the hook must never take the loop down
+            logger.error("task_worker_on_degraded_failed", error=str(exc), exc_info=True)
 
     def _process_task(self, task: Task) -> None:
         """
@@ -1145,3 +1166,25 @@ class TaskWorker:
                 note="stale-task reset will recover this row",
                 exc_info=True,
             )
+
+
+def request_process_exit(delay_s: float = 2.0) -> None:
+    """Ask this process to shut down so the supervisor restarts it.
+
+    Sends ``SIGTERM`` to our own pid after ``delay_s`` from a daemon timer,
+    so the ``task_worker_degraded`` log line flushes and the calling handler
+    returns first. uvicorn handles SIGTERM as a graceful shutdown, which
+    runs the app's lifespan teardown (``task_worker.stop``) and exits; the
+    container's ``restart: unless-stopped`` then brings a fresh process up
+    with a clean executor. ``QUEUE_EXIT_ON_DEGRADED=false`` opts out.
+    """
+    pid = os.getpid()
+    logger.critical(
+        "task_worker_requesting_exit",
+        pid=pid,
+        delay_s=delay_s,
+        note="degraded worker; exiting so the process supervisor restarts it with a clean executor",
+    )
+    timer = threading.Timer(delay_s, os.kill, args=(pid, signal.SIGTERM))
+    timer.daemon = True
+    timer.start()

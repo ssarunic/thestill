@@ -42,7 +42,7 @@ from ..core.feed_manager import PodcastFeedManager
 from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
 from ..core.task_handlers import create_task_handlers
-from ..core.task_worker import TaskWorker
+from ..core.task_worker import TaskWorker, request_process_exit
 from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
@@ -366,6 +366,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         get_stage_watchdog_seconds,
         is_queue_auto_heal_enabled,
         is_queue_circuit_breaker_enabled,
+        is_queue_exit_on_degraded_enabled,
     )
 
     task_worker = TaskWorker(
@@ -384,6 +385,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         circuit_window_seconds=get_circuit_window_seconds(),
         circuit_cooldown_seconds=get_circuit_cooldown_seconds(),
         watchdog_timeout_per_stage=get_stage_watchdog_seconds(),
+        # A degraded worker fails readiness, but nothing restarts an unhealthy
+        # container; exiting is what the restart policy reacts to.
+        on_degraded=request_process_exit if is_queue_exit_on_degraded_enabled() else None,
     )
     app_state.task_worker = task_worker
 
