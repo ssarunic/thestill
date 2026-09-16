@@ -281,3 +281,84 @@ def test_incremental_without_idf_falls_back_to_full_build(seeded):
     assert summary["episodes"] == 4
     rails = _rails()
     assert set(rails) == {EP_FIT_A, EP_FIT_B, EP_BIZ_C, EP_BIZ_D}
+
+
+# ---------------------------------------------------------------------------
+# Spec #56 §Testing "Complexity guard" — Postgres mirror of
+# tests/unit/search/test_related_complexity_guard.py at a smaller n.
+# ---------------------------------------------------------------------------
+_TOPICS = 20
+
+
+def _topic_docs(rng, topic: int) -> list:
+    vocab = [f"topic{topic}word{w}" for w in range(12)]
+    words = list(rng.choice(vocab, size=7, replace=False)) + ["market", "people"]
+    rng.shuffle(words)
+    return [" ".join(words[:5]), " ".join(words[4:])]
+
+
+def _topic_base(topic: int) -> np.ndarray:
+    base = np.zeros(DIM, dtype=np.float32)
+    base[topic % DIM] = 1.0
+    return base
+
+
+@pytest.fixture
+def corpus_200():
+    """200 episodes across 20 topics with a persisted IDF; returns their ids."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    from thestill.repositories.postgres_schema import ensure_schema
+    from thestill.search.pg_related_builder import _persist_idf
+    from thestill.search.related_builder import _TFIDF_KWARGS
+    from thestill.utils.postgres_ext import connect
+
+    ensure_schema(PG_DSN)
+    rng = np.random.default_rng(11)
+    eids = [str(uuid.uuid4()) for _ in range(200)]
+    docs = {}
+    with connect(PG_DSN, vector=True) as conn:
+        conn.execute(
+            "TRUNCATE chunks, episode_vectors, episode_related, related_idf, "
+            "entity_mentions, entities, episodes, podcasts CASCADE"
+        )
+        conn.execute(
+            "INSERT INTO podcasts (id, rss_url, title) VALUES (%s, %s, %s)",
+            (PODCAST_ID, "https://rel.test/feed.xml", "Related Test Pod"),
+        )
+        for i, eid in enumerate(eids):
+            topic = i % _TOPICS
+            _seed_episode(conn, eid, f"Episode {i}")
+            docs[eid] = _topic_docs(rng, topic)
+            _seed_chunks(conn, eid, docs[eid], _topic_base(topic), seed=1000 + i, noise=0.15)
+    vectorizer = TfidfVectorizer(**_TFIDF_KWARGS)
+    vectorizer.fit([" ".join(docs[e]) for e in eids])
+    _persist_idf(PG_DSN, vectorizer)
+    return eids
+
+
+def test_incremental_work_is_bounded_by_pool_k_on_postgres(corpus_200):
+    from thestill.search.pg_related_builder import update_related_for_episodes
+    from thestill.search.related_builder import IncrementalStats
+    from thestill.utils.postgres_ext import connect
+
+    rng = np.random.default_rng(99)
+    new_id = str(uuid.uuid4())
+    with connect(PG_DSN, vector=True) as conn:
+        _seed_episode(conn, new_id, "Newcomer")
+        _seed_chunks(conn, new_id, _topic_docs(rng, 3), _topic_base(3), seed=5000, noise=0.15)
+
+    k = 20
+    stats = IncrementalStats()
+    summary = update_related_for_episodes(
+        PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=k, stats=stats
+    )
+    pool = 2 * k
+    assert summary["pairs"] > 0
+    assert stats.seeds == 1
+    assert stats.candidate_queries == 1
+    assert stats.episodes_touched <= pool + 1
+    assert stats.pair_scores <= pool + pool * (pool + 5)
+    assert stats.episodes_touched < 100  # never the ~whole corpus of 200
+    # Untouched episodes keep whatever rail they had (none here) — nothing was deleted.
+    assert len(_rails()) == stats.episodes_touched or len(_rails()) <= stats.episodes_touched
