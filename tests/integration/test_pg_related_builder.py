@@ -133,9 +133,7 @@ def _rails(where: str = "") -> dict:
             f"SELECT episode_id, related_episode_id, rank, score FROM episode_related {where} ORDER BY episode_id, rank"
         ).fetchall()
     for r in rows:
-        rails.setdefault(as_str(r["episode_id"]), []).append(
-            (as_str(r["related_episode_id"]), r["rank"], r["score"])
-        )
+        rails.setdefault(as_str(r["episode_id"]), []).append((as_str(r["related_episode_id"]), r["rank"], r["score"]))
     return rails
 
 
@@ -253,9 +251,9 @@ def test_incremental_update_scopes_to_seed_and_reverse_neighbours(seeded):
 
     from thestill.search.pg_related_builder import update_related_for_episodes
 
-    # candidate_cap=2 bounds each leg to 2 candidates, so the newcomer's pool
+    # pool_k=2 bounds each leg to 2 candidates, so the newcomer's pool
     # is the fitness pair — the business rails are reverse-out-of-scope.
-    summary = update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], candidate_cap=2)
+    summary = update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=2)
     assert summary["episodes"] >= 1
     after = _rails()
 
@@ -271,7 +269,7 @@ def test_incremental_update_scopes_to_seed_and_reverse_neighbours(seeded):
     assert after[EP_BIZ_D] == before[EP_BIZ_D]
 
     # Re-running the same incremental update is idempotent.
-    update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], candidate_cap=2)
+    update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=2)
     assert _rails() == after
 
 
