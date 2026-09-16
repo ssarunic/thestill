@@ -147,6 +147,13 @@ def is_queue_auto_heal_enabled() -> bool:
     return _env_bool("QUEUE_AUTO_HEAL", True)
 
 
+def is_queue_exit_on_degraded_enabled() -> bool:
+    """When true (default), a worker that leaks past ``QUEUE_ABANDONED_THREAD_BUDGET``
+    asks its process to exit so the container supervisor restarts it. A failed
+    readiness check alone never triggers a Docker restart (2026-09-16)."""
+    return _env_bool("QUEUE_EXIT_ON_DEGRADED", True)
+
+
 def get_queue_heal_interval_seconds() -> int:
     """How often the auto-heal loop sweeps for healable tasks (default 300s)."""
     return _env_int("QUEUE_HEAL_INTERVAL_SECONDS", 300)
