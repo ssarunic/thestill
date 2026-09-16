@@ -260,9 +260,9 @@ def run_incremental(
     rails = backend.existing_rails(neighbours)
     rescore = {x: (context[x] | set(rails.get(x, ()))) - {x} for x in neighbours}
 
+    # Every pool member is a neighbour (or a seed) already; only stored rail
+    # members pulled in for rescoring can be new here.
     scored_ids = set(pools) | set(neighbours)
-    for members in pools.values():
-        scored_ids |= members
     for members in rescore.values():
         scored_ids |= members
     entity_sets = backend.entity_sets(scored_ids)

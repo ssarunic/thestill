@@ -1060,7 +1060,11 @@ class TaskWorker:
         try:
             with self._active_lock:
                 active_ids = {t.id for stage_active in self._active_by_stage.values() for t in stage_active.values()}
-            windows = self.stale_timeout_per_stage or (self.stale_timeout_minutes * 60.0)
+            windows = (
+                self.stale_timeout_per_stage
+                if self.stale_timeout_per_stage is not None
+                else self.stale_timeout_minutes * 60.0
+            )
             reset_count = self.queue_manager.reset_stale_tasks(windows, exclude_task_ids=active_ids)
             if reset_count > 0:
                 logger.info("stale_tasks_reset", count=reset_count, excluded_active=len(active_ids))

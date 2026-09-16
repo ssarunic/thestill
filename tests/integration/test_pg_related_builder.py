@@ -338,6 +338,7 @@ def corpus_200():
 
 
 def test_incremental_work_is_bounded_by_pool_k_on_postgres(corpus_200):
+    from tests.unit.search.test_related_complexity_guard import bounds
     from thestill.search.pg_related_builder import update_related_for_episodes
     from thestill.search.related_builder import IncrementalStats
     from thestill.utils.postgres_ext import connect
@@ -353,12 +354,12 @@ def test_incremental_work_is_bounded_by_pool_k_on_postgres(corpus_200):
     summary = update_related_for_episodes(
         PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=k, stats=stats
     )
-    pool = 2 * k
+    limit = bounds(k)  # the same Phase 1 ceilings the SQLite guard asserts
     assert summary["pairs"] > 0
     assert stats.seeds == 1
-    assert stats.candidate_queries == 1
-    assert stats.episodes_touched <= pool + 1
-    assert stats.pair_scores <= pool + pool * (pool + 5)
+    assert stats.candidate_queries == limit["candidate_queries"]
+    assert stats.episodes_touched <= limit["episodes_touched"]
+    assert stats.pair_scores <= limit["pair_scores"]
     assert stats.episodes_touched < 100  # never the ~whole corpus of 200
-    # Untouched episodes keep whatever rail they had (none here) — nothing was deleted.
-    assert len(_rails()) == stats.episodes_touched or len(_rails()) <= stats.episodes_touched
+    # Only scored episodes were written; untouched ones (which had no rail) stay absent.
+    assert len(_rails()) <= stats.episodes_touched
