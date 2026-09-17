@@ -112,6 +112,7 @@ class TaskWorker:
         circuit_cooldown_seconds: float = 60.0,
         watchdog_timeout_per_stage: Optional[Dict[TaskStage, Optional[float]]] = None,
         on_degraded: Optional[Callable[[], None]] = None,
+        stale_timeout_per_stage: Optional[Dict[TaskStage, float]] = None,
     ):
         """
         Initialize task worker.
@@ -131,11 +132,16 @@ class TaskWorker:
                 ``abandoned_thread_budget``. The server passes
                 :func:`request_process_exit` so the container restarts
                 (see ``is_degraded``); ``None`` only logs and stops claiming.
+            stale_timeout_per_stage: Seconds a ``processing`` row may sit
+                before the stale sweep presumes its worker died, per stage
+                (``config.get_stale_timeout_seconds_per_stage``). ``None``
+                applies ``stale_timeout_minutes`` to every stage.
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
         self.poll_interval = poll_interval
         self.stale_timeout_minutes = stale_timeout_minutes
+        self.stale_timeout_per_stage = stale_timeout_per_stage
         self.progress_store = progress_store
         self.repository = repository
         self.parallel_jobs = max(1, parallel_jobs)
@@ -1044,11 +1050,24 @@ class TaskWorker:
             logger.error(f"Failed to mark episode {task.episode_id} as failed: {e}")
 
     def _reset_stale_tasks(self) -> None:
-        """Reset any stale processing tasks from previous runs."""
+        """Requeue ``processing`` rows whose worker died, never our own.
+
+        The rows this process is still running are excluded by task id, and
+        each stage gets its own window (at least its handler watchdog). Both
+        guards come from the 2026-09-16 outage, where a healthy two-hour
+        compute-related run lost its row to a flat 30-minute sweep.
+        """
         try:
-            reset_count = self.queue_manager.reset_stale_tasks(self.stale_timeout_minutes)
+            with self._active_lock:
+                active_ids = {t.id for stage_active in self._active_by_stage.values() for t in stage_active.values()}
+            windows = (
+                self.stale_timeout_per_stage
+                if self.stale_timeout_per_stage is not None
+                else self.stale_timeout_minutes * 60.0
+            )
+            reset_count = self.queue_manager.reset_stale_tasks(windows, exclude_task_ids=active_ids)
             if reset_count > 0:
-                logger.info(f"Reset {reset_count} stale tasks on startup")
+                logger.info("stale_tasks_reset", count=reset_count, excluded_active=len(active_ids))
         except Exception as e:
             logger.warning(f"Failed to reset stale tasks: {e}")
 

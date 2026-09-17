@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Collection, Dict, List, Optional, Sequence
 
 from psycopg.types.json import Jsonb
 from structlog import get_logger
@@ -60,9 +60,11 @@ from ..utils.postgres_ext import as_str, connect
 from .queue_manager import (
     _IDEMPOTENT_STAGES,
     ErrorType,
+    StaleTimeouts,
     Task,
     TaskStage,
     TaskStatus,
+    _stale_windows,
     calculate_backoff,
     is_feed_scoped_stage,
     stages_at_or_before,
@@ -807,39 +809,43 @@ class PostgresQueueManager:
 
             return deleted
 
-    def reset_stale_tasks(self, timeout_minutes: int = 30) -> int:
-        """
-        Reset tasks that have been processing for too long back to pending.
+    def reset_stale_tasks(
+        self,
+        timeouts: StaleTimeouts,
+        *,
+        exclude_task_ids: Collection[str] = (),
+    ) -> int:
+        """Requeue ``processing`` rows that have outlived their stage's window.
 
-        This handles cases where a worker crashed while processing a task.
-
-        Args:
-            timeout_minutes: Consider tasks stale after this many minutes
-
-        Returns:
-            Number of tasks reset
+        Same contract as the SQLite manager (see its docstring): per-stage
+        or uniform windows in seconds, and the rows this process is still
+        running are never touched.
         """
         now = now_utc()
-        cutoff = now - timedelta(minutes=timeout_minutes)
-
+        excluded = [t for t in exclude_task_ids if t]
+        reset = 0
         with connect(self.dsn) as conn:
-            # timestamptz compares as an instant — the SQLite julianday
-            # workaround (text-format comparison foot-gun) has no PG analogue.
-            cursor = conn.execute(
-                """
-                UPDATE tasks
-                SET status = 'pending', started_at = NULL, updated_at = %s
-                WHERE status = 'processing'
-                AND started_at < %s
-                """,
-                (now, cutoff),
-            )
-
-            reset = cursor.rowcount
-            if reset > 0:
-                logger.warning(f"Reset {reset} stale tasks back to pending")
-
-            return reset
+            for stage_sql, stage_params, seconds in _stale_windows(timeouts):
+                # timestamptz compares as an instant — the SQLite julianday
+                # workaround (text-format comparison foot-gun) has no PG analogue.
+                params: list = [now, *stage_params, now - timedelta(seconds=seconds)]
+                exclude_sql = ""
+                if excluded:
+                    exclude_sql = " AND NOT (id = ANY(%s::uuid[]))"
+                    params.append(excluded)
+                cursor = conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET status = 'pending', started_at = NULL, updated_at = %s
+                    WHERE status = 'processing'{stage_sql.replace('?', '%s')}
+                    AND started_at < %s{exclude_sql}
+                    """,
+                    params,
+                )
+                reset += cursor.rowcount
+        if reset > 0:
+            logger.warning(f"Reset {reset} stale tasks back to pending")
+        return reset
 
     def recover_interrupted_tasks(self, excluded_stages: Optional[List[TaskStage]] = None) -> int:
         """

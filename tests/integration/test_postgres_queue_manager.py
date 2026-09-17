@@ -495,16 +495,48 @@ class TestStaleAndRecovery:
         claimed = qm.get_next_task()
         assert claimed.id == task.id
         # A fresh claim is NOT stale.
-        assert qm.reset_stale_tasks(timeout_minutes=30) == 0
+        assert qm.reset_stale_tasks(30 * 60) == 0
 
         _exec(
             "UPDATE tasks SET started_at = %s WHERE id = %s",
             (now_utc() - timedelta(minutes=60), task.id),
         )
-        assert qm.reset_stale_tasks(timeout_minutes=30) == 1
+        assert qm.reset_stale_tasks(30 * 60) == 1
         got = qm.get_task(task.id)
         assert got.status == TaskStatus.PENDING
         assert got.started_at is None
+
+    def test_reset_stale_tasks_skips_rows_this_process_still_runs(self, qm):
+        live = qm.add_task(episode_id=EPISODE_IDS[0], stage=TaskStage.COMPUTE_RELATED)
+        dead = qm.add_task(episode_id=EPISODE_IDS[1], stage=TaskStage.CLEAN)
+        assert qm.get_next_task(stage=TaskStage.COMPUTE_RELATED).id == live.id
+        assert qm.get_next_task(stage=TaskStage.CLEAN).id == dead.id
+        _exec(
+            "UPDATE tasks SET started_at = %s WHERE id IN (%s, %s)", (now_utc() - timedelta(hours=3), live.id, dead.id)
+        )
+
+        assert qm.reset_stale_tasks(30 * 60, exclude_task_ids={live.id}) == 1
+        assert qm.get_task(live.id).status == TaskStatus.PROCESSING
+        assert qm.get_task(dead.id).status == TaskStatus.PENDING
+
+    def test_reset_stale_tasks_per_stage_windows(self, qm):
+        slow = qm.add_task(episode_id=EPISODE_IDS[0], stage=TaskStage.COMPUTE_RELATED)
+        quick = qm.add_task(episode_id=EPISODE_IDS[1], stage=TaskStage.CLEAN)
+        assert qm.get_next_task(stage=TaskStage.COMPUTE_RELATED).id == slow.id
+        assert qm.get_next_task(stage=TaskStage.CLEAN).id == quick.id
+        _exec(
+            "UPDATE tasks SET started_at = %s WHERE id IN (%s, %s)",
+            (now_utc() - timedelta(minutes=100), slow.id, quick.id),
+        )
+
+        assert qm.reset_stale_tasks({TaskStage.COMPUTE_RELATED: 7800.0, TaskStage.CLEAN: 30 * 60.0}) == 1
+        assert qm.get_task(slow.id).status == TaskStatus.PROCESSING
+        assert qm.get_task(quick.id).status == TaskStatus.PENDING
+
+    def test_postgres_manager_satisfies_the_reset_protocol(self, qm):
+        from thestill.core.queue_manager import SupportsStaleReset
+
+        assert isinstance(qm, SupportsStaleReset)
 
     def test_recover_interrupted_resumes_idempotent_fails_entity_branch(self, qm):
         user_task = qm.add_task(episode_id=EPISODE_IDS[0], stage=TaskStage.DOWNLOAD)

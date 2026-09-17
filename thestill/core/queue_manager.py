@@ -47,7 +47,21 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypeVar,
+    Union,
+    runtime_checkable,
+)
 
 from structlog import get_logger
 
@@ -319,6 +333,31 @@ class ErrorType(str, Enum):
 
     TRANSIENT = "transient"  # May succeed on retry (network issues, rate limits)
     FATAL = "fatal"  # Will never succeed (404, corrupt file, invalid format)
+
+
+# Seconds per stage, or one number for every stage (spec #56 / 2026-09-16
+# outage: the stale window must be sized per stage, at least the stage's
+# handler watchdog, or a long legitimate handler gets its row requeued).
+StaleTimeouts = Union[float, int, Mapping["TaskStage", float]]
+
+
+def _stale_windows(timeouts: StaleTimeouts) -> List[Tuple[str, Tuple[str, ...], float]]:
+    """Expand ``timeouts`` into ``(stage filter SQL, its params, seconds)`` rows.
+
+    A scalar becomes one unfiltered sweep; a mapping becomes one sweep per
+    stage present in it. Shared by both queue managers so the two backends
+    cannot disagree on what the window means.
+    """
+    if isinstance(timeouts, Mapping):
+        return [(" AND stage = ?", (stage.value,), float(seconds)) for stage, seconds in timeouts.items()]
+    return [("", (), float(timeouts))]
+
+
+@runtime_checkable
+class SupportsStaleReset(Protocol):
+    """The reset contract the task worker relies on, satisfied by both backends."""
+
+    def reset_stale_tasks(self, timeouts: StaleTimeouts, *, exclude_task_ids: Collection[str] = ()) -> int: ...
 
 
 @dataclass
@@ -1496,43 +1535,50 @@ class QueueManager:
 
             return deleted
 
-    def reset_stale_tasks(self, timeout_minutes: int = 30) -> int:
-        """
-        Reset tasks that have been processing for too long back to pending.
+    def reset_stale_tasks(
+        self,
+        timeouts: "StaleTimeouts",
+        *,
+        exclude_task_ids: Collection[str] = (),
+    ) -> int:
+        """Requeue ``processing`` rows that have outlived their stage's window.
 
-        This handles cases where a worker crashed while processing a task.
+        Recovers rows whose worker died mid-task. ``timeouts`` is either one
+        window in seconds for every stage or a per-stage mapping (a stage
+        missing from the mapping is left alone). ``exclude_task_ids`` are
+        the rows this process is still running: the 2026-09-16 outage was a
+        compute-related handler that legitimately ran past a global 30-min
+        window, had its row requeued underneath it, lost its claim on
+        completion, and was re-run from scratch — forever.
 
-        Args:
-            timeout_minutes: Consider tasks stale after this many minutes
-
-        Returns:
-            Number of tasks reset
+        Returns the number of rows reset.
         """
         now = now_utc().isoformat()
-
+        excluded = [t for t in exclude_task_ids if t]
+        exclude_sql = f" AND id NOT IN ({','.join('?' for _ in excluded)})" if excluded else ""
+        reset = 0
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                UPDATE tasks
-                SET status = 'pending', started_at = NULL, updated_at = ?
-                WHERE status = 'processing'
-                -- ``started_at`` is stored as ``now_utc().isoformat()`` (ISO-8601
-                -- with a 'T' separator + ``+00:00``), but ``datetime('now', …)``
-                -- renders a space-separated, tz-naive string. A TEXT ``<``
-                -- compares lexicographically: 'T'(84) > ' '(32) at the separator,
-                -- so EVERY stored value sorts after the cutoff and the predicate
-                -- matched zero rows — the watchdog silently never fired. Compare
-                -- as numbers via ``julianday`` so format/offset don't matter.
-                AND julianday(started_at) < julianday('now', '-' || ? || ' minutes')
-            """,
-                (now, timeout_minutes),
-            )
-
-            reset = cursor.rowcount
-            if reset > 0:
-                logger.warning(f"Reset {reset} stale tasks back to pending")
-
-            return reset
+            for stage_sql, stage_params, seconds in _stale_windows(timeouts):
+                cursor = conn.execute(
+                    f"""
+                    UPDATE tasks
+                    SET status = 'pending', started_at = NULL, updated_at = ?
+                    WHERE status = 'processing'{stage_sql}
+                    -- ``started_at`` is stored as ``now_utc().isoformat()`` (ISO-8601
+                    -- with a 'T' separator + ``+00:00``), but ``datetime('now', …)``
+                    -- renders a space-separated, tz-naive string. A TEXT ``<``
+                    -- compares lexicographically: 'T'(84) > ' '(32) at the separator,
+                    -- so EVERY stored value sorts after the cutoff and the predicate
+                    -- matched zero rows — the watchdog silently never fired. Compare
+                    -- as numbers via ``julianday`` so format/offset don't matter.
+                    AND julianday(started_at) < julianday('now', '-' || ? || ' seconds'){exclude_sql}
+                    """,
+                    (now, *stage_params, int(seconds), *excluded),
+                )
+                reset += cursor.rowcount
+        if reset > 0:
+            logger.warning(f"Reset {reset} stale tasks back to pending")
+        return reset
 
     def recover_interrupted_tasks(self, excluded_stages: Optional[List[TaskStage]] = None) -> int:
         """

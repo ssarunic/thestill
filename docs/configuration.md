@@ -193,6 +193,8 @@ down, and frees slots held by wedged handlers.
 | `QUEUE_CIRCUIT_WINDOW_SECONDS` | Rolling window over which failures are counted | `120` |
 | `QUEUE_CIRCUIT_COOLDOWN_SECONDS` | How long a breaker stays OPEN before a half-open probe | `60` |
 | `QUEUE_STAGE_WATCHDOG_SECONDS` | Uniform handler watchdog timeout for every stage; `0` disables everywhere | - (unset = per-stage defaults) |
+| `QUEUE_STALE_TIMEOUT_SECONDS` | Global floor for how long a `processing` row may sit before the stale sweep presumes its worker died and requeues it. Rows this process is still running are never requeued (2026-09-16) | `1800` |
+| `QUEUE_STALE_TIMEOUT_MARGIN_SECONDS` | Added to a stage's watchdog to form that stage's stale window (`max(global, watchdog + margin)`), so a handler the watchdog still tolerates is never swept | `600` |
 | `QUEUE_EXIT_ON_DEGRADED` | When the worker crosses `QUEUE_ABANDONED_THREAD_BUDGET` it sends itself `SIGTERM` (after a 2 s log flush) so the container's restart policy brings up a fresh process. Docker never restarts on a failed health check alone, which is how production sat unready for days on 2026-09-16. Set `false` to only fail readiness and stop claiming | `true` |
 | `QUEUE_ABANDONED_THREAD_BUDGET` | Watchdog-abandoned handler threads tolerated before the worker declares itself degraded, stops claiming, and fails `/health/ready`. Abandoned threads cannot be killed, so each one permanently consumes an executor slot — only a restart recovers | `8` |
 
@@ -372,6 +374,12 @@ A misconfigured provider (e.g. `EMAIL_PROVIDER=smtp` without
 Each briefing is emailed at most once — deliveries are tracked in the
 `briefing_deliveries` table with bounded retries, and a failed send never
 blocks briefing generation.
+
+## Related Episodes (spec #46, #56)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RELATED_INCREMENTAL_POOL_K` | Seed-pool size per leg for the incremental `compute-related` update: one vector and one lexical query of this many candidates per new episode, and pool members rescored against the pool plus their stored rail. Fixed, so work per episode never grows with the corpus (spec #56 Phase 1). The full rebuild (`thestill related build`) keeps its own 2,000 cap | `150` |
 
 ## Corpus Search (sqlite-vec)
 

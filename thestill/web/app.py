@@ -364,6 +364,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         get_queue_heal_interval_seconds,
         get_queue_max_heal_attempts,
         get_stage_watchdog_seconds,
+        get_stale_timeout_seconds_per_stage,
         is_queue_auto_heal_enabled,
         is_queue_circuit_breaker_enabled,
         is_queue_exit_on_degraded_enabled,
@@ -388,6 +389,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # A degraded worker fails readiness, but nothing restarts an unhealthy
         # container; exiting is what the restart policy reacts to.
         on_degraded=request_process_exit if is_queue_exit_on_degraded_enabled() else None,
+        stale_timeout_per_stage=get_stale_timeout_seconds_per_stage(),
     )
     app_state.task_worker = task_worker
 

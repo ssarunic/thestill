@@ -47,7 +47,8 @@ from __future__ import annotations
 import sqlite3
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional, Protocol, Tuple
 
 from structlog import get_logger
 
@@ -87,6 +88,11 @@ DEFAULT_W_ENTITY = 0.15
 # model ranks low — the recall safety net. Both are queried at the cap.
 DEFAULT_CANDIDATE_CAP = 2000
 DEFAULT_LEXICAL_TERMS = 25
+# Spec #56 Change 2 — the *incremental* seed pool is a fixed size, decoupled
+# from ``DEFAULT_CANDIDATE_CAP`` (the full rebuild's exactness knob). The rail
+# keeps 5, so a 150-candidate pool is ~30× oversampled; recall loss is
+# bounded and, unlike ``min(n_corpus, cap)``, never grows with the corpus.
+DEFAULT_INCREMENTAL_POOL_K = 150
 
 # TF-IDF configuration — module-level so the full build and any
 # incremental transform agree on vocabulary and normalisation. ``min_df=2``
@@ -180,6 +186,115 @@ def build_related_episodes(
         pairs=len(rows),
     )
     return {"episodes": episodes_with_related, "pairs": len(rows)}
+
+
+@dataclass
+class IncrementalStats:
+    """Work counters for one incremental update (spec #56 §Testing).
+
+    Filled by :func:`run_incremental` so the complexity guard asserts on
+    counts, not wall-clock: every number here must be bounded by the pool
+    size ``k`` and independent of the corpus size ``n``.
+    """
+
+    seeds: int = 0
+    episodes_touched: int = 0
+    candidate_queries: int = 0
+    pair_scores: int = 0
+
+
+class IncrementalBackend(Protocol):
+    """The five storage primitives :func:`run_incremental` needs.
+
+    Each backend (SQLite, Postgres) supplies these over its own connection;
+    the orchestration is written once so the two paths cannot drift
+    (spec #42 FM-6). Spec #56 Phase 2 replaces the body of
+    :func:`run_incremental` and ``rerank``/``existing_rails`` only.
+    """
+
+    def has(self, eid: str) -> bool: ...
+
+    def candidate_ids(self, eid: str, k: int) -> set: ...
+
+    def existing_rails(self, eids: Iterable[str]) -> Dict[str, List[str]]: ...
+
+    def entity_sets(self, eids: Iterable[str]) -> Dict[str, frozenset]: ...
+
+    def rerank(self, src: str, pool: set, entity_sets: Dict[str, frozenset]) -> List[Tuple[str, float]]: ...
+
+
+def run_incremental(
+    backend: IncrementalBackend,
+    episode_ids: Iterable[str],
+    *,
+    pool_k: int = DEFAULT_INCREMENTAL_POOL_K,
+    stats: Optional[IncrementalStats] = None,
+) -> Dict[str, List[Tuple[str, float]]]:
+    """Spec #56 Phase 1: rails to rewrite for ``episode_ids``, bounded by ``pool_k``.
+
+    - **forward:** each seed gets one candidate query of size ``pool_k``
+      per leg and its rail is reranked over that pool;
+    - **reverse:** each pool member is rescored over the seed pools it
+      appeared in, plus its own stored rail members — never a fresh
+      candidate query. A member can therefore miss a better candidate
+      outside that set until the next sweep or rebuild (accepted
+      approximation; Phase 2's merge replaces this path).
+
+    Work per seed is one candidate query and O(k²) pair scores, whatever
+    the corpus size. Only scored episodes appear in the result, so a rail
+    the caller could not recompute is never deleted.
+    """
+    stats = stats if stats is not None else IncrementalStats()
+    seed = [e for e in dict.fromkeys(episode_ids) if backend.has(e)]
+    stats.seeds = len(seed)
+    pools: Dict[str, set] = {}
+    context: Dict[str, set] = defaultdict(set)
+    for a in seed:
+        pool = backend.candidate_ids(a, pool_k)
+        stats.candidate_queries += 1
+        pools[a] = pool
+        for x in pool:
+            context[x] |= pool
+            context[x].add(a)
+    neighbours = [x for x in context if x not in pools]
+    rails = backend.existing_rails(neighbours)
+    rescore = {x: (context[x] | set(rails.get(x, ()))) - {x} for x in neighbours}
+
+    # Every pool member is a neighbour (or a seed) already; only stored rail
+    # members pulled in for rescoring can be new here.
+    scored_ids = set(pools) | set(neighbours)
+    for members in rescore.values():
+        scored_ids |= members
+    entity_sets = backend.entity_sets(scored_ids)
+
+    out: Dict[str, List[Tuple[str, float]]] = {}
+    for a in seed:
+        out[a] = backend.rerank(a, pools[a], entity_sets)
+        stats.pair_scores += len(pools[a])
+    for x in neighbours:
+        if not backend.has(x):
+            continue
+        out[x] = backend.rerank(x, rescore[x], entity_sets)
+        stats.pair_scores += len(rescore[x])
+    stats.episodes_touched = len(out)
+    return out
+
+
+def _rail_members(conn, eids: Iterable[str], placeholder: str, batch: int = 500) -> Dict[str, List[str]]:
+    """Stored rail members per episode, batched to stay under bind limits."""
+    ids = list(eids)
+    rails: Dict[str, List[str]] = defaultdict(list)
+    for start in range(0, len(ids), batch):
+        chunk = ids[start : start + batch]
+        marks = ",".join(placeholder for _ in chunk)
+        rows = conn.execute(
+            f"SELECT episode_id, related_episode_id FROM episode_related "
+            f"WHERE episode_id IN ({marks}) ORDER BY episode_id, rank",
+            chunk,
+        ).fetchall()
+        for r in rows:
+            rails[str(r["episode_id"])].append(str(r["related_episode_id"]))
+    return dict(rails)
 
 
 @contextmanager
@@ -316,18 +431,18 @@ def update_related_for_episodes(
     w_vector: float = DEFAULT_W_VECTOR,
     w_entity: float = DEFAULT_W_ENTITY,
     candidate_cap: int = DEFAULT_CANDIDATE_CAP,
+    pool_k: int = DEFAULT_INCREMENTAL_POOL_K,
+    stats: Optional[IncrementalStats] = None,
 ) -> Dict[str, int]:
     """Recompute ``episode_related`` for a few episodes without a full rebuild.
 
     Reuses the **persisted** IDF model (``related_idf``) so no corpus-wide
     refit happens — a new episode's novel terms are IDF-invisible until the
-    next full build (acceptable drift, spec #46). Updates two sets:
-
-    - **forward:** each episode in ``episode_ids`` gets its own rail;
-    - **reverse:** the episodes near each input (its candidate pool) get
-      *their* rails recomputed too, so the newcomer surfaces in them.
-
-    Falls back to a full build if no IDF model exists yet (first run).
+    next full build (acceptable drift, spec #46). The work itself is the
+    shared :func:`run_incremental` (spec #56 Phase 1): a ``pool_k`` seed
+    pool per episode and bounded reverse rescoring, independent of corpus
+    size. ``candidate_cap`` only reaches the full build this falls back to
+    when no IDF model exists yet (first run).
     """
     import numpy as np
 
@@ -348,50 +463,81 @@ def update_related_for_episodes(
     dim = embedding_dim_for(embedding_model_name)
     _ensure_episode_vectors(db_path, embedding_model_name, dim, np)
 
+    run_stats = stats if stats is not None else IncrementalStats()
     with _candidate_conn(db_path) as conn:
-        n_corpus = conn.execute(
-            "SELECT COUNT(*) FROM episode_vectors WHERE embedding_model = ?", (embedding_model_name,)
-        ).fetchone()[0]
-        k = min(n_corpus, candidate_cap)
-        rowid_to_eid = _episode_vec_rowmap(conn, embedding_model_name)
-        cache = _EpisodeCache(conn, embedding_model_name, dim, transform, np)
-
-        seed = [e for e in dict.fromkeys(episode_ids) if cache.has(e)]
-        # Forward pools + reverse expansion: every candidate of a seed
-        # episode is a reverse target (its rail may now include the seed).
-        pools: Dict[str, set] = {}
-        affected: set = set(seed)
-        for a in seed:
-            pool = _candidate_ids(
-                conn, a, cache.centroid(a), cache.tfidf(a), feature_names, rowid_to_eid, np, k_vec=k, k_lex=k
-            )
-            pools[a] = pool
-            affected |= pool
-
-        entity_sets = _load_entity_sets(db_path, affected)  # ``affected`` already includes every pool member
-        out: Dict[str, List[Tuple[str, float]]] = {}
-        for a in affected:
-            if not cache.has(a):
-                continue
-            pool = pools.get(a)
-            if pool is None:
-                pool = _candidate_ids(
-                    conn, a, cache.centroid(a), cache.tfidf(a), feature_names, rowid_to_eid, np, k_vec=k, k_lex=k
-                )
-            out[a] = _rerank_incremental(
-                a, pool, cache, entity_sets, top_n, tfidf_floor, w_tfidf, w_vector, w_entity, np
-            )
+        backend = _SqliteIncrementalBackend(
+            conn,
+            db_path,
+            _EpisodeCache(conn, embedding_model_name, dim, transform, np),
+            _episode_vec_rowmap(conn, embedding_model_name),
+            feature_names,
+            np,
+            top_n=top_n,
+            tfidf_floor=tfidf_floor,
+            w_tfidf=w_tfidf,
+            w_vector=w_vector,
+            w_entity=w_entity,
+        )
+        out = run_incremental(backend, episode_ids, pool_k=pool_k, stats=run_stats)
 
     # Only episodes we actually scored are rewritten — never delete a rail we
     # couldn't recompute (e.g. a pool member that lost its centroid mid-flight).
     pairs = _write_pairs_scoped(db_path, out)
     logger.info(
         "related_incremental_complete",
-        seed=len(seed),
-        affected=len(affected),
+        seed=run_stats.seeds,
+        affected=run_stats.episodes_touched,
+        candidate_queries=run_stats.candidate_queries,
+        pair_scores=run_stats.pair_scores,
+        pool_k=pool_k,
         pairs=pairs,
     )
     return {"episodes": sum(1 for v in out.values() if v), "pairs": pairs}
+
+
+class _SqliteIncrementalBackend:
+    """:class:`IncrementalBackend` over one sqlite-vec connection."""
+
+    def __init__(
+        self, conn, db_path, cache, rowid_to_eid, feature_names, np, *, top_n, tfidf_floor, w_tfidf, w_vector, w_entity
+    ):
+        self._conn = conn
+        self._db_path = db_path
+        self._cache = cache
+        self._rowid_to_eid = rowid_to_eid
+        self._feature_names = feature_names
+        self._np = np
+        self._top_n = top_n
+        self._floor = tfidf_floor
+        self._weights = (w_tfidf, w_vector, w_entity)
+
+    def has(self, eid: str) -> bool:
+        return self._cache.has(eid)
+
+    def candidate_ids(self, eid: str, k: int) -> set:
+        return _candidate_ids(
+            self._conn,
+            eid,
+            self._cache.centroid(eid),
+            self._cache.tfidf(eid),
+            self._feature_names,
+            self._rowid_to_eid,
+            self._np,
+            k_vec=k,
+            k_lex=k,
+        )
+
+    def existing_rails(self, eids: Iterable[str]) -> Dict[str, List[str]]:
+        return _rail_members(self._conn, eids, "?")
+
+    def entity_sets(self, eids: Iterable[str]) -> Dict[str, frozenset]:
+        return _load_entity_sets(self._db_path, eids)
+
+    def rerank(self, src: str, pool: set, entity_sets: Dict[str, frozenset]) -> List[Tuple[str, float]]:
+        w_tfidf, w_vector, w_entity = self._weights
+        return _rerank_incremental(
+            src, pool, self._cache, entity_sets, self._top_n, self._floor, w_tfidf, w_vector, w_entity, self._np
+        )
 
 
 class _EpisodeCache:

@@ -38,7 +38,7 @@ storage access differs:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
@@ -47,15 +47,19 @@ from .base import embedding_dim_for
 from .related_builder import (  # shared behaviour — one concept, one number (FM-6)
     _TFIDF_KWARGS,
     DEFAULT_CANDIDATE_CAP,
+    DEFAULT_INCREMENTAL_POOL_K,
     DEFAULT_LEXICAL_TERMS,
     DEFAULT_TFIDF_FLOOR,
     DEFAULT_W_ENTITY,
     DEFAULT_W_TFIDF,
     DEFAULT_W_VECTOR,
+    IncrementalStats,
     _make_doc_transform,
+    _rail_members,
     _rerank,
     _rerank_incremental,
     _top_terms,
+    run_incremental,
 )
 
 logger = get_logger(__name__)
@@ -217,13 +221,15 @@ def update_related_for_episodes(
     w_vector: float = DEFAULT_W_VECTOR,
     w_entity: float = DEFAULT_W_ENTITY,
     candidate_cap: int = DEFAULT_CANDIDATE_CAP,
+    pool_k: int = DEFAULT_INCREMENTAL_POOL_K,
+    stats: Optional[IncrementalStats] = None,
 ) -> Dict[str, int]:
     """Recompute ``episode_related`` for a few episodes without a full rebuild.
 
-    Same contract as the SQLite version: reuses the persisted IDF model
-    (``related_idf``), updates the forward rails for ``episode_ids`` plus the
-    reverse rails of their candidate pools, and falls back to a full build if
-    no IDF model exists yet (first run).
+    Same contract as the SQLite version: reuses the persisted IDF, runs the
+    shared :func:`run_incremental` (spec #56 Phase 1: a ``pool_k`` seed pool
+    per episode, bounded reverse rescoring), and falls back to a full build
+    if no IDF model exists yet. ``candidate_cap`` only reaches that fallback.
     """
     import numpy as np
 
@@ -244,57 +250,79 @@ def update_related_for_episodes(
     dim = embedding_dim_for(embedding_model_name)
     _ensure_episode_vectors(dsn, embedding_model_name, dim, np)
 
+    run_stats = stats if stats is not None else IncrementalStats()
     with connect(dsn, vector=True) as conn:
-        n_corpus = conn.execute(
-            "SELECT COUNT(*) AS n FROM episode_vectors WHERE embedding_model = %s", (embedding_model_name,)
-        ).fetchone()["n"]
-        k = min(n_corpus, candidate_cap)
-        cache = _EpisodeCache(conn, embedding_model_name, transform)
-
-        seed = [e for e in dict.fromkeys(episode_ids) if cache.has(e)]
-        # Forward pools + reverse expansion: every candidate of a seed
-        # episode is a reverse target (its rail may now include the seed).
-        pools: Dict[str, set] = {}
-        affected: set = set(seed)
-        for a in seed:
-            pool = _candidate_ids(
-                conn, embedding_model_name, a, cache.centroid(a), cache.tfidf(a), feature_names, np, k_vec=k, k_lex=k
-            )
-            pools[a] = pool
-            affected |= pool
-
-        entity_sets = _load_entity_sets(dsn, affected)  # ``affected`` already includes every pool member
-        out: Dict[str, List[Tuple[str, float]]] = {}
-        for a in affected:
-            if not cache.has(a):
-                continue
-            pool = pools.get(a)
-            if pool is None:
-                pool = _candidate_ids(
-                    conn,
-                    embedding_model_name,
-                    a,
-                    cache.centroid(a),
-                    cache.tfidf(a),
-                    feature_names,
-                    np,
-                    k_vec=k,
-                    k_lex=k,
-                )
-            out[a] = _rerank_incremental(
-                a, pool, cache, entity_sets, top_n, tfidf_floor, w_tfidf, w_vector, w_entity, np
-            )
+        backend = _PostgresIncrementalBackend(
+            conn,
+            dsn,
+            _EpisodeCache(conn, embedding_model_name, transform),
+            embedding_model_name,
+            feature_names,
+            np,
+            top_n=top_n,
+            tfidf_floor=tfidf_floor,
+            w_tfidf=w_tfidf,
+            w_vector=w_vector,
+            w_entity=w_entity,
+        )
+        out = run_incremental(backend, episode_ids, pool_k=pool_k, stats=run_stats)
 
     # Only episodes we actually scored are rewritten — never delete a rail we
     # couldn't recompute (e.g. a pool member that lost its centroid mid-flight).
     pairs = _write_pairs_scoped(dsn, out)
     logger.info(
         "related_incremental_complete",
-        seed=len(seed),
-        affected=len(affected),
+        seed=run_stats.seeds,
+        affected=run_stats.episodes_touched,
+        candidate_queries=run_stats.candidate_queries,
+        pair_scores=run_stats.pair_scores,
+        pool_k=pool_k,
         pairs=pairs,
     )
     return {"episodes": sum(1 for v in out.values() if v), "pairs": pairs}
+
+
+class _PostgresIncrementalBackend:
+    """:class:`related_builder.IncrementalBackend` over one pgvector connection."""
+
+    def __init__(self, conn, dsn, cache, model, feature_names, np, *, top_n, tfidf_floor, w_tfidf, w_vector, w_entity):
+        self._conn = conn
+        self._dsn = dsn
+        self._cache = cache
+        self._model = model
+        self._feature_names = feature_names
+        self._np = np
+        self._top_n = top_n
+        self._floor = tfidf_floor
+        self._weights = (w_tfidf, w_vector, w_entity)
+
+    def has(self, eid: str) -> bool:
+        return self._cache.has(eid)
+
+    def candidate_ids(self, eid: str, k: int) -> set:
+        return _candidate_ids(
+            self._conn,
+            self._model,
+            eid,
+            self._cache.centroid(eid),
+            self._cache.tfidf(eid),
+            self._feature_names,
+            self._np,
+            k_vec=k,
+            k_lex=k,
+        )
+
+    def existing_rails(self, eids: Iterable[str]) -> Dict[str, List[str]]:
+        return _rail_members(self._conn, eids, "%s")
+
+    def entity_sets(self, eids: Iterable[str]) -> Dict[str, frozenset]:
+        return _load_entity_sets(self._dsn, eids)
+
+    def rerank(self, src: str, pool: set, entity_sets: Dict[str, frozenset]) -> List[Tuple[str, float]]:
+        w_tfidf, w_vector, w_entity = self._weights
+        return _rerank_incremental(
+            src, pool, self._cache, entity_sets, self._top_n, self._floor, w_tfidf, w_vector, w_entity, self._np
+        )
 
 
 class _EpisodeCache:

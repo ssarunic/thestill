@@ -1,6 +1,6 @@
 # Related Episodes — Constant-Time Updates (Tier 4)
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Phase 1 implemented on `feat/56-related-episodes-constant-time` (2026-09-16) with the stale-sweep fix from the same day's outage; Phases 2–4 pending
 > **Created:** 2026-07-10
 > **Author:** Product & Engineering
 > **Related:** [#46 related-episodes-scaling](46-related-episodes-scaling.md) (Tiers 0–3; this spec is Tier 4 and replaces its incremental path), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (owns the rail UX), [#44 postgres-migration](44-postgres-migration.md), [#42 robustness](42-robustness-and-failure-mode-hardening.md) (FM-6 parallel-path drift governs the dual-backend builders)
@@ -312,16 +312,18 @@ query-time design needs, so nothing is wasted (recorded as an open question).
 
 ### Phase 1 — Stop the bleeding (no schema change)
 
-- [ ] `RELATED_INCREMENTAL_POOL_K=150` for seed pools in
+- [x] `RELATED_INCREMENTAL_POOL_K=150` for seed pools in
       `update_related_for_episodes` (both backends).
-- [ ] Bound reverse expansion to the seed's pool *without* per-member candidate
+- [x] Bound reverse expansion to the seed's pool *without* per-member candidate
       queries: rescore member rails only against `pool ∪ existing rail
       members` (interim, pool-relative scoring kept). This phase performs
       O(k²) pair evaluations per seed, though it remains independent of n;
       Phase 2 reduces it to O(k).
-- [ ] Perf assertion in CI-adjacent test: incremental update on a 1k-episode
+- [x] Perf assertion in CI-adjacent test: incremental update on a 1k-episode
       synthetic corpus completes in seconds, touching O(k) episodes and no
       more than O(k²) pairs in this interim phase.
+      (Done 2026-09-16: ~0.5 s at n=1,000 on SQLite; counters identical at
+      n=200 and n=1,000; Postgres mirror at n=200.)
 - Expected effect: ~19 min → well under a minute at today's corpus, without
   waiting for calibration. (Interim approximation: pool-relative min-max over
   a 150-pool instead of 1,455-pool — rank drift is small and measured.)
@@ -408,3 +410,53 @@ query-time design needs, so nothing is wasted (recorded as an open question).
 | Date | Decision |
 |------|----------|
 | 2026-07-10 | Spec created from the production finding `seed=1, affected=1344, avg 1161s`. Invariant adopted: per-episode work is O(k), k fixed. Materialized rails kept for v1; query-time computation documented as the fallback architecture. Calibrated (pool-independent) scoring accepted as the prerequisite for reverse-rail merging. |
+
+---
+
+## Implementation notes — Phase 1 (2026-09-16)
+
+Triggered by the 2026-09-16 production outage (refresh-feed tasks stuck for
+hours). Diagnosis in order: the app container was unhealthy because the
+task worker had leaked eight watchdog-abandoned handler threads; the
+abandoned handlers were all `compute-related`; one seed at 2,450 episodes
+touched 2,102 rails and ran 46 minutes on the t4g.medium (866 s for one
+seed at 1,931 episodes on a dev Mac); and the periodic stale-task sweep
+requeued any `processing` row older than a flat 30 minutes with no regard
+for handlers alive in the process, so every long run lost its claim on
+completion and was re-run from scratch. Over two hours the watchdog turned
+that loop into the thread leak. (Exit-on-degraded shipped separately as
+v1.4.2, PR #215.)
+
+What landed, in commit order on `feat/56-related-episodes-constant-time`:
+
+1. `related_builder.run_incremental` — the single incremental orchestration
+   over a five-method `IncrementalBackend` protocol (`has`, `candidate_ids`,
+   `existing_rails`, `entity_sets`, `rerank`), with `IncrementalStats`
+   counters. Seed pool of `pool_k` per leg; reverse targets rescored over
+   the seed pools they appeared in plus their stored rail members, never a
+   fresh candidate query. SQLite backend delegates.
+2. Postgres backend delegates to the same function (FM-6: one edit site;
+   Phase 2's merge replaces `run_incremental` only).
+3. `RELATED_INCREMENTAL_POOL_K` via `config.get_related_incremental_pool_k`,
+   passed explicitly by `handle_compute_related`; documented.
+4. Complexity guard on synthetic corpora, both backends: one candidate
+   query per seed, episodes touched ≤ 2k+1, pair scores ≤ 2k + 2k(2k+5),
+   unchanged between n=200 and n=1,000; never-delete rule pinned.
+5. Queue: `reset_stale_tasks(timeouts, *, exclude_task_ids)` on both
+   backends — seconds, per-stage mapping or scalar, rows the calling worker
+   still runs excluded; `SupportsStaleReset` protocol; shared
+   `_stale_windows` expansion.
+6. Worker: passes its active task ids and per-stage windows from
+   `config.get_stale_timeout_seconds_per_stage` (≥ stage watchdog +
+   `QUEUE_STALE_TIMEOUT_MARGIN_SECONDS`, floor `QUEUE_STALE_TIMEOUT_SECONDS`).
+
+Deviation from the draft: the stale-sweep fix was not in this spec; it is
+recorded here because Phase 1 alone would not have stopped the loop (any
+run over the flat window re-ran regardless of cost) and the sweep fix alone
+would not have stopped two-hour runs.
+
+Deferred to Phase 2+: calibrated scores and the true merge (the Phase 1
+reverse rescoring is the accepted approximation), the feature store and
+postings, the maintenance loop, and a DB heartbeat for multi-worker
+deployments (the exclusion is process-local by design, matching the
+single-process worker).

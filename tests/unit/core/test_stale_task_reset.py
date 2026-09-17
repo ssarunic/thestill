@@ -82,7 +82,7 @@ def _processing_with_started_at(qm: QueueManager, stage: TaskStage, age_minutes:
 def test_resets_iso_format_stale_task(qm):
     task_id = _processing_with_started_at(qm, TaskStage.CLEAN, age_minutes=160)
 
-    reset = qm.reset_stale_tasks(timeout_minutes=30)
+    reset = qm.reset_stale_tasks(30 * 60)
 
     assert reset == 1
     assert qm.get_task(task_id).status == TaskStatus.PENDING
@@ -91,7 +91,7 @@ def test_resets_iso_format_stale_task(qm):
 def test_leaves_fresh_processing_task(qm):
     task_id = _processing_with_started_at(qm, TaskStage.CLEAN, age_minutes=5)
 
-    reset = qm.reset_stale_tasks(timeout_minutes=30)
+    reset = qm.reset_stale_tasks(30 * 60)
 
     assert reset == 0
     assert qm.get_task(task_id).status == TaskStatus.PROCESSING
@@ -101,7 +101,42 @@ def test_unblocks_stage_capacity(qm):
     # The real-world symptom: wedged processing tasks saturate a stage so
     # pending work can't start. After reset, the freed row is dequeuable.
     _processing_with_started_at(qm, TaskStage.CLEAN, age_minutes=160)
-    qm.reset_stale_tasks(timeout_minutes=30)
+    qm.reset_stale_tasks(30 * 60)
 
     nxt = qm.get_next_task(stage=TaskStage.CLEAN)
     assert nxt is not None  # the reclaimed task is now pending → claimable
+
+
+def test_rows_this_process_is_still_running_are_never_reset(qm):
+    """2026-09-16: a live compute-related handler had its row requeued under it."""
+    live = _processing_with_started_at(qm, TaskStage.COMPUTE_RELATED, age_minutes=160)
+    dead = _processing_with_started_at(qm, TaskStage.CLEAN, age_minutes=160)
+
+    reset = qm.reset_stale_tasks(30 * 60, exclude_task_ids={live})
+
+    assert reset == 1
+    assert qm.get_task(live).status == TaskStatus.PROCESSING
+    assert qm.get_task(dead).status == TaskStatus.PENDING
+
+
+def test_per_stage_windows_apply_to_their_stage_only(qm):
+    slow = _processing_with_started_at(qm, TaskStage.COMPUTE_RELATED, age_minutes=100)
+    quick = _processing_with_started_at(qm, TaskStage.CLEAN, age_minutes=100)
+
+    reset = qm.reset_stale_tasks({TaskStage.COMPUTE_RELATED: 7800.0, TaskStage.CLEAN: 30 * 60.0})
+
+    assert reset == 1  # only the CLEAN row is past its window
+    assert qm.get_task(slow).status == TaskStatus.PROCESSING
+    assert qm.get_task(quick).status == TaskStatus.PENDING
+
+
+def test_stage_missing_from_the_mapping_is_left_alone(qm):
+    untouched = _processing_with_started_at(qm, TaskStage.DOWNLOAD, age_minutes=999)
+    assert qm.reset_stale_tasks({TaskStage.CLEAN: 60.0}) == 0
+    assert qm.get_task(untouched).status == TaskStatus.PROCESSING
+
+
+def test_sqlite_manager_satisfies_the_reset_protocol(qm):
+    from thestill.core.queue_manager import SupportsStaleReset
+
+    assert isinstance(qm, SupportsStaleReset)

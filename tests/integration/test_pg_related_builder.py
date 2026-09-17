@@ -133,9 +133,7 @@ def _rails(where: str = "") -> dict:
             f"SELECT episode_id, related_episode_id, rank, score FROM episode_related {where} ORDER BY episode_id, rank"
         ).fetchall()
     for r in rows:
-        rails.setdefault(as_str(r["episode_id"]), []).append(
-            (as_str(r["related_episode_id"]), r["rank"], r["score"])
-        )
+        rails.setdefault(as_str(r["episode_id"]), []).append((as_str(r["related_episode_id"]), r["rank"], r["score"]))
     return rails
 
 
@@ -253,9 +251,9 @@ def test_incremental_update_scopes_to_seed_and_reverse_neighbours(seeded):
 
     from thestill.search.pg_related_builder import update_related_for_episodes
 
-    # candidate_cap=2 bounds each leg to 2 candidates, so the newcomer's pool
+    # pool_k=2 bounds each leg to 2 candidates, so the newcomer's pool
     # is the fitness pair — the business rails are reverse-out-of-scope.
-    summary = update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], candidate_cap=2)
+    summary = update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=2)
     assert summary["episodes"] >= 1
     after = _rails()
 
@@ -271,7 +269,7 @@ def test_incremental_update_scopes_to_seed_and_reverse_neighbours(seeded):
     assert after[EP_BIZ_D] == before[EP_BIZ_D]
 
     # Re-running the same incremental update is idempotent.
-    update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], candidate_cap=2)
+    update_related_for_episodes(PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=2)
     assert _rails() == after
 
 
@@ -283,3 +281,85 @@ def test_incremental_without_idf_falls_back_to_full_build(seeded):
     assert summary["episodes"] == 4
     rails = _rails()
     assert set(rails) == {EP_FIT_A, EP_FIT_B, EP_BIZ_C, EP_BIZ_D}
+
+
+# ---------------------------------------------------------------------------
+# Spec #56 §Testing "Complexity guard" — Postgres mirror of
+# tests/unit/search/test_related_complexity_guard.py at a smaller n.
+# ---------------------------------------------------------------------------
+_TOPICS = 20
+
+
+def _topic_docs(rng, topic: int) -> list:
+    vocab = [f"topic{topic}word{w}" for w in range(12)]
+    words = list(rng.choice(vocab, size=7, replace=False)) + ["market", "people"]
+    rng.shuffle(words)
+    return [" ".join(words[:5]), " ".join(words[4:])]
+
+
+def _topic_base(topic: int) -> np.ndarray:
+    base = np.zeros(DIM, dtype=np.float32)
+    base[topic % DIM] = 1.0
+    return base
+
+
+@pytest.fixture
+def corpus_200():
+    """200 episodes across 20 topics with a persisted IDF; returns their ids."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    from thestill.repositories.postgres_schema import ensure_schema
+    from thestill.search.pg_related_builder import _persist_idf
+    from thestill.search.related_builder import _TFIDF_KWARGS
+    from thestill.utils.postgres_ext import connect
+
+    ensure_schema(PG_DSN)
+    rng = np.random.default_rng(11)
+    eids = [str(uuid.uuid4()) for _ in range(200)]
+    docs = {}
+    with connect(PG_DSN, vector=True) as conn:
+        conn.execute(
+            "TRUNCATE chunks, episode_vectors, episode_related, related_idf, "
+            "entity_mentions, entities, episodes, podcasts CASCADE"
+        )
+        conn.execute(
+            "INSERT INTO podcasts (id, rss_url, title) VALUES (%s, %s, %s)",
+            (PODCAST_ID, "https://rel.test/feed.xml", "Related Test Pod"),
+        )
+        for i, eid in enumerate(eids):
+            topic = i % _TOPICS
+            _seed_episode(conn, eid, f"Episode {i}")
+            docs[eid] = _topic_docs(rng, topic)
+            _seed_chunks(conn, eid, docs[eid], _topic_base(topic), seed=1000 + i, noise=0.15)
+    vectorizer = TfidfVectorizer(**_TFIDF_KWARGS)
+    vectorizer.fit([" ".join(docs[e]) for e in eids])
+    _persist_idf(PG_DSN, vectorizer)
+    return eids
+
+
+def test_incremental_work_is_bounded_by_pool_k_on_postgres(corpus_200):
+    from tests.unit.search.test_related_complexity_guard import bounds
+    from thestill.search.pg_related_builder import update_related_for_episodes
+    from thestill.search.related_builder import IncrementalStats
+    from thestill.utils.postgres_ext import connect
+
+    rng = np.random.default_rng(99)
+    new_id = str(uuid.uuid4())
+    with connect(PG_DSN, vector=True) as conn:
+        _seed_episode(conn, new_id, "Newcomer")
+        _seed_chunks(conn, new_id, _topic_docs(rng, 3), _topic_base(3), seed=5000, noise=0.15)
+
+    k = 20
+    stats = IncrementalStats()
+    summary = update_related_for_episodes(
+        PG_DSN, embedding_model_name=MODEL, episode_ids=[new_id], pool_k=k, stats=stats
+    )
+    limit = bounds(k)  # the same Phase 1 ceilings the SQLite guard asserts
+    assert summary["pairs"] > 0
+    assert stats.seeds == 1
+    assert stats.candidate_queries == limit["candidate_queries"]
+    assert stats.episodes_touched <= limit["episodes_touched"]
+    assert stats.pair_scores <= limit["pair_scores"]
+    assert stats.episodes_touched < 100  # never the ~whole corpus of 200
+    # Only scored episodes were written; untouched ones (which had no rail) stay absent.
+    assert len(_rails()) <= stats.episodes_touched

@@ -886,6 +886,7 @@ def handle_compute_related(task: Task, state: "AppState") -> None:
     is effectively a full rebuild (exact), above it a true incremental.
     """
     from ..repositories.factory import uses_postgres
+    from ..utils.config import get_related_incremental_pool_k
 
     if uses_postgres(state.config):
         from ..search.pg_related_builder import update_related_for_episodes
@@ -904,6 +905,7 @@ def handle_compute_related(task: Task, state: "AppState") -> None:
                 db_target,
                 embedding_model_name=state.embedding_model.model_name,
                 episode_ids=episode_ids,
+                pool_k=get_related_incremental_pool_k(),  # spec #56: fixed, never min(n, cap)
             )
         logger.info(
             "related_compute_completed",
