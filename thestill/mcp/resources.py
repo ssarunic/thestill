@@ -30,6 +30,7 @@ from structlog import get_logger
 from ..services import PodcastService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
+from .errors import McpUserError, public_error_message
 from .identity import McpIdentity, current_mcp_identity, remote_call_limiter, require_authenticated
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
@@ -46,6 +47,7 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
         config: the caller's Config (web server); None = load it (stdio).
     """
     config = config or load_config()
+    expose_error_detail = config.environment == "development"
 
     # Initialize shared components
     path_manager = PathManager(storage_path)
@@ -115,12 +117,21 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
         # closed. Remote reads (file I/O) run off the event loop.
         identity = current_mcp_identity(server)
         # The SDK hands us a pydantic AnyUrl; everything below wants str.
-        if identity.is_remote:
-            require_authenticated(identity)
-            return await anyio.to_thread.run_sync(
-                _read_resource_sync, str(uri), identity, limiter=remote_call_limiter(server)
+        try:
+            if identity.is_remote:
+                require_authenticated(identity)
+                return await anyio.to_thread.run_sync(
+                    _read_resource_sync, str(uri), identity, limiter=remote_call_limiter(server)
+                )
+            return _read_resource_sync(str(uri), identity)
+        except Exception as exc:  # pylint: disable=broad-except
+            # The SDK relays an exception's text to the client. Authored
+            # failures ("Podcast not found: …") pass through unchanged;
+            # anything else is logged and replaced (see mcp/errors.py).
+            message = public_error_message(
+                exc, operation="resources/read", expose_detail=expose_error_detail, uri=str(uri)
             )
-        return _read_resource_sync(str(uri), identity)
+            raise McpUserError(message) from None
 
     def _read_resource_sync(uri: str, identity: McpIdentity) -> str:
         logger.info(f"Reading resource: {uri}")
@@ -134,16 +145,16 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
 
             logger.debug(f"Parsed URI: resource={resource_type}, podcast={podcast_id}, episode={episode_id}")
 
-        except ValueError as e:
+        except McpUserError as e:
             logger.error(f"Invalid URI: {uri} - {e}")
-            raise ValueError(f"Invalid URI: {uri}. {str(e)}")
+            raise McpUserError(f"Invalid URI: {uri}. {str(e)}")
 
         # Handle podcast resource
         if resource_type == "podcast":
             podcast = podcast_service.get_podcast(podcast_id)
             if not podcast:
                 logger.warning(f"Podcast not found: {podcast_id}")
-                raise ValueError(f"Podcast not found: {podcast_id}")
+                raise McpUserError(f"Podcast not found: {podcast_id}")
 
             # Get podcast index
             podcasts = podcast_service.get_podcasts()
@@ -167,13 +178,13 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
             episode = podcast_service.get_episode(podcast_id, episode_id)
             if not episode:
                 logger.warning(f"Episode not found: {podcast_id}/{episode_id}")
-                raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
+                raise McpUserError(f"Episode not found: {podcast_id}/{episode_id}")
 
             # Get indices
             podcasts = podcast_service.get_podcasts()
             podcast = podcast_service.get_podcast(podcast_id)
             if not podcast:
-                raise ValueError(f"Podcast not found: {podcast_id}")
+                raise McpUserError(f"Podcast not found: {podcast_id}")
 
             podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
@@ -217,7 +228,7 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
             transcript = podcast_service.get_transcript(podcast_id, episode_id)
             if transcript is None:
                 logger.warning(f"Episode not found for transcript: {podcast_id}/{episode_id}")
-                raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
+                raise McpUserError(f"Episode not found: {podcast_id}/{episode_id}")
 
             return transcript
 
@@ -226,7 +237,7 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
             episode = podcast_service.get_episode(podcast_id, episode_id)
             if not episode:
                 logger.warning(f"Episode not found for audio: {podcast_id}/{episode_id}")
-                raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
+                raise McpUserError(f"Episode not found: {podcast_id}/{episode_id}")
 
             # Build audio reference response
             from pathlib import Path
@@ -246,10 +257,10 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
             summary = podcast_service.get_summary(podcast_id, episode_id)
             if summary is None:
                 logger.warning(f"Episode not found for summary: {podcast_id}/{episode_id}")
-                raise ValueError(f"Episode not found: {podcast_id}/{episode_id}")
+                raise McpUserError(f"Episode not found: {podcast_id}/{episode_id}")
 
             return summary
 
         else:
             logger.error(f"Unknown resource type: {resource_type}")
-            raise ValueError(f"Unknown resource type: {resource_type}")
+            raise McpUserError(f"Unknown resource type: {resource_type}")
