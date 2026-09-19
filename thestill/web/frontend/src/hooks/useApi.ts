@@ -25,9 +25,7 @@ import {
   getMcpToken,
   createOrRotateMcpToken,
   revokeMcpToken,
-  getAddPodcastStatus,
   queuePipelineTask,
-  getPipelineTaskStatus,
   getEpisodeTasks,
   getAllEpisodes,
   bulkProcessEpisodes,
@@ -521,15 +519,39 @@ export function useEpisodeLiveRefresh({
 }
 
 // Commands hooks
+const RUNNING_REFRESH_POLL_MS = 1_000
+const IDLE_REFRESH_POLL_MS = 15_000
+const IDLE_REFRESH_TICKS_BEFORE_STOP = 4
+
+/**
+ * Refresh status on a level-triggered cadence (spec #42 FM-8, issue #163).
+ *
+ * Returning `false` the instant a response is not `running` is a latch that
+ * can only fall open: one status read at the wrong moment — or a refresh
+ * started by another tab or the scheduler — stops the poll, and nothing
+ * restarts it, leaving the button enabled over a running refresh. Instead a
+ * quiet response drops to a slow tier, and the poll only stops after
+ * `IDLE_REFRESH_TICKS_BEFORE_STOP` *consecutive* quiet ticks; any `running`
+ * response resets the count.
+ *
+ * Stopping is safe because `useStartRefresh` invalidates this key and a
+ * window refocus refetches. Counted in `queryFn` for the reasons given on
+ * `useEpisodeTasks`; `RefreshButton` is the single owner.
+ */
 export function useRefreshStatus(enabled = true) {
+  const idleTicksRef = useRef(0)
+
   return useQuery({
     queryKey: ['commands', 'refresh', 'status'],
-    queryFn: getRefreshStatus,
+    queryFn: async () => {
+      const data = await getRefreshStatus()
+      idleTicksRef.current = data.status === 'running' ? 0 : idleTicksRef.current + 1
+      return data
+    },
     enabled,
     refetchInterval: (query) => {
-      // Poll every 1 second while running, stop when complete
-      const status = query.state.data?.status
-      return status === 'running' ? 1000 : false
+      if (query.state.data?.status === 'running') return RUNNING_REFRESH_POLL_MS
+      return idleTicksRef.current < IDLE_REFRESH_TICKS_BEFORE_STOP ? IDLE_REFRESH_POLL_MS : false
     },
   })
 }
@@ -552,19 +574,6 @@ export function useStartRefresh() {
 }
 
 // Add Podcast hooks
-export function useAddPodcastStatus(enabled = true) {
-  return useQuery({
-    queryKey: ['commands', 'add', 'status'],
-    queryFn: getAddPodcastStatus,
-    enabled,
-    refetchInterval: (query) => {
-      // Poll every 1 second while running, stop when complete
-      const status = query.state.data?.status
-      return status === 'running' ? 1000 : false
-    },
-  })
-}
-
 export function useAddPodcast() {
   const queryClient = useQueryClient()
 
@@ -594,19 +603,6 @@ export function useQueuePipelineTask(podcastSlug: string, episodeSlug: string) {
       queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug] })
       // Also invalidate episode tasks
       queryClient.invalidateQueries({ queryKey: ['episodes', 'tasks'] })
-    },
-  })
-}
-
-export function usePipelineTaskStatus(taskId: string | null) {
-  return useQuery({
-    queryKey: ['commands', 'pipeline', 'task', taskId],
-    queryFn: () => getPipelineTaskStatus(taskId!),
-    enabled: !!taskId,
-    refetchInterval: (query) => {
-      // Poll while task is pending or processing
-      const status = query.state.data?.status
-      return status === 'pending' || status === 'processing' ? 2000 : false
     },
   })
 }
