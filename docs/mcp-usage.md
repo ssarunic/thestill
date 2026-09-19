@@ -507,9 +507,21 @@ Claude: "You're tracking 3 podcasts with a total of 550 episodes.
   "transcripts_available": 87,
   "audio_files_count": 95,
   "storage_path": "/path/to/data",
+  "entity_extraction": {
+    "available_on_this_host": false,
+    "episodes_skipped_unavailable": 480,
+    "by_status": {"complete": 2040, "skipped_unavailable": 480}
+  },
   "last_updated": "2025-01-15T14:30:00Z"
 }
 ```
+
+`entity_extraction` (admin and stdio only) reports the entity-branch backlog.
+A server built without the `entities` extra skips entity extraction for every
+new episode and still reports success, so `episodes_skipped_unavailable` is
+the number of summarized episodes that `find_mentions`, `list_quotes_by`,
+`get_entity` and `list_episodes_by_entity` cannot see. An empty result from
+those tools does not mean "never mentioned" while this is non-zero.
 
 ### 6. `get_transcript`
 

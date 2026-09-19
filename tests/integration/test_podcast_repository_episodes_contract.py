@@ -525,6 +525,30 @@ def test_entity_extraction_status_and_skipped_legacy_count(h):
     assert h.repo.update_entity_extraction_status(MISSING_ID, "complete") is False
 
 
+def test_count_entity_extraction_statuses_covers_summarized_episodes_only(h):
+    """Spec #66 — the entity backlog must be countable. Deltas, not absolutes:
+    the Postgres harness shares a database across tests."""
+    before = h.repo.count_entity_extraction_statuses()
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    skipped = _mk_episode(pid, uid, 1, summary_path="s1.md")
+    skipped_too = _mk_episode(pid, uid, 2, summary_path="s2.md")
+    done = _mk_episode(pid, uid, 3, summary_path="s3.md")
+    never_reached = _mk_episode(pid, uid, 4, summary_path="s4.md")
+    not_summarized = _mk_episode(pid, uid, 5)  # owes no entity work yet
+    for ep in (skipped, skipped_too, done, never_reached, not_summarized):
+        h.repo.save_episode(ep)
+    h.repo.update_entity_extraction_status(skipped.id, "skipped_unavailable")
+    h.repo.update_entity_extraction_status(skipped_too.id, "skipped_unavailable")
+    h.repo.update_entity_extraction_status(done.id, "complete")
+    h.repo.update_entity_extraction_status(not_summarized.id, "skipped_unavailable")
+
+    after = h.repo.count_entity_extraction_statuses()
+    delta = {k: after.get(k, 0) - before.get(k, 0) for k in set(after) | set(before)}
+    assert {k: v for k, v in delta.items() if v} == {"skipped_unavailable": 2, "complete": 1, "none": 1}
+    assert all(isinstance(v, int) for v in after.values())
+
+
 # ---------------------------------------------------------------------------
 # Failure marking / clearing
 # ---------------------------------------------------------------------------

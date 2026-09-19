@@ -13,6 +13,11 @@ export interface DashboardStats {
   storage_path: string
   audio_files_count: number
   transcripts_available: number
+  // Spec #66 — entity-branch health. Optional: older servers omit it.
+  entity_extraction?: {
+    available: boolean
+    skipped_unavailable: number
+  }
   pipeline: {
     discovered: number
     downloaded: number

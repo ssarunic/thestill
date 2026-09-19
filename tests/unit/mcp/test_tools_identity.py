@@ -161,6 +161,35 @@ class TestGetStatus:
         assert "storage_path" not in mine and "podcasts_tracked" not in mine
         assert full["podcasts_tracked"] == 2 and "storage_path" in full
 
+    def test_admin_status_reports_the_entity_backlog_and_plain_users_do_not_see_it(self, world):
+        """Spec #66 — an empty find_mentions must be explainable: the admin
+        view says how many summarized episodes have no entity data."""
+        h, p0, _ = world
+        with sqlite3.connect(str(h.config.database_path)) as conn:
+            for n in range(3):
+                conn.execute(
+                    "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url, summary_path, "
+                    "entity_extraction_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        p0,
+                        f"x{n}",
+                        f"Ep {n}",
+                        f"https://x/{n}.mp3",
+                        f"s{n}.md",
+                        "skipped_unavailable",
+                    ),
+                )
+        a = h.mint(USER_A)
+        b = h.mint(USER_B, is_admin=True)
+        with h.client() as c:
+            mine = _payload(Harness.rpc(c, a, "tools/call", {"name": "get_status", "arguments": {}}))
+            full = _payload(Harness.rpc(c, b, "tools/call", {"name": "get_status", "arguments": {}}))
+        assert "entity_extraction" not in mine
+        assert full["entity_extraction"]["episodes_skipped_unavailable"] == 3
+        assert full["entity_extraction"]["by_status"] == {"skipped_unavailable": 3}
+        assert isinstance(full["entity_extraction"]["available_on_this_host"], bool)
+
 
 class TestIdentifiers:
     def test_numeric_podcast_id_refused_over_http_uuid_and_slug_accepted(self, world):

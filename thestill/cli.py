@@ -1351,6 +1351,12 @@ def status(ctx):
     click.echo("")
     click.echo("Entity extraction:")
     click.echo(f"  Skipped (legacy, no JSON sidecar): {stats.episodes_skipped_legacy:,}")
+    click.echo(f"  Available on this host:            {'yes' if stats.entity_extraction_available else 'NO'}")
+    backlog = stats.episodes_entities_skipped_unavailable
+    click.echo(f"  Skipped (extractor unavailable):   {backlog:,}")
+    if backlog:
+        click.echo("    ^ owed work: these episodes have no entity mentions. Backfill on a host with")
+        click.echo("      the `entities` extra: thestill rebuild-entities (see specs/66).")
     click.echo("")
     # Spec #60 — feed refresh health: make a mass park/quarantine visible
     # instead of silent (the 2026-07-15 incident's second half).

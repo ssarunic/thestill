@@ -5,6 +5,7 @@ import PipelineStatus from '../components/PipelineStatus'
 import RefreshButton from '../components/RefreshButton'
 import MobileSummaryBar from '../components/MobileSummaryBar'
 import NarrationStatsTile from '../components/NarrationStatsTile'
+import EntityBacklogNotice from '../components/EntityBacklogNotice'
 
 export default function Dashboard() {
   const { data: stats, isLoading: statsLoading, error: statsError } = useDashboardStats()
@@ -40,6 +41,8 @@ export default function Dashboard() {
         </div>
         <RefreshButton />
       </div>
+
+      <EntityBacklogNotice entityExtraction={stats?.entity_extraction} />
 
       {/* Mobile: Compact Summary Bar */}
       <div className="sm:hidden">

@@ -68,6 +68,14 @@ class SystemStats(BaseModel):
     # Spec #28 Phase 3.4 — episodes the entity branch skipped because they
     # have no AnnotatedTranscript JSON sidecar (legacy Markdown-only cleaning).
     episodes_skipped_legacy: int = 0
+    # Spec #66 — entity-branch health over summarized episodes.
+    # ``entity_extraction_by_status`` is the raw breakdown ('none' = never
+    # reached the branch). ``episodes_entities_skipped_unavailable`` is the
+    # backlog owed because this host lacks the ``entities`` extra; with
+    # ``entity_extraction_available`` False it grows with every new episode.
+    entity_extraction_by_status: dict = {}
+    episodes_entities_skipped_unavailable: int = 0
+    entity_extraction_available: bool = True
     # Spec #60 — feed refresh health. ``refresh_parked_by_reason`` buckets
     # quarantined feeds by refresh_disabled_reason; legacy generic parks
     # (pre-#60) count under 'unknown'. ``refresh_backing_off`` is the
@@ -148,6 +156,7 @@ class StatsService:
 
         chunks_count, embedding_model = self._chunks_health()
         episodes_skipped_legacy = self._skipped_legacy_count()
+        entity_statuses = self._entity_extraction_statuses()
         refresh_health = self._refresh_health()
 
         stats = SystemStats(
@@ -166,6 +175,9 @@ class StatsService:
             chunks_count=chunks_count,
             embedding_model=embedding_model,
             episodes_skipped_legacy=episodes_skipped_legacy,
+            entity_extraction_by_status=entity_statuses,
+            episodes_entities_skipped_unavailable=entity_statuses.get("skipped_unavailable", 0),
+            entity_extraction_available=self._entity_extraction_available(),
             refresh_active=refresh_health.get("active", 0),
             refresh_due_now=refresh_health.get("due_now", 0),
             refresh_backing_off=refresh_health.get("backing_off", 0),
@@ -202,6 +214,26 @@ class StatsService:
         if getter is None:
             return 0
         return getter()
+
+    def _entity_extraction_statuses(self) -> dict:
+        """Delegate to the repository's per-status count; {} when the backend
+        doesn't implement it (in-memory test repositories)."""
+        getter = getattr(self.repository, "count_entity_extraction_statuses", None)
+        if getter is None:
+            return {}
+        return getter()
+
+    @staticmethod
+    def _entity_extraction_available() -> bool:
+        """Whether this host can run the entity branch at all.
+
+        ``handle_extract_entities`` decides the same thing by importing
+        gliner; a status page must not — on a host that has it, that import
+        drags torch into the web process. Finding the spec is enough.
+        """
+        import importlib.util
+
+        return importlib.util.find_spec("gliner") is not None
 
     def _refresh_health(self) -> dict:
         """Delegate to the repository's refresh-health aggregate (spec #60).
