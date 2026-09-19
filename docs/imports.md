@@ -149,8 +149,16 @@ Requests` with a clear message; the API surface won't change otherwise.
 
 - **"No resolver matched URL"** — the URL kind isn't supported. See the
   table above.
-- **"yt-dlp returned no metadata"** — the video is private, age-gated,
-  geo-restricted, or deleted. Check the URL in a browser.
+- **"YouTube is blocking automated access from this server"** — YouTube's
+  bot check ("Sign in to confirm you're not a bot") has flagged the
+  server's IP address; datacenter ranges such as AWS are hit routinely.
+  The video itself is fine. Retry later, or paste a direct audio link.
+  Well-known yt-dlp failures (private, unavailable, age-restricted,
+  region-locked, members-only, unfinished live stream) are rewritten
+  into plain-language messages by `thestill/utils/youtube_errors.py`;
+  anything unrecognised falls through with yt-dlp's own text.
+- **"yt-dlp returned no metadata"** — yt-dlp succeeded but produced no
+  usable payload. Check the URL in a browser.
 - **"iTunes lookup found no episode"** — the Apple share link's `?i=`
   track id no longer exists (the show was unpublished or the episode
   was withdrawn).

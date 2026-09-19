@@ -20,6 +20,7 @@ import yt_dlp
 from structlog import get_logger
 
 from ..models.podcast import Episode
+from ..utils.youtube_errors import describe_youtube_failure
 
 logger = get_logger(__name__)
 
@@ -41,6 +42,10 @@ class YouTubeDownloader:
         """
         self.storage_path: Path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
+        #: Human-readable reason for the most recent ``download_episode`` failure,
+        #: or ``None`` after a success. ``download_episode`` returns ``None`` on
+        #: failure by contract, so callers read this to report *why*.
+        self.last_error: Optional[str] = None
 
     @staticmethod
     def is_youtube_url(url: str) -> bool:
@@ -214,6 +219,7 @@ class YouTubeDownloader:
                 return str(local_path)
 
             logger.info(f"Downloading from YouTube: {episode.title}")
+            self.last_error = None
 
             # yt-dlp options optimized for audio extraction
             ydl_opts = {
@@ -247,7 +253,14 @@ class YouTubeDownloader:
             return str(local_path)
 
         except Exception as e:
-            logger.error(f"Error downloading YouTube video {episode.title}: {e}")
+            self.last_error = describe_youtube_failure(e) or str(e)
+            logger.error(
+                "youtube_download_failed",
+                episode_title=episode.title,
+                episode_id=episode.id,
+                reason=self.last_error,
+                error=str(e),
+            )
             return None
 
     def _progress_hook(self, d: Dict[str, Any]) -> None:

@@ -48,6 +48,7 @@ from ..utils.url_patterns import (
     is_apple_podcast_url,
     is_youtube_url,
 )
+from ..utils.youtube_errors import describe_youtube_failure
 
 logger = get_logger(__name__)
 
@@ -226,8 +227,15 @@ def _default_youtube_metadata_fetch(url: str) -> dict:
     import yt_dlp
 
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": False}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except yt_dlp.utils.DownloadError as exc:
+        friendly = describe_youtube_failure(exc)
+        if friendly is None:
+            raise
+        logger.warning("youtube_metadata_fetch_failed", url=url, reason=friendly, error=str(exc))
+        raise ResolverError(friendly) from exc
     if not isinstance(info, dict):
         raise ResolverError(f"yt-dlp returned no metadata for {url!r}")
     return info
