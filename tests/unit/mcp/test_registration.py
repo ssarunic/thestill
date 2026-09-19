@@ -14,6 +14,7 @@ from mcp.server import Server
 from mcp.shared.exceptions import MCPError
 from mcp.types import Resource, TextContent, Tool
 
+from thestill.mcp.errors import McpUserError
 from thestill.mcp.identity import STDIO
 from thestill.mcp.registration import register_resources, register_tools
 
@@ -98,7 +99,8 @@ class TestTools:
         async with Client(server) as client:
             result = await client.call_tool("boom", {})
         assert result.is_error is True
-        assert result.content[0].text == "kaput"
+        assert "kaput" not in result.content[0].text
+        assert result.content[0].text.startswith("Internal error (ref ")
 
 
 class TestResources:
@@ -111,7 +113,7 @@ class TestResources:
         async def read_resource(uri, identity):
             assert isinstance(uri, str) and identity is STDIO
             if uri.endswith("/missing"):
-                raise ValueError(f"Podcast not found: {uri}")
+                raise McpUserError(f"Podcast not found: {uri}")
             if uri.endswith("/bug"):
                 raise RuntimeError("secret internals")
             return f"body of {uri}"

@@ -42,6 +42,7 @@ from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
+from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
 from .registration import register_tools
@@ -79,6 +80,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             the stdio entry point leaves it None and loads it here.
     """
     config = config or load_config()
+    # Mirrors the web app's exception handler: exception text is relayed to
+    # the client only in development (see mcp/errors.py).
+    expose_error_detail = config.environment == "development"
 
     # Per-session MCP quota key.
     # stdio transport has one client per server process, so process identity
@@ -445,6 +449,18 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
         except ScopeError as exc:
             return [TextContent(type="text", text=json.dumps({"success": False, "error": str(exc)}))]
 
+        def _public_error(exc, episode=None, *, also_authored=()):
+            """Client-safe text for ``exc``; the detail goes to the log."""
+            context = {"episode_id": episode.id} if episode is not None else {}
+            return public_error_message(
+                exc,
+                operation=name,
+                expose_detail=expose_error_detail,
+                also_authored=also_authored,
+                remote=identity.is_remote,
+                **context,
+            )
+
         def _pid(raw):
             """Podcast identifier resolver: numeric index on stdio only."""
             return resolve_identifier(raw, allow_numeric_index=not identity.is_remote)
@@ -736,7 +752,8 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                         "next_step": "Run download_episodes to download the audio files",
                     }
                 except ValueError as e:
-                    result = {"success": False, "error": str(e)}
+                    # RefreshService documents ValueError as "podcast not found".
+                    result = {"success": False, "error": _public_error(e, also_authored=(ValueError,))}
 
                 return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -802,7 +819,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                                 {"podcast": podcast.title, "episode": episode.title, "error": "Download failed"}
                             )
                     except Exception as e:
-                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+                        failed.append(
+                            {"podcast": podcast.title, "episode": episode.title, "error": _public_error(e, episode)}
+                        )
 
                 result = {
                     "success": True,
@@ -887,7 +906,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                                 {"podcast": podcast.title, "episode": episode.title, "error": "Downsampling failed"}
                             )
                     except Exception as e:
-                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+                        failed.append(
+                            {"podcast": podcast.title, "episode": episode.title, "error": _public_error(e, episode)}
+                        )
 
                 result = {
                     "success": True,
@@ -1015,7 +1036,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                                 {"podcast": podcast.title, "episode": episode.title, "error": "Transcription failed"}
                             )
                     except Exception as e:
-                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+                        failed.append(
+                            {"podcast": podcast.title, "episode": episode.title, "error": _public_error(e, episode)}
+                        )
 
                 result = {
                     "success": True,
@@ -1158,7 +1181,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                                 {"podcast": podcast.title, "episode": episode.title, "error": "Cleaning failed"}
                             )
                     except Exception as e:
-                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+                        failed.append(
+                            {"podcast": podcast.title, "episode": episode.title, "error": _public_error(e, episode)}
+                        )
 
                 result = {
                     "success": True,
@@ -1432,7 +1457,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                             text=json.dumps(
                                 {
                                     "success": False,
-                                    "error": f"Failed at step '{current_step}': {str(e)}",
+                                    "error": f"Failed at step '{current_step}': {_public_error(e)}",
                                     "steps_completed": steps_completed,
                                 }
                             ),
@@ -1547,7 +1572,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                         )
                         summarized.append({"podcast": podcast.title, "episode": episode.title})
                     except Exception as e:
-                        failed.append({"podcast": podcast.title, "episode": episode.title, "error": str(e)})
+                        failed.append(
+                            {"podcast": podcast.title, "episode": episode.title, "error": _public_error(e, episode)}
+                        )
 
                 result = {
                     "success": True,
@@ -1618,8 +1645,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Unknown tool: {name}"}))]
 
         except Exception as e:
-            logger.error(f"Error calling tool {name}: {e}", exc_info=True)
-            return [TextContent(type="text", text=json.dumps({"success": False, "error": str(e)}))]
+            # The catch-all for every tool. Nothing reaches the client from
+            # here except authored messages and a logged reference id.
+            return [TextContent(type="text", text=json.dumps({"success": False, "error": _public_error(e)}))]
 
     register_tools(server, list_tools=list_tools, call_tool=call_tool)
 

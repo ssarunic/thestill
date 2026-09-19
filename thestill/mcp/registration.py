@@ -31,14 +31,12 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, List
 
 import jsonschema
-import structlog
 from mcp import types
 from mcp.server import Server, ServerRequestContext
 from mcp.shared.exceptions import MCPError
 
-from .identity import McpIdentity, NotAuthenticatedError, current_mcp_identity
-
-logger = structlog.get_logger(__name__)
+from .errors import McpUserError, public_error_message
+from .identity import McpIdentity, current_mcp_identity
 
 ListToolsFn = Callable[[McpIdentity], Awaitable[List[types.Tool]]]
 CallToolFn = Callable[[str, Dict[str, Any], McpIdentity], Awaitable[List[types.TextContent]]]
@@ -76,9 +74,10 @@ def register_tools(server: Server, *, list_tools: ListToolsFn, call_tool: CallTo
             content = await call_tool(params.name, arguments, identity)
         except Exception as exc:  # pylint: disable=broad-except
             # A tool failure is a result the model can read and react to,
-            # not a protocol error.
-            logger.error("mcp_tool_call_failed", tool=params.name, error=str(exc), exc_info=True)
-            return _error_result(str(exc))
+            # not a protocol error — but never the exception's own text
+            # (mcp/errors.py). The dispatcher in tools.py has its own
+            # catch-all; this is the backstop for anything that escapes it.
+            return _error_result(public_error_message(exc, operation=params.name, remote=identity.is_remote))
         return types.CallToolResult(content=list(content))
 
     server.add_request_handler("tools/list", types.PaginatedRequestParams, on_list_tools)
@@ -99,11 +98,11 @@ def register_resources(server: Server, *, list_resources: ListResourcesFn, read_
         uri = str(params.uri)
         try:
             text = await read_resource(uri, current_mcp_identity(ctx))
-        except (ValueError, NotAuthenticatedError) as exc:
-            # The resource code raises these with messages written for the
-            # caller ("Podcast not found: …"). 2.x reports any other
-            # exception as an opaque internal error, which is right for
-            # the unexpected but would hide these from the model.
+        except McpUserError as exc:
+            # Written for the caller ("Podcast not found: …", or the
+            # sanitised "Internal error (ref …)" from resources.py). 2.x
+            # reports every other exception as an opaque internal error,
+            # which is what we want for the unexpected.
             raise MCPError(code=types.INVALID_PARAMS, message=str(exc)) from exc
         return types.ReadResourceResult(
             contents=[types.TextResourceContents(uri=uri, mime_type="text/plain", text=text)]
