@@ -79,7 +79,7 @@ describe('BriefingIndex', () => {
     )
   })
 
-  it('renders each episode as a card: title link, gist, meta and artwork', () => {
+  it('renders each episode as an inbox-style row: leading artwork, title link, gist and meta', () => {
     renderIndex()
     const card = screen.getByRole('link', { name: 'Starmer under pressure' }).closest('li')!
     expect(screen.getByRole('link', { name: 'Starmer under pressure' })).toHaveAttribute(
@@ -89,10 +89,12 @@ describe('BriefingIndex', () => {
     expect(within(card).getByText('Rory and Alastair on the reshuffle.')).toBeInTheDocument()
     // Node's ICU renders en-GB September as ``Sept``; browsers as ``Sep``.
     expect(within(card).getByText(/^Sun 6 Sept? · 58 min$/)).toBeInTheDocument()
-    // Episode artwork wins; the card-sized tile keeps the page scannable.
+    // Episode artwork wins. It leads the row like the inbox, one size up
+    // (64 px) because the gist stacks under the title.
     const art = within(card).getByRole('presentation', { hidden: true })
     expect(art).toHaveAttribute('src', 'https://img/ep1.jpg')
-    expect(art.className).toContain('w-24')
+    expect(art.className).toContain('w-16')
+    expect(card.firstElementChild).toBe(art)
   })
 
   it('rounds the length to whole minutes on a card', () => {

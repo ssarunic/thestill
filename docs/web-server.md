@@ -381,9 +381,10 @@ unread coverage exists. It links to the briefing detail page.
 - **Hero**: the covered shows' artwork as one cover tile (a 2 × 2 mosaic
   past one show), a "From Show A, Show B and 3 more" line, and the blurred
   backdrop the episode page uses
-- **Episode index**: artwork cards grouped by show, each with the episode
-  title, gist, date and length, fed by `GET /api/briefings/{id}/episodes`;
-  a card opens the episode in the reader overlay above the briefing
+- **Episode index**: inbox-style rows grouped by show (artwork leading,
+  64 px, then title, gist, date and length), fed by
+  `GET /api/briefings/{id}/episodes`; a row opens the episode in the
+  reader overlay above the briefing
 - **Script reader**: the rendered morning-briefing markdown, shown only
   when the index is empty (episodes deleted since) or unavailable
 - **Narration variants** (spec #33): short/medium/long length switcher;
