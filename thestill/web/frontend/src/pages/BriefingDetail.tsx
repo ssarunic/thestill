@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import NarrationView from '../components/NarrationView'
 import {
   useBriefing,
+  useBriefingEpisodes,
   useBriefingScript,
   useMarkBriefingListened,
 } from '../hooks/useApi'
@@ -11,6 +12,10 @@ import PageHero from '../components/PageHero'
 import ActionRow from '../components/ActionRow'
 import MetaEyebrow from '../components/MetaEyebrow'
 import Panel from '../components/Panel'
+import BriefingCover from '../components/BriefingCover'
+import BriefingIndex, { BriefingIndexSkeleton } from '../components/BriefingIndex'
+import { artworkFrameClass } from '../components/artworkRoles'
+import { describeShows } from '../utils/briefingFormat'
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -25,8 +30,15 @@ function formatDateTime(iso: string): string {
 export default function BriefingDetail() {
   const { briefingId } = useParams<{ briefingId: string }>()
   const briefingQuery = useBriefing(briefingId ?? null)
-  const scriptQuery = useBriefingScript(briefingId ?? null)
+  const episodesQuery = useBriefingEpisodes(briefingId ?? null)
   const markListened = useMarkBriefingListened()
+
+  const podcasts = episodesQuery.data?.podcasts ?? []
+  const hasIndex = podcasts.length > 0
+  // The text-only script is the fallback: briefings whose episodes have
+  // since been deleted, or an index request that failed. Only fetched then.
+  const needsScript = episodesQuery.isError || (episodesQuery.isSuccess && !hasIndex)
+  const scriptQuery = useBriefingScript(needsScript ? (briefingId ?? null) : null)
 
   if (briefingQuery.isLoading) {
     return (
@@ -54,12 +66,22 @@ export default function BriefingDetail() {
 
   const briefing = briefingQuery.data
   const isListened = !!briefing.listened_at
+  const showsLine = describeShows(podcasts)
 
   return (
     <div className="space-y-6 max-w-3xl">
-      {/* Spec #76 §5 — same hero anatomy as the episode page, no artwork;
-          the one action sits under the title instead of below the script. */}
+      {/* Spec #76 §5 — same hero anatomy as the episode page. The artwork
+          slot holds the covered shows' artwork as one cover tile; the one
+          action sits under the title instead of below the script. */}
       <PageHero
+        artwork={
+          hasIndex ? (
+            <BriefingCover podcasts={podcasts} />
+          ) : episodesQuery.isLoading ? (
+            <div aria-hidden="true" className={`${artworkFrameClass('collage')} animate-pulse bg-gray-200`} />
+          ) : undefined
+        }
+        backdropSources={hasIndex ? [podcasts[0].image_url] : undefined}
         eyebrow={
           <MetaEyebrow
             items={[
@@ -70,6 +92,7 @@ export default function BriefingDetail() {
           />
         }
         title="Today's briefing"
+        identity={showsLine ? <p className="text-sm text-muted">{showsLine}</p> : undefined}
       >
         <ActionRow
           primary={
@@ -93,19 +116,21 @@ export default function BriefingDetail() {
           narrations={briefing.narrations ?? []}
           linkIndexFallback={
             <>
-              {scriptQuery.isLoading && (
+              {episodesQuery.isLoading && <BriefingIndexSkeleton />}
+              {hasIndex && <BriefingIndex podcasts={podcasts} />}
+              {needsScript && scriptQuery.isLoading && (
                 <div className="space-y-2">
                   <div className="animate-pulse h-4 w-3/4 bg-gray-100 rounded" />
                   <div className="animate-pulse h-4 w-2/3 bg-gray-100 rounded" />
                   <div className="animate-pulse h-4 w-5/6 bg-gray-100 rounded" />
                 </div>
               )}
-              {scriptQuery.error && (
+              {needsScript && scriptQuery.error && (
                 <p className="text-muted italic">
                   Briefing script not available yet.
                 </p>
               )}
-              {scriptQuery.data && (
+              {needsScript && scriptQuery.data && (
                 <div className="prose prose-sm max-w-none">
                   <ReactMarkdown>{scriptQuery.data.markdown}</ReactMarkdown>
                 </div>
