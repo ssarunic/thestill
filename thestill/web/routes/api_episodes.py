@@ -28,7 +28,7 @@ from ...core.queue_manager import TaskStage
 from ...models.podcast import EpisodeState
 from ...models.user import User
 from ...services.playback import build_playback_manifest
-from ...services.podcast_service import extract_summary_preview
+from ...services.podcast_service import resolve_summary_preview
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import bad_request, conflict, not_found, paginated_response, parse_iso_datetime
@@ -130,23 +130,14 @@ def get_all_episodes(
     )
     episodes = []
     for podcast, episode in episodes_with_podcasts:
-        # Spec #69 Phase 6.5 — the preview is stored at summarize time.
-        # Episodes summarized before the column existed backfill lazily:
-        # read the file once, persist the extraction, and never read it
-        # again (bounded by page size, self-healing). Spec #35 — reads go
-        # via FileStorage; FileNotFoundError replaces the exists() check.
-        summary_preview = episode.summary_preview
-        if summary_preview is None and episode.summary_path:
-            summary_file = app_state.path_manager.summary_file(episode.summary_path)
-            try:
-                summary_text = app_state.config.file_storage.read_text(app_state.path_manager.to_relative(summary_file))
-                summary_preview = extract_summary_preview(summary_text)
-                # Persist "" when nothing was extractable so the file is
-                # never re-read for this episode ('' renders as no preview).
-                app_state.repository.set_episode_summary_preview(episode.id, summary_preview or "")
-            except FileNotFoundError:
-                pass
-        summary_preview = summary_preview or None
+        # Lazy backfill of the stored preview, bounded by page size and
+        # self-healing (spec #69 Phase 6.5).
+        summary_preview = resolve_summary_preview(
+            episode,
+            repository=app_state.repository,
+            path_manager=app_state.path_manager,
+            file_storage=app_state.config.file_storage,
+        )
 
         episodes.append(
             {

@@ -130,12 +130,17 @@ interface ListRowArtworkProps {
    * placeholder shows.
    */
   sources: (string | null | undefined)[]
-  /** 48 px for podcast/inbox rows, 40 px for episode rows inside a podcast. */
-  size?: 12 | 10
+  /**
+   * 48 px for podcast/inbox rows, 40 px for episode rows inside a podcast,
+   * 64 px for rows that stack a gist under the title (the briefing index).
+   */
+  size?: 12 | 10 | 16
   className?: string
 }
 
-/** Standard square row thumbnail — the ``row`` / ``rowSm`` roles of ``Artwork`` (spec #76 §5.8). */
+const ARTWORK_SIZE_ROLE = { 10: 'rowSm', 12: 'row', 16: 'sheet' } as const
+
+/** Standard square row thumbnail — the ``rowSm`` / ``row`` / ``sheet`` roles of ``Artwork`` (spec #76 §5.8). */
 export function ListRowArtwork({ sources, size = 12, className = '' }: ListRowArtworkProps) {
-  return <Artwork role={size === 12 ? 'row' : 'rowSm'} sources={sources} className={className} />
+  return <Artwork role={ARTWORK_SIZE_ROLE[size]} sources={sources} className={className} />
 }

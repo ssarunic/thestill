@@ -37,7 +37,7 @@ from ..models.annotated_transcript import AnnotatedTranscript, WordSpan
 from ..models.podcast import Episode, Podcast
 from ..models.transcript import Segment as RawSegment
 from ..models.transcript import Word
-from ..repositories.podcast_repository import PodcastRepository
+from ..repositories.podcast_repository import EpisodeRepository, PodcastRepository
 from ..utils.duration import format_duration
 from ..utils.file_storage import FileStorage
 from ..utils.language_config import normalize_language_code
@@ -50,6 +50,33 @@ if TYPE_CHECKING:
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]
+
+
+def resolve_summary_preview(
+    episode: Episode,
+    *,
+    repository: EpisodeRepository,
+    path_manager: PathManager,
+    file_storage: FileStorage,
+) -> Optional[str]:
+    """Return the episode's stored summary preview, backfilling it once.
+
+    Spec #69 Phase 6.5 — the preview is stored at summarize time. Episodes
+    summarized before the column existed backfill lazily: read the file
+    once, persist the extraction, and never read it again. ``""`` is
+    persisted when nothing was extractable so the file is not re-read;
+    it renders as no preview. Spec #35 — reads go via ``FileStorage``.
+    """
+    summary_preview = episode.summary_preview
+    if summary_preview is None and episode.summary_path:
+        summary_file = path_manager.summary_file(episode.summary_path)
+        try:
+            summary_text = file_storage.read_text(path_manager.to_relative(summary_file))
+        except FileNotFoundError:
+            return None
+        summary_preview = extract_summary_preview(summary_text)
+        repository.set_episode_summary_preview(episode.id, summary_preview or "")
+    return summary_preview or None
 
 
 def extract_summary_preview(content: str, max_length: int = 200) -> Optional[str]:

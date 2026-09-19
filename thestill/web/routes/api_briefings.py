@@ -23,19 +23,21 @@ bounded; a future spec moves this to an explicit operator trigger.
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from structlog import get_logger
 
 from ...models.briefing import Briefing
 from ...models.briefing_schedule import BriefingFrequency, BriefingSchedule
+from ...models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING
 from ...models.user import User
 from ...services.briefing_service import BriefingNotFoundError, Deferred
 from ...services.narration import NarrationRunnerError, read_narration_header
+from ...services.podcast_service import resolve_summary_preview
 from ...utils.briefing_cadence import next_run_for
-from ...utils.duration import resolve_target_or_default, slug_for_duration_seconds
+from ...utils.duration import format_duration, resolve_target_or_default, slug_for_duration_seconds
 from ...utils.path_manager import _validate_slug
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, etag_json_response, not_found, paginated_response
@@ -301,6 +303,87 @@ def get_briefing(
     _require_owned(briefing, user)
     narrations = _list_narrations_for_briefing(app_state.path_manager.narrations_dir(), briefing_id)
     return api_response({**_serialize(briefing), "narrations": narrations})
+
+
+def _briefing_episode_groups(app_state: AppState, briefing: Briefing) -> List[dict]:
+    """Episodes a briefing covers, grouped by podcast in first-seen order.
+
+    Same window the narration runner resolves (spec #33): inbox rows
+    delivered in ``[cursor_from, cursor_to)`` that are still unread/saved,
+    plus rows read *after* the cut — an episode the user opened from this
+    briefing stays in its index. Episodes deleted since the render are
+    skipped, matching ``BriefingRenderer``. Order is delivery order, the
+    same as the rendered ``script.md``.
+    """
+    episode_ids = app_state.inbox_repository.list_episode_ids_in_window(
+        briefing.user_id,
+        since=briefing.cursor_from,
+        until=briefing.cursor_to,
+        states=INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+        read_since=briefing.created_at,
+    )
+    pairs = app_state.repository.get_episodes_by_ids(episode_ids)
+    groups: Dict[str, dict] = {}
+    for episode_id in episode_ids:
+        pair = pairs.get(episode_id)
+        if pair is None:
+            continue
+        podcast, episode = pair
+        group = groups.get(podcast.id)
+        if group is None:
+            group = {
+                "id": podcast.id,
+                "title": podcast.title,
+                "slug": podcast.slug,
+                "image_url": podcast.image_url,
+                "episodes": [],
+            }
+            groups[podcast.id] = group
+        group["episodes"].append(
+            {
+                "id": episode.id,
+                "title": episode.title,
+                "slug": episode.slug,
+                "pub_date": episode.pub_date.isoformat() if episode.pub_date else None,
+                "duration": episode.duration,
+                "duration_formatted": format_duration(episode.duration) if episode.duration else None,
+                "image_url": episode.image_url,
+                "summary_available": bool(episode.summary_path),
+                "summary_preview": resolve_summary_preview(
+                    episode,
+                    repository=app_state.repository,
+                    path_manager=app_state.path_manager,
+                    file_storage=app_state.config.file_storage,
+                ),
+            }
+        )
+    return list(groups.values())
+
+
+@router.get("/{briefing_id}/episodes")
+def get_briefing_episodes(
+    briefing_id: str,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """The episodes a briefing covers, grouped by podcast, with artwork.
+
+    Structured counterpart of ``/script`` for the briefing index UI: the
+    web page renders artwork cards from this instead of the text-only
+    markdown, which stays as the fallback and the emailed form.
+    """
+    briefing = app_state.briefing_repository.get(briefing_id)
+    if briefing is None:
+        not_found("Briefing", briefing_id)
+    _require_owned(briefing, user)
+    podcasts = _briefing_episode_groups(app_state, briefing)
+    return api_response(
+        {
+            "briefing_id": briefing.id,
+            "podcasts": podcasts,
+            "episode_count": sum(len(p["episodes"]) for p in podcasts),
+        }
+    )
 
 
 @router.post("/{briefing_id}/narrate", status_code=201)

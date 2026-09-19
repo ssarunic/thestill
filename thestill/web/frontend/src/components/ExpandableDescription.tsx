@@ -13,8 +13,9 @@ export default function ExpandableDescription({
   className = '',
 }: ExpandableDescriptionProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const [needsTruncation, setNeedsTruncation] = useState(false)
-  const [measured, setMeasured] = useState(false)
+  // Tagged with the HTML it was taken from, so new content is unmeasured
+  // by construction — no reset step to forget.
+  const [measurement, setMeasurement] = useState<{ html: string; needsTruncation: boolean } | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
   // Check if content has HTML tags (excluding just whitespace/newlines)
@@ -29,11 +30,8 @@ export default function ExpandableDescription({
   // noopener/noreferrer on links (spec #25 item 3.2).
   const cleanHtml = sanitizeUntrustedHtml(processedHtml)
 
-  useEffect(() => {
-    // Reset measurement when content changes
-    setMeasured(false)
-    setNeedsTruncation(false)
-  }, [cleanHtml])
+  const measured = measurement?.html === cleanHtml
+  const needsTruncation = measured && measurement.needsTruncation
 
   useEffect(() => {
     if (contentRef.current && !measured) {
@@ -42,8 +40,7 @@ export default function ExpandableDescription({
       const maxHeight = lineHeight * maxLines
       const fullHeight = contentRef.current.scrollHeight
 
-      setNeedsTruncation(fullHeight > maxHeight + 5)
-      setMeasured(true)
+      setMeasurement({ html: cleanHtml, needsTruncation: fullHeight > maxHeight + 5 })
     }
   }, [cleanHtml, maxLines, measured])
 

@@ -117,6 +117,10 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # Issue #210 — errors gate; warnings (react-refresh HMR hints) don't.
+      - name: Lint (eslint)
+        run: npm run lint
+
       - name: Tests (vitest)
         run: npm run test:run
 

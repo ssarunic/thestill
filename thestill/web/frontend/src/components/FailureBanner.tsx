@@ -52,7 +52,7 @@ export default function FailureBanner({
     try {
       await retryMutation.mutateAsync(episodeId)
       onRetrySuccess?.()
-    } catch (error) {
+    } catch {
       // Error handling is managed by the mutation
     }
   }

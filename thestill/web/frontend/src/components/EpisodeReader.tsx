@@ -286,7 +286,7 @@ export default function EpisodeReader({
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
   const { data: entitiesData } = useEpisodeEntities(episode?.id ?? null)
-  const entities = entitiesData?.entities ?? []
+  const entities = useMemo(() => entitiesData?.entities ?? [], [entitiesData])
 
   // Spec #28 §5.2 — "Related episodes" rail. Independent fetch (the
   // backend computes a centroid over chunk embeddings) so the rail can
@@ -777,16 +777,17 @@ interface TranscriptPanelProps {
 // rely on the browser requesting only the MP3 metadata (preload:'metadata')
 // so the full file isn't downloaded. `null` while unknown.
 function useAudioDuration(url: string | null): number | null {
-  const [duration, setDuration] = useState<number | null>(null)
+  // Tagged with the url it was probed from, so a new url reads as unknown
+  // until its own metadata arrives.
+  const [probed, setProbed] = useState<{ url: string; duration: number } | null>(null)
   useEffect(() => {
-    setDuration(null)
     if (!url) return
     const audio = new Audio()
     audio.preload = 'metadata'
     audio.src = url
     const onMeta = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        setDuration(audio.duration)
+        setProbed({ url, duration: audio.duration })
       }
     }
     audio.addEventListener('loadedmetadata', onMeta)
@@ -797,7 +798,7 @@ function useAudioDuration(url: string | null): number | null {
       audio.src = ''
     }
   }, [url])
-  return duration
+  return probed && probed.url === url ? probed.duration : null
 }
 
 // VBR MP3 duration differs by 1–3s between decoders, and hosts occasionally
