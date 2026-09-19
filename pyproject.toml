@@ -56,6 +56,9 @@ dependencies = [
     # (the 1.x ``@server.call_tool()`` decorators are gone) and receive the
     # request context explicitly. <3.0 until the next major is vetted.
     "mcp>=2.0.0,<3.0.0",
+    # Imported directly by mcp/registration.py to validate tool arguments
+    # (mcp 1.x did this inside its decorator); also a dependency of mcp.
+    "jsonschema>=4.20.0",
     "tenacity>=8.2.0",
     "python-slugify>=8.0.0",
     "requests-toolbelt>=1.0.0",
