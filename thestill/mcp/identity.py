@@ -15,9 +15,11 @@
 
 The one seam ``tools.py`` and ``resources.py`` both import. Over HTTP the
 ASGI guard stashes the resolved user, effective admin flag and scopes on
-the ASGI scope state; the MCP SDK forwards the Starlette request into
-``server.request_context.request``, so handlers read identity from there.
-On stdio there is no request at all, and every handler takes the explicit
+the ASGI scope state; the MCP SDK forwards the Starlette request into the
+per-request context it hands each handler (``ctx.request``), and
+``registration.py`` resolves identity from there before calling into the
+tool and resource code. On stdio there is no request at all, and every
+handler takes the explicit
 identity-None branch (legacy semantics: whole corpus, delete, numeric
 ids, no scopes) rather than inheriting per-user behaviour by accident.
 """
@@ -35,7 +37,7 @@ from ..utils.log_safety import redact_capability_path
 from .scopes import effective_scopes, scope_for_tool
 
 if TYPE_CHECKING:
-    from mcp.server import Server
+    from mcp.server import Server, ServerRequestContext
     from mcp.types import Tool
 
     from ..models.user import User
@@ -102,12 +104,10 @@ class NotAuthenticatedError(Exception):
     """An HTTP request reached a handler without a resolved user."""
 
 
-def current_mcp_identity(server: "Server") -> McpIdentity:
-    """Read identity from the current request, or STDIO when there is none."""
-    try:
-        request = server.request_context.request
-    except LookupError:  # called outside any request (defensive; tests)
-        return STDIO
+def current_mcp_identity(ctx: "ServerRequestContext") -> McpIdentity:
+    """Read identity from the handler's request context; STDIO when the
+    transport attached no HTTP request."""
+    request = ctx.request
     if request is None:
         return STDIO
     state = request.scope.get("state") or {}

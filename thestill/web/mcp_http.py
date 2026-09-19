@@ -39,8 +39,6 @@ from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
 from ..mcp.identity import STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
-from ..mcp.resources import setup_resources
-from ..mcp.tools import setup_tools
 from ..services.mcp_token_service import McpTokenService
 from ..utils.datetime_utils import now_utc
 from .dependencies import is_effective_admin
@@ -83,6 +81,14 @@ class McpHttpRuntime:
         # The app passes its own service so there is one instance per
         # process; tests and embedders may let the guard build one.
         self._tokens = token_service or McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days)
+
+        # Imported here, not at module level: ``mcp.tools`` imports the rate
+        # limiter from ``thestill.web``, whose package init imports the app
+        # and, through it, this module. When the stdio entry point imports
+        # ``mcp.tools`` first, a module-level import here finds it half
+        # initialised and ``thestill-mcp`` dies on startup.
+        from ..mcp.resources import setup_resources
+        from ..mcp.tools import setup_tools
 
         # Same wiring as ThestillMCPServer, minus the stdio transport —
         # the stdio and HTTP servers are two doors into one room.

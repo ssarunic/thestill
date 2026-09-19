@@ -75,7 +75,7 @@ def entity_tool_definitions() -> List[Tool]:
                 "speaker, quote excerpt, timestamps, and a deeplink. Use this for "
                 '"what has X been mentioned in?" or "all clips where Y appears".'
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "entity": {
@@ -124,7 +124,7 @@ def entity_tool_definitions() -> List[Tool]:
                 'centres?" or "every quote from Sam Altman in 2026". Speaker matching is '
                 "case-insensitive substring."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "speaker": {
@@ -154,7 +154,7 @@ def entity_tool_definitions() -> List[Tool]:
                 "If ``plus_minus_sec`` is set, the resulting end_ms is widened around the "
                 "original mention."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "episode_id": {"type": "string", "description": "Episode UUID."},
@@ -181,7 +181,7 @@ def entity_tool_definitions() -> List[Tool]:
                 "and recent mentions. Use for entity pages and to disambiguate before "
                 "calling ``find_mentions``."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "id_or_name": {
@@ -208,7 +208,7 @@ def entity_tool_definitions() -> List[Tool]:
                 "podcast, pub_date, mention count for each requested entity. Use for "
                 '"episodes where both Scott Galloway and Andrew Yang appear".'
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "has_entity": {
