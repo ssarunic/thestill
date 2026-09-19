@@ -84,6 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Check auth status on mount
   useEffect(() => {
+    // Fetch-on-mount: every setState in refreshAuth runs after an await, so
+    // nothing updates synchronously inside this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshAuth()
   }, [refreshAuth])
 

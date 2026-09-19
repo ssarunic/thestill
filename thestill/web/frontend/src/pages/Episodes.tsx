@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAllEpisodesInfinite, useProcessingStageByEpisodeId } from '../hooks/useApi'
 import EpisodeCard from '../components/EpisodeCard'
@@ -75,7 +75,7 @@ export default function Episodes() {
   }, [handleObserver])
 
   // Flatten all pages into a single episodes array
-  const allEpisodes = data?.pages.flatMap((page) => page.episodes) ?? []
+  const allEpisodes = useMemo(() => data?.pages.flatMap((page) => page.episodes) ?? [], [data])
   const totalEpisodes = data?.pages[0]?.total ?? 0
 
   const processingByEpisodeId = useProcessingStageByEpisodeId()

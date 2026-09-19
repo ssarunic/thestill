@@ -207,7 +207,7 @@ export function useReadingPosition(
     } catch {
       // Invalid stored data
     }
-  }, [episodeId, location.key, location.state, navigationType, getMaxScroll, scrollToTop])
+  }, [episodeId, location.key, location.state, navigationType, getMaxScroll, scrollToTop, scrollContainerRef])
 
   return {
     clearPosition,

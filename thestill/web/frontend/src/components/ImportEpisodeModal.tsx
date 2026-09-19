@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { importEpisode } from '../api/client'
@@ -29,16 +29,17 @@ function clientSideError(url: string): string | null {
   return null
 }
 
+// The shell mounts the content only while open, so the form starts fresh on
+// every open.
 export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeModalProps) {
+  if (!isOpen) return null
+  return <ImportEpisodeModalContent onClose={onClose} />
+}
+
+function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'onClose'>) {
   const queryClient = useQueryClient()
   const [url, setUrl] = useState('')
   const [state, setState] = useState<ImportState>({ kind: 'idle' })
-
-  useEffect(() => {
-    if (!isOpen) return
-    setUrl('')
-    setState({ kind: 'idle' })
-  }, [isOpen])
 
   const handleSubmit = useCallback(
     async (e?: React.FormEvent) => {
@@ -71,7 +72,6 @@ export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeMod
     [url, queryClient],
   )
 
-  if (!isOpen) return null
 
   const submitting = state.kind === 'submitting'
 

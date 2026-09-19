@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect } from 'react'
+import { useCallback } from 'react'
 import { useToast } from './Toast'
 import Button, { LinkIcon, ShareIcon } from './Button'
 
@@ -16,12 +16,8 @@ interface ShareButtonProps {
  */
 export default function ShareButton({ title, url, className = '', iconOnly = false }: ShareButtonProps) {
   const { showToast } = useToast()
-  const [canShare, setCanShare] = useState(false)
-
   // Check if Web Share API is available
-  useEffect(() => {
-    setCanShare(typeof navigator !== 'undefined' && !!navigator.share)
-  }, [])
+  const canShare = typeof navigator !== 'undefined' && !!navigator.share
 
   const handleShare = useCallback(async () => {
     if (canShare) {
