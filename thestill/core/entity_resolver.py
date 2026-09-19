@@ -195,10 +195,14 @@ class EntityResolver:
             return []
         self._load_model()
         results: List[ResolutionResult] = []
+        failures = 0
+        last_error: Optional[BaseException] = None
         for mention in mentions:
             try:
                 result = self._resolve_one(mention, is_blacklisted=is_blacklisted)
-            except Exception:
+            except Exception as exc:  # pylint: disable=broad-except
+                failures += 1
+                last_error = exc
                 logger.exception(
                     "refined_resolve_failed",
                     mention_id=mention.id,
@@ -206,6 +210,19 @@ class EntityResolver:
                 )
                 result = self._unresolvable_result(mention)
             results.append(result)
+        # One odd mention may fail and be recorded as unresolvable. A batch
+        # where most of them fail is not "nothing in Wikidata", it is a
+        # broken resolver - and "unresolvable" is a terminal status nothing
+        # revisits. Raise instead, so the task fails and the mentions stay
+        # pending for a retry. (2026-09-19: transformers 5 removed an API
+        # ReFinED calls; every mention raised and 641 were written off as
+        # unresolvable before anyone looked. Failure-mode catalogue:
+        # errors-as-empty-results.)
+        if failures >= _BROKEN_MIN_FAILURES and failures * 2 >= len(mentions):
+            raise EntityResolverBrokenError(
+                f"ReFinED failed on {failures} of {len(mentions)} mentions; refusing to record them as "
+                f"unresolvable. Last error: {type(last_error).__name__}: {last_error}"
+            ) from last_error
         logger.info(
             "entity_resolution_complete",
             mentions=len(mentions),
@@ -500,6 +517,15 @@ def _build_entity_id(entity_type: EntityType, canonical_name: str, qid: Optional
     if base_slug == "unnamed" and qid:
         base_slug = qid.lower()
     return f"{entity_type.value}:{base_slug}"
+
+
+# A batch is treated as "resolver broken" rather than "mentions unresolvable"
+# when at least this many mentions raised AND they are half the batch or more.
+_BROKEN_MIN_FAILURES = 3
+
+
+class EntityResolverBrokenError(RuntimeError):
+    """ReFinED is failing systematically; nothing from this batch was recorded."""
 
 
 _AUTOTOKENIZER_PATCHED = False

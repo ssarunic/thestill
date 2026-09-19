@@ -18,6 +18,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import List
 
+import pytest
+
 from thestill.core.entity_resolver import (
     EntityResolver,
     _build_entity_id,
@@ -131,6 +133,43 @@ class TestResolveBasic:
         statuses = [r.status for r in results]
         # boom mention falls back to unresolvable, the others resolve
         assert statuses == ["resolved", "unresolvable", "resolved"]
+
+
+class TestBrokenResolverFailsLoudly:
+    """2026-09-19: transformers 5 removed ``encode_plus``, which ReFinED calls
+    on every text. Every mention raised, each was recorded as unresolvable -
+    a terminal status nothing revisits - and the task reported success."""
+
+    class _DeadReFinED:
+        def process_text(self, text: str):
+            raise AttributeError("RobertaTokenizer has no attribute encode_plus")
+
+    def test_a_batch_that_mostly_fails_raises_instead_of_returning_unresolvables(self):
+        from thestill.core.entity_resolver import EntityResolverBrokenError
+
+        resolver = EntityResolver(preloaded_model=self._DeadReFinED())
+        mentions = [_mention(i, f"Thing {i}", label="topic") for i in range(1, 6)]
+        with pytest.raises(EntityResolverBrokenError) as excinfo:
+            resolver.resolve(mentions)
+        assert "5 of 5" in str(excinfo.value) and "encode_plus" in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, AttributeError)
+
+    def test_a_couple_of_failures_in_a_large_batch_are_still_tolerated(self):
+        class Flaky:
+            def process_text(self, text: str):
+                if "boom" in text:
+                    raise RuntimeError("one bad excerpt")
+                return []
+
+        resolver = EntityResolver(preloaded_model=Flaky())
+        mentions = [_mention(i, f"Thing {i}", label="topic") for i in range(1, 9)]
+        mentions += [_mention(90 + i, "boom", label="topic", excerpt="boom here") for i in range(3)]
+        results = resolver.resolve(mentions)  # 3 of 11 fail: under half
+        assert len(results) == 11
+
+    def test_tiny_batches_do_not_trip_on_one_or_two_failures(self):
+        resolver = EntityResolver(preloaded_model=self._DeadReFinED())
+        assert len(resolver.resolve([_mention(1, "A", label="topic"), _mention(2, "B", label="topic")])) == 2
 
 
 class TestEntityTypeInference:
