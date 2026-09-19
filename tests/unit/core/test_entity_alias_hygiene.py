@@ -260,3 +260,24 @@ class TestPrevention:
         )
         assert matcher("president", [trump]) == []
         assert matcher("Donald", [trump]) == [trump]
+
+    def test_coref_does_not_match_on_a_title_inside_a_legitimate_alias(self):
+        """ "President Trump" is a fair alias; its first word is not a name."""
+        from thestill.core.entity_coref import _candidates_for as matcher
+
+        trump = EntityRecord(
+            id="person:donald-trump",
+            type=EntityType.PERSON,
+            canonical_name="Donald Trump",
+            aliases=["President Trump", "Mr. Trump"],
+        )
+        hinton = EntityRecord(
+            id="person:geoffrey-hinton",
+            type=EntityType.PERSON,
+            canonical_name="Geoffrey Hinton",
+            aliases=["Professor Geoff Hinton", "Sir Geoffrey Hinton"],
+        )
+        for title in ("president", "President", "Mr", "professor", "Sir"):
+            assert matcher(title, [trump, hinton]) == []
+        assert matcher("Trump", [trump, hinton]) == [trump]
+        assert matcher("Geoff", [trump, hinton]) == [hinton]
