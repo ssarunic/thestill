@@ -41,7 +41,7 @@ from ..utils.config import Config, load_config
 from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
-from .entity_tools import dispatch_entity_tool, entity_tool_definitions
+from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, current_mcp_identity, remote_call_limiter, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
@@ -1637,6 +1637,18 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             # falling through to "unknown tool". Returns ``None`` when
             # ``name`` isn't an entity tool, in which case we fall
             # through to the unknown-tool error path.
+            #
+            # The entity tools filter on the podcast's uuid in SQL, but their
+            # schemas accept any podcast identifier like every other tool.
+            # Resolve it here, through the same resolver, so a slug works and
+            # an unknown podcast is a clean "not found" rather than whatever
+            # the database makes of a non-uuid.
+            if arguments.get("podcast_id") and name in ENTITY_TOOL_NAMES:
+                entity_podcast = podcast_service.get_podcast(_pid(arguments["podcast_id"]))
+                if entity_podcast is None:
+                    error = f"Podcast not found: {arguments['podcast_id']}"
+                    return [TextContent(type="text", text=json.dumps({"success": False, "error": error}))]
+                arguments = {**arguments, "podcast_id": entity_podcast.id}
             entity_response = dispatch_entity_tool(name, arguments, entity_repository)
             if entity_response is not None:
                 return entity_response

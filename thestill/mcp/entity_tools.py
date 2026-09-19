@@ -138,7 +138,7 @@ def entity_tool_definitions() -> List[Tool]:
                             "the topic was also mentioned."
                         ),
                     },
-                    "podcast_id": {"type": "string", "description": "Restrict to one podcast."},
+                    "podcast_id": {"type": "string", "description": "Restrict to one podcast (UUID or slug)."},
                     "date_from": {"type": "string", "description": "ISO-8601 lower bound on pub_date."},
                     "date_to": {"type": "string", "description": "ISO-8601 upper bound on pub_date."},
                     "limit": {"type": "integer", "default": 50, "description": "Max rows."},
@@ -216,7 +216,7 @@ def entity_tool_definitions() -> List[Tool]:
                         "items": {"type": "string"},
                         "description": "Entity ids or names. AND-semantics.",
                     },
-                    "podcast_id": {"type": "string", "description": "Restrict to one podcast."},
+                    "podcast_id": {"type": "string", "description": "Restrict to one podcast (UUID or slug)."},
                     "date_from": {"type": "string", "description": "ISO-8601 lower bound on pub_date."},
                     "date_to": {"type": "string", "description": "ISO-8601 upper bound on pub_date."},
                     "limit": {"type": "integer", "default": 50, "description": "Max rows."},

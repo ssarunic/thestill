@@ -56,6 +56,7 @@ import type {
   BriefingScheduleResponse,
   BriefingScheduleUpdate,
   BriefingScriptResponse,
+  BriefingEpisodesResponse,
   InboxListResponse,
   InboxMarkReadResponse,
   InboxState,
@@ -749,6 +750,10 @@ export async function getBriefing(briefingId: string): Promise<BriefingResponse>
 
 export async function getBriefingScript(briefingId: string): Promise<BriefingScriptResponse> {
   return fetchApi<BriefingScriptResponse>(`/briefings/${briefingId}/script`)
+}
+
+export async function getBriefingEpisodes(briefingId: string): Promise<BriefingEpisodesResponse> {
+  return fetchApi<BriefingEpisodesResponse>(`/briefings/${briefingId}/episodes`)
 }
 
 export async function markBriefingListened(briefingId: string): Promise<BriefingResponse> {

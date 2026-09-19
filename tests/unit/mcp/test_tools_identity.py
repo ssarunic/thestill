@@ -112,6 +112,62 @@ class TestRemovePodcast:
         assert h.repos.follower.exists(USER_B, p1) is True
 
 
+class TestEntityToolPodcastIdentifier:
+    """The entity tools' schemas accept "UUID or slug", but their SQL filters
+    on the uuid. A slug used to reach the query raw: on Postgres that is
+    ``invalid input syntax for type uuid``, relayed to the client verbatim."""
+
+    @pytest.fixture
+    def dispatched(self, monkeypatch):
+        """Capture what the entity dispatcher is handed."""
+        from mcp.types import TextContent
+
+        import thestill.mcp.tools as tools_module
+
+        seen = []
+
+        def spy(name, arguments, repository):
+            seen.append((name, dict(arguments)))
+            return [TextContent(type="text", text=json.dumps({"results": []}))]
+
+        monkeypatch.setattr(tools_module, "dispatch_entity_tool", spy)
+        return seen
+
+    @pytest.mark.parametrize("tool", ["find_mentions", "list_quotes_by", "list_episodes_by_entity"])
+    def test_slug_is_resolved_to_the_uuid_before_the_query(self, world, dispatched, tool):
+        h, p0, _ = world
+        a = h.mint(USER_A)
+        args = {"entity": "x", "speaker": "x", "has_entity": ["x"], "podcast_id": "podcast-0"}
+        with h.client() as c:
+            _payload(Harness.rpc(c, a, "tools/call", {"name": tool, "arguments": args}))
+        assert [(name, seen["podcast_id"]) for name, seen in dispatched] == [(tool, p0)]
+
+    def test_unknown_podcast_is_a_clean_not_found_and_never_reaches_the_query(self, world, dispatched):
+        h, _, _ = world
+        a = h.mint(USER_A)
+        args = {"name": "find_mentions", "arguments": {"entity": "x", "podcast_id": "no-such-podcast"}}
+        with h.client() as c:
+            out = _payload(Harness.rpc(c, a, "tools/call", args))
+        assert out == {"success": False, "error": "Podcast not found: no-such-podcast"}
+        assert dispatched == []
+
+    def test_numeric_index_is_refused_remotely_like_every_other_tool(self, world, dispatched):
+        h, _, _ = world
+        a = h.mint(USER_A)
+        args = {"name": "find_mentions", "arguments": {"entity": "x", "podcast_id": "1"}}
+        with h.client() as c:
+            out = _payload(Harness.rpc(c, a, "tools/call", args))
+        assert out["success"] is False and "uuid, slug or RSS URL" in out["error"]
+        assert dispatched == []
+
+    def test_no_podcast_filter_passes_through_untouched(self, world, dispatched):
+        h, _, _ = world
+        a = h.mint(USER_A)
+        with h.client() as c:
+            _payload(Harness.rpc(c, a, "tools/call", {"name": "find_mentions", "arguments": {"entity": "x"}}))
+        assert dispatched == [("find_mentions", {"entity": "x"})]
+
+
 class TestScopes:
     def test_read_only_token_lists_no_mutating_tools_and_is_refused_naming_scope(self, world):
         h, p0, _ = world

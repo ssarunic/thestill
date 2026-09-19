@@ -13,7 +13,12 @@ import pytest
 
 from thestill.models.podcast import Episode, Podcast
 from thestill.repositories.podcast_repository import PodcastRepository
-from thestill.services.podcast_service import EpisodeWithIndex, PodcastService, PodcastWithIndex
+from thestill.services.podcast_service import (
+    EpisodeWithIndex,
+    PodcastService,
+    PodcastWithIndex,
+    resolve_summary_preview,
+)
 from thestill.utils.path_manager import PathManager
 
 
@@ -125,7 +130,6 @@ class TestPodcastServiceInitialization:
         assert service.storage_path == path_obj
         assert service.repository is mock_repository
         assert service.path_manager is mock_path_manager
-
 
 
 def _wire_repo_lookups(podcast_service, sample_podcasts):
@@ -527,3 +531,101 @@ class TestEdgeCases:
         _wire_repo_lookups(podcast_service, [])
         result = podcast_service.get_podcast("")
         assert result is None
+
+
+# ============================================================================
+# resolve_summary_preview — shared lazy backfill (spec #69 Phase 6.5)
+# ============================================================================
+
+
+def _preview_episode(**overrides):
+    fields = dict(
+        id="ep-1",
+        external_id="guid-1",
+        title="Ep",
+        description="",
+        audio_url="https://example.com/a.mp3",
+    )
+    fields.update(overrides)
+    return Episode(**fields)
+
+
+def _preview_deps():
+    repository = MagicMock()
+    path_manager = MagicMock()
+    path_manager.summary_file.side_effect = lambda name: f"/data/summaries/{name}"
+    path_manager.to_relative.side_effect = lambda path: str(path).removeprefix("/data/")
+    file_storage = MagicMock()
+    return repository, path_manager, file_storage
+
+
+def test_resolve_summary_preview_returns_stored_value_without_reading():
+    repository, path_manager, file_storage = _preview_deps()
+    episode = _preview_episode(summary_path="ep.md", summary_preview="Stored gist.")
+
+    assert (
+        resolve_summary_preview(episode, repository=repository, path_manager=path_manager, file_storage=file_storage)
+        == "Stored gist."
+    )
+    file_storage.read_text.assert_not_called()
+    repository.set_episode_summary_preview.assert_not_called()
+
+
+def test_resolve_summary_preview_treats_persisted_empty_string_as_none_without_reading():
+    repository, path_manager, file_storage = _preview_deps()
+    episode = _preview_episode(summary_path="ep.md", summary_preview="")
+
+    assert (
+        resolve_summary_preview(episode, repository=repository, path_manager=path_manager, file_storage=file_storage)
+        is None
+    )
+    file_storage.read_text.assert_not_called()
+
+
+def test_resolve_summary_preview_backfills_from_file_once():
+    repository, path_manager, file_storage = _preview_deps()
+    file_storage.read_text.return_value = "## 1. 🎙️ The Gist\nHost intro.\nA sharp two-line gist.\n\n## 2. Next\n"
+    episode = _preview_episode(summary_path="ep.md", summary_preview=None)
+
+    preview = resolve_summary_preview(
+        episode, repository=repository, path_manager=path_manager, file_storage=file_storage
+    )
+
+    assert preview == "A sharp two-line gist."
+    file_storage.read_text.assert_called_once_with("summaries/ep.md")
+    repository.set_episode_summary_preview.assert_called_once_with("ep-1", "A sharp two-line gist.")
+
+
+def test_resolve_summary_preview_persists_empty_marker_when_nothing_extractable():
+    repository, path_manager, file_storage = _preview_deps()
+    file_storage.read_text.return_value = "No gist section here."
+    episode = _preview_episode(summary_path="ep.md", summary_preview=None)
+
+    assert (
+        resolve_summary_preview(episode, repository=repository, path_manager=path_manager, file_storage=file_storage)
+        is None
+    )
+    repository.set_episode_summary_preview.assert_called_once_with("ep-1", "")
+
+
+def test_resolve_summary_preview_missing_file_is_none_and_not_persisted():
+    repository, path_manager, file_storage = _preview_deps()
+    file_storage.read_text.side_effect = FileNotFoundError
+    episode = _preview_episode(summary_path="ep.md", summary_preview=None)
+
+    assert (
+        resolve_summary_preview(episode, repository=repository, path_manager=path_manager, file_storage=file_storage)
+        is None
+    )
+    repository.set_episode_summary_preview.assert_not_called()
+
+
+def test_resolve_summary_preview_without_summary_is_none():
+    repository, path_manager, file_storage = _preview_deps()
+    episode = _preview_episode(summary_path=None, summary_preview=None)
+
+    assert (
+        resolve_summary_preview(episode, repository=repository, path_manager=path_manager, file_storage=file_storage)
+        is None
+    )
+    file_storage.read_text.assert_not_called()

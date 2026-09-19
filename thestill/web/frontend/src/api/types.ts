@@ -1327,6 +1327,37 @@ export interface BriefingsListResponse {
   next_offset: number | null
 }
 
+// The episodes a briefing covers, grouped by podcast in delivery order
+// (GET /api/briefings/{id}/episodes). The structured counterpart of the
+// text-only script: the briefing page renders artwork cards from this.
+export interface BriefingEpisode {
+  id: string
+  title: string
+  slug: string
+  pub_date: string | null
+  duration: number | null  // seconds
+  duration_formatted: string | null
+  image_url: string | null  // Episode artwork; fall back to the podcast's
+  summary_available: boolean
+  summary_preview: string | null  // The Gist, one or two sentences
+}
+
+export interface BriefingPodcastGroup {
+  id: string
+  title: string
+  slug: string
+  image_url: string | null
+  episodes: BriefingEpisode[]
+}
+
+export interface BriefingEpisodesResponse {
+  status: string
+  timestamp: string
+  briefing_id: string
+  podcasts: BriefingPodcastGroup[]
+  episode_count: number
+}
+
 export interface BriefingScriptResponse {
   status: string
   timestamp: string

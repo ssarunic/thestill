@@ -45,6 +45,7 @@ import {
   unfollowPodcast,
   narrateBriefing,
   getBriefings,
+  getBriefingEpisodes,
   getNarration,
   quickSearch,
   corpusSearch,
@@ -1136,6 +1137,15 @@ export function useBriefingScript(briefingId: string | null) {
   return useQuery({
     queryKey: ['briefings', briefingId, 'script'],
     queryFn: () => getBriefingScript(briefingId!),
+    enabled: !!briefingId,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useBriefingEpisodes(briefingId: string | null) {
+  return useQuery({
+    queryKey: ['briefings', briefingId, 'episodes'],
+    queryFn: () => getBriefingEpisodes(briefingId!),
     enabled: !!briefingId,
     staleTime: 5 * 60_000,
   })

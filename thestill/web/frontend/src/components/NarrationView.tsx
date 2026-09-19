@@ -123,7 +123,7 @@ function LengthSwitcher({
               onClick={() => handleClick(preset)}
               disabled={isBusy}
               aria-pressed={isSelected}
-              className={`px-3 py-1.5 text-sm font-medium rounded-full border transition-colors ${
+              className={`px-3 py-1.5 text-sm font-medium whitespace-nowrap rounded-full border transition-colors ${
                 isSelected
                   ? 'border-primary-600 bg-primary-50 text-primary-700'
                   : exists
@@ -210,7 +210,7 @@ export default function NarrationView({
           onClick={() => setShowLinkIndex((v) => !v)}
           className="text-sm text-primary-600 hover:underline"
         >
-          {showLinkIndex ? 'Show narrated' : 'Show link-index'}
+          {showLinkIndex ? 'Show narration' : 'Show episodes'}
         </button>
       </div>
 
