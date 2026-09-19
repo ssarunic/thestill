@@ -1558,6 +1558,11 @@ class YouTubeMediaSource(MediaSource):
         """
         return self.youtube_downloader.download_episode(episode, podcast_title)
 
+    @property
+    def last_error(self) -> Optional[str]:
+        """Reason for the most recent failed download, if any."""
+        return self.youtube_downloader.last_error
+
 
 class MediaSourceFactory:
     """

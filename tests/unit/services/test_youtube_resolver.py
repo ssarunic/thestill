@@ -23,11 +23,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from thestill.services.import_service import (
-    CanonicalParent,
-    ResolverError,
-    YouTubeResolver,
-)
+from thestill.services.import_service import CanonicalParent, ResolverError, YouTubeResolver
 
 
 def _resolver_with(info):
@@ -61,9 +57,7 @@ def test_matches(url, expected):
 
 
 def test_resolve_maps_yt_dlp_fields_to_canonical_source(fake_youtube_video_info):
-    src = _resolver_with(fake_youtube_video_info).resolve(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    )
+    src = _resolver_with(fake_youtube_video_info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     assert src.kind == "youtube"
     assert src.canonical_id == "youtube:dQw4w9WgXcQ"
@@ -82,16 +76,12 @@ def test_resolve_maps_yt_dlp_fields_to_canonical_source(fake_youtube_video_info)
 
 
 def test_resolve_emits_canonical_parent_for_channel(fake_youtube_video_info):
-    src = _resolver_with(fake_youtube_video_info).resolve(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-    )
+    src = _resolver_with(fake_youtube_video_info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
 
     assert isinstance(src.parent, CanonicalParent)
     assert src.parent.external_id == "UCuAXFkgsw1L7xaCfnd5JJOw"
     assert src.parent.title == "Rick Astley"
-    assert src.parent.rss_url == (
-        "https://www.youtube.com/feeds/videos.xml?channel_id=UCuAXFkgsw1L7xaCfnd5JJOw"
-    )
+    assert src.parent.rss_url == ("https://www.youtube.com/feeds/videos.xml?channel_id=UCuAXFkgsw1L7xaCfnd5JJOw")
 
 
 def test_resolve_falls_back_to_thumbnail_when_thumbnails_missing(fake_youtube_video_info):
@@ -130,3 +120,61 @@ def test_resolve_raises_when_id_missing(fake_youtube_video_info):
     info.pop("id")
     with pytest.raises(ResolverError):
         _resolver_with(info).resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+
+
+# ============================================================================
+# _default_youtube_metadata_fetch() error mapping
+# ============================================================================
+
+
+def test_default_fetch_rewrites_bot_check_into_actionable_resolver_error(monkeypatch):
+    import yt_dlp
+
+    from thestill.services import import_service
+    from thestill.utils.youtube_errors import YOUTUBE_BOT_CHECK_MESSAGE
+
+    class _FakeYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: [youtube] abc: Sign in to confirm you’re not a bot. Use --cookies-from-browser ..."
+            )
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+
+    with pytest.raises(ResolverError) as excinfo:
+        import_service._default_youtube_metadata_fetch("https://www.youtube.com/watch?v=abc")
+
+    assert str(excinfo.value) == YOUTUBE_BOT_CHECK_MESSAGE
+
+
+def test_default_fetch_reraises_unrecognised_yt_dlp_errors(monkeypatch):
+    import yt_dlp
+
+    from thestill.services import import_service
+
+    class _FakeYDL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            raise yt_dlp.utils.DownloadError("ERROR: [youtube] abc: something unexpected")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", _FakeYDL)
+
+    with pytest.raises(yt_dlp.utils.DownloadError):
+        import_service._default_youtube_metadata_fetch("https://www.youtube.com/watch?v=abc")

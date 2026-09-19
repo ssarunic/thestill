@@ -113,8 +113,9 @@ class AudioDownloader:
             from .youtube_downloader import YouTubeDownloader
 
             if YouTubeDownloader.is_youtube_url(str(episode.audio_url)):
-                logger.error("youtube_download_failed", episode_title=episode.title, reason="no_fallback_available")
-                raise DownloadError(f"YouTube download failed for '{episode.title}' (yt-dlp error)")
+                reason = getattr(source, "last_error", None) or "yt-dlp error"
+                logger.error("youtube_download_failed", episode_title=episode.title, reason=reason)
+                raise DownloadError(f"YouTube download failed for '{episode.title}': {reason}")
 
             # Handle standard HTTP downloads (RSS feeds)
             # Use slugs for filename generation (fall back to sanitized titles for backwards compatibility)
