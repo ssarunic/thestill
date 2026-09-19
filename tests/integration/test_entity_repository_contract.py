@@ -546,6 +546,118 @@ def test_list_episodes_with_all_entities_is_an_and_newest_first_with_filters(rep
     assert [e.episode_id for e in windowed] == [EP_1, EP_3]
 
 
+def test_list_episode_ids_with_pending_mentions_scoped_and_capped(repo):
+    repo.upsert_entity(_entity())
+    repo.insert_mentions(
+        [
+            _mention(episode_id=EP_1),
+            _mention(episode_id=EP_1, segment_id=2),
+            _mention(episode_id=EP_3),
+            _resolved_mention("person:elon-musk", episode_id=EP_2),  # resolved: not pending work
+        ]
+    )
+    assert repo.list_episode_ids_with_pending_mentions() == sorted([EP_1, EP_3])
+    assert repo.list_episode_ids_with_pending_mentions(podcast_id=POD_2) == [EP_3]
+    assert repo.list_episode_ids_with_pending_mentions(limit=1) == [sorted([EP_1, EP_3])[0]]
+
+
+def _alias_corpus(repo):
+    """Musk with one real alias and one bug-era alias, and the mentions each
+    kind of link produces. ``resolved_at`` straddles the evidence cutoff."""
+    from thestill.models.entities import ResolutionMethod
+
+    before, after = datetime(2026, 5, 1, tzinfo=timezone.utc), datetime(2026, 6, 1, tzinfo=timezone.utc)
+    repo.upsert_entity(_entity(aliases=["Musk", "price"]))
+    repo.upsert_entity(_entity(id="company:spacex", type=EntityType.COMPANY, name="SpaceX", qid="Q193701", aliases=[]))
+
+    def m(surface, method, when, episode_id=EP_1, segment_id=1, entity_id="person:elon-musk"):
+        return _mention(
+            entity_id=entity_id,
+            resolution_status=ResolutionStatus.RESOLVED,
+            surface=surface,
+            episode_id=episode_id,
+            segment_id=segment_id,
+            resolution_method=method,
+            resolved_at=when,
+        )
+
+    repo.insert_mentions(
+        [
+            m("price", ResolutionMethod.DIRECT, before),
+            m("PRICE", ResolutionMethod.ANCHOR, after, episode_id=EP_2),  # case-insensitive surface
+            m("price", ResolutionMethod.ANCHOR, after, episode_id=EP_3),
+            m("price", ResolutionMethod.COREF, after, segment_id=2),
+            m("Musk", ResolutionMethod.DIRECT, after, segment_id=3),
+            m("Musk", ResolutionMethod.DIRECT, before, segment_id=4),
+            # Same surface, different entity: never counted for, or removed from, Musk.
+            m("price", ResolutionMethod.ANCHOR, after, segment_id=5, entity_id="company:spacex"),
+            _mention(surface="price", segment_id=6),  # pending: not evidence of anything
+        ]
+    )
+    return datetime(2026, 5, 9, tzinfo=timezone.utc)
+
+
+def test_list_alias_evidence_counts_per_entity_alias_and_method(repo):
+    cutoff = _alias_corpus(repo)
+    rows = {(r.entity_id, r.alias): r for r in repo.list_alias_evidence(cutoff)}
+    assert set(rows) == {("person:elon-musk", "Musk"), ("person:elon-musk", "price")}  # alias-less entities omitted
+
+    price = rows[("person:elon-musk", "price")]
+    assert (price.entity_type, price.canonical_name) == ("person", "Elon Musk")
+    assert (price.direct_before_fix, price.direct_since_fix) == (1, 0)
+    assert (price.anchor_mentions, price.coref_mentions) == (2, 1)
+
+    musk = rows[("person:elon-musk", "Musk")]
+    assert (musk.direct_before_fix, musk.direct_since_fix, musk.anchor_mentions) == (1, 1, 0)
+
+
+def test_find_and_delete_mentions_by_entity_surface_are_scoped_to_entity_and_method(repo):
+    _alias_corpus(repo)
+    found = repo.find_mention_ids_by_entity_surface("person:elon-musk", "price", methods=("direct", "coref"))
+    assert sorted(ep for _, ep in found) == [EP_1, EP_1]
+    assert repo.find_mention_ids_by_entity_surface("person:elon-musk", "price", methods=()) == []
+
+    assert repo.delete_mentions_by_entity_surface("person:elon-musk", "Price", methods=("anchor",)) == 2
+    assert repo.delete_mentions_by_entity_surface("person:elon-musk", "price", methods=()) == 0
+    # SpaceX's anchor mention under the same surface, and Musk's other links, survive.
+    assert len(repo.find_mention_ids_by_entity_surface("company:spacex", "price", methods=("anchor",))) == 1
+    assert len(repo.find_mention_ids_by_entity_surface("person:elon-musk", "price", methods=("direct", "coref"))) == 2
+    assert len(repo.find_mention_ids_by_entity_surface("person:elon-musk", "Musk", methods=("direct",))) == 2
+
+
+def test_replace_aliases_can_remove_which_upsert_never_does(repo):
+    repo.upsert_entity(_entity(aliases=["Musk", "price", "you guys"]))
+    repo.upsert_entity(_entity(aliases=["Musk"]))  # union: nothing removed
+    assert repo.get_entity("person:elon-musk").aliases == ["Musk", "price", "you guys"]
+
+    assert repo.replace_aliases("person:elon-musk", ["Musk", " Elon ", "Musk", ""]) is True
+    assert repo.get_entity("person:elon-musk").aliases == ["Elon", "Musk"]  # distinct, stripped, sorted
+    assert repo.replace_aliases("person:nobody", ["x"]) is False
+
+
+def test_alias_cleanup_end_to_end_on_a_real_database(repo):
+    """The planner and applier against the real SQL, not fakes."""
+    from thestill.core.entity_alias_hygiene import apply_alias_cleanup, plan_alias_cleanup
+
+    cutoff = _alias_corpus(repo)
+    plan = plan_alias_cleanup(repo.list_alias_evidence(cutoff))
+    assert [(v.alias, v.reason) for v in plan.removals] == [("price", "unsupported")]
+
+    result = apply_alias_cleanup(repo, plan)
+    assert (result.aliases_removed, result.anchor_mentions_deleted, result.mentions_reset) == (1, 2, 2)
+    assert result.episodes_affected == [EP_1]
+    assert repo.get_entity("person:elon-musk").aliases == ["Musk"]
+    assert (
+        repo.find_mention_ids_by_entity_surface("person:elon-musk", "price", methods=("direct", "coref", "anchor"))
+        == []
+    )
+    assert len(repo.find_mentions(entity_id="person:elon-musk")) == 2  # the two real "Musk" links
+    assert len(repo.list_pending_mentions()) == 3  # the two reset + the one that was already pending
+
+    # Idempotent: a second pass finds nothing.
+    assert plan_alias_cleanup(repo.list_alias_evidence(cutoff)).removals == []
+
+
 def test_list_mentions_by_speaker_substring_and_topic_segment_constraint(repo):
     _seed_resolved_corpus(repo)
     # Case-insensitive substring on the speaker label.

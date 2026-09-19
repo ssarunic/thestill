@@ -1,0 +1,8 @@
+# entity_id<TAB>alias - correct aliases the rule would otherwise remove (reviewed 2026-09-19)
+company:recommender-system	RecSys
+company:nuclear-fuel	Triso
+person:human	Homo sapiens
+person:iron-man	Tony Stark
+person:jesus	Christ
+person:darth-vader	Anakin Skywalker
+person:kanye-west	Ye

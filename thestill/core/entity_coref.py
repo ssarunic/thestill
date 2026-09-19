@@ -17,6 +17,7 @@ from structlog import get_logger
 
 from ..models.entities import EntityMention, EntityRecord, ResolutionMethod, ResolutionStatus
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+from .entity_alias_hygiene import is_related_alias
 
 logger = get_logger(__name__)
 
@@ -100,6 +101,21 @@ def resolve_coreferences_for_episode(repository: SqliteEntityRepository, episode
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]+")
 
 
+# Titles and honorifics are not name tokens. "President Trump" is a fair
+# alias, but matching on its first word hands every bare "president" in the
+# episode to whichever president happens to be resolved in it (88 such
+# links in one 110-episode re-resolution run, 2026-09-19).
+_TITLE_TOKENS = frozenset(
+    {
+        "mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "dame", "lord", "lady",
+        "president", "vice", "senator", "governor", "congressman", "congresswoman", "secretary",
+        "minister", "prime", "chancellor", "mayor", "judge", "justice", "general", "admiral",
+        "captain", "colonel", "king", "queen", "prince", "princess", "pope", "saint", "st",
+        "ceo", "cto", "cfo", "chairman", "founder", "coach", "host",
+    }
+)  # fmt: skip
+
+
 def _candidates_for(surface: str, persons: List[EntityRecord]) -> List[EntityRecord]:
     """Find resolved person entities whose canonical name (or alias)
     contains ``surface`` as a whole token.
@@ -118,9 +134,14 @@ def _candidates_for(surface: str, persons: List[EntityRecord]) -> List[EntityRec
             # Exact canonical match — should already have been resolved
             # by ReFinED, but skip rather than re-claim the mention.
             continue
-        haystacks = [person.canonical_name] + list(person.aliases)
+        # Unrelated stored aliases are ignored for the same reason the
+        # anchor pass ignores them: "president" as an alias of one person
+        # would claim every mention of any president.
+        haystacks = [person.canonical_name] + [
+            alias for alias in person.aliases if is_related_alias(alias, person.canonical_name)
+        ]
         for haystack in haystacks:
-            tokens = {t.lower() for t in _TOKEN_RE.findall(haystack)}
+            tokens = {t.lower() for t in _TOKEN_RE.findall(haystack)} - _TITLE_TOKENS
             if needle_lower in tokens:
                 matches.append(person)
                 break

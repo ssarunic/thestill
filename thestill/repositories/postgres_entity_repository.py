@@ -46,7 +46,7 @@ from structlog import get_logger
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 from ..utils.postgres_ext import as_str, connect
-from .entity_repository import EntityEpisode, EntityHit, EntityRepository, MentionContext
+from .entity_repository import AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
 
 logger = get_logger(__name__)
 
@@ -194,6 +194,100 @@ class PostgresEntityRepository(EntityRepository):
         with connect(self.dsn) as conn:
             cursor = conn.execute("DELETE FROM entities WHERE id = %s", (entity_id,))
             return cursor.rowcount > 0
+
+    def list_episode_ids_with_pending_mentions(
+        self, *, podcast_id: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[str]:
+        sql = "SELECT DISTINCT episode_id FROM entity_mentions WHERE resolution_status = 'pending'"
+        params: list = []
+        if podcast_id is not None:
+            sql += " AND episode_id IN (SELECT id FROM episodes WHERE podcast_id = %s)"
+            params.append(podcast_id)
+        sql += " ORDER BY episode_id"
+        if limit:
+            sql += " LIMIT %s"
+            params.append(int(limit))
+        with connect(self.dsn) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [as_str(r["episode_id"]) for r in rows]
+
+    def replace_aliases(self, entity_id: str, aliases: List[str]) -> bool:
+        """Overwrite the alias list (distinct, sorted) — see the ABC."""
+        cleaned = sorted({a.strip() for a in aliases if a and a.strip()})
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                "UPDATE entities SET aliases = %s, updated_at = %s WHERE id = %s",
+                (Jsonb(cleaned), datetime.now(timezone.utc), entity_id),
+            )
+            return cursor.rowcount == 1
+
+    def list_alias_evidence(self, since: datetime) -> List[AliasEvidence]:
+        sql = """
+            WITH al AS (
+                SELECT e.id, e.type, e.canonical_name, a.alias AS alias
+                FROM entities e, jsonb_array_elements_text(e.aliases) AS a(alias)
+            )
+            SELECT al.id, al.type, al.canonical_name, al.alias,
+                COUNT(m.id) FILTER (WHERE m.resolution_method = 'direct' AND m.resolved_at >= %s) AS direct_since,
+                COUNT(m.id) FILTER (
+                    WHERE m.resolution_method = 'direct' AND (m.resolved_at < %s OR m.resolved_at IS NULL)
+                ) AS direct_before,
+                COUNT(m.id) FILTER (WHERE m.resolution_method = 'anchor') AS anchor_n,
+                COUNT(m.id) FILTER (WHERE m.resolution_method = 'coref') AS coref_n
+            FROM al
+            LEFT JOIN entity_mentions m
+                ON m.entity_id = al.id
+               AND m.resolution_status = 'resolved'
+               AND lower(m.surface_form) = lower(al.alias)
+            GROUP BY al.id, al.type, al.canonical_name, al.alias
+            ORDER BY al.id, al.alias
+        """
+        with connect(self.dsn) as conn:
+            rows = conn.execute(sql, (since, since)).fetchall()
+        return [
+            AliasEvidence(
+                entity_id=r["id"],
+                entity_type=r["type"],
+                canonical_name=r["canonical_name"],
+                alias=r["alias"],
+                direct_since_fix=int(r["direct_since"]),
+                direct_before_fix=int(r["direct_before"]),
+                anchor_mentions=int(r["anchor_n"]),
+                coref_mentions=int(r["coref_n"]),
+            )
+            for r in rows
+        ]
+
+    def find_mention_ids_by_entity_surface(
+        self, entity_id: str, surface_form: str, *, methods: Tuple[str, ...]
+    ) -> List[Tuple[int, str]]:
+        if not methods:
+            return []
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, episode_id FROM entity_mentions
+                WHERE entity_id = %s AND resolution_status = 'resolved'
+                  AND lower(surface_form) = lower(%s) AND resolution_method = ANY(%s)
+                ORDER BY id
+                """,
+                (entity_id, surface_form, list(methods)),
+            ).fetchall()
+        return [(int(r["id"]), as_str(r["episode_id"])) for r in rows]
+
+    def delete_mentions_by_entity_surface(self, entity_id: str, surface_form: str, *, methods: Tuple[str, ...]) -> int:
+        if not methods:
+            return 0
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM entity_mentions
+                WHERE entity_id = %s AND resolution_status = 'resolved'
+                  AND lower(surface_form) = lower(%s) AND resolution_method = ANY(%s)
+                """,
+                (entity_id, surface_form, list(methods)),
+            )
+            return cursor.rowcount
 
     def repoint_mentions(self, *, from_entity_id: str, to_entity_id: str) -> int:
         """Bulk-UPDATE every mention pointing at ``from_entity_id`` to

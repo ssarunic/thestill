@@ -2958,23 +2958,17 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
     if episode_id:
         episode_ids = [episode_id]
     else:
-        # Find episodes with pending mentions, optionally scoped to a
-        # podcast. We grab the IDs up front so progress reporting is
-        # accurate.
-        sql = "SELECT DISTINCT episode_id FROM entity_mentions " "WHERE resolution_status = 'pending'"
-        params: list = []
+        # Episodes with pending mentions, optionally scoped to a podcast.
+        # Through the repository: this used to run SQLite SQL on the SQLite
+        # repository's private connection and failed on Postgres.
+        scoped_podcast_id = None
         if podcast_id:
             podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
             if not podcast:
                 click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
                 ctx.exit(1)
-            sql += " AND episode_id IN (SELECT id FROM episodes WHERE podcast_id = ?)"
-            params.append(podcast.id)
-        sql += " ORDER BY episode_id"
-        if max_episodes:
-            sql += f" LIMIT {int(max_episodes)}"
-        with repo._get_connection() as conn:
-            episode_ids = [r[0] for r in conn.execute(sql, params).fetchall()]
+            scoped_podcast_id = podcast.id
+        episode_ids = repo.list_episode_ids_with_pending_mentions(podcast_id=scoped_podcast_id, limit=max_episodes)
 
     click.echo(f"Found {len(episode_ids)} episode(s) with pending mentions")
     if dry_run:
@@ -3418,6 +3412,111 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
+
+
+@main.command("clean-aliases")
+@click.option("--apply", "apply_changes", is_flag=True, help="Write the changes. Without it this is a dry run.")
+@click.option(
+    "--report",
+    "report_path",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write every verdict to this TSV (review it before --apply).",
+)
+@click.option(
+    "--allowlist",
+    "allowlist_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="TSV of 'entity_id<TAB>alias' pairs to keep regardless of the rule.",
+)
+@click.option(
+    "--reresolve/--no-reresolve",
+    default=True,
+    help="Enqueue resolve-entities for episodes whose mentions were reset. "
+    "Use --no-reresolve on a host without the `entities` extra.",
+)
+@click.pass_context
+@require_config
+@log_command
+def clean_aliases(ctx, apply_changes, report_path, allowlist_path, reresolve):
+    """Remove stored aliases that do not name their entity, and undo the
+    mentions they produced.
+
+    Before the resolver fix of 2026-05-08 a mention could be linked to the
+    first entity in its excerpt and its text saved as that entity's alias
+    ("tariffs" on Donald Trump). Aliases are match surfaces for the anchor
+    pass, so each one kept producing wrong mentions.
+
+    An alias is kept when it visibly names the entity (shared text, initials,
+    spelling/accent variant), is allowlisted, or - for non-person entities -
+    the fixed resolver has linked that exact surface to the entity since the
+    fix. For each removed alias, that entity's ``anchor`` mentions under that
+    surface are deleted and its ``direct``/``coref`` mentions reset to
+    pending. An alias that merely repeats the entity's name is dropped from
+    the list and its mentions left alone.
+
+    Dry run by default; --apply also rebuilds the co-occurrence table. Safe
+    to re-run: a second pass finds nothing left to remove.
+    """
+    import csv
+
+    from .core.entity_alias_hygiene import RESOLVER_FIX_CUTOFF, apply_alias_cleanup, plan_alias_cleanup
+
+    repo = ctx.obj.entity_repository
+    allowlist = []
+    if allowlist_path:
+        with open(allowlist_path, newline="", encoding="utf-8") as fh:
+            for row in csv.reader(fh, delimiter="\t"):
+                if len(row) >= 2 and not row[0].startswith("#"):
+                    allowlist.append((row[0].strip(), row[1].strip()))
+
+    click.echo("Scanning aliases...")
+    plan = plan_alias_cleanup(repo.list_alias_evidence(RESOLVER_FIX_CUTOFF), allowlist=allowlist)
+    summary = plan.summary()
+    for key, value in summary.items():
+        click.echo(f"  {key:<28} {value:,}")
+
+    if report_path:
+        with open(report_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh, delimiter="\t")
+            writer.writerow(
+                ["verdict", "reason", "entity_id", "canonical_name", "alias", "direct_since_fix"]
+                + ["direct_before_fix", "anchor_mentions", "coref_mentions"]
+            )
+            for v in sorted(plan.verdicts, key=lambda v: (v.keep, v.entity_id, v.alias)):
+                writer.writerow(
+                    ["keep" if v.keep else "remove", v.reason, v.entity_id, v.canonical_name, v.alias]
+                    + [v.direct_since_fix, v.direct_before_fix, v.anchor_mentions, v.coref_mentions]
+                )
+        click.echo(f"Report written to {report_path}")
+
+    worst = sorted(plan.removals, key=lambda v: -(v.mentions_to_delete + v.mentions_to_reset))[:15]
+    if worst:
+        click.echo("")
+        click.echo("Most damaging aliases to be removed:")
+        for v in worst:
+            click.echo(
+                f"  {v.canonical_name!r} <- {v.alias!r}: "
+                f"{v.mentions_to_delete} anchor deleted, {v.mentions_to_reset} reset"
+            )
+
+    if not apply_changes:
+        click.echo("")
+        click.echo("Dry run - nothing written. Re-run with --apply to make these changes.")
+        return
+
+    queue = make_queue_manager(ctx.obj.config) if reresolve else None
+    result = apply_alias_cleanup(repo, plan, queue_manager=queue)
+    click.echo("")
+    click.echo(f"✓ Removed {result.aliases_removed:,} aliases from {result.entities_updated:,} entities")
+    click.echo(f"  Anchor mentions deleted:    {result.anchor_mentions_deleted:,}")
+    click.echo(f"  Mentions reset to pending:  {result.mentions_reset:,}")
+    click.echo(f"  Episodes affected:          {len(result.episodes_affected):,}")
+    if result.cooccurrence_pairs is not None:
+        click.echo(f"  Co-occurrence pairs rebuilt: {result.cooccurrence_pairs:,}")
+    if reresolve:
+        click.echo(f"  resolve-entities enqueued:  {result.episodes_enqueued:,} (run the worker / `thestill server`)")
+    else:
+        click.echo("  Not enqueued (--no-reresolve): reset mentions stay pending until resolved elsewhere.")
 
 
 @main.command("repair-entity-types")
