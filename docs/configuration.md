@@ -193,6 +193,9 @@ down, and frees slots held by wedged handlers.
 | `QUEUE_CIRCUIT_WINDOW_SECONDS` | Rolling window over which failures are counted | `120` |
 | `QUEUE_CIRCUIT_COOLDOWN_SECONDS` | How long a breaker stays OPEN before a half-open probe | `60` |
 | `QUEUE_STAGE_WATCHDOG_SECONDS` | Uniform handler watchdog timeout for every stage; `0` disables everywhere | - (unset = per-stage defaults) |
+| `QUEUE_STALE_TIMEOUT_SECONDS` | Global floor for how long a `processing` row may sit before the stale sweep presumes its worker died and requeues it. Rows this process is still running are never requeued (2026-09-16) | `1800` |
+| `QUEUE_STALE_TIMEOUT_MARGIN_SECONDS` | Added to a stage's watchdog to form that stage's stale window (`max(global, watchdog + margin)`), so a handler the watchdog still tolerates is never swept | `600` |
+| `QUEUE_EXIT_ON_DEGRADED` | When the worker crosses `QUEUE_ABANDONED_THREAD_BUDGET` it sends itself `SIGTERM` (after a 2 s log flush) so the container's restart policy brings up a fresh process. Docker never restarts on a failed health check alone, which is how production sat unready for days on 2026-09-16. Set `false` to only fail readiness and stop claiming | `true` |
 | `QUEUE_ABANDONED_THREAD_BUDGET` | Watchdog-abandoned handler threads tolerated before the worker declares itself degraded, stops claiming, and fails `/health/ready`. Abandoned threads cannot be killed, so each one permanently consumes an executor slot — only a restart recovers | `8` |
 
 ## Transcript Cleaning (legacy inline path)
@@ -300,6 +303,8 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `RATE_LIMIT_MCP_MISS_MAX` | Unknown/revoked/expired remote-MCP tokens per client IP per window before the guard stops looking them up (spec #78) | `120` |
+| `RATE_LIMIT_MCP_MISS_WINDOW_SECONDS` | Window for the MCP token-miss budget | `60` |
 | `RATE_LIMIT_AUTH_MAX` | Auth endpoint requests per window | `10` |
 | `RATE_LIMIT_AUTH_WINDOW_SECONDS` | Auth window length | `60` |
 | `RATE_LIMIT_WEBHOOK_MAX` | Webhook requests per window | `60` |
@@ -373,6 +378,12 @@ Each briefing is emailed at most once — deliveries are tracked in the
 `briefing_deliveries` table with bounded retries, and a failed send never
 blocks briefing generation.
 
+## Related Episodes (spec #46, #56)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RELATED_INCREMENTAL_POOL_K` | Seed-pool size per leg for the incremental `compute-related` update: one vector and one lexical query of this many candidates per new episode, and pool members rescored against the pool plus their stored rail. Fixed, so work per episode never grows with the corpus (spec #56 Phase 1). The full rebuild (`thestill related build`) keeps its own 2,000 cap | `150` |
+
 ## Corpus Search (sqlite-vec)
 
 Hybrid lexical + semantic search over transcript chunks lives in the
@@ -442,6 +453,9 @@ The MCP server logs through the shared logging setup — use `LOG_LEVEL`,
 |----------|-------------|---------|
 | `MCP_SESSION_KEY` | Per-session quota key for MCP rate limiting | - (random per-process key) |
 | `THESTILL_ENV_FILE` | Absolute path to the `.env` to load — useful for MCP clients like Claude Desktop that launch servers with CWD=`$HOME` | - (walk upward from package/CWD) |
+| `MCP_HTTP_ENABLED` | Mount the remote MCP endpoint (Streamable HTTP) on the web server at `/mcp/{token}` for claude.ai custom connectors / Claude mobile (spec #78). Inert until a user mints a token from Settings; set `false` to opt out | `true` |
+| `MCP_TOKEN_TTL_DAYS` | Lifetime of a remote MCP token in days; rotating resets it. `0` = never expires (spec #78 Phase 2) | `90` |
+| `MCP_TOKEN_REQUESTS_PER_MINUTE` | Per-token HTTP request limit on `/mcp/{token}`; above it the server answers `429` with `Retry-After` (spec #78 Phase 2) | `120` |
 
 ## Security & Misc
 

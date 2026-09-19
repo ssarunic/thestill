@@ -37,7 +37,7 @@ export default function NowPlayingScrubber({ currentTime, duration, onSeek, tick
       : formatClock(duration)
 
   return (
-    <div className="space-y-1">
+    <div>
       <div className="relative h-11">
         <input
           type="range"
@@ -75,7 +75,7 @@ export default function NowPlayingScrubber({ currentTime, duration, onSeek, tick
         </div>
       )}
 
-      <div className="flex items-center justify-between text-xs tabular-nums text-muted">
+      <div className="-mt-1 flex items-center justify-between text-xs tabular-nums text-muted">
         <span>{formatClock(currentTime)}</span>
         <button
           type="button"

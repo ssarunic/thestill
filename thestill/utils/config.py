@@ -147,6 +147,38 @@ def is_queue_auto_heal_enabled() -> bool:
     return _env_bool("QUEUE_AUTO_HEAL", True)
 
 
+def get_stale_timeout_seconds_per_stage() -> Dict["TaskStage", float]:  # noqa: F821
+    """Per-stage window after which a ``processing`` row is presumed orphaned.
+
+    At least the stage's handler watchdog plus a margin wherever a watchdog
+    exists, and never below the global ``QUEUE_STALE_TIMEOUT_SECONDS``.
+    Before 2026-09-16 the window was a flat 30 minutes while compute-related
+    was allowed two hours, so a healthy handler had its row requeued under it.
+    """
+    global_window = float(max(60, _env_int("QUEUE_STALE_TIMEOUT_SECONDS", 1800)))
+    margin = float(max(0, _env_int("QUEUE_STALE_TIMEOUT_MARGIN_SECONDS", 600)))
+    return {
+        stage: (max(global_window, watchdog + margin) if watchdog else global_window)
+        for stage, watchdog in get_stage_watchdog_seconds().items()
+    }
+
+
+def get_related_incremental_pool_k() -> int:
+    """Seed-pool size for the incremental related-episodes update (spec #56).
+
+    Fixed and corpus-independent: the rail keeps 5 of this many candidates
+    per leg. ``DEFAULT_CANDIDATE_CAP`` remains the full rebuild's knob.
+    """
+    return max(1, _env_int("RELATED_INCREMENTAL_POOL_K", 150))
+
+
+def is_queue_exit_on_degraded_enabled() -> bool:
+    """When true (default), a worker that leaks past ``QUEUE_ABANDONED_THREAD_BUDGET``
+    asks its process to exit so the container supervisor restarts it. A failed
+    readiness check alone never triggers a Docker restart (2026-09-16)."""
+    return _env_bool("QUEUE_EXIT_ON_DEGRADED", True)
+
+
 def get_queue_heal_interval_seconds() -> int:
     """How often the auto-heal loop sweeps for healable tasks (default 300s)."""
     return _env_int("QUEUE_HEAL_INTERVAL_SECONDS", 300)
@@ -491,6 +523,17 @@ class Config(BaseModel):
     # Request body cap for the webhook endpoint (bytes). Default 1 MiB.
     max_webhook_body_bytes: int = 1 * 1024 * 1024
 
+    # Remote MCP over Streamable HTTP (spec #78). On by default since Phase
+    # 2: the mount is inert until a user mints a per-user token from their
+    # Settings page (stored hashed, scoped, rate-limited, expiring), and a
+    # token can never exceed that user's own web session. Opt out with
+    # MCP_HTTP_ENABLED=false.
+    mcp_http_enabled: bool = True
+    # Token lifetime in days; 0 = never expires. Rotating resets it.
+    mcp_token_ttl_days: int = 90
+    # Per-token HTTP request limit on the /mcp endpoint (429 above it).
+    mcp_token_requests_per_minute: int = 120
+
     # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
     enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
     enrichment_wikipedia_lang: str = "en"  # language edition for sitelinks + summaries
@@ -806,6 +849,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
+        # Remote MCP (spec #78)
+        "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "true").lower() == "true",
+        "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
+        "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
         # Entity enrichment (spec #45 Tier 0)
         "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
         "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
@@ -840,6 +887,17 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(f"NARRATION_MATERIAL_MAX_WORDS must be > 0; got {config_data['narration_material_max_words']}")
     if not config_data["narration_anchor_prompt"]:
         raise ValueError("NARRATION_ANCHOR_PROMPT must name a voice file, e.g. conversational_anchor")
+    # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
+    # for exactly 0; a negative TTL would silently mean the same thing,
+    # and a non-positive request limit would refuse every request.
+    if config_data["mcp_token_ttl_days"] < 0:
+        raise ValueError(
+            f"MCP_TOKEN_TTL_DAYS must be >= 0 (0 = tokens never expire); got {config_data['mcp_token_ttl_days']}"
+        )
+    if config_data["mcp_token_requests_per_minute"] <= 0:
+        raise ValueError(
+            "MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0; got " f"{config_data['mcp_token_requests_per_minute']}"
+        )
 
     # Multi-user mode runs OAuth, which must build a non-spoofable
     # callback URL. Require PUBLIC_BASE_URL unconditionally — TRUSTED_PROXIES

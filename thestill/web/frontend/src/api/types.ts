@@ -1392,3 +1392,34 @@ export interface ImportResponse {
   timestamp: string
   import: ImportPayload
 }
+
+// Remote MCP connector (spec #78 Phase 2). Per-user capability tokens:
+// GET returns the caller's token *state* (never the plaintext); POST
+// returns the full connector URL exactly once.
+export type McpTokenScope = 'read' | 'follows' | 'pipeline'
+export type McpTokenState = 'none' | 'active' | 'expiring' | 'expired' | 'revoked'
+
+export interface McpTokenInfo {
+  enabled: boolean
+  state: McpTokenState
+  prefix?: string
+  scopes?: McpTokenScope[]
+  created_at?: string
+  expires_at?: string | null
+  last_used_at?: string | null
+  last_used_ip?: string | null
+  revoked_at?: string | null
+}
+
+export interface McpTokenInfoResponse extends McpTokenInfo {
+  status: string
+  timestamp: string
+}
+
+export interface McpTokenMintResponse {
+  status: string
+  timestamp: string
+  url: string
+  scopes: McpTokenScope[]
+  expires_at: string | null
+}

@@ -45,6 +45,8 @@ Usage:
 
 import asyncio
 import concurrent.futures
+import os
+import signal
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, Dict, Optional
@@ -109,6 +111,8 @@ class TaskWorker:
         circuit_window_seconds: float = 120.0,
         circuit_cooldown_seconds: float = 60.0,
         watchdog_timeout_per_stage: Optional[Dict[TaskStage, Optional[float]]] = None,
+        on_degraded: Optional[Callable[[], None]] = None,
+        stale_timeout_per_stage: Optional[Dict[TaskStage, float]] = None,
     ):
         """
         Initialize task worker.
@@ -124,11 +128,20 @@ class TaskWorker:
                 explicit entry in ``parallel_jobs_per_stage``.
             parallel_jobs_per_stage: Per-stage capacity overrides. Any stage
                 omitted from this dict falls back to ``parallel_jobs``.
+            on_degraded: Called exactly once when leaked handler threads reach
+                ``abandoned_thread_budget``. The server passes
+                :func:`request_process_exit` so the container restarts
+                (see ``is_degraded``); ``None`` only logs and stops claiming.
+            stale_timeout_per_stage: Seconds a ``processing`` row may sit
+                before the stale sweep presumes its worker died, per stage
+                (``config.get_stale_timeout_seconds_per_stage``). ``None``
+                applies ``stale_timeout_minutes`` to every stage.
         """
         self.queue_manager = queue_manager
         self.task_handlers = task_handlers
         self.poll_interval = poll_interval
         self.stale_timeout_minutes = stale_timeout_minutes
+        self.stale_timeout_per_stage = stale_timeout_per_stage
         self.progress_store = progress_store
         self.repository = repository
         self.parallel_jobs = max(1, parallel_jobs)
@@ -181,6 +194,7 @@ class TaskWorker:
         from ..utils.config import _env_int
 
         self.abandoned_thread_budget: int = _env_int("QUEUE_ABANDONED_THREAD_BUDGET", 8)
+        self._on_degraded = on_degraded
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -288,8 +302,12 @@ class TaskWorker:
 
         Rather than silently degrade again, the worker stops claiming and says
         so. Recovery is a process restart (the only thing that reclaims the
-        threads); the deployment's ``restart: unless-stopped`` plus a readiness
-        probe that consults this makes that visible and actionable.
+        threads). Failing ``/health/ready`` alone does not get one: Docker's
+        restart policies act on process exit, never on an unhealthy check, so
+        production sat unready for days on 2026-09-16 with a dead pipeline
+        behind a green web server. The server therefore wires ``on_degraded``
+        to :func:`request_process_exit`, which turns the transition into an
+        exit that ``restart: unless-stopped`` recovers within seconds.
         """
         with self._active_lock:
             return sum(self._abandoned_threads.values()) >= self.abandoned_thread_budget
@@ -687,9 +705,18 @@ class TaskWorker:
                             "Only a process restart reclaims these threads."
                         ),
                     )
+                    self._fire_on_degraded()
             finally:
                 with self._active_lock:
                     self._active_by_stage[stage].pop(self._task_key(task), None)
+
+    def _fire_on_degraded(self) -> None:
+        if self._on_degraded is None:
+            return
+        try:
+            self._on_degraded()
+        except Exception as exc:  # noqa: BLE001 — the hook must never take the loop down
+            logger.error("task_worker_on_degraded_failed", error=str(exc), exc_info=True)
 
     def _process_task(self, task: Task) -> None:
         """
@@ -1023,11 +1050,24 @@ class TaskWorker:
             logger.error(f"Failed to mark episode {task.episode_id} as failed: {e}")
 
     def _reset_stale_tasks(self) -> None:
-        """Reset any stale processing tasks from previous runs."""
+        """Requeue ``processing`` rows whose worker died, never our own.
+
+        The rows this process is still running are excluded by task id, and
+        each stage gets its own window (at least its handler watchdog). Both
+        guards come from the 2026-09-16 outage, where a healthy two-hour
+        compute-related run lost its row to a flat 30-minute sweep.
+        """
         try:
-            reset_count = self.queue_manager.reset_stale_tasks(self.stale_timeout_minutes)
+            with self._active_lock:
+                active_ids = {t.id for stage_active in self._active_by_stage.values() for t in stage_active.values()}
+            windows = (
+                self.stale_timeout_per_stage
+                if self.stale_timeout_per_stage is not None
+                else self.stale_timeout_minutes * 60.0
+            )
+            reset_count = self.queue_manager.reset_stale_tasks(windows, exclude_task_ids=active_ids)
             if reset_count > 0:
-                logger.info(f"Reset {reset_count} stale tasks on startup")
+                logger.info("stale_tasks_reset", count=reset_count, excluded_active=len(active_ids))
         except Exception as e:
             logger.warning(f"Failed to reset stale tasks: {e}")
 
@@ -1145,3 +1185,25 @@ class TaskWorker:
                 note="stale-task reset will recover this row",
                 exc_info=True,
             )
+
+
+def request_process_exit(delay_s: float = 2.0) -> None:
+    """Ask this process to shut down so the supervisor restarts it.
+
+    Sends ``SIGTERM`` to our own pid after ``delay_s`` from a daemon timer,
+    so the ``task_worker_degraded`` log line flushes and the calling handler
+    returns first. uvicorn handles SIGTERM as a graceful shutdown, which
+    runs the app's lifespan teardown (``task_worker.stop``) and exits; the
+    container's ``restart: unless-stopped`` then brings a fresh process up
+    with a clean executor. ``QUEUE_EXIT_ON_DEGRADED=false`` opts out.
+    """
+    pid = os.getpid()
+    logger.critical(
+        "task_worker_requesting_exit",
+        pid=pid,
+        delay_s=delay_s,
+        note="degraded worker; exiting so the process supervisor restarts it with a clean executor",
+    )
+    timer = threading.Timer(delay_s, os.kill, args=(pid, signal.SIGTERM))
+    timer.daemon = True
+    timer.start()

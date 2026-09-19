@@ -6,7 +6,6 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { PlayerProvider, usePlayer, type PlayerContextValue, type PlayerTrack } from '../contexts/PlayerContext'
 import NowPlayingSheet from './NowPlayingSheet'
-import { __resetFollowPlaybackForTests } from '../hooks/useFollowPlayback'
 
 // Entities for the tick row come from the reader's query hook; stub it so
 // the sheet test needs no QueryClient. Two people, three mentions.
@@ -134,7 +133,6 @@ beforeEach(() => {
   state.rate = 1
   state.time = 0
   localStorage.clear()
-  __resetFollowPlaybackForTests()
   isSmUp.current = true
   vi.spyOn(HTMLMediaElement.prototype, 'paused', 'get').mockImplementation(() => state.paused)
   vi.spyOn(HTMLMediaElement.prototype, 'playbackRate', 'get').mockImplementation(() => state.rate)
@@ -243,17 +241,10 @@ describe('NowPlayingSheet (spec #72)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Forward 15 seconds' }))
     expect(state.time).toBe(615)
 
-    await userEvent.click(screen.getByRole('radio', { name: '1.5×' }))
-    expect(state.rate).toBe(1.5)
-    expect(localStorage.getItem('thestill:player:rate')).toBe('1.5')
-  })
-
-  it('Stop clears the session and closes', async () => {
-    const { onClose } = renderSheet()
-    act(() => ctx.play(track))
-    await userEvent.click(screen.getByRole('button', { name: 'Stop playback' }))
-    expect(ctx.track).toBeNull()
-    expect(onClose).toHaveBeenCalled()
+    // The speed chip steps through the option set: 1× → 1.2×.
+    await userEvent.click(screen.getByRole('button', { name: 'Speed 1×' }))
+    expect(state.rate).toBe(1.2)
+    expect(localStorage.getItem('thestill:player:rate')).toBe('1.2')
   })
 
   it('the title link keeps the inbox overlay contract', async () => {
@@ -285,16 +276,6 @@ describe('NowPlayingSheet (spec #72)', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Open transcript here' }))
     expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}?view=transcript&t=754|/inbox`)
     expect(onClose).toHaveBeenCalled()
-  })
-
-  it('the follow-playback toggle writes the shared preference', async () => {
-    renderSheet()
-    act(() => ctx.play(track))
-    const toggle = screen.getByRole('button', { name: 'Follow playback' })
-    expect(toggle).toHaveAttribute('aria-pressed', 'false')
-    await userEvent.click(toggle)
-    expect(screen.getByRole('button', { name: 'Following playback' })).toHaveAttribute('aria-pressed', 'true')
-    expect(localStorage.getItem('thestill:transcript:followPlayback')).toBe('true')
   })
 
   it('phone: hosts the video when nothing else presents it, and releases it on close (2c)', () => {

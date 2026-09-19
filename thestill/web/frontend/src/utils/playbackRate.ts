@@ -53,3 +53,16 @@ export function clampRateToAvailable(rate: number, available: readonly number[] 
 export function formatRateLabel(rate: number): string {
   return `${Number(rate.toFixed(2))}×`
 }
+
+/**
+ * Spec #72 §5 — the rate that follows `rate` in the option set, skipping
+ * options the engine rejects and wrapping at the end. A rate that is not an
+ * option (a YouTube clamp to 1.25, say) advances to the first option above
+ * it.
+ */
+export function nextRate(rate: number, available: readonly number[] | null): number {
+  const supported = RATE_OPTIONS.filter((o) => !available || available.some((r) => Math.abs(r - o) < 0.01))
+  if (supported.length === 0) return rate
+  const above = supported.find((o) => o > rate + 0.01)
+  return above ?? supported[0]
+}

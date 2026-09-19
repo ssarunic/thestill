@@ -73,6 +73,21 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires_at ON revoked_tokens(expires_at);
 
+-- Spec #78 Phase 2 — per-user remote MCP tokens (one row per user,
+-- replaced in place on rotate; looked up by hash from the ASGI guard).
+CREATE TABLE IF NOT EXISTS mcp_tokens (
+    user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    token_hash text NOT NULL,
+    token_prefix text NOT NULL,
+    scopes text NOT NULL DEFAULT 'read',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    expires_at timestamptz NULL,
+    last_used_at timestamptz NULL,
+    last_used_ip text NULL,
+    revoked_at timestamptz NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
+
 -- ===== categories / podcasts / episodes ==================================
 CREATE TABLE IF NOT EXISTS categories (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

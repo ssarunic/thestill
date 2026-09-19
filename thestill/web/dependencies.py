@@ -61,6 +61,7 @@ if TYPE_CHECKING:
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..services.legacy_claim_service import LegacyClaimService
+    from ..services.mcp_token_service import McpTokenService
     from ..services.narration import NarrationRunner
     from ..services.refresh_on_open import RefreshOnOpenService
     from ..utils.config import Config
@@ -167,6 +168,9 @@ class AppState:
     # Spec #74 — open-triggered feed refresh. ``Optional`` only for
     # hand-built test fixtures; production wiring always passes it.
     refresh_on_open: "Optional[RefreshOnOpenService]" = None
+    # Spec #78 Phase 2 — per-user remote MCP tokens. ``Optional`` only for
+    # hand-built test fixtures; production wiring always passes it.
+    mcp_token_service: "Optional[McpTokenService]" = None
 
 
 def get_app_state(request: Request) -> AppState:
@@ -308,14 +312,24 @@ def require_admin(
     """
     user = require_auth(request, state)
 
-    # Single-user mode: the local user is the operator and always an admin.
-    if not state.config.multi_user:
-        return user
-
-    if not user.is_admin:
+    if not is_effective_admin(user, state.config):
         raise HTTPException(
             status_code=403,
             detail="Admin access required",
         )
 
     return user
+
+
+def is_effective_admin(user: "User", config: "Config") -> bool:
+    """The one definition of "is this user an operator right now".
+
+    Single-user mode: the local user is always the operator, regardless of
+    the stored flag (keeps pre-existing single-user databases working).
+    Multi-user mode: the fresh ``is_admin`` flag on the row. Shared by
+    ``require_admin`` and the remote MCP guard (spec #78 Phase 2) so a
+    demoted admin loses operator scope on their very next request.
+    """
+    if not config.multi_user:
+        return True
+    return bool(user.is_admin)

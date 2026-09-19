@@ -19,11 +19,40 @@ Helper functions for URI parsing and ID resolution.
 RESTful URI format: thestill://podcasts/{id}/episodes/{id}/...
 """
 
-from typing import Dict, Union
+from typing import Dict, Optional, Union
 from urllib.parse import unquote
 
 
-def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
+class NumericIdentifierRefused(ValueError):
+    """A bare numeric podcast index was used over the remote connector.
+
+    Spec #78 Phase 2: identifiers are corpus-global (uuid, slug, RSS URL).
+    The legacy 1-based index is order-dependent and only accepted on stdio.
+    """
+
+
+def resolve_identifier(raw: Union[str, int, None], *, allow_numeric_index: bool) -> Union[str, int, None]:
+    """The one place deciding whether a numeric podcast index is legal.
+
+    Replaces the ad-hoc ``x.isdigit() -> int(x)`` coercions in the tool
+    handlers and the resource URI parser. Returns the value unchanged when
+    it is not numeric; ``int`` when numeric and allowed; raises when
+    numeric and refused.
+    """
+    if raw is None:
+        return None
+    is_numeric = isinstance(raw, int) or (isinstance(raw, str) and raw.isdigit())
+    if not is_numeric:
+        return raw
+    if not allow_numeric_index:
+        raise NumericIdentifierRefused(
+            f"Numeric podcast index {raw!r} is not accepted over the remote connector; "
+            "use the podcast's uuid, slug or RSS URL (as returned by list_podcasts)."
+        )
+    return int(raw)
+
+
+def parse_thestill_uri(uri: str, *, allow_numeric_ids: bool = True) -> Dict[str, Union[str, int]]:
     """
     Parse a thestill:// URI with RESTful path structure.
 
@@ -35,6 +64,11 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
 
     Args:
         uri: URI string starting with thestill://
+        allow_numeric_ids: accept the legacy 1-based numeric podcast index
+            (stdio). Over the remote connector this is False and a numeric
+            podcast id raises :class:`NumericIdentifierRefused`. Episode
+            ordinals (``1`` = latest within a podcast) stay accepted on
+            both transports.
 
     Returns:
         Dictionary with parsed components:
@@ -70,7 +104,7 @@ def parse_thestill_uri(uri: str) -> Dict[str, Union[str, int]]:
         raise ValueError(f"Invalid URI: {uri}. Expected 'podcasts' as first path segment")
 
     # Parse podcast ID
-    podcast_id = _parse_id(parts[1])
+    podcast_id = resolve_identifier(parts[1], allow_numeric_index=allow_numeric_ids)
 
     # Case 1: thestill://podcasts/{podcast_id}
     if len(parts) == 2:

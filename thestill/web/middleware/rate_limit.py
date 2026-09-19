@@ -71,6 +71,14 @@ MCP_MUTATION_LIMIT = RateLimit(
     max_events=_int_env("RATE_LIMIT_MCP_MUTATION_MAX", 30),
     window_seconds=_int_env("RATE_LIMIT_MCP_MUTATION_WINDOW_SECONDS", 60),
 )
+# Spec #78 Phase 2 — unknown/revoked/expired tokens per client IP. Once
+# exhausted the guard answers 404 without touching the database. Generous
+# on purpose: claude.ai's egress IPs are shared across users, and one
+# stale connector polling a revoked URL must not lock out its neighbours.
+MCP_MISS_LIMIT = RateLimit(
+    max_events=_int_env("RATE_LIMIT_MCP_MISS_MAX", 120),
+    window_seconds=_int_env("RATE_LIMIT_MCP_MISS_WINDOW_SECONDS", 60),
+)
 
 
 # Once the bucket table grows past this size, each allow() call evicts any
@@ -103,6 +111,16 @@ class _SlidingWindow:
                 self._sweep(cutoff)
             return True
 
+    def exhausted(self, key: str, limit: RateLimit) -> bool:
+        """Would ``allow`` refuse right now? Never records an event."""
+        cutoff = time.monotonic() - limit.window_seconds
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if not bucket:
+                return False
+            live = sum(1 for t in bucket if t >= cutoff)
+            return live >= limit.max_events
+
     def _sweep(self, cutoff: float) -> None:
         # Caller holds self._lock.
         stale = [k for k, b in self._buckets.items() if not b or b[-1] < cutoff]
@@ -118,7 +136,7 @@ class _SlidingWindow:
 _LIMITER = _SlidingWindow()
 
 
-def resolve_client_ip(request: Request) -> str:
+def resolve_client_ip(request: Request, config=None) -> str:
     """
     Identify the real client behind any trusted reverse proxy.
 
@@ -137,10 +155,13 @@ def resolve_client_ip(request: Request) -> str:
     pollute entries that appear BEFORE the last trusted hop.
     """
     peer = request.client.host if request.client else "unknown"
-    try:
-        config = request.app.state.app_state.config
-    except AttributeError:
-        return peer
+    if config is None:
+        # FastAPI routes: read the app's config. Raw ASGI callers (the MCP
+        # guard, spec #78) pass ``config`` explicitly.
+        try:
+            config = request.app.state.app_state.config
+        except AttributeError:
+            return peer
     trusted_proxies = trusted_proxy_set(config)
 
     if not trusted_proxies or peer not in trusted_proxies:
@@ -218,6 +239,32 @@ def enforce_mcp_mutation_quota(tool_name: str, session_key: Optional[str] = None
             f"MCP tool {tool_name!r} has exceeded its rate limit "
             f"({MCP_MUTATION_LIMIT.max_events}/{MCP_MUTATION_LIMIT.window_seconds}s)."
         )
+
+
+def check_mcp_token_rate_limit(token_hash: str, *, requests_per_minute: int) -> bool:
+    """
+    Per-token HTTP request limit for the remote MCP endpoint (spec #78
+    Phase 2). Returns a bool rather than raising because the caller is a
+    raw ASGI guard outside FastAPI's exception handling — it writes the
+    ``429`` itself. Keyed on the token hash so one leaked URL cannot burn
+    another user's budget.
+    """
+    limit = RateLimit(max_events=requests_per_minute, window_seconds=60)
+    allowed = _LIMITER.allow(f"mcp-token:{token_hash}", limit)
+    if not allowed:
+        logger.warning("mcp_token_rate_limit_exceeded", token_prefix=token_hash[:8], max_events=requests_per_minute)
+    return allowed
+
+
+def mcp_miss_budget_exhausted(client_ip: str) -> bool:
+    """True when ``client_ip`` has burned its token-miss budget (spec #78)."""
+    return _LIMITER.exhausted(f"mcp-miss:{client_ip}", MCP_MISS_LIMIT)
+
+
+def record_mcp_token_miss(client_ip: str) -> None:
+    """Count one unknown/revoked/expired token attempt from ``client_ip``."""
+    if not _LIMITER.allow(f"mcp-miss:{client_ip}", MCP_MISS_LIMIT):
+        logger.warning("mcp_token_miss_budget_exhausted", client_ip=client_ip, max_events=MCP_MISS_LIMIT.max_events)
 
 
 def reset_for_testing() -> None:

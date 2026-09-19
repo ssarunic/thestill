@@ -1,46 +1,36 @@
-import { formatRateLabel, RATE_OPTIONS } from '../utils/playbackRate'
+import { formatRateLabel, nextRate } from '../utils/playbackRate'
 
 interface NowPlayingSpeedControlProps {
   rate: number
   /** Rates the active engine accepts; null = unrestricted (spec #72 §5). */
   availableRates: number[] | null
   onChange: (rate: number) => void
-}
-
-function nearlyEqual(a: number, b: number): boolean {
-  return Math.abs(a - b) < 0.01
+  className?: string
 }
 
 /**
- * Spec #72 §5 — segmented speed control over the fixed option set. On the
- * YouTube engine, options the video does not accept are disabled rather
- * than hidden, so the control keeps its shape.
+ * Spec #72 §5 — playback speed as one compact chip that shows the current
+ * rate and steps to the next on tap (`0.8× → 1× → 1.2× → 1.5× → 2× → 0.8×`).
+ * A set-and-forget preference does not earn a segmented control; the chip
+ * takes one slot in the sheet's utility row. On the YouTube engine, rates
+ * the video does not accept are skipped.
  */
-export default function NowPlayingSpeedControl({ rate, availableRates, onChange }: NowPlayingSpeedControlProps) {
+export default function NowPlayingSpeedControl({ rate, availableRates, onChange, className = '' }: NowPlayingSpeedControlProps) {
+  const label = formatRateLabel(rate)
   return (
-    <div role="radiogroup" aria-label="Playback speed" className="inline-flex rounded-lg border border-hairline bg-page p-0.5">
-      {RATE_OPTIONS.map((option) => {
-        const selected = nearlyEqual(option, rate)
-        const supported = !availableRates || availableRates.some((r) => nearlyEqual(r, option))
-        return (
-          <button
-            key={option}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            disabled={!supported}
-            title={supported ? undefined : 'Not available for this video'}
-            onClick={() => onChange(option)}
-            className={`min-w-[44px] rounded-md px-2 py-2 text-sm font-medium tabular-nums transition-colors ${
-              selected
-                ? 'bg-accent text-accent-contrast shadow-sm'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-ink disabled:text-gray-300 disabled:hover:bg-transparent disabled:cursor-not-allowed'
-            }`}
-          >
-            {formatRateLabel(option)}
-          </button>
-        )
-      })}
-    </div>
+    <button
+      type="button"
+      onClick={() => onChange(nextRate(rate, availableRates))}
+      aria-label={`Speed ${label}`}
+      title="Change playback speed"
+      className={className}
+    >
+      <span aria-hidden="true" className="flex h-6 items-center text-base font-semibold tabular-nums leading-none">
+        {label}
+      </span>
+      <span aria-hidden="true" className="text-[11px] font-medium leading-none">
+        Speed
+      </span>
+    </button>
   )
 }
