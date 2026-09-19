@@ -11,8 +11,8 @@ import { QueryClient } from '@tanstack/react-query'
  *
  *   - `useEpisode` — the spec #68 live-reader clock (5s while unsettled,
  *     stops on settle).
- *   - `useRefreshStatus` / `useAddPodcastStatus` / `usePipelineTaskStatus`
- *     — poll while running, stop on terminal status.
+ *   - `useRefreshStatus` — 1s while running → 15s → stop after 4 quiet
+ *     ticks.
  *   - `useEpisodeTasks` — 2s → 15s → 60s → stop cadence.
  *   - `useQueueTasks` — 5s/15s operator queue view.
  *   - `useInbox` / `useInboxInfinite` — caller-supplied conditional poll

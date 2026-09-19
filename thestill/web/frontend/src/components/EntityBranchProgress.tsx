@@ -107,15 +107,15 @@ export default function EntityBranchProgress({
   // entity-branch stage. The queue can have multiple historical tasks
   // (retries, manual re-runs) — we care about the latest one for each
   // stage to drive the dot color.
-  const latestByStage = new Map<string, { status: string; failedAt?: string | null }>()
+  const latestByStage = new Map<string, EpisodeTask>()
   for (const t of tasks) {
     if (!ENTITY_STAGE_KEYS.has(t.stage)) continue
     const existing = latestByStage.get(t.stage)
     // ``created_at`` ordering is good enough — the queue assigns
     // monotonically increasing UUIDs but not all stages do; sort by
     // the timestamp the row carries.
-    if (!existing || (t.created_at ?? '') > (existing as any).created_at) {
-      latestByStage.set(t.stage, t as any)
+    if (!existing || (t.created_at ?? '') > (existing.created_at ?? '')) {
+      latestByStage.set(t.stage, t)
     }
   }
 
@@ -126,7 +126,7 @@ export default function EntityBranchProgress({
   }
 
   const stageStatuses: { key: PipelineStage; label: string; tooltip: string; icon: ReactElement; status: StageStatus }[] = ENTITY_STAGES.map((stage) => {
-    const t = latestByStage.get(stage.key) as any
+    const t = latestByStage.get(stage.key)
     let status: StageStatus = 'pending'
     if (t) {
       switch (t.status) {
@@ -141,7 +141,6 @@ export default function EntityBranchProgress({
           status = 'failed'
           break
         case 'pending':
-        case 'retry':
         case 'retry_scheduled':
           status = 'queued'
           break

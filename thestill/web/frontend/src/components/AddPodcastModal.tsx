@@ -22,7 +22,7 @@ type AddInputState =
   | { kind: 'url'; value: string }
   | { kind: 'query'; value: string }
 
-const URL_RE = /^[A-Za-z][A-Za-z0-9+.\-]*:\/\//
+const URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 
 export function parseAddInput(raw: string): AddInputState {
   const text = raw.trim()
@@ -35,7 +35,18 @@ export function parseAddInput(raw: string): AddInputState {
 const QUERY_DEBOUNCE_MS = 250
 const SEARCH_LIMIT = 10
 
+// The shell mounts the content only while open, so every open starts from
+// fresh state — including ``addDone``, which exists purely to flip a button
+// optimistically *during* a single open session. The next fetch returns
+// authoritative ``is_following`` values, so a set cached from the previous
+// open could only contradict the server (e.g. if the user unfollowed
+// elsewhere).
 export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProps) {
+  if (!isOpen) return null
+  return <AddPodcastModalContent onClose={onClose} />
+}
+
+function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose'>) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -57,42 +68,39 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
 
   const parsed = useMemo(() => parseAddInput(input), [input])
 
-  // Reset all per-open UI state when the modal opens. ``addDone`` is reset
-  // alongside everything else — the next fetch returns authoritative
-  // ``is_following`` values, so a stale cached set from the previous open
-  // could only contradict the server (e.g. if the user unfollowed elsewhere).
-  // It exists purely to flip a button optimistically *during* a single
-  // open session.
   useEffect(() => {
-    if (!isOpen) return
-    setInput('')
-    setCursorIdx(-1)
-    setAddError(null)
-    setAddInFlight(new Set())
-    setAddDone(new Set())
     inputRef.current?.focus()
-  }, [isOpen])
+  }, [])
 
-  // Reset highlight whenever results change so ↑/↓ doesn't point at a stale row.
-  useEffect(() => {
+  // Every results change also resets the highlight so ↑/↓ doesn't point at
+  // a stale row.
+  const replaceResults = useCallback((next: TopPodcast[]) => {
+    setResults(next)
     setCursorIdx(-1)
-  }, [results])
+  }, [])
+
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setInput(value)
+      if (parseAddInput(value).kind === 'url') {
+        // Hide the list immediately; clearing here means stale results from a
+        // prior query state don't flash through during the typing transition.
+        abortRef.current?.abort()
+        replaceResults([])
+        setFetchError(null)
+        setIsFetching(false)
+      }
+    },
+    [replaceResults],
+  )
 
   // Fetch effect. Three paths:
   //   - empty: load top-N for the user's region (no debounce).
   //   - query: debounced search via ?q=.
   //   - url:   no fetch; the list area gives way to an "Add this feed" row.
   useEffect(() => {
-    if (!isOpen) return
-
-    if (parsed.kind === 'url') {
-      // Hide the list immediately; clearing here means stale results from a
-      // prior query state don't flash through during the typing transition.
-      setResults([])
-      setFetchError(null)
-      setIsFetching(false)
-      return
-    }
+    // ``handleInputChange`` already cleared the list for this state.
+    if (parsed.kind === 'url') return
 
     const runFetch = async (q: string | undefined) => {
       abortRef.current?.abort()
@@ -103,12 +111,12 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
       try {
         const response = await getTopPodcasts(undefined, SEARCH_LIMIT, q, undefined, ctrl.signal)
         if (ctrl.signal.aborted) return
-        setResults(response.top_podcasts)
+        replaceResults(response.top_podcasts)
         setRegion(response.region)
       } catch (err) {
         if ((err as Error).name === 'AbortError') return
         setFetchError("Couldn't load suggestions — paste an RSS URL above.")
-        setResults([])
+        replaceResults([])
       } finally {
         if (!ctrl.signal.aborted) setIsFetching(false)
       }
@@ -126,12 +134,10 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
       runFetch(parsed.value)
     }, QUERY_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [isOpen, parsed])
+  }, [parsed, replaceResults])
 
   // Abort any in-flight request when the modal closes.
-  useEffect(() => {
-    if (!isOpen) abortRef.current?.abort()
-  }, [isOpen])
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const handleFollow = useCallback(
     async (rssUrl: string) => {
@@ -200,8 +206,6 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
     navigate('/settings')
   }, [navigate, onClose])
 
-  if (!isOpen) return null
-
   const showList = parsed.kind !== 'url'
   const showUrlRow = parsed.kind === 'url'
 
@@ -234,7 +238,7 @@ export default function AddPodcastModal({ isOpen, onClose }: AddPodcastModalProp
         <input
           ref={inputRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => handleInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Search top 500 or paste an RSS URL…"
           aria-label="Search top podcasts or paste a URL"

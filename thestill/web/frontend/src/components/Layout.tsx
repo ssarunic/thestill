@@ -88,11 +88,14 @@ function LayoutContent() {
   const screenSize = useScreenSize()
   const { isAdmin } = useAuth()
 
-  // Close sidebar/drawer when screen size changes
-  useEffect(() => {
+  // Close sidebar/drawer when screen size changes (same adjust-during-render
+  // pattern as the Now Playing reset above).
+  const [layoutScreenSize, setLayoutScreenSize] = useState(screenSize)
+  if (screenSize !== layoutScreenSize) {
+    setLayoutScreenSize(screenSize)
     setIsDrawerOpen(false)
     setIsSidebarExpanded(false)
-  }, [screenSize])
+  }
 
   // Spec #28 §4.1 — global ⌘K / Ctrl+K toggle for the command bar.
   useEffect(() => {

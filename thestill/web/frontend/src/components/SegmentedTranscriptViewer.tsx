@@ -779,10 +779,14 @@ export default function SegmentedTranscriptViewer({
     return { matchingIds: ids, matchOrder: order }
   }, [searchQuery, renderedSegments])
 
-  useEffect(() => {
+  // A new search starts from the first match with hidden groups collapsed.
+  // Adjusted during render rather than in an effect (no extra commit).
+  const [appliedSearchQuery, setAppliedSearchQuery] = useState(searchQuery)
+  if (searchQuery !== appliedSearchQuery) {
+    setAppliedSearchQuery(searchQuery)
     setCurrentMatchIndex(0)
     setExpandedHiddenGroups(new Set())
-  }, [searchQuery])
+  }
 
   useEffect(() => {
     if (!searchQuery || matchOrder.length === 0) return
