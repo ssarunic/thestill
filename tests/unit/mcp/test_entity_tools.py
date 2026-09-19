@@ -115,8 +115,8 @@ class TestToolDefinitions:
 
     def test_each_tool_has_input_schema(self):
         for tool in entity_tool_definitions():
-            assert tool.inputSchema["type"] == "object"
-            assert "required" in tool.inputSchema
+            assert tool.input_schema["type"] == "object"
+            assert "required" in tool.input_schema
 
 
 class TestFindMentionsTool:

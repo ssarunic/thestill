@@ -13,8 +13,8 @@ import sqlite3
 import uuid
 
 import pytest
+from mcp.client import Client
 from mcp.server import Server
-from mcp.shared.memory import create_connected_server_and_client_session
 
 from tests.unit.web.test_mcp_http import USER_A, USER_B, Harness, isolated_env  # noqa: F401
 from thestill.mcp.tools import setup_tools
@@ -206,7 +206,7 @@ class TestStdioBranch:
     @pytest.mark.anyio
     async def test_all_tools_listed_and_list_podcasts_has_index(self, stdio):
         server, p0, p1 = stdio
-        async with create_connected_server_and_client_session(server) as session:
+        async with Client(server) as session:
             tools = await session.list_tools()
             assert PIPELINE_TOOLS <= {t.name for t in tools.tools}
             listed = await session.call_tool("list_podcasts", {})
@@ -217,7 +217,7 @@ class TestStdioBranch:
     @pytest.mark.anyio
     async def test_numeric_ids_accepted_and_remove_deletes(self, stdio):
         server, p0, p1 = stdio
-        async with create_connected_server_and_client_session(server) as session:
+        async with Client(server) as session:
             episodes = await session.call_tool("list_episodes", {"podcast_id": "1"})
             assert "not accepted" not in episodes.content[0].text
             removed = json.loads((await session.call_tool("remove_podcast", {"podcast_id": "1"})).content[0].text)

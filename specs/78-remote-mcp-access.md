@@ -116,6 +116,10 @@ boot with the one-line remediation.
 - The SPA catch-all's skip list gains `"mcp/"` as defense in depth.
 - `pyproject.toml` bumps the floor to `mcp>=1.8.0` (first release with
   `StreamableHTTPSessionManager`).
+  *Update 2026-09-19:* now `mcp>=2.0.0,<3.0.0`. 2.x removed the
+  `@server.call_tool()`-style decorators; handlers register through
+  `thestill/mcp/registration.py`. The mount and session manager are
+  unchanged.
 - The per-session mutation quota in `mcp/tools.py` keys off process
   identity today; under HTTP all connector traffic shares one key. That is
   *stricter*, not looser — acceptable for Phase 1, revisit in Phase 2.
@@ -375,7 +379,8 @@ the token's scopes on `scope["state"]["mcp_user"]` /
 `scope["state"]["mcp_scopes"]` before handing the request to the
 session manager. Miss, revoked or expired → the same empty 404 as
 today. The SDK forwards the
-Starlette request into `server.request_context.request`, so tool and
+Starlette request into `server.request_context.request` (mcp 2.x: the
+`ctx.request` of the context each handler receives), so tool and
 resource handlers read the user from `request.scope["state"]`. A
 `current_mcp_user()` helper in `mcp/tools.py` returns that user over
 HTTP and **`None` on stdio** (no request). The two doors share one

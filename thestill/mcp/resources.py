@@ -30,7 +30,8 @@ from structlog import get_logger
 from ..services import PodcastService
 from ..utils.config import Config, load_config
 from ..utils.path_manager import PathManager
-from .identity import McpIdentity, current_mcp_identity, remote_call_limiter, require_authenticated
+from .identity import McpIdentity, remote_call_limiter, require_authenticated
+from .registration import register_resources
 from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
 
 logger = get_logger(__name__)
@@ -55,8 +56,7 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
     repository = make_repositories(config).podcast
     podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
 
-    @server.list_resources()
-    async def list_resources() -> list[Resource]:
+    async def list_resources(identity: McpIdentity) -> list[Resource]:
         """
         List available resources.
 
@@ -68,36 +68,35 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
                 uri="thestill://podcasts/{podcast_id}",
                 name="Podcast metadata",
                 description="Get podcast information by index (1, 2, 3...) or RSS URL",
-                mimeType="application/json",
+                mime_type="application/json",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}",
                 name="Episode metadata",
                 description="Get episode information by podcast and episode ID",
-                mimeType="application/json",
+                mime_type="application/json",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/transcript",
                 name="Episode transcript",
                 description="Get cleaned transcript in Markdown format",
-                mimeType="text/markdown",
+                mime_type="text/markdown",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/audio",
                 name="Episode audio reference",
                 description="Get audio file URL and metadata",
-                mimeType="application/json",
+                mime_type="application/json",
             ),
             Resource(
                 uri="thestill://podcasts/{podcast_id}/episodes/{episode_id}/summary",
                 name="Episode summary",
                 description="Get comprehensive episode summary with executive summary, quotes, and analysis",
-                mimeType="text/markdown",
+                mime_type="text/markdown",
             ),
         ]
 
-    @server.read_resource()
-    async def read_resource(uri: str) -> str:
+    async def read_resource(uri: str, identity: McpIdentity) -> str:
         """
         Read a resource by URI.
 
@@ -113,14 +112,12 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
         # for any *authenticated* caller (web parity), so there is no
         # scope table, but an HTTP request that lost its identity fails
         # closed. Remote reads (file I/O) run off the event loop.
-        identity = current_mcp_identity(server)
-        # The SDK hands us a pydantic AnyUrl; everything below wants str.
         if identity.is_remote:
             require_authenticated(identity)
             return await anyio.to_thread.run_sync(
-                _read_resource_sync, str(uri), identity, limiter=remote_call_limiter(server)
+                _read_resource_sync, uri, identity, limiter=remote_call_limiter(server)
             )
-        return _read_resource_sync(str(uri), identity)
+        return _read_resource_sync(uri, identity)
 
     def _read_resource_sync(uri: str, identity: McpIdentity) -> str:
         logger.info(f"Reading resource: {uri}")
@@ -253,3 +250,5 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
         else:
             logger.error(f"Unknown resource type: {resource_type}")
             raise ValueError(f"Unknown resource type: {resource_type}")
+
+    register_resources(server, list_resources=list_resources, read_resource=read_resource)

@@ -75,7 +75,7 @@ class TestRequireScope:
 
 class TestVisibleTools:
     TOOLS = [
-        Tool(name=n, description="", inputSchema={"type": "object"})
+        Tool(name=n, description="", input_schema={"type": "object"})
         for n in ("list_podcasts", "add_podcast", "refresh_feeds", "unregistered")
     ]
 
@@ -96,18 +96,11 @@ class TestVisibleTools:
 
 class TestCurrentIdentity:
     def _server(self, request):
-        return SimpleNamespace(request_context=SimpleNamespace(request=request))
+        """The per-request context mcp 2.x hands each handler."""
+        return SimpleNamespace(request=request)
 
     def test_no_request_is_stdio(self):
         assert current_mcp_identity(self._server(None)) is STDIO
-
-    def test_outside_request_context_is_stdio(self):
-        class Boom:
-            @property
-            def request_context(self):
-                raise LookupError
-
-        assert current_mcp_identity(Boom()) is STDIO
 
     def test_reads_state(self):
         user = User(id="u1", email="u@example.com")

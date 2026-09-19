@@ -38,7 +38,7 @@ def search_tool_definitions() -> List[Tool]:
                 "- semantic: vector similarity. Concept-level recall.\n"
                 "- hybrid (default): RRF over both. Best recall on novel phrasings."
             ),
-            inputSchema={
+            input_schema={
                 "type": "object",
                 "properties": {
                     "query": {

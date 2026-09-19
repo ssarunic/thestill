@@ -42,8 +42,9 @@ from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import dispatch_entity_tool, entity_tool_definitions
-from .identity import McpIdentity, ScopeError, current_mcp_identity, remote_call_limiter, require_scope, visible_tools
+from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
+from .registration import register_tools
 from .search_tools import dispatch_search_tool, search_tool_definitions
 from .utils import resolve_identifier
 
@@ -153,16 +154,15 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
     )
     follower_service = FollowerService(repos.follower, repository, inbox_service=inbox_service)
 
-    @server.list_tools()
     @log_mcp_stdio
-    async def list_tools() -> list[Tool]:
+    async def list_tools(identity: McpIdentity) -> list[Tool]:
         """List available tools."""
         logger.debug("listing_available_tools")
         tools = [
             Tool(
                 name="add_podcast",
                 description="Add a new podcast to tracking. Supports RSS URLs, Apple Podcast URLs, and YouTube channels/playlists.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "url": {
@@ -176,7 +176,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="remove_podcast",
                 description="Remove a podcast from tracking by index number or RSS URL.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -193,7 +193,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                     "List podcasts with their statistics. Over the remote connector this is the caller's "
                     "followed podcasts; admins may pass all=true for every podcast on the instance."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "all": {
@@ -206,7 +206,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="list_episodes",
                 description="List episodes for a specific podcast with optional filtering.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -229,12 +229,12 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="get_status",
                 description="Get system-wide statistics including podcast count, episode counts, and processing status.",
-                inputSchema={"type": "object", "properties": {}},
+                input_schema={"type": "object", "properties": {}},
             ),
             Tool(
                 name="get_transcript",
                 description="Get the cleaned Markdown transcript for a specific episode. Returns the cleaned transcript from clean_transcripts/ directory. Episode must be in CLEANED or SUMMARIZED state.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -253,7 +253,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="refresh_feeds",
                 description="Refresh podcast feeds to discover new episodes. This is step 1 of the pipeline. Does not download audio - just discovers what's new.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -271,7 +271,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="download_episodes",
                 description="Download audio files for discovered episodes. This is step 2 of the pipeline. Episodes must be discovered first via refresh_feeds.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -290,7 +290,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="downsample_audio",
                 description="Downsample downloaded audio to 16kHz WAV format for transcription. This is step 3 of the pipeline.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -309,7 +309,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="transcribe_episodes",
                 description="Transcribe downsampled audio to JSON transcripts. This is step 4 of the pipeline. Requires audio to be downsampled first.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -328,7 +328,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="clean_transcripts",
                 description="Clean raw transcripts with LLM processing for better readability. This is step 5 (final) of the pipeline.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -347,7 +347,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="process_episode",
                 description="Run the full processing pipeline (download → downsample → transcribe → clean) for a specific episode. Convenient for processing a single episode end-to-end.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -365,7 +365,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="summarize_episodes",
                 description="Summarize cleaned transcripts with comprehensive analysis. This is step 6 of the pipeline. Produces executive summary, notable quotes, content angles, social snippets, and critical analysis.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -384,7 +384,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             Tool(
                 name="get_summary",
                 description="Get the summary for a specific episode. Returns the comprehensive analysis including executive summary, quotes, and content angles.",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "podcast_id": {
@@ -409,10 +409,9 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
         # Spec #78 Phase 2 — over the remote connector only the tools the
         # token's (effective) scopes grant are listed. Advisory: the
         # call-time check below is the control.
-        return visible_tools(current_mcp_identity(server), tools)
+        return visible_tools(identity, tools)
 
-    @server.call_tool()
-    async def call_tool(name: str, arguments: Any) -> list[TextContent]:
+    async def call_tool(name: str, arguments: Any, identity: McpIdentity) -> list[TextContent]:
         """
         Call a tool with given arguments.
 
@@ -425,13 +424,13 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
         Args:
             name: Tool name
             arguments: Tool arguments
+            identity: Who is calling (spec #78 Phase 2). STDIO (no request)
+                keeps the legacy semantics on every branch below; a remote
+                caller is scoped.
 
         Returns:
             List of text content results
         """
-        # Spec #78 Phase 2 — who is calling. STDIO (no request) keeps the
-        # legacy semantics on every branch below; a remote caller is scoped.
-        identity = current_mcp_identity(server)
         if identity.is_remote:
             return await anyio.to_thread.run_sync(
                 _call_tool_sync, name, arguments, identity, limiter=remote_call_limiter(server)
@@ -1621,6 +1620,8 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
         except Exception as e:
             logger.error(f"Error calling tool {name}: {e}", exc_info=True)
             return [TextContent(type="text", text=json.dumps({"success": False, "error": str(e)}))]
+
+    register_tools(server, list_tools=list_tools, call_tool=call_tool)
 
 
 def _get_transcriber(config, pending_ops_repository=None):
