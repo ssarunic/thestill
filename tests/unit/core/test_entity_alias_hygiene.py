@@ -37,6 +37,8 @@ class TestIsRelatedAlias:
             ("Semmelweiss", "Ignaz Semmelweis"),  # spelling
             ("Mbappe", "Kylian Mbappé"),  # accents
             ("Open AI", "OpenAI"),  # run-together
+            ("GM", "General Motors"),  # short, but initials
+            ("X", "X Corp"),  # short, but a whole token
         ],
     )
     def test_related(self, alias, canonical):
@@ -50,6 +52,7 @@ class TestIsRelatedAlias:
             ("price", "Elon Musk"),
             ("OpenAI", "Anthropic principle"),
             ("AI", "Geoffrey Hinton"),
+            ("ai", "OpenAI"),  # a two-letter fragment is not a nickname
             ("Ryan Carson", "Treehouse (company)"),
             ("Coke", "Coca-Cola"),  # genuinely unrelated on its face: needs evidence
             ("", "Elon Musk"),

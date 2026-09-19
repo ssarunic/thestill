@@ -102,10 +102,13 @@ def is_related_alias(alias: str, canonical_name: str) -> bool:
     a, c = _fold(alias), _fold(canonical_name)
     if not a or not c or a == c:
         return False
-    if a in c or c in a:
-        return True
     a_tokens, c_tokens = _TOKEN_RE.findall(a), _TOKEN_RE.findall(c)
     if set(a_tokens) & set(c_tokens):
+        return True
+    # Containment, but not for fragments: "zuck" in "zuckerberg" is a
+    # nickname, "ai" in "openai" is two letters that match half the corpus.
+    shorter, longer = sorted((a, c), key=len)
+    if len(shorter) >= 3 and shorter in longer:
         return True
     # Handles and run-together forms: "@elonmusk", "OpenAI"/"Open AI".
     a_compact, c_compact = "".join(a_tokens), "".join(c_tokens)
