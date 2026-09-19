@@ -22,8 +22,10 @@ RESTful URI format: thestill://podcasts/{id}/episodes/{id}/...
 from typing import Dict, Optional, Union
 from urllib.parse import unquote
 
+from .errors import McpUserError
 
-class NumericIdentifierRefused(ValueError):
+
+class NumericIdentifierRefused(McpUserError):
     """A bare numeric podcast index was used over the remote connector.
 
     Spec #78 Phase 2: identifiers are corpus-global (uuid, slug, RSS URL).
@@ -90,18 +92,18 @@ def parse_thestill_uri(uri: str, *, allow_numeric_ids: bool = True) -> Dict[str,
         {"resource": "audio", "podcast_id": 1, "episode_id": 2}
     """
     if not uri.startswith("thestill://"):
-        raise ValueError(f"Invalid URI scheme: {uri}. Expected thestill://")
+        raise McpUserError(f"Invalid URI scheme: {uri}. Expected thestill://")
 
     # Extract and parse path
     path = uri[len("thestill://") :]
     parts = [unquote(p) for p in path.split("/") if p]
 
     if len(parts) < 2:
-        raise ValueError(f"Invalid URI format: {uri}. Expected thestill://podcasts/{{id}}/...")
+        raise McpUserError(f"Invalid URI format: {uri}. Expected thestill://podcasts/{{id}}/...")
 
     # Validate podcasts namespace
     if parts[0] != "podcasts":
-        raise ValueError(f"Invalid URI: {uri}. Expected 'podcasts' as first path segment")
+        raise McpUserError(f"Invalid URI: {uri}. Expected 'podcasts' as first path segment")
 
     # Parse podcast ID
     podcast_id = resolve_identifier(parts[1], allow_numeric_index=allow_numeric_ids)
@@ -112,10 +114,10 @@ def parse_thestill_uri(uri: str, *, allow_numeric_ids: bool = True) -> Dict[str,
 
     # Validate episodes namespace
     if len(parts) >= 3 and parts[2] != "episodes":
-        raise ValueError(f"Invalid URI: {uri}. Expected 'episodes' as third path segment")
+        raise McpUserError(f"Invalid URI: {uri}. Expected 'episodes' as third path segment")
 
     if len(parts) < 4:
-        raise ValueError(f"Invalid URI format: {uri}. Expected thestill://podcasts/{{id}}/episodes/{{id}}")
+        raise McpUserError(f"Invalid URI format: {uri}. Expected thestill://podcasts/{{id}}/episodes/{{id}}")
 
     # Parse episode ID
     episode_id = _parse_id(parts[3])
@@ -129,12 +131,12 @@ def parse_thestill_uri(uri: str, *, allow_numeric_ids: bool = True) -> Dict[str,
         sub_resource = parts[4].lower()
 
         if sub_resource not in ["transcript", "audio", "summary"]:
-            raise ValueError(f"Invalid sub-resource: {sub_resource}. Expected 'transcript', 'audio', or 'summary'")
+            raise McpUserError(f"Invalid sub-resource: {sub_resource}. Expected 'transcript', 'audio', or 'summary'")
 
         return {"resource": sub_resource, "podcast_id": podcast_id, "episode_id": episode_id}
 
     # Too many path segments
-    raise ValueError(
+    raise McpUserError(
         f"Invalid URI format: {uri}. " f"Expected thestill://podcasts/{{id}}/episodes/{{id}}/[transcript|audio|summary]"
     )
 
