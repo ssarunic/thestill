@@ -94,6 +94,22 @@ class EntityEpisode:
     podcast_slug: str
 
 
+@dataclass(frozen=True)
+class AliasEvidence:
+    """One stored alias with the resolved mentions that use it *for that
+    entity* (surface match is case-insensitive). Feeds
+    ``core.entity_alias_hygiene``."""
+
+    entity_id: str
+    entity_type: str
+    canonical_name: str
+    alias: str
+    direct_since_fix: int
+    direct_before_fix: int
+    anchor_mentions: int
+    coref_mentions: int
+
+
 class EntityRepository(ABC):
     """Abstract contract for ``entities`` / ``entity_mentions`` /
     ``entity_cooccurrences`` / ``entity_enrichment`` /
@@ -153,6 +169,37 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def replace_aliases(self, entity_id: str, aliases: List[str]) -> bool:
+        """Overwrite an entity's alias list (distinct, sorted). The one way
+        to *remove* an alias: ``upsert_entity`` only ever unions. Returns
+        True if the entity exists.
+        """
+
+    @abstractmethod
+    def list_alias_evidence(self, since: datetime) -> List["AliasEvidence"]:
+        """Every stored alias of every entity, with counts of the resolved
+        mentions linking that surface to that entity: ``direct`` split at
+        ``since`` (by ``resolved_at``; NULL counts as before), plus
+        ``anchor`` and ``coref``. Ordered by entity id, then alias.
+        """
+
+    @abstractmethod
+    def find_mention_ids_by_entity_surface(
+        self, entity_id: str, surface_form: str, *, methods: Tuple[str, ...]
+    ) -> List[Tuple[int, str]]:
+        """``(mention_id, episode_id)`` for resolved mentions of
+        ``entity_id`` whose surface is ``surface_form`` (case-insensitive)
+        and whose resolution method is in ``methods``. Empty ``methods``
+        returns ``[]``.
+        """
+
+    @abstractmethod
+    def delete_mentions_by_entity_surface(self, entity_id: str, surface_form: str, *, methods: Tuple[str, ...]) -> int:
+        """Delete the mentions ``find_mention_ids_by_entity_surface`` would
+        return; rowcount.
+        """
+
+    @abstractmethod
     def repoint_mentions(self, *, from_entity_id: str, to_entity_id: str) -> int:
         """Bulk re-point every mention of one entity at another; return
         the number of mentions updated. Used by alias-merge before
@@ -190,6 +237,14 @@ class EntityRepository(ABC):
 
         ``episode_id`` scopes to one episode; without it the full
         backlog is returned (up to ``limit``).
+        """
+
+    @abstractmethod
+    def list_episode_ids_with_pending_mentions(
+        self, *, podcast_id: Optional[str] = None, limit: Optional[int] = None
+    ) -> List[str]:
+        """Distinct episode ids that still have ``pending`` mentions,
+        ordered by id; optionally scoped to one podcast and capped.
         """
 
     @abstractmethod

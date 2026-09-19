@@ -17,6 +17,7 @@ from structlog import get_logger
 
 from ..models.entities import EntityMention, EntityRecord, ResolutionMethod, ResolutionStatus
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
+from .entity_alias_hygiene import is_related_alias
 
 logger = get_logger(__name__)
 
@@ -118,7 +119,12 @@ def _candidates_for(surface: str, persons: List[EntityRecord]) -> List[EntityRec
             # Exact canonical match — should already have been resolved
             # by ReFinED, but skip rather than re-claim the mention.
             continue
-        haystacks = [person.canonical_name] + list(person.aliases)
+        # Unrelated stored aliases are ignored for the same reason the
+        # anchor pass ignores them: "president" as an alias of one person
+        # would claim every mention of any president.
+        haystacks = [person.canonical_name] + [
+            alias for alias in person.aliases if is_related_alias(alias, person.canonical_name)
+        ]
         for haystack in haystacks:
             tokens = {t.lower() for t in _TOKEN_RE.findall(haystack)}
             if needle_lower in tokens:

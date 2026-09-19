@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List
 
 from ..models.entities import EntityRecord, EntityType
+from .entity_alias_hygiene import is_related_alias
 
 _TOKEN_SPLIT_RE = re.compile(r"\s+")
 _PUNCT_STRIP_RE = re.compile(r"[^\w\-']")
@@ -81,8 +82,13 @@ def _surfaces_for(entity: EntityRecord) -> List[str]:
         out.append(cleaned)
 
     _add(entity.canonical_name)
+    # Only aliases that visibly name this entity. A stored alias becomes a
+    # match surface here, so one bad row ("price" on Elon Musk, from the
+    # pre-#79 resolver bug) manufactures a wrong mention every time the
+    # entity anchors an episode. See core/entity_alias_hygiene.py.
     for alias in entity.aliases:
-        _add(alias)
+        if is_related_alias(alias, entity.canonical_name):
+            _add(alias)
 
     # Person-specific token expansion. Companies/products/topics rarely
     # benefit from token splitting — "Apple Inc" is not the same as
