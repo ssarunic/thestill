@@ -147,17 +147,41 @@ def repo(request, tmp_path):
         conn.execute(
             "INSERT INTO podcasts (id, rss_url, title, slug) VALUES (%s, %s, %s, %s), (%s, %s, %s, %s)",
             (
-                POD_1, "https://example.com/feed1.xml", "Prof G Markets", "prof-g-markets",
-                POD_2, "https://example.com/feed2.xml", "All-In", "all-in",
+                POD_1,
+                "https://example.com/feed1.xml",
+                "Prof G Markets",
+                "prof-g-markets",
+                POD_2,
+                "https://example.com/feed2.xml",
+                "All-In",
+                "all-in",
             ),
         )
         conn.execute(
             "INSERT INTO episodes (id, podcast_id, external_id, title, audio_url, pub_date, slug) VALUES "
             "(%s, %s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s, %s), (%s, %s, %s, %s, %s, %s, %s)",
             (
-                EP_1, POD_1, "e1", "SpaceX IPO", "https://example.com/1.mp3", PUB_1, "spacex-ipo",
-                EP_2, POD_1, "e2", "AI Job Crisis", "https://example.com/2.mp3", PUB_2, "ai-job-crisis",
-                EP_3, POD_2, "e3", "Market Wrap", "https://example.com/3.mp3", PUB_3, "market-wrap",
+                EP_1,
+                POD_1,
+                "e1",
+                "SpaceX IPO",
+                "https://example.com/1.mp3",
+                PUB_1,
+                "spacex-ipo",
+                EP_2,
+                POD_1,
+                "e2",
+                "AI Job Crisis",
+                "https://example.com/2.mp3",
+                PUB_2,
+                "ai-job-crisis",
+                EP_3,
+                POD_2,
+                "e3",
+                "Market Wrap",
+                "https://example.com/3.mp3",
+                PUB_3,
+                "market-wrap",
             ),
         )
     yield PostgresEntityRepository(PG_DSN)
@@ -393,7 +417,9 @@ def test_resolve_mention_lifecycle(repo):
     m = repo.list_pending_mentions()[0]
     ts = datetime(2026, 6, 21, 12, 0, 0, tzinfo=timezone.utc)
     assert (
-        repo.resolve_mention(mention_id=m.id, entity_id="person:elon-musk", status="resolved", resolved_at=ts, method="direct")
+        repo.resolve_mention(
+            mention_id=m.id, entity_id="person:elon-musk", status="resolved", resolved_at=ts, method="direct"
+        )
         is True
     )
     got = repo.get_mention(m.id)
@@ -485,6 +511,39 @@ def test_find_mentions_only_resolved_with_filters(repo):
         date_range=(datetime(2026, 6, 12, tzinfo=timezone.utc), datetime(2026, 6, 30, tzinfo=timezone.utc)),
     )
     assert [r.episode_id for r in windowed] == [EP_1, EP_3]
+
+
+def test_list_episodes_with_all_entities_is_an_and_newest_first_with_filters(repo):
+    _seed_resolved_corpus(repo)
+    repo.insert_mentions([_mention(surface="Pending Person")])  # unresolved: must never count
+
+    # musk is in all three episodes; spacex only in pod 1's two.
+    musk = repo.list_episodes_with_all_entities(["person:elon-musk"])
+    assert [e.episode_id for e in musk] == [EP_1, EP_3, EP_2]  # pub_date DESC
+    first = musk[0]
+    assert (first.episode_title, first.episode_pub_date) == ("SpaceX IPO", PUB_1)
+    assert (first.podcast_id, first.podcast_title, first.podcast_slug) == (POD_1, "Prof G Markets", "prof-g-markets")
+
+    both = repo.list_episodes_with_all_entities(["person:elon-musk", "company:spacex"])
+    assert [e.episode_id for e in both] == [EP_1, EP_2]
+    # A repeated id must not raise the bar past what any episode can meet.
+    assert [e.episode_id for e in repo.list_episodes_with_all_entities(["company:spacex", "company:spacex"])] == [
+        EP_1,
+        EP_2,
+    ]
+    # AND with an entity nobody mentions, and the empty set, match nothing.
+    assert repo.list_episodes_with_all_entities(["person:elon-musk", "topic:ai-jobs"]) == []
+    assert repo.list_episodes_with_all_entities([]) == []
+
+    assert [e.episode_id for e in repo.list_episodes_with_all_entities(["person:elon-musk"], podcast_id=POD_2)] == [
+        EP_3
+    ]
+    assert [e.episode_id for e in repo.list_episodes_with_all_entities(["person:elon-musk"], limit=1)] == [EP_1]
+    windowed = repo.list_episodes_with_all_entities(
+        ["person:elon-musk"],
+        date_range=(datetime(2026, 6, 12, tzinfo=timezone.utc), datetime(2026, 6, 30, tzinfo=timezone.utc)),
+    )
+    assert [e.episode_id for e in windowed] == [EP_1, EP_3]
 
 
 def test_list_mentions_by_speaker_substring_and_topic_segment_constraint(repo):

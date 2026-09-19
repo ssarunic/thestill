@@ -46,7 +46,7 @@ from structlog import get_logger
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 from ..utils.postgres_ext import as_str, connect
-from .entity_repository import EntityHit, EntityRepository, MentionContext
+from .entity_repository import EntityEpisode, EntityHit, EntityRepository, MentionContext
 
 logger = get_logger(__name__)
 
@@ -416,6 +416,54 @@ class PostgresEntityRepository(EntityRepository):
         with connect(self.dsn) as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_mention_context(r) for r in rows]
+
+    def list_episodes_with_all_entities(
+        self,
+        entity_ids: List[str],
+        *,
+        podcast_id: Optional[str] = None,
+        date_range: Optional[Tuple[datetime, datetime]] = None,
+        limit: int = 50,
+    ) -> List[EntityEpisode]:
+        """Spec #28 §1.8 — backing query for ``list_episodes_by_entity``."""
+        if not entity_ids:
+            return []
+        distinct_ids = list(dict.fromkeys(entity_ids))
+        sql = """
+            SELECT e.id, e.title, e.pub_date, p.id AS podcast_id, p.title AS podcast_title,
+                   p.slug AS podcast_slug
+            FROM episodes e
+            JOIN podcasts p ON e.podcast_id = p.id
+            WHERE e.id IN (
+                SELECT episode_id FROM entity_mentions
+                WHERE resolution_status = 'resolved' AND entity_id = ANY(%s)
+                GROUP BY episode_id
+                HAVING COUNT(DISTINCT entity_id) = %s
+            )
+        """
+        params: list = [distinct_ids, len(distinct_ids)]
+        if podcast_id is not None:
+            sql += " AND p.id = %s"
+            params.append(podcast_id)
+        if date_range is not None:
+            sql += " AND e.pub_date BETWEEN %s AND %s"
+            params.append(date_range[0])
+            params.append(date_range[1])
+        sql += " ORDER BY e.pub_date DESC NULLS LAST LIMIT %s"
+        params.append(limit)
+        with connect(self.dsn) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            EntityEpisode(
+                episode_id=as_str(r["id"]),
+                episode_title=r["title"],
+                episode_pub_date=r["pub_date"],
+                podcast_id=as_str(r["podcast_id"]),
+                podcast_title=r["podcast_title"],
+                podcast_slug=r["podcast_slug"],
+            )
+            for r in rows
+        ]
 
     def list_mentions_by_speaker(
         self,
@@ -1314,7 +1362,8 @@ class PostgresEntityRepository(EntityRepository):
         ``json.loads`` on it — that's the cross-backend contract.
         """
         with connect(self.dsn) as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT e.id                   AS entity_id,
                        e.type                 AS type,
                        e.canonical_name       AS canonical_name,
@@ -1327,7 +1376,8 @@ class PostgresEntityRepository(EntityRepository):
                 WHERE e.wikidata_qid IS NOT NULL
                   AND m.resolution_status = 'resolved'
                 GROUP BY e.id, m.surface_form
-                """).fetchall()
+                """
+            ).fetchall()
         return [{**r, "wikidata_instance_of": json.dumps(r["wikidata_instance_of"] or [])} for r in rows]
 
     # ------------------------------------------------------------------
@@ -1341,7 +1391,8 @@ class PostgresEntityRepository(EntityRepository):
         same rule (and same Python-side ranking) as the SQLite version.
         """
         with connect(self.dsn) as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT
                     e.wikidata_qid,
                     e.id,
@@ -1358,7 +1409,8 @@ class PostgresEntityRepository(EntityRepository):
                       GROUP BY wikidata_qid
                       HAVING COUNT(*) > 1
                   )
-                """).fetchall()
+                """
+            ).fetchall()
 
         by_qid: Dict[str, List[dict]] = {}
         for row in rows:
@@ -1390,7 +1442,8 @@ class PostgresEntityRepository(EntityRepository):
         """
         valid_types = {t.value for t in EntityType}
         with connect(self.dsn) as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT
                     e.id AS entity_id,
                     e.type AS current_type,
@@ -1400,7 +1453,8 @@ class PostgresEntityRepository(EntityRepository):
                 JOIN entity_mentions m ON m.entity_id = e.id
                 WHERE m.surface_label IS NOT NULL
                 GROUP BY e.id, m.surface_label
-                """).fetchall()
+                """
+            ).fetchall()
 
         per_entity: Dict[str, Dict[str, Any]] = {}
         for row in rows:
