@@ -122,6 +122,101 @@ def extract_gist(summary_text: str) -> Optional[str]:
     return description or None
 
 
+# Spec #54 citation markup as it appears in summaries: a timestamp label
+# (single or range) linking to ``?t=...&cite=...``, or a bare label.
+_CITATION_LINK_RE = re.compile(r"\[[^\]]*\]\(\?[^)]*\)")
+_BARE_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\s*-\s*(?:\d{1,2}:\d{2}(?::\d{2})?|End))?\]")
+_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+
+
+def _summary_section(summary_text: str, number: int) -> Optional[str]:
+    """Body of numbered section ``## <number>. …`` (spec #58: numbers are the stable anchor)."""
+    pattern = rf"^##\s*{number}\.?\s*[^\n]*\n(.*?)(?=^##\s*\d|\Z)"
+    match = re.search(pattern, summary_text, re.DOTALL | re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _strip_summary_markup(text: str) -> List[str]:
+    """Return non-empty lines with citations, timestamps and bold removed."""
+    text = _CITATION_LINK_RE.sub("", text)
+    text = _BARE_TIMESTAMP_RE.sub("", text)
+    text = _BOLD_RE.sub(r"\1", text)
+    lines: List[str] = []
+    for raw in text.splitlines():
+        indent = len(raw) - len(raw.lstrip())
+        body = re.sub(r"^[*\-]\s+", "- ", raw.strip())
+        body = re.sub(r"[ \t]+", " ", body).strip()
+        if body:
+            lines.append(("  " if indent else "") + body)
+    return lines
+
+
+def _group_items(lines: List[str]) -> List[List[str]]:
+    """Group a section's lines into bullets: a top-level bullet plus its indented lines."""
+    items: List[List[str]] = []
+    for line in lines:
+        if items and line.startswith("  "):
+            items[-1].append(line)
+        else:
+            items.append([line])
+    return items
+
+
+@dataclass(frozen=True)
+class SummarySections:
+    """The parts of a summary the narration writer can use (spec #77 §2 / Phase 2b).
+
+    ``takeaways`` are the Key Takeaways bullets, one string each;
+    ``drama`` are The Drama rounds, each round (header plus its indented
+    what-happened / why-it-matters / temperature lines) joined into one
+    string. Citation links, bare timestamps, bold and scare-quoted terms
+    are already removed.
+    """
+
+    gist: str
+    takeaways: Tuple[str, ...]
+    drama: Tuple[str, ...]
+
+
+# A guest's term the summary rubric put in single quotes ('spaghetti',
+# 'Oreo'): unquote it so the writer owns the phrase instead of copying
+# the scare quotes (spec #77 Phase 2b, requirement 5).
+_SCARE_QUOTE_RE = re.compile(r"(?<!\w)[\u2018']([^'\u2019\n]{1,40}?)[\u2019'](?!\w)")
+
+
+def _unquote_terms(text: str) -> str:
+    return _SCARE_QUOTE_RE.sub(r"\1", text)
+
+
+def _items_as_strings(section_text: Optional[str]) -> Tuple[str, ...]:
+    if not section_text:
+        return ()
+    items = _group_items(_strip_summary_markup(section_text))
+    out: List[str] = []
+    for item in items:
+        joined = " ".join(line.strip() for line in item)
+        joined = re.sub(r"^- ", "", joined)
+        joined = joined.replace(" - ", " ")  # flatten nested bullet markers
+        if joined:
+            out.append(_unquote_terms(joined))
+    return tuple(out)
+
+
+def extract_summary_sections(summary_text: str) -> Optional[SummarySections]:
+    """Gist, Key Takeaways and The Drama by section number (spec #58 anchors).
+
+    Returns ``None`` when the summary has no numbered sections (legacy
+    layout) so callers fall back to :func:`extract_gist`.
+    """
+    gist_body = _summary_section(summary_text, 1)
+    takeaways = _items_as_strings(_summary_section(summary_text, 3))
+    drama = _items_as_strings(_summary_section(summary_text, 4))
+    if gist_body is None and not takeaways and not drama:
+        return None
+    gist = _unquote_terms(" ".join(_strip_summary_markup(gist_body or "")))
+    return SummarySections(gist=gist, takeaways=takeaways, drama=drama)
+
+
 def _split_sentences(text: str) -> List[str]:
     sentences = re.split(r"(?<=[.!?])\s+", text)
     return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
@@ -281,13 +376,6 @@ class BriefingScriptGenerator:
     def _extract_executive_summary(self, summary_text: str) -> Optional[str]:
         """Backwards-compat shim. Prefer ``extract_gist`` directly."""
         return extract_gist(summary_text)
-
-    def _split_sentences(self, text: str) -> List[str]:
-        """Split text into sentences."""
-        # Simple sentence splitting on common end punctuation
-        sentences = re.split(r"(?<=[.!?])\s+", text)
-        # Filter out empty strings and very short fragments
-        return [s.strip() for s in sentences if s.strip() and len(s.strip()) > 10]
 
     def _generate_markdown(self, episode_infos: List[BriefingEpisodeInfo], stats: BriefingScriptStats) -> str:
         """Generate the markdown content for the briefing script."""

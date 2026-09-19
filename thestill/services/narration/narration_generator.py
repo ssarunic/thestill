@@ -44,8 +44,9 @@ from ...core.facts_manager import FactsManager
 from ...core.llm_provider import LLMProvider
 from ...models.podcast import Episode, Podcast
 from ...utils.path_manager import PathManager, _validate_slug
+from ...utils.text_sanitizer import sanitize_text
 from ...utils.url_generator import UrlGenerator
-from ..briefing_script_generator import BriefingScriptGenerator, extract_gist
+from ..briefing_script_generator import BriefingScriptGenerator, extract_gist, extract_summary_sections
 
 if TYPE_CHECKING:
     from ...utils.file_storage import FileStorage
@@ -63,6 +64,7 @@ from .models import (
     word_count,
 )
 from .quote_selector import QuoteSelector, QuoteSelectorConfig
+from .register import measure_register
 from .script_writer import ScriptWriter
 from .theme_clusterer import ThemeClusterer
 from .transcript_loader import TranscriptTurnLoader
@@ -77,6 +79,11 @@ DEFAULT_BOUNDARY_TRIM_FRACTION = 0.05
 DEFAULT_TAIL_SHARE = 0.15
 DEFAULT_OPENER_SHARE = 0.05
 DEFAULT_SIGNOFF_SHARE = 0.03
+# Spec #77 §2 — per-episode cap on the summary material fed to the writer.
+DEFAULT_MATERIAL_MAX_WORDS = 400
+# Spec #77 §4 — fraction of the word budget the writer is told (see
+# script_writer.DEFAULT_STATED_TARGET_RATIO for the reasoning).
+DEFAULT_STATED_TARGET_RATIO = 0.8
 
 
 @dataclass
@@ -121,6 +128,7 @@ class _PerEpisodeBucket:
     episode: Episode
     picked: List[QuoteCandidate]
     brief: EpisodeBrief
+    has_sidecar: bool = False
 
 
 @dataclass
@@ -132,6 +140,23 @@ class _Pipeline:
     buckets: List[_PerEpisodeBucket] = field(default_factory=list)
     plan: ThemePlan = field(default_factory=lambda: ThemePlan(segments=(), tail_ids=()))
     fallback_reason: Optional[str] = None
+    # Human-readable detail behind ``fallback_reason`` (e.g. the word
+    # counts of a budget overrun) so the fallback is diagnosable from
+    # the log line alone (spec #77 §6).
+    fallback_detail: Optional[str] = None
+    # Filled by the script stage on success (spec #77 §3/§4 stats).
+    noise_phrase_hits: int = 0
+    stated_word_target: int = 0
+    reaction_count: int = 0
+    reactions_missing: int = 0
+
+    @property
+    def quote_pool_size(self) -> int:
+        return sum(len(b.picked) for b in self.buckets)
+
+    @property
+    def episodes_with_sidecar(self) -> int:
+        return sum(1 for b in self.buckets if b.has_sidecar)
 
 
 class NarrationGenerator:
@@ -157,6 +182,8 @@ class NarrationGenerator:
         script_generator: Optional[BriefingScriptGenerator] = None,
         url_generator: Optional[UrlGenerator] = None,
         anchor_prompt: Optional[str] = None,
+        material_max_words: int = DEFAULT_MATERIAL_MAX_WORDS,
+        stated_target_ratio: float = DEFAULT_STATED_TARGET_RATIO,
     ):
         self.path_manager = path_manager
         self.file_storage = file_storage
@@ -175,6 +202,8 @@ class NarrationGenerator:
         )
         self.llm_provider = llm_provider
         self._anchor_prompt = anchor_prompt
+        self._material_max_words = material_max_words
+        self._stated_target_ratio = stated_target_ratio
         self.clusterer = clusterer
         self.script_writer = script_writer
 
@@ -233,6 +262,21 @@ class NarrationGenerator:
             "blocks": [self._block_to_dict(b, content.quotes) for b in content.blocks],
             "episodes_covered": list(content.episode_ids_covered),
             "episodes_in_tail": list(content.episode_ids_in_tail),
+            # Spec #77 §6 — additive diagnostics; consumers read the
+            # header with ``.get`` so the schema version stays "phase2".
+            "quote_pool_size": content.stats.quote_pool_size,
+            "episodes_with_sidecar": content.stats.episodes_with_sidecar,
+            "narration_words": content.stats.narration_words,
+            "stated_word_target": content.stats.stated_word_target,
+            "noise_phrase_hits": content.stats.noise_phrase_hits,
+            "reaction_count": content.stats.reaction_count,
+            "reactions_missing": content.stats.reactions_missing,
+            "first_person_sentences": content.stats.first_person_sentences,
+            "reportage_sentences": content.stats.reportage_sentences,
+            "scare_quote_count": content.stats.scare_quote_count,
+            "sentence_len_p50": content.stats.sentence_len_p50,
+            "sentence_len_p90": content.stats.sentence_len_p90,
+            "bridges_unearned": content.stats.bridges_unearned,
         }
         # Spec #35 — go through FileStorage so artefacts land on the
         # configured backend (was Path.write_text, missing S3 entirely).
@@ -284,6 +328,7 @@ class NarrationGenerator:
                     episode=episode,
                     picked=picked,
                     brief=self._build_episode_brief(podcast, episode),
+                    has_sidecar=self.loader.sidecar_exists(podcast, episode),
                 )
             )
         kept_ids = self._enforce_quote_share_cap(
@@ -293,6 +338,16 @@ class NarrationGenerator:
         )
         for bucket in pipeline.buckets:
             bucket.picked = [q for q in bucket.picked if q.quote_id in kept_ids]
+        if pipeline.episodes_with_sidecar and not pipeline.quote_pool_size:
+            # Transcripts were there to quote from and nothing survived
+            # selection. Spec #77 §6: this must never be silent — it is
+            # the exact shape of the loader drift that produced quote-less
+            # briefings for months.
+            logger.warning(
+                "narration.quote_pool_empty",
+                episodes_total=len(pipeline.buckets),
+                episodes_with_sidecar=pipeline.episodes_with_sidecar,
+            )
 
     def _stage_theme_clustering(self, pipeline: _Pipeline) -> None:
         clusterer = self._theme_clusterer()
@@ -322,7 +377,12 @@ class NarrationGenerator:
         )
         if not result.blocks:
             pipeline.fallback_reason = self._summarise_failures(result.failures)
+            pipeline.fallback_detail = "; ".join(f.detail for f in result.failures) or None
             return None
+        pipeline.noise_phrase_hits = result.noise_phrase_hits
+        pipeline.stated_word_target = result.stated_word_target
+        pipeline.reaction_count = result.reaction_count
+        pipeline.reactions_missing = result.reactions_missing
         return result.blocks
 
     # --- Outputs --------------------------------------------------------
@@ -331,7 +391,7 @@ class NarrationGenerator:
         all_quotes = [q for b in pipeline.buckets for q in b.picked]
         episode_ids_covered, episode_ids_in_tail = self._covered_and_tail(pipeline.plan, pipeline)
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks,
             episode_ids_covered,
             episode_ids_in_tail,
@@ -361,6 +421,17 @@ class NarrationGenerator:
             episodes_covered=stats.episodes_covered,
             episodes_in_tail=stats.episodes_in_tail,
             quote_count=stats.quote_count,
+            quote_pool_size=stats.quote_pool_size,
+            episodes_with_sidecar=stats.episodes_with_sidecar,
+            narration_words=stats.narration_words,
+            stated_word_target=stats.stated_word_target,
+            noise_phrase_hits=stats.noise_phrase_hits,
+            reaction_count=stats.reaction_count,
+            reactions_missing=stats.reactions_missing,
+            first_person_sentences=stats.first_person_sentences,
+            reportage_sentences=stats.reportage_sentences,
+            scare_quote_count=stats.scare_quote_count,
+            bridges_unearned=stats.bridges_unearned,
             target_seconds=stats.target_duration_seconds,
             actual_seconds=round(stats.actual_duration_seconds, 1),
         )
@@ -372,7 +443,7 @@ class NarrationGenerator:
         episode_ids_in_tail = [b.episode.id for b in pipeline.buckets if not b.picked]
         blocks = self._render_skeleton_blocks(pipeline)
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks,
             episode_ids_covered,
             episode_ids_in_tail,
@@ -395,7 +466,7 @@ class NarrationGenerator:
             " instead._\n\n" + digest_content.markdown
         )
         stats = self._build_stats(
-            pipeline.cfg,
+            pipeline,
             blocks=(),
             episode_ids_covered=[],
             episode_ids_in_tail=episode_ids_in_tail,
@@ -404,8 +475,11 @@ class NarrationGenerator:
         logger.warning(
             "narration.fallback",
             reason=stats.fallback_reason,
+            detail=pipeline.fallback_detail,
             episodes_total=len(pipeline.buckets),
             quote_count=stats.quote_count,
+            quote_pool_size=stats.quote_pool_size,
+            episodes_with_sidecar=stats.episodes_with_sidecar,
         )
         return NarrationContent(
             blocks=[],
@@ -435,7 +509,13 @@ class NarrationGenerator:
         if self.llm_provider is None:
             return None
         prompt = self._anchor_prompt or load_default_anchor_prompt()
-        return ScriptWriter(self.llm_provider, system_prompt=prompt, wpm=DEFAULT_WPM)
+        return ScriptWriter(
+            self.llm_provider,
+            system_prompt=prompt,
+            wpm=DEFAULT_WPM,
+            stated_target_ratio=self._stated_target_ratio,
+            material_max_words=self._material_max_words,
+        )
 
     def _select_quotes_for_episode(
         self,
@@ -463,7 +543,8 @@ class NarrationGenerator:
 
     def _build_episode_brief(self, podcast: Podcast, episode: Episode) -> EpisodeBrief:
         facts = self.loader.load_episode_facts(podcast, episode)
-        gist = self._read_gist(episode)
+        summary = self._read_summary(episode)
+        takeaways, drama = self._writer_material(summary, episode)
         return EpisodeBrief(
             episode_id=episode.id,
             podcast_title=podcast.title,
@@ -471,8 +552,42 @@ class NarrationGenerator:
             guests=tuple(facts.guests) if facts and facts.guests else (),
             topics=tuple(facts.topics_keywords) if facts and facts.topics_keywords else (),
             sponsors=tuple(facts.ad_sponsors) if facts and facts.ad_sponsors else (),
-            gist=gist,
+            gist=extract_gist(summary) if summary else None,
+            takeaways=takeaways,
+            drama=drama,
         )
+
+    def _writer_material(self, summary: Optional[str], episode: Episode) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+        """Takeaways and drama rounds for the writer (spec #77 Phase 2b).
+
+        The summary is LLM output; the control-byte guard from spec #42
+        applies whenever such text is fed back to a model.
+        """
+        if not summary:
+            return (), ()
+        sections = extract_summary_sections(summary)
+        if sections is None:
+            return (), ()
+        removed_total = 0
+
+        def clean_all(items: Tuple[str, ...]) -> Tuple[str, ...]:
+            nonlocal removed_total
+            out = []
+            for item in items:
+                clean, removed = sanitize_text(item)
+                removed_total += removed
+                if clean.strip():
+                    out.append(clean.strip())
+            return tuple(out)
+
+        takeaways, drama = clean_all(sections.takeaways), clean_all(sections.drama)
+        if removed_total:
+            logger.warning(
+                "narration.material_sanitized",
+                episode_id=episode.id,
+                removed_count=removed_total,
+            )
+        return takeaways, drama
 
     def _read_summary(self, episode: Episode) -> Optional[str]:
         if not episode.summary_path:
@@ -487,28 +602,24 @@ class NarrationGenerator:
         except FileNotFoundError:
             return None
 
-    def _read_gist(self, episode: Episode) -> Optional[str]:
-        text = self._read_summary(episode)
-        if not text:
-            return None
-        return extract_gist(text)
-
     @staticmethod
     def _build_stats(
-        cfg: NarrationConfig,
+        pipeline: _Pipeline,
         blocks: Sequence[ScriptBlock],
         episode_ids_covered: Sequence[str],
         episode_ids_in_tail: Sequence[str],
         fallback_reason: Optional[str] = None,
     ) -> NarrationStats:
+        cfg = pipeline.cfg
         # Derive stats from the emitted blocks rather than the selected
         # pool: the LLM may drop a quote (or repeat one) and the stats
         # have to match what's actually in the script for downstream
         # TTS budgeting / UI display.
-        narration_words = sum(word_count(b.text) for b in blocks if b.kind == "narration" and b.text)
+        narration_words = sum(word_count(b.text) for b in blocks if b.kind in ("narration", "reaction") and b.text)
         quote_blocks = [b for b in blocks if b.kind == "quote"]
         quote_seconds = sum(b.duration_seconds for b in quote_blocks)
         narration_seconds = narration_words / cfg.wpm * 60.0 if cfg.wpm else 0.0
+        register = measure_register(blocks, pipeline.plan)
         return NarrationStats(
             target_duration_seconds=cfg.target_duration_seconds,
             actual_duration_seconds=narration_seconds + quote_seconds,
@@ -518,6 +629,18 @@ class NarrationGenerator:
             episodes_in_tail=len(episode_ids_in_tail),
             quote_count=len(quote_blocks),
             fallback_reason=fallback_reason,
+            quote_pool_size=pipeline.quote_pool_size,
+            episodes_with_sidecar=pipeline.episodes_with_sidecar,
+            noise_phrase_hits=pipeline.noise_phrase_hits,
+            stated_word_target=pipeline.stated_word_target,
+            reaction_count=pipeline.reaction_count,
+            reactions_missing=pipeline.reactions_missing,
+            first_person_sentences=register.first_person_sentences,
+            reportage_sentences=register.reportage_sentences,
+            scare_quote_count=register.scare_quotes,
+            sentence_len_p50=register.sentence_len_p50,
+            sentence_len_p90=register.sentence_len_p90,
+            bridges_unearned=register.bridges_unearned,
         )
 
     @staticmethod
@@ -630,9 +753,9 @@ class NarrationGenerator:
 
     @staticmethod
     def _block_to_dict(block: ScriptBlock, quotes: List[QuoteCandidate]) -> dict:
-        if block.kind == "narration":
+        if block.kind in ("narration", "reaction"):
             return {
-                "kind": "narration",
+                "kind": block.kind,
                 "section": block.section,
                 "text": block.text or "",
                 "duration_seconds": round(block.duration_seconds, 2),

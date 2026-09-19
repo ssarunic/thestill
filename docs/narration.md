@@ -31,6 +31,9 @@ twice (or theme clustering errors out), the JSON carries `mode:
 |----------|-------------|---------|
 | `NARRATION_ENABLED` | Master rollout switch. Off by default while fallback rates are measured. | `false` |
 | `NARRATION_DEFAULT_DURATION_SECONDS` | Target spoken runtime when the caller doesn't pass one (presets: 180/300/600). | `300` |
+| `NARRATION_ANCHOR_PROMPT` | Anchor voice: `conversational_anchor` (one narrator talking to a friend) or `newsroom_anchor` (measured news-anchor). Spec #77. | `conversational_anchor` |
+| `NARRATION_STATED_TARGET_RATIO` | Share of the narration word budget the writer is told to aim for; validation keeps the full budget. `0.5`–`1.0`. Spec #77. | `0.8` |
+| `NARRATION_MATERIAL_MAX_WORDS` | Per-episode cap on the summary material (Gist + Key Takeaways + The Drama) the writer sees. Spec #77. | `400` |
 | `LLM_PROVIDER` | Same provider as the rest of the pipeline (`anthropic` / `openai` / `gemini` / `mistral` / `ollama`). | (per `.env.example`) |
 
 The `thestill narrate` standalone command requires a configured
@@ -77,20 +80,82 @@ as `DEFAULT_*` module-level values.
 ## Anchor prompt
 
 Each anchor voice ships as its own Markdown file under
-[`thestill/services/narration_prompts/`](../thestill/services/narration_prompts/).
-v1 ships one default voice
-([`default_anchor.md`](../thestill/services/narration_prompts/default_anchor.md)) —
-informed, slightly wry, news-anchor pacing.
+[`thestill/services/narration_prompts/`](../thestill/services/narration_prompts/)
+and is picked by basename with `NARRATION_ANCHOR_PROMPT` (spec #77):
+
+| Voice | File | Character |
+|---|---|---|
+| `conversational_v2` (default) | [`conversational_v2.md`](../thestill/services/narration_prompts/conversational_v2.md) | One narrator with a point of view: one claim per show, a `reaction` block after every clip, a why-you'd-care line per segment, honest transitions (spec #77 Phase 2b) |
+| `conversational_anchor` | [`conversational_anchor.md`](../thestill/services/narration_prompts/conversational_anchor.md) | The Phase 2 conversational voice: spoken English, concrete beat first, story-shaped segments; kept as the A/B baseline |
+| `newsroom_anchor` | [`newsroom_anchor.md`](../thestill/services/narration_prompts/newsroom_anchor.md) | The original spec #33 voice: informed, slightly wry, news-anchor pacing |
 
 The prompt is **read on every run** (no in-process caching) so an
-operator can edit the file and re-run `thestill narrate` to A/B a new
-voice without restarting any long-running process. The file is small
-(under 4 KB) so the unconditional read is cheap.
+operator can edit the file and re-run `thestill narrate` to A/B a
+voice without restarting any long-running process. The files are small
+(under 8 KB) so the unconditional read is cheap.
 
-To ship a new voice, drop a sibling Markdown file next to
-`default_anchor.md` and pass its contents to `NarrationGenerator(...,
-anchor_prompt=...)`. A future spec promotes the voice picker to
-config; for now the indirection lives at the constructor.
+A voice file may contain the placeholder `{{noise_phrases}}`. The loader
+replaces it with the list in
+[`noise_phrases.py`](../thestill/services/narration_prompts/noise_phrases.py),
+the same list the script writer counts against to produce the
+`noise_phrase_hits` stat, so the instruction the model sees and the lint
+can never drift. Edit that file, not the prompt, to tune the ban list.
+
+To ship a new voice, drop a sibling `<name>.md` in the directory and set
+`NARRATION_ANCHOR_PROMPT=<name>`. Names are plain basenames (`[a-z0-9_]`);
+anything else, or a missing file, fails the server boot and the
+`narrate` command with the list of available voices. Programmatic callers
+can still pass `NarrationGenerator(..., anchor_prompt=...)` directly.
+
+### What the writer is given
+
+Besides the quote pool and the theme plan, each lead-segment episode
+carries one `claim` and, when the summary has a Drama section, one piece
+of `colour`: the Key Takeaway with the most content-token overlap with
+the segment angle (first on ties, gist sentence as fallback) and the
+Drama round closest to that claim, capped to whole sentences under
+`NARRATION_MATERIAL_MAX_WORDS`. Citation links, bold and scare-quoted
+terms are stripped first. Every quote in the pool is marked
+`fits_claim=yes|no` by overlap with that claim so the writer cues only
+clips that illustrate the point, or skips the clip for that show. Each
+segment also carries a `transition:` line: a hard cut or a permitted
+phrase for unrelated shows, or the clusterer's typed `relationship`
+(consensus / debate / contradiction / extension) to name plainly.
+
+The writer is told to aim for `NARRATION_STATED_TARGET_RATIO` × the
+narration word budget; validation still enforces the full budget's
+−50 % / +15 % window, which is what keeps the richer material from
+tipping runs into the link-index fallback.
+
+### Reaction blocks and soft validation
+
+A script block may be `narration`, `quote`, or `reaction`: one spoken
+sentence (≤ 30 words) directly after a quote cue, in the same section,
+rendered in italics under the clip. Reaction words count toward the
+budget and the leak check.
+
+Four rules are checked as **soft** failures: every clip is followed by a
+reaction, every segment has a first-person sentence, every segment
+addresses the listener ("why you'd care"), and no phrase from
+[`noise_phrases.py`](../thestill/services/narration_prompts/noise_phrases.py)
+appears. A soft miss earns the single retry with the miss named; if the
+retry still misses, the script is accepted and the miss recorded
+(`reactions_missing`, `noise_phrase_hits`). A retry that trips a hard
+rule (budget, leak, unknown quote id) falls back to the earlier
+soft-only attempt rather than to the link index. Hard rules keep their
+fallback semantics.
+
+### A/B two voices
+
+```bash
+python scripts/narration_ab.py --briefing <briefing-id> --runs 3 \
+  --voices conversational_anchor conversational_v2 --out data/narration_ab
+```
+
+Runs each voice on the same inbox window, computes the register metrics
+below plus two judged ones (ideas per episode, stakes lines) with the
+`EVAL_JUDGE_*` judge (falling back to the pipeline provider), prints a
+table with a merge-gate verdict per voice, and writes every script.
 
 ## Validation contract
 
@@ -156,7 +221,20 @@ is the canonical TTS contract. Schema version `phase2`:
     }
   ],
   "episodes_covered": ["ep-uuid-…"],
-  "episodes_in_tail":  []
+  "episodes_in_tail":  [],
+  "quote_pool_size": 6,          // spec #77: pool handed to the writer after the share cap
+  "episodes_with_sidecar": 7,    // episodes that had a transcript to quote from at all
+  "narration_words": 508,
+  "stated_word_target": 372,     // the number the writer was told (ratio × budget)
+  "noise_phrase_hits": 0,        // hits against narration_prompts/noise_phrases.py; a soft rule, never a fallback
+  "reaction_count": 4,           // reaction blocks emitted
+  "reactions_missing": 0,        // clips still without a reaction after the retry
+  "first_person_sentences": 5,   // register metrics (services/narration/register.py)
+  "reportage_sentences": 0,
+  "scare_quote_count": 0,
+  "sentence_len_p50": 15.0,
+  "sentence_len_p90": 22.0,
+  "bridges_unearned": 0          // segment openings that bridge to an untyped neighbour
 }
 ```
 
@@ -171,7 +249,12 @@ The runner emits two structured log events:
 
 - `narration.run` — once per invocation, with `mode`,
   `target_seconds`, `actual_seconds`, `quote_count`, `latency_ms`,
-  and `fallback_reason`.
+  `fallback_reason`, and the spec #77 pool and register fields
+  (`quote_pool_size`, `episodes_with_sidecar`, `narration_words`,
+  `stated_word_target`, `noise_phrase_hits`).
+- `narration.quote_pool_empty` (warning) — transcripts were present but
+  no quote survived selection. This is never silent: it is the shape of
+  the loader drift that produced quote-less briefings before spec #77.
 - `narration.fallback` — emitted when validation fails twice, with
   the comma-joined failure reasons.
 

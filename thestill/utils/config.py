@@ -445,6 +445,15 @@ class Config(BaseModel):
     # are measured in production (spec #33 §"Migration Strategy").
     narration_enabled: bool = False
     narration_default_duration_seconds: int = 300
+    # Spec #77 — anchor voice and writer tuning. ``narration_anchor_prompt``
+    # is the basename of a file under ``services/narration_prompts``
+    # (``conversational_v2`` | ``conversational_anchor`` | ``newsroom_anchor``); the stated-target
+    # ratio is the share of the word budget the writer is told (validation
+    # keeps the full budget); the material cap bounds per-episode summary
+    # text fed to the writer.
+    narration_anchor_prompt: str = "conversational_v2"
+    narration_stated_target_ratio: float = 0.8
+    narration_material_max_words: int = 400
 
     # When a user follows a podcast, deliver up to N most-recent published
     # episodes as the on-follow seed so the inbox is non-empty immediately.
@@ -806,6 +815,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),
+        "narration_anchor_prompt": os.getenv("NARRATION_ANCHOR_PROMPT", "conversational_v2").strip(),
+        "narration_stated_target_ratio": float(os.getenv("NARRATION_STATED_TARGET_RATIO", "0.8")),
+        "narration_material_max_words": int(os.getenv("NARRATION_MATERIAL_MAX_WORDS", "400")),
         "inbox_seed_on_follow": int(os.getenv("INBOX_SEED_ON_FOLLOW", "2")),
         "briefing_min_interval_seconds": int(os.getenv("BRIEFING_MIN_INTERVAL_SECONDS", str(6 * 60 * 60))),
         "briefing_readiness_grace_minutes": int(os.getenv("BRIEFING_READINESS_GRACE_MINUTES", "60")),
@@ -862,6 +874,19 @@ def load_config(env_file: Optional[str] = None) -> Config:
             "Set COOKIE_SECURE=true (the default) or switch ENVIRONMENT=development."
         )
 
+    # Spec #77 — writer tuning bounds. Below 0.5 the writer is told to
+    # undershoot the -50% validation floor; above 1.0 it is told to
+    # overshoot the ceiling it is validated against. A non-positive
+    # material cap would feed the writer nothing.
+    if not 0.5 <= config_data["narration_stated_target_ratio"] <= 1.0:
+        raise ValueError(
+            "NARRATION_STATED_TARGET_RATIO must be within 0.5..1.0; got "
+            f"{config_data['narration_stated_target_ratio']}"
+        )
+    if config_data["narration_material_max_words"] <= 0:
+        raise ValueError(f"NARRATION_MATERIAL_MAX_WORDS must be > 0; got {config_data['narration_material_max_words']}")
+    if not config_data["narration_anchor_prompt"]:
+        raise ValueError("NARRATION_ANCHOR_PROMPT must name a voice file, e.g. conversational_anchor")
     # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
     # for exactly 0; a negative TTL would silently mean the same thing,
     # and a non-positive request limit would refuse every request.

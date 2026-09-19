@@ -21,10 +21,7 @@ import pytest
 
 from thestill.core.facts_manager import FactsManager
 from thestill.models.facts import EpisodeFacts
-from thestill.services.narration.transcript_loader import (
-    TranscriptTurnLoader,
-    _classify_role,
-)
+from thestill.services.narration.transcript_loader import TranscriptTurnLoader, _classify_role, _resolve_speaker
 from thestill.utils.path_manager import PathManager
 
 
@@ -36,12 +33,12 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
     pm = PathManager(storage_path=str(data_root))
     pm.ensure_directories_exist()
 
-    # Mark the episode as having a sidecar so the loader resolves a path.
-    sidecar_md = "the-first-episode_abc_cleaned.md"
-    sample_episode.clean_transcript_path = sidecar_md
-    sample_episode.clean_transcript_json_path = sidecar_md
+    # Production shape (task_handlers): both paths are stored
+    # storage-relative as ``<podcast-slug>/<stem>.<ext>``.
+    sample_episode.clean_transcript_path = f"{sample_podcast.slug}/the-first-episode_abc_cleaned.md"
+    sample_episode.clean_transcript_json_path = f"{sample_podcast.slug}/the-first-episode_abc_cleaned.json"
 
-    sidecar_path = pm.clean_transcript_json_file(sample_podcast.slug, sidecar_md)
+    sidecar_path = pm.clean_transcript_file(sample_episode.clean_transcript_json_path)
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
 
     sidecar_path.write_text(
@@ -63,7 +60,7 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
                         "id": 1,
                         "start": 10.0,
                         "end": 30.0,
-                        "speaker": "SPEAKER_00",
+                        "speaker": "Jane Anchor",
                         "text": "Good morning, this is the show. Today we have a guest with us.",
                         "kind": "content",
                     },
@@ -71,7 +68,7 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
                         "id": 2,
                         "start": 30.5,
                         "end": 60.0,
-                        "speaker": "SPEAKER_01",
+                        "speaker": "Bob Guest",
                         "text": "Thanks for having me.",
                         "kind": "content",
                     },
@@ -88,7 +85,7 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
                         "id": 4,
                         "start": 130.0,
                         "end": 165.0,
-                        "speaker": "SPEAKER_00",
+                        "speaker": "Jane Anchor",
                         "text": "Continuing on after the break with our guest.",
                         "kind": "content",
                     },
@@ -96,7 +93,7 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
                         "id": 5,
                         "start": 600.0,
                         "end": 640.0,
-                        "speaker": "SPEAKER_01",
+                        "speaker": "Bob Guest",
                         "text": "Final thoughts before we wrap up the episode.",
                         "kind": "content",
                     },
@@ -121,9 +118,7 @@ def staged_storage(tmp_path: Path, sample_podcast, sample_episode):
     return pm, facts_manager
 
 
-def test_loader_returns_only_content_segments(
-    staged_storage, sample_podcast, sample_episode
-) -> None:
+def test_loader_returns_only_content_segments(staged_storage, sample_podcast, sample_episode) -> None:
     pm, fm = staged_storage
     loader = TranscriptTurnLoader(pm, fm)
     turns = loader.load(sample_podcast, sample_episode)
@@ -134,9 +129,7 @@ def test_loader_returns_only_content_segments(
     assert kinds_present == {1, 2, 4, 5}
 
 
-def test_loader_resolves_speakers_via_facts(
-    staged_storage, sample_podcast, sample_episode
-) -> None:
+def test_loader_resolves_speakers_via_facts(staged_storage, sample_podcast, sample_episode) -> None:
     pm, fm = staged_storage
     loader = TranscriptTurnLoader(pm, fm)
     turns = loader.load(sample_podcast, sample_episode)
@@ -147,9 +140,7 @@ def test_loader_resolves_speakers_via_facts(
     assert by_segment[2].speaker_role == "guest"
 
 
-def test_loader_flags_ad_adjacent_turns(
-    staged_storage, sample_podcast, sample_episode
-) -> None:
+def test_loader_flags_ad_adjacent_turns(staged_storage, sample_podcast, sample_episode) -> None:
     pm, fm = staged_storage
     loader = TranscriptTurnLoader(pm, fm)
     turns = loader.load(sample_podcast, sample_episode)
@@ -162,35 +153,27 @@ def test_loader_flags_ad_adjacent_turns(
     assert by_segment[2].is_ad_adjacent is True
 
 
-def test_loader_returns_empty_when_no_sidecar_path(
-    staged_storage, sample_podcast, sample_episode
-) -> None:
+def test_loader_returns_empty_when_no_sidecar_path(staged_storage, sample_podcast, sample_episode) -> None:
     pm, fm = staged_storage
     sample_episode.clean_transcript_json_path = None
     loader = TranscriptTurnLoader(pm, fm)
     assert loader.load(sample_podcast, sample_episode) == []
 
 
-def test_loader_returns_empty_when_sidecar_missing_on_disk(
-    staged_storage, sample_podcast, sample_episode
-) -> None:
+def test_loader_returns_empty_when_sidecar_missing_on_disk(staged_storage, sample_podcast, sample_episode) -> None:
     pm, fm = staged_storage
-    sample_episode.clean_transcript_json_path = "nonexistent_cleaned.md"
+    sample_episode.clean_transcript_json_path = f"{sample_podcast.slug}/nonexistent_cleaned.json"
     loader = TranscriptTurnLoader(pm, fm)
     assert loader.load(sample_podcast, sample_episode) == []
 
 
-def test_loader_returns_unresolved_role_when_facts_missing(
-    tmp_path: Path, sample_podcast, sample_episode
-) -> None:
+def test_loader_returns_unresolved_role_when_facts_missing(tmp_path: Path, sample_podcast, sample_episode) -> None:
     data_root = tmp_path / "data"
     data_root.mkdir()
     pm = PathManager(storage_path=str(data_root))
     pm.ensure_directories_exist()
-    sidecar = "the-first-episode_abc_cleaned.md"
-    sample_episode.clean_transcript_path = sidecar
-    sample_episode.clean_transcript_json_path = sidecar
-    path = pm.clean_transcript_json_file(sample_podcast.slug, sidecar)
+    sample_episode.clean_transcript_json_path = f"{sample_podcast.slug}/the-first-episode_abc_cleaned.json"
+    path = pm.clean_transcript_file(sample_episode.clean_transcript_json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -214,9 +197,105 @@ def test_loader_returns_unresolved_role_when_facts_missing(
     loader = TranscriptTurnLoader(pm, fm)
     turns = loader.load(sample_podcast, sample_episode)
     assert len(turns) == 1
-    # No facts file → no resolved name; selector will skip this turn.
+    # No facts file and a raw label → no resolved name; selector skips it.
     assert turns[0].speaker_name is None
     assert turns[0].speaker_role == "unknown"
+
+
+def _write_sidecar(pm: PathManager, podcast, episode, speakers: list[str]) -> Path:
+    """Write a minimal content-only sidecar at the production-shaped path."""
+    episode.clean_transcript_json_path = f"{podcast.slug}/{episode.slug}_cleaned.json"
+    path = pm.clean_transcript_file(episode.clean_transcript_json_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "episode_id": episode.id,
+                "segments": [
+                    {
+                        "id": i,
+                        "start": 100.0 * i,
+                        "end": 100.0 * i + 20.0,
+                        "speaker": speaker,
+                        "text": f"Turn {i} with some words in it.",
+                        "kind": "content",
+                    }
+                    for i, speaker in enumerate(speakers)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _fresh_storage(tmp_path: Path) -> PathManager:
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    pm = PathManager(storage_path=str(data_root))
+    pm.ensure_directories_exist()
+    return pm
+
+
+def test_loader_resolves_stored_path_without_doubling_slug(staged_storage, sample_podcast, sample_episode) -> None:
+    """Spec #77 §1a: the stored ``<slug>/<stem>.json`` must resolve as-is."""
+    pm, fm = staged_storage
+    loader = TranscriptTurnLoader(pm, fm)
+    resolved = loader._resolve_sidecar_path(sample_podcast, sample_episode)
+    assert resolved == pm.clean_transcript_file(sample_episode.clean_transcript_json_path)
+    assert resolved is not None and resolved.exists()
+    assert loader.sidecar_exists(sample_podcast, sample_episode) is True
+
+
+def test_sidecar_exists_false_without_file(staged_storage, sample_podcast, sample_episode) -> None:
+    pm, fm = staged_storage
+    sample_episode.clean_transcript_json_path = f"{sample_podcast.slug}/gone_cleaned.json"
+    assert TranscriptTurnLoader(pm, fm).sidecar_exists(sample_podcast, sample_episode) is False
+
+
+def test_loader_resolves_legacy_label_keyed_sidecar(tmp_path: Path, sample_podcast, sample_episode) -> None:
+    """Sidecars written before the cleaner substituted names still resolve."""
+    pm = _fresh_storage(tmp_path)
+    _write_sidecar(pm, sample_podcast, sample_episode, ["SPEAKER_00", "SPEAKER_01"])
+    fm = FactsManager(pm)
+    fm.save_episode_facts(
+        sample_podcast.slug,
+        sample_episode.slug,
+        EpisodeFacts(
+            episode_title=sample_episode.title,
+            speaker_mapping={"SPEAKER_00": "Jane Anchor (Host)", "SPEAKER_01": "Bob Guest (Guest)"},
+        ),
+    )
+    turns = TranscriptTurnLoader(pm, fm).load(sample_podcast, sample_episode)
+    assert [(t.speaker_name, t.speaker_role) for t in turns] == [("Jane Anchor", "host"), ("Bob Guest", "guest")]
+
+
+def test_loader_keeps_named_speaker_without_facts_row_eligible(tmp_path: Path, sample_podcast, sample_episode) -> None:
+    """A resolved name the facts file does not list is still a quotable speaker."""
+    pm = _fresh_storage(tmp_path)
+    _write_sidecar(pm, sample_podcast, sample_episode, ["Jane Anchor", "Greg Jackson", "SPEAKER_07"])
+    fm = FactsManager(pm)
+    fm.save_episode_facts(
+        sample_podcast.slug,
+        sample_episode.slug,
+        EpisodeFacts(episode_title=sample_episode.title, speaker_mapping={"SPEAKER_00": "Jane Anchor (Host)"}),
+    )
+    turns = TranscriptTurnLoader(pm, fm).load(sample_podcast, sample_episode)
+    assert [(t.speaker_name, t.speaker_role) for t in turns] == [
+        ("Jane Anchor", "host"),
+        ("Greg Jackson", "unknown"),
+        (None, "unknown"),  # raw label facts missed: canary, never quoted
+    ]
+
+
+def test_resolve_speaker_prefers_label_then_name() -> None:
+    by_label = {"SPEAKER_00": "Jane Anchor (Host)"}
+    by_name = {"Jane Anchor": "Jane Anchor (Host)"}
+    assert _resolve_speaker("SPEAKER_00", by_label, by_name) == ("Jane Anchor", "host")
+    assert _resolve_speaker("Jane Anchor", by_label, by_name) == ("Jane Anchor", "host")
+    assert _resolve_speaker("Someone Else", by_label, by_name) == ("Someone Else", "unknown")
+    assert _resolve_speaker("SPEAKER_03", by_label, by_name) == (None, "unknown")
+    assert _resolve_speaker(None, by_label, by_name) == (None, "unknown")
 
 
 def test_classify_role_recognises_host_guest_unknown() -> None:

@@ -21,7 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple
 
-ScriptBlockKind = Literal["narration", "quote"]
+# ``reaction`` (spec #77 Phase 2b): one spoken sentence that directly follows
+# a quote cue and shares its section. Structural so the validator can
+# require it, the renderer can set it apart, and TTS can pause on it.
+ScriptBlockKind = Literal["narration", "quote", "reaction"]
+# Spoken-sentence ceiling for a reaction block; longer means the model
+# resumed narrating instead of reacting.
+REACTION_MAX_WORDS = 30
 SpeakerRole = Literal["host", "guest", "unknown"]
 NarrationMode = Literal["narrated", "fallback"]
 
@@ -88,6 +94,29 @@ class NarrationStats:
     episodes_in_tail: int
     quote_count: int
     fallback_reason: Optional[str] = None
+    # Spec #77 §6 — pool diagnostics. ``quote_pool_size`` is the pool
+    # handed to the writer after the share cap; ``episodes_with_sidecar``
+    # is how many episodes had a transcript to quote from at all. A zero
+    # pool with sidecars present is the silent failure that hid the
+    # loader drift for months, so it is logged and persisted.
+    quote_pool_size: int = 0
+    episodes_with_sidecar: int = 0
+    # Spec #77 §3/§4 — register metric (hits against the shared noise
+    # list; a stat, never a validation failure) and the word target the
+    # writer was told, which sits below the validation ceiling.
+    noise_phrase_hits: int = 0
+    stated_word_target: int = 0
+    # Spec #77 Phase 2b — reaction blocks emitted, and quote cues that were
+    # still missing one after the retry (accepted, not failed).
+    reaction_count: int = 0
+    reactions_missing: int = 0
+    # Deterministic register metrics (``register.measure_register``).
+    first_person_sentences: int = 0
+    reportage_sentences: int = 0
+    scare_quote_count: int = 0
+    sentence_len_p50: float = 0.0
+    sentence_len_p90: float = 0.0
+    bridges_unearned: int = 0
 
 
 @dataclass
@@ -138,6 +167,13 @@ class EpisodeBrief:
     topics: Tuple[str, ...] = ()
     sponsors: Tuple[str, ...] = ()
     gist: Optional[str] = None
+    # Spec #77 Phase 2b — Key Takeaways bullets and The Drama rounds, one
+    # string each, de-marked and unquoted. The script writer picks one
+    # claim and one piece of colour per episode from these against the
+    # segment angle (``claim_selector``); the theme clusterer keeps
+    # working from ``gist`` so its call stays cheap.
+    takeaways: Tuple[str, ...] = ()
+    drama: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -153,6 +189,11 @@ class Segment:
     angle: str
     episode_ids: Tuple[str, ...]
     rank: int
+    # Spec #77 Phase 2b — how the episodes in a multi-episode segment relate
+    # (``consensus`` / ``debate`` / ``contradiction`` / ``extension``), or
+    # ``none`` when they were merely co-grouped or the segment has one
+    # episode. The writer may bridge between shows only when this is set.
+    relationship: str = "none"
 
 
 @dataclass(frozen=True)
@@ -181,3 +222,7 @@ class ValidationFailure:
 
     reason: str
     detail: str
+    # Soft failures trigger the single retry but never the fallback: on the
+    # last attempt the script is accepted and the miss is recorded as a
+    # stat (spec #77 Phase 2b, reaction rule).
+    soft: bool = False

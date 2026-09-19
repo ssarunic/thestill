@@ -15,20 +15,15 @@
 """Tests for the anchor-prose script writer (spec #33 Phase 2 stage 4)."""
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Type
 
 import pytest
 from pydantic import BaseModel
 
-from thestill.services.narration.models import (
-    EpisodeBrief,
-    QuoteCandidate,
-    Segment,
-    ThemePlan,
-)
-from thestill.services.narration.script_writer import ScriptResult, ScriptWriter
-
 from tests.conftest import MockLLMProvider
+from thestill.services.narration.models import EpisodeBrief, QuoteCandidate, Segment, ThemePlan
+from thestill.services.narration.script_writer import ScriptResult, ScriptWriter
 
 _SYSTEM_PROMPT = "TEST ANCHOR PROMPT"
 
@@ -104,6 +99,7 @@ def _good_response(
     narration_words: int = 100,
     cue_quote: bool = True,
     quote_id: str = "q1",
+    reaction: str | None = "Which, honestly, I think is the bit you'd want to steal.",
 ) -> dict:
     body = (" ".join(["word"] * narration_words)).strip()
     blocks: List[Dict[str, Any]] = [
@@ -111,6 +107,8 @@ def _good_response(
     ]
     if cue_quote:
         blocks.append({"kind": "quote", "section": "segment-1", "quote_id": quote_id})
+        if reaction:
+            blocks.append({"kind": "reaction", "section": "segment-1", "text": reaction})
     return {"blocks": blocks}
 
 
@@ -216,3 +214,259 @@ def test_zero_budget_short_circuits_without_calling_llm() -> None:
     assert provider.call_count == 0
     assert result.blocks == ()
     assert any(f.reason == "empty_blocks" for f in result.failures)
+
+
+def test_segment_prompt_carries_one_claim_and_colour_and_falls_back_to_gist() -> None:
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    briefs = {
+        "ep-1": EpisodeBrief(
+            episode_id="ep-1",
+            podcast_title="Pod",
+            episode_title="Lead Episode",
+            gist="Compact gist.",
+            takeaways=("AI revenue is real.", "The angle point about shipping."),
+            drama=("Round 1: The row over shipping. Tense.",),
+        )
+    }
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=briefs, quotes=[_quote()], narration_word_budget=100
+    )
+    user_prompt = provider.last_messages[1]["content"]
+    assert "claim: The angle point about shipping." in user_prompt  # picked against the angle
+    assert "colour: Round 1: The row over shipping." in user_prompt
+    assert "AI revenue is real." not in user_prompt  # the other takeaway is dropped, not listed
+    assert "gist: Compact gist." not in user_prompt
+    assert "transition: these shows are not related; do not bridge" in user_prompt
+
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "claim: Compact gist." in provider.last_messages[1]["content"]  # gist fallback becomes the claim
+
+
+def test_segment_prompt_names_a_typed_relationship() -> None:
+    from thestill.services.narration.models import Segment, ThemePlan
+
+    plan = ThemePlan(
+        segments=(
+            Segment(theme="T", angle="two shows disagree", episode_ids=("ep-1", "ep-2"), rank=1, relationship="debate"),
+        ),
+        tail_ids=(),
+    )
+    briefs = {
+        "ep-1": EpisodeBrief(episode_id="ep-1", podcast_title="A", episode_title="One", gist="One gist."),
+        "ep-2": EpisodeBrief(episode_id="ep-2", podcast_title="B", episode_title="Two", gist="Two gist."),
+    }
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=plan, briefs_by_id=briefs, quotes=[_quote()], narration_word_budget=100
+    )
+    assert "transition: relationship=debate: name it plainly" in provider.last_messages[1]["content"]
+
+
+def test_stated_target_is_below_the_validated_budget() -> None:
+    """Spec #77 §4: the model hears 80 % of the budget; validation keeps the ceiling."""
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "aim for 80 words" in provider.last_messages[1]["content"]
+    # 100 narration + 11 reaction words = 111 ≤ 115: over the stated target, under the ceiling.
+    assert result.failures == () and result.stated_word_target == 80
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT, stated_target_ratio=1.0).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert "aim for 100 words" in provider.last_messages[1]["content"]
+
+
+def test_retry_restates_the_stated_target() -> None:
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, quote_id="q-nope"), _good_response(narration_words=100)]
+    )
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    retry_prompt = provider.last_messages[1]["content"]
+    assert "RETRY" in retry_prompt and "Aim for 80 narration words" in retry_prompt
+
+
+def test_noise_phrase_hits_earn_one_retry_then_are_counted_not_failed() -> None:
+    body = "The landscape is shifting, and it's worth noting that, notably, nobody can navigate it. " * 3
+    response = {"blocks": [{"kind": "narration", "section": "opener", "text": body}]}
+    provider = _ScriptedProvider([response, response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[], narration_word_budget=50
+    )
+    assert provider.call_count == 2 and result.failures == ()
+    assert result.noise_phrase_hits == 12  # four phrases × three repeats
+
+
+def test_control_bytes_in_model_output_are_stripped() -> None:
+    body = "So here is\x00 the thing. " + " ".join(["word"] * 60)
+    response = {"blocks": [{"kind": "narration", "section": "opener", "text": body}]}
+    provider = _ScriptedProvider([response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[], narration_word_budget=60
+    )
+    assert result.failures == ()
+    assert "\x00" not in result.blocks[0].text and result.blocks[0].text.startswith("So here is the thing.")
+
+
+def test_quote_without_reaction_retries_then_is_accepted_with_a_miss_recorded() -> None:
+    """Spec #77 Phase 2b: the reaction rule earns the retry, never the fallback."""
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, reaction=None), _good_response(narration_words=100, reaction=None)]
+    )
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2
+    assert "reaction_missing" in provider.last_messages[1]["content"]
+    assert result.failures == () and result.blocks  # accepted, not fallen back
+    assert result.reactions_missing == 1 and result.reaction_count == 0
+
+
+def test_reaction_on_retry_clears_the_miss() -> None:
+    provider = _ScriptedProvider(
+        [_good_response(narration_words=100, reaction=None), _good_response(narration_words=100)]
+    )
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2
+    assert result.reactions_missing == 0 and result.reaction_count == 1
+    assert [b.kind for b in result.blocks] == ["narration", "quote", "reaction"]
+
+
+def test_overlong_or_misplaced_reaction_is_soft() -> None:
+    long_reaction = " ".join(["word"] * 40)
+    response = _good_response(narration_words=60, reaction=long_reaction)  # 100 spoken words total
+    response["blocks"][-1]["section"] = "segment-2"
+    provider = _ScriptedProvider([response, response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert provider.call_count == 2 and result.blocks
+    retry = provider.last_messages[1]["content"]
+    assert "reaction_too_long" in retry and "reaction_section_mismatch" in retry
+
+
+def test_hard_failure_still_falls_back_even_when_reaction_is_fine() -> None:
+    provider = _ScriptedProvider([_good_response(narration_words=200), _good_response(narration_words=200)])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert result.blocks == () and [f.reason for f in result.failures] == ["word_budget_high"]
+
+
+def test_reaction_words_count_toward_budget_and_leak_check() -> None:
+    leak = _quote().text
+    response = _good_response(narration_words=60, reaction=leak)
+    provider = _ScriptedProvider([response, response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=100
+    )
+    assert result.blocks == () and "verbatim_leak" in [f.reason for f in result.failures]
+
+
+def _spoken(section: str, text: str, kind: str = "narration") -> dict:
+    return {"kind": kind, "section": section, "text": text}
+
+
+def _v2_response(*, first_person: bool = True, stakes: bool = True, noise: bool = False, quotes: bool = True) -> dict:
+    seg = "Tom says the fear never goes away. " + ("I think that's right. " if first_person else "That is right. ")
+    if noise:
+        seg += "It's a reality check. "
+    blocks = [_spoken("opener", "So, a thing happened."), _spoken("segment-1", seg)]
+    if quotes:
+        blocks.append({"kind": "quote", "section": "segment-1", "quote_id": "q1"})
+        blocks.append(_spoken("segment-1", "Which, honestly, is the bit worth stealing.", kind="reaction"))
+    blocks.append(
+        _spoken(
+            "segment-1",
+            "You'd care because it makes the violence feel human." if stakes else "It makes the violence feel human.",
+        )
+    )
+    blocks.append(_spoken("signoff", "Catch you tomorrow."))
+    return {"blocks": blocks}
+
+
+def test_register_rules_are_soft_and_named_in_the_retry() -> None:
+    bad = _v2_response(first_person=False, stakes=False, noise=True)
+    provider = _ScriptedProvider([bad, _v2_response()])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    retry = provider.last_messages[1]["content"]
+    for reason in ("segment_no_first_person", "segment_no_stakes", "noise_phrases"):
+        assert reason in retry
+    assert "'a reality check'" in retry
+    assert result.failures == () and result.blocks and provider.call_count == 2
+
+
+def test_register_rules_never_fall_back() -> None:
+    bad = _v2_response(first_person=False, stakes=False, noise=True)
+    provider = _ScriptedProvider([bad, bad])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    assert result.blocks and result.failures == ()
+    assert result.noise_phrase_hits == 1
+
+
+def test_scare_quotes_are_dropped_from_model_text() -> None:
+    response = _v2_response()
+    response["blocks"][1]["text"] += " He calls it the 'one in, one out' policy and it's 'fine'."
+    provider = _ScriptedProvider([response])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=50
+    )
+    text = result.blocks[1].text
+    assert "the one in, one out policy and it's fine." in text
+    assert re.search(r"(?<!\w)'|'(?!\w)", text) is None  # apostrophes inside words stay
+
+
+def test_soft_only_first_attempt_wins_over_a_retry_that_hard_fails() -> None:
+    """The old voice overshot while fixing a soft miss; keep the usable first attempt."""
+    soft_only = _v2_response(first_person=False)  # only segment_no_first_person
+    overshoot = _good_response(narration_words=200)  # word_budget_high on a 40-word budget
+    provider = _ScriptedProvider([soft_only, overshoot])
+    result = ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=_briefs(), quotes=[_quote()], narration_word_budget=40
+    )
+    assert provider.call_count == 2
+    assert result.failures == () and result.blocks
+    assert result.blocks[1].text.startswith("Tom says the fear")  # the first attempt, not the overshoot
+
+
+def test_quote_pool_marks_whether_each_quote_fits_the_claim() -> None:
+    from thestill.services.narration.models import QuoteCandidate
+
+    fitting = _quote()  # text about shipping / pipelines; the claim below shares its tokens
+    off_topic = QuoteCandidate(
+        quote_id="q2",
+        episode_id="ep-1",
+        podcast_title="Pod",
+        speaker="Someone",
+        speaker_role="guest",
+        text="Completely unrelated words about breakfast cereal and the weather in Lisbon.",
+        start_seconds=10.0,
+        duration_seconds=8.0,
+    )
+    briefs = {
+        "ep-1": EpisodeBrief(
+            episode_id="ep-1",
+            podcast_title="Pod",
+            episode_title="Lead Episode",
+            takeaways=(fitting.text,),
+        )
+    }
+    provider = _ScriptedProvider([_good_response(narration_words=100)])
+    ScriptWriter(provider, _SYSTEM_PROMPT).write(
+        plan=_plan(), briefs_by_id=briefs, quotes=[fitting, off_topic], narration_word_budget=100
+    )
+    user_prompt = provider.last_messages[1]["content"]
+    assert "quote_id=q1 " in user_prompt and "fits_claim=yes" in user_prompt
+    assert "quote_id=q2 " in user_prompt and user_prompt.count("fits_claim=no") == 1
