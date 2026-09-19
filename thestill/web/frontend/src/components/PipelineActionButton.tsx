@@ -172,33 +172,32 @@ function RetryCountdown({
   lastError,
   onCancel,
 }: {
-  nextRetryAt: string
+  nextRetryAt: string | null
   retryCount: number
   maxRetries: number
   lastError: string | null
   onCancel: () => void
 }) {
-  const [secondsRemaining, setSecondsRemaining] = useState(0)
+  // The countdown is derived from a ticking clock rather than stored, so a
+  // new ``nextRetryAt`` shows the right value on the same render.
+  const [now, setNow] = useState(() => Date.now())
+  const retryTime = nextRetryAt ? new Date(nextRetryAt).getTime() : NaN
+  const secondsRemaining = Number.isNaN(retryTime)
+    ? 0
+    : Math.max(0, Math.floor((retryTime - now) / 1000))
 
   useEffect(() => {
-    const calculateRemaining = () => {
-      const retryTime = new Date(nextRetryAt).getTime()
-      const now = Date.now()
-      return Math.max(0, Math.floor((retryTime - now) / 1000))
-    }
-
-    setSecondsRemaining(calculateRemaining())
-
+    if (Number.isNaN(retryTime)) return
     const interval = setInterval(() => {
-      const remaining = calculateRemaining()
-      setSecondsRemaining(remaining)
-      if (remaining <= 0) {
+      const tick = Date.now()
+      setNow(tick)
+      if (tick >= retryTime) {
         clearInterval(interval)
       }
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [nextRetryAt])
+  }, [retryTime])
 
   return (
     <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
@@ -244,7 +243,7 @@ export default function PipelineActionButton({
 }: PipelineActionButtonProps) {
   const { isAdmin } = useAuth()
   const [error, setError] = useState<string | null>(null)
-  const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [progressState, setProgressState] = useState<{ taskId: string; update: ProgressUpdate } | null>(null)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
@@ -270,7 +269,7 @@ export default function PipelineActionButton({
   const isPipelineRunning = tasks.some(
     (t) =>
       (t.status === 'pending' || t.status === 'processing') &&
-      (t as any).metadata?.run_full_pipeline
+      t.metadata?.run_full_pipeline
   )
 
   // Close dropdown when clicking outside
@@ -284,11 +283,20 @@ export default function PipelineActionButton({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Progress is tagged with the task it belongs to, so it disappears on its
+  // own once that task is no longer the active transcribe task.
+  const transcribingTaskId =
+    activeTask && activeTask.stage === 'transcribe' && activeTask.status === 'processing'
+      ? activeTask.id
+      : null
+  const progress =
+    progressState && progressState.taskId === transcribingTaskId ? progressState.update : null
+
   // Connect to SSE when there's an active transcribe task
   useEffect(() => {
-    if (activeTask && activeTask.stage === 'transcribe' && activeTask.status === 'processing') {
+    if (transcribingTaskId) {
       // Connect to SSE for progress updates
-      const taskId = activeTask.id
+      const taskId = transcribingTaskId
       let reconnectAttempts = 0
       const maxReconnectAttempts = 5
       let eventSource: EventSource | null = null
@@ -300,7 +308,7 @@ export default function PipelineActionButton({
         eventSource.onmessage = (event) => {
           try {
             const data: ProgressUpdate = JSON.parse(event.data)
-            setProgress(data)
+            setProgressState({ taskId, update: data })
             // Reset reconnect attempts on successful message
             reconnectAttempts = 0
 
@@ -309,7 +317,7 @@ export default function PipelineActionButton({
               eventSource?.close()
               eventSourceRef.current = null
               // Clear progress after a short delay
-              setTimeout(() => setProgress(null), 2000)
+              setTimeout(() => setProgressState(null), 2000)
             }
           } catch (e) {
             console.error('Failed to parse SSE data:', e)
@@ -337,11 +345,8 @@ export default function PipelineActionButton({
         eventSource?.close()
         eventSourceRef.current = null
       }
-    } else {
-      // Clear progress when no active transcribe task
-      setProgress(null)
     }
-  }, [activeTask?.id, activeTask?.stage, activeTask?.status])
+  }, [transcribingTaskId])
 
   // Check for failed task for the NEXT stage (the action we're about to take)
   // Only show if there's no completed task for that stage that supersedes it
@@ -420,7 +425,7 @@ export default function PipelineActionButton({
 
   // Show retry countdown if task is scheduled for retry
   if (retryScheduledTask) {
-    const task = retryScheduledTask as any
+    const task = retryScheduledTask
     return (
       <div className="flex flex-col gap-2">
         <RetryCountdown

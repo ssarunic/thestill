@@ -41,7 +41,14 @@ interface FlatItem {
   flatIndex: number
 }
 
+// The shell mounts the content only while open, so the query and selection
+// start fresh on every open.
 export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
+  if (!isOpen) return null
+  return <CommandBarContent onClose={onClose} />
+}
+
+function CommandBarContent({ onClose }: Pick<CommandBarProps, 'onClose'>) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -56,23 +63,19 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
   )
   const { data, isFetching, isError, error } = useQuickSearch(parsed.text, searchOptions)
 
-  // Reset selection whenever the query changes — selecting the first
-  // hit by default is the expected typeahead UX.
-  useEffect(() => {
+  // Reset selection whenever the query or its results change — selecting
+  // the first hit by default is the expected typeahead UX. Adjusted during
+  // render rather than in an effect, so there is no extra commit.
+  const [selectionKey, setSelectionKey] = useState({ query, data })
+  if (selectionKey.query !== query || selectionKey.data !== data) {
+    setSelectionKey({ query, data })
     setSelected(0)
-  }, [query, data])
+  }
 
-  // Focus + clear when the modal opens; clear state on close so the
-  // next open starts fresh.
   useEffect(() => {
-    if (isOpen) {
-      const id = window.setTimeout(() => inputRef.current?.focus(), 0)
-      return () => window.clearTimeout(id)
-    }
-    setQuery('')
-    setSelected(0)
-    return undefined
-  }, [isOpen])
+    const id = window.setTimeout(() => inputRef.current?.focus(), 0)
+    return () => window.clearTimeout(id)
+  }, [])
 
   // Build a flat list of items so ↑/↓ can walk across groups.
   const flat: FlatItem[] = useMemo(() => {
@@ -137,7 +140,6 @@ export default function CommandBar({ isOpen, onClose }: CommandBarProps) {
     el?.scrollIntoView({ block: 'nearest' })
   }, [selected])
 
-  if (!isOpen) return null
 
   const totalHits = flat.length
   const trimmed = parsed.text.trim()

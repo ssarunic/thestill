@@ -66,27 +66,31 @@ export function useKaraokeActiveWordIdx(
   // one frame before the rAF catches up.
   // `readUpTo` (the visual) leads the audio by HIGHLIGHT_LEAD_SECONDS;
   // `activeIdx` (aria-current) tracks the actual acoustic position.
-  const [cursor, setCursor] = useState<KaraokeWordCursor>(() => {
+  const seed = (): KaraokeWordCursor => {
     if (!words || words.length === 0) return { activeIdx: -1, readUpTo: -1 }
     const t = getCurrentTime()
     return {
       activeIdx: findActiveWordIndex(words, t, offset),
       readUpTo: findReadUpToIndex(words, t + HIGHLIGHT_LEAD_SECONDS, offset),
     }
-  })
+  }
+  const [cursor, setCursor] = useState<KaraokeWordCursor>(seed)
+
+  // Re-seed when the inputs change. When the active segment swaps, the
+  // cursor carried over from the previous segment is wrong for this
+  // segment's word list. Adjusted during render so the swap never paints
+  // the stale cursor.
+  const [seededFor, setSeededFor] = useState({ words, offset })
+  if (seededFor.words !== words || seededFor.offset !== offset) {
+    setSeededFor({ words, offset })
+    setCursor(seed())
+  }
 
   useEffect(() => {
-    if (!words || words.length === 0) {
-      setCursor({ activeIdx: -1, readUpTo: -1 })
-      return
-    }
-    // Sync once on deps change. When the active segment swaps, the
-    // cursor carried over from the previous segment is wrong until
-    // we re-seed it from this segment's word list.
+    if (!words || words.length === 0) return
     const t0 = getCurrentTime()
     let lastActive = findActiveWordIndex(words, t0, offset)
     let lastReadUpTo = findReadUpToIndex(words, t0 + HIGHLIGHT_LEAD_SECONDS, offset)
-    setCursor({ activeIdx: lastActive, readUpTo: lastReadUpTo })
 
     let handle = 0
     const tick = () => {

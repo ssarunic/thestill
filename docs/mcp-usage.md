@@ -1173,6 +1173,27 @@ All 5 episodes are now fully processed! You can read any of them using:
 
 ## Troubleshooting
 
+### "Internal error (ref ab12cd34)"
+
+Tools and resources never relay raw exception text to the client. Messages
+written for the caller ("Podcast not found: …", scope refusals, rate limits)
+are shown as they are; anything unexpected is replaced by a generic message
+carrying an eight-character reference. The full error is in the server log
+under that reference:
+
+```bash
+# JSON logs (production)
+docker compose logs thestill | jq 'select(.event == "mcp_internal_error" and .error_ref == "ab12cd34")'
+
+# stdio server: logs go to stderr, which Claude Desktop writes to its MCP log
+grep ab12cd34 ~/Library/Logs/Claude/mcp-server-thestill.log
+```
+
+The log line has `operation` (the tool name), `error_type`, `error`, the
+traceback and, where known, `episode_id`. With `ENVIRONMENT=development` the
+exception text is included in the client message as well, matching the web
+API's behaviour.
+
 ### MCP Server Not Connecting
 
 1. **Check logs:**
