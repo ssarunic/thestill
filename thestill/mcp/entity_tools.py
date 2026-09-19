@@ -41,7 +41,7 @@ from typing import Any, List, Optional
 
 from mcp.types import TextContent, Tool
 
-from ..repositories.sqlite_entity_repository import MentionContext, SqliteEntityRepository
+from ..repositories.entity_repository import EntityRepository, MentionContext
 from ..search.citation import build_citation_rows
 from ..utils.datetime_utils import now_utc
 
@@ -230,7 +230,7 @@ def entity_tool_definitions() -> List[Tool]:
 def dispatch_entity_tool(
     name: str,
     arguments: Any,
-    repository: SqliteEntityRepository,
+    repository: EntityRepository,
 ) -> Optional[List[TextContent]]:
     """Handle one of the spec #28 §1.8 tools.
 
@@ -259,7 +259,7 @@ def dispatch_entity_tool(
 # ---------------------------------------------------------------------------
 
 
-def _handle_find_mentions(args: dict, repo: SqliteEntityRepository) -> List[TextContent]:
+def _handle_find_mentions(args: dict, repo: EntityRepository) -> List[TextContent]:
     raw = args.get("entity")
     if not raw:
         return _err("'entity' is required")
@@ -284,7 +284,7 @@ def _handle_find_mentions(args: dict, repo: SqliteEntityRepository) -> List[Text
     )
 
 
-def _handle_list_quotes_by(args: dict, repo: SqliteEntityRepository) -> List[TextContent]:
+def _handle_list_quotes_by(args: dict, repo: EntityRepository) -> List[TextContent]:
     speaker = args.get("speaker")
     if not speaker:
         return _err("'speaker' is required")
@@ -304,7 +304,7 @@ def _handle_list_quotes_by(args: dict, repo: SqliteEntityRepository) -> List[Tex
     return _ok({"speaker": speaker, "topic_entity_id": topic_id, "results": rows})
 
 
-def _handle_get_episode_clip(args: dict, repo: SqliteEntityRepository) -> List[TextContent]:
+def _handle_get_episode_clip(args: dict, repo: EntityRepository) -> List[TextContent]:
     episode_id = args.get("episode_id")
     start_ms = args.get("start_ms")
     if episode_id is None or start_ms is None:
@@ -326,7 +326,7 @@ def _handle_get_episode_clip(args: dict, repo: SqliteEntityRepository) -> List[T
     return _ok({"result": row.model_dump(mode="json")})
 
 
-def _handle_get_entity(args: dict, repo: SqliteEntityRepository) -> List[TextContent]:
+def _handle_get_entity(args: dict, repo: EntityRepository) -> List[TextContent]:
     id_or_name = args.get("id_or_name")
     if not id_or_name:
         return _err("'id_or_name' is required")
@@ -355,7 +355,7 @@ def _handle_get_entity(args: dict, repo: SqliteEntityRepository) -> List[TextCon
     )
 
 
-def _handle_list_episodes_by_entity(args: dict, repo: SqliteEntityRepository) -> List[TextContent]:
+def _handle_list_episodes_by_entity(args: dict, repo: EntityRepository) -> List[TextContent]:
     names = args.get("has_entity") or []
     if not names:
         return _err("'has_entity' must contain at least one entity")
@@ -371,47 +371,29 @@ def _handle_list_episodes_by_entity(args: dict, repo: SqliteEntityRepository) ->
     if unresolved:
         return _ok({"results": [], "unresolved_names": unresolved})
 
-    # AND-intersection on episode_id: episodes that contain ALL the
-    # requested entities (one row per resolved mention; dedupe + count).
-    placeholders = ",".join("?" * len(resolved_ids))
-    sql = f"""
-        SELECT e.id, e.title, e.pub_date, p.id AS podcast_id, p.title AS podcast_title,
-               p.slug AS podcast_slug
-        FROM episodes e
-        JOIN podcasts p ON e.podcast_id = p.id
-        WHERE e.id IN (
-            SELECT episode_id FROM entity_mentions
-            WHERE resolution_status = 'resolved' AND entity_id IN ({placeholders})
-            GROUP BY episode_id
-            HAVING COUNT(DISTINCT entity_id) = ?
-        )
-    """
-    params: list = list(resolved_ids) + [len(resolved_ids)]
-    if args.get("podcast_id"):
-        sql += " AND p.id = ?"
-        params.append(args["podcast_id"])
-    date_range = _parse_date_range(args)
-    if date_range is not None:
-        sql += " AND e.pub_date BETWEEN ? AND ?"
-        params.append(date_range[0].isoformat())
-        params.append(date_range[1].isoformat())
-    sql += " ORDER BY e.pub_date DESC LIMIT ?"
-    params.append(int(args.get("limit", 50)))
-    with repo._get_connection() as conn:
-        rows = conn.execute(sql, params).fetchall()
+    # AND-intersection: episodes containing ALL the requested entities.
+    # Through the repository, not raw SQL here — this handler used to reach
+    # into the SQLite repository's private connection, which the Postgres
+    # repository does not have, so the tool failed on every Postgres install.
+    episodes = repo.list_episodes_with_all_entities(
+        resolved_ids,
+        podcast_id=args.get("podcast_id"),
+        date_range=_parse_date_range(args),
+        limit=int(args.get("limit", 50)),
+    )
     return _ok(
         {
             "matched_entity_ids": resolved_ids,
             "results": [
                 {
-                    "episode_id": row["id"],
-                    "episode_title": row["title"],
-                    "published_at": row["pub_date"],
-                    "podcast_id": row["podcast_id"],
-                    "podcast_title": row["podcast_title"],
-                    "podcast_slug": row["podcast_slug"],
+                    "episode_id": ep.episode_id,
+                    "episode_title": ep.episode_title,
+                    "published_at": ep.episode_pub_date.isoformat() if ep.episode_pub_date else None,
+                    "podcast_id": ep.podcast_id,
+                    "podcast_title": ep.podcast_title,
+                    "podcast_slug": ep.podcast_slug,
                 }
-                for row in rows
+                for ep in episodes
             ],
         }
     )

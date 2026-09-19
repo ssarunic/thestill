@@ -82,6 +82,18 @@ class MentionContext:
     episode_duration: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class EntityEpisode:
+    """An episode matched by entity, with the podcast fields a citation needs."""
+
+    episode_id: str
+    episode_title: str
+    episode_pub_date: Optional[datetime]
+    podcast_id: str
+    podcast_title: str
+    podcast_slug: str
+
+
 class EntityRepository(ABC):
     """Abstract contract for ``entities`` / ``entity_mentions`` /
     ``entity_cooccurrences`` / ``entity_enrichment`` /
@@ -234,6 +246,20 @@ class EntityRepository(ABC):
         """Resolved mentions joined with episode + podcast + entity,
         newest episode first (spec #28 §1.8 ``find_mentions``).
         All filters compose (AND).
+        """
+
+    @abstractmethod
+    def list_episodes_with_all_entities(
+        self,
+        entity_ids: List[str],
+        *,
+        podcast_id: Optional[str] = None,
+        date_range: Optional[Tuple[datetime, datetime]] = None,
+        limit: int = 50,
+    ) -> List["EntityEpisode"]:
+        """Episodes containing a resolved mention of *every* id in
+        ``entity_ids`` (AND), newest first (spec #28 §1.8
+        ``list_episodes_by_entity``). An empty ``entity_ids`` matches nothing.
         """
 
     @abstractmethod

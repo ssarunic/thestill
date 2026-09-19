@@ -2676,6 +2676,29 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 return 0
         return int(row["n"] or 0)
 
+    def count_entity_extraction_statuses(self) -> Dict[str, int]:
+        """Summarized episodes grouped by ``entity_extraction_status``.
+
+        The entity branch runs after SUMMARIZE, so only summarized episodes
+        are owed entity work; a NULL status (never reached the branch) is
+        reported under ``"none"``. This is what makes a host without the
+        ``entities`` extra visible: there every new episode lands in
+        ``skipped_unavailable`` and, without this count, nothing says so
+        (spec #66; failure-mode catalogue: silent degradation).
+
+        Returns {} on databases that predate the status column.
+        """
+        with self._get_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT COALESCE(entity_extraction_status, 'none') AS status, COUNT(*) AS n "
+                    "FROM episodes WHERE summary_path IS NOT NULL "
+                    "GROUP BY 1"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+        return {row["status"]: int(row["n"]) for row in rows}
+
     def get_all(self) -> List[Podcast]:
         """Retrieve all podcasts with their episodes."""
         with self._get_connection() as conn:

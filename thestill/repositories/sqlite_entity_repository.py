@@ -40,7 +40,7 @@ from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRo
 # ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
 # spec #44; re-exported here so existing call sites keep importing them
 # from this module.
-from .entity_repository import EntityHit, EntityRepository, MentionContext
+from .entity_repository import EntityEpisode, EntityHit, EntityRepository, MentionContext
 
 __all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
 
@@ -492,6 +492,55 @@ class SqliteEntityRepository(EntityRepository):
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_mention_context(r) for r in rows]
+
+    def list_episodes_with_all_entities(
+        self,
+        entity_ids: List[str],
+        *,
+        podcast_id: Optional[str] = None,
+        date_range: Optional[Tuple[datetime, datetime]] = None,
+        limit: int = 50,
+    ) -> List[EntityEpisode]:
+        """Spec #28 §1.8 — backing query for ``list_episodes_by_entity``."""
+        if not entity_ids:
+            return []
+        distinct_ids = list(dict.fromkeys(entity_ids))
+        placeholders = ",".join("?" * len(distinct_ids))
+        sql = f"""
+            SELECT e.id, e.title, e.pub_date, p.id AS podcast_id, p.title AS podcast_title,
+                   p.slug AS podcast_slug
+            FROM episodes e
+            JOIN podcasts p ON e.podcast_id = p.id
+            WHERE e.id IN (
+                SELECT episode_id FROM entity_mentions
+                WHERE resolution_status = 'resolved' AND entity_id IN ({placeholders})
+                GROUP BY episode_id
+                HAVING COUNT(DISTINCT entity_id) = ?
+            )
+        """
+        params: list = [*distinct_ids, len(distinct_ids)]
+        if podcast_id is not None:
+            sql += " AND p.id = ?"
+            params.append(podcast_id)
+        if date_range is not None:
+            sql += " AND e.pub_date BETWEEN ? AND ?"
+            params.append(date_range[0].isoformat())
+            params.append(date_range[1].isoformat())
+        sql += " ORDER BY e.pub_date DESC LIMIT ?"
+        params.append(limit)
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            EntityEpisode(
+                episode_id=row["id"],
+                episode_title=row["title"],
+                episode_pub_date=(datetime.fromisoformat(row["pub_date"]) if row["pub_date"] else None),
+                podcast_id=row["podcast_id"],
+                podcast_title=row["podcast_title"],
+                podcast_slug=row["podcast_slug"],
+            )
+            for row in rows
+        ]
 
     def list_mentions_by_speaker(
         self,
@@ -1516,7 +1565,8 @@ class SqliteEntityRepository(EntityRepository):
         mention_count``.
         """
         with self._get_connection() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT e.id                   AS entity_id,
                        e.type                 AS type,
                        e.canonical_name       AS canonical_name,
@@ -1529,7 +1579,8 @@ class SqliteEntityRepository(EntityRepository):
                 WHERE e.wikidata_qid IS NOT NULL
                   AND m.resolution_status = 'resolved'
                 GROUP BY e.id, m.surface_form
-                """).fetchall()
+                """
+            ).fetchall()
         return [dict(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -1558,7 +1609,8 @@ class SqliteEntityRepository(EntityRepository):
         deleted by the caller.
         """
         with self._get_connection() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT
                     e.wikidata_qid,
                     e.id,
@@ -1575,7 +1627,8 @@ class SqliteEntityRepository(EntityRepository):
                       GROUP BY wikidata_qid
                       HAVING COUNT(*) > 1
                   )
-                """).fetchall()
+                """
+            ).fetchall()
 
         by_qid: Dict[str, List[sqlite3.Row]] = {}
         for row in rows:
@@ -1619,7 +1672,8 @@ class SqliteEntityRepository(EntityRepository):
         """
         valid_types = {t.value for t in EntityType}
         with self._get_connection() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(
+                """
                 SELECT
                     e.id AS entity_id,
                     e.type AS current_type,
@@ -1629,7 +1683,8 @@ class SqliteEntityRepository(EntityRepository):
                 JOIN entity_mentions m ON m.entity_id = e.id
                 WHERE m.surface_label IS NOT NULL
                 GROUP BY e.id, m.surface_label
-                """).fetchall()
+                """
+            ).fetchall()
 
         per_entity: Dict[str, Dict[str, Any]] = {}
         for row in rows:

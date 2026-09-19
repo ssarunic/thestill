@@ -79,6 +79,12 @@ def get_status(state: AppState = Depends(get_app_state)):
                 "llm_provider": state.config.llm_provider,
                 "diarization_enabled": state.config.enable_diarization,
             },
+            # Spec #66 — entity-branch health; the backlog is silent otherwise.
+            "entity_extraction": {
+                "available": stats.entity_extraction_available,
+                "skipped_unavailable": stats.episodes_entities_skipped_unavailable,
+                "by_status": stats.entity_extraction_by_status,
+            },
             # Spec #60 — feed refresh health (parked/quarantined by reason).
             "refresh_health": {
                 "active": stats.refresh_active,

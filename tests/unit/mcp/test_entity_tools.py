@@ -247,6 +247,42 @@ class TestListEpisodesByEntityTool:
         assert result["success"] is False
 
 
+class TestHandlersUseOnlyTheRepositoryInterface:
+    """``list_episodes_by_entity`` once ran raw SQL through the SQLite
+    repository's private ``_get_connection``. The Postgres repository has no
+    such method, so the tool failed on every Postgres install while every
+    SQLite-backed test here passed. Hiding the backend's private surface
+    makes that class of mistake fail in a unit test."""
+
+    class InterfaceOnly:
+        """Forwards public calls; private attributes do not exist."""
+
+        def __init__(self, repo):
+            self.__repo = repo
+
+        def __getattr__(self, name):
+            if name.startswith("_"):
+                raise AttributeError(f"handlers must not use the repository's private {name!r}")
+            return getattr(self.__repo, name)
+
+    def test_every_entity_tool_works_through_the_public_interface(self, populated_db):
+        repo, _, ep1, _ = populated_db
+        facade = self.InterfaceOnly(repo)
+        calls = {
+            "find_mentions": {"entity": "Elon Musk"},
+            "list_quotes_by": {"speaker": "Scott Galloway"},
+            "get_entity": {"id_or_name": "Elon Musk"},
+            "list_episodes_by_entity": {"has_entity": ["Elon Musk", "SpaceX"]},
+        }
+        for tool, args in calls.items():
+            result = _payload(dispatch_entity_tool(tool, args, facade))
+            assert result["success"] is True, (tool, result)
+
+        listed = _payload(dispatch_entity_tool("list_episodes_by_entity", calls["list_episodes_by_entity"], facade))
+        assert [r["episode_id"] for r in listed["results"]] == [ep1]
+        assert listed["results"][0]["published_at"] is None or isinstance(listed["results"][0]["published_at"], str)
+
+
 class TestNonEntityToolReturnsNone:
     def test_unknown_tool_returns_none(self, populated_db):
         repo, _, _, _ = populated_db

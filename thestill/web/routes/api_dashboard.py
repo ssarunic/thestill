@@ -85,6 +85,11 @@ def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
             "storage_path": stats.storage_path,
             "audio_files_count": stats.audio_files_count,
             "transcripts_available": stats.transcripts_available,
+            # Spec #66 — drives the Dashboard's entity-backlog warning.
+            "entity_extraction": {
+                "available": stats.entity_extraction_available,
+                "skipped_unavailable": stats.episodes_entities_skipped_unavailable,
+            },
             "pipeline": {
                 "discovered": stats.episodes_discovered,
                 "downloaded": stats.episodes_downloaded,

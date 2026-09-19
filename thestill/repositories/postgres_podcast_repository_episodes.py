@@ -230,6 +230,29 @@ class EpisodesMixin(CategoryCacheMixin):
     # Status / health counters
     # ------------------------------------------------------------------
 
+    def count_entity_extraction_statuses(self) -> Dict[str, int]:
+        """Summarized episodes grouped by ``entity_extraction_status``.
+
+        The entity branch runs after SUMMARIZE, so only summarized episodes
+        are owed entity work; a NULL status (never reached the branch) is
+        reported under ``"none"``. This is what makes a host without the
+        ``entities`` extra visible: there every new episode lands in
+        ``skipped_unavailable`` and, without this count, nothing says so
+        (spec #66; failure-mode catalogue: silent degradation).
+
+        Returns {} on partially-provisioned databases.
+        """
+        try:
+            with connect(self.dsn) as conn:
+                rows = conn.execute(
+                    "SELECT COALESCE(entity_extraction_status, 'none') AS status, COUNT(*) AS n "
+                    "FROM episodes WHERE summary_path IS NOT NULL "
+                    "GROUP BY 1"
+                ).fetchall()
+        except (psycopg.errors.UndefinedColumn, psycopg.errors.UndefinedTable):
+            return {}
+        return {row["status"]: int(row["n"]) for row in rows}
+
     def count_episodes_skipped_legacy(self) -> int:
         """Spec #28 Phase 3.4 — episodes the entity branch declined to process.
 
