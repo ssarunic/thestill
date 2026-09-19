@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from thestill.models.briefing import Briefing
+from thestill.models.podcast import Episode, Podcast
 from thestill.models.user import User
 from thestill.services.briefing_service import BriefingNotFoundError, Deferred
 from thestill.web.routes import api_briefings
@@ -603,3 +604,135 @@ class TestScheduleEmailDelivery:
 
         assert response.status_code == 422
         mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+
+
+# ============================================================================
+# GET /api/briefings/{id}/episodes
+# ============================================================================
+
+
+def _podcast(podcast_id: str, title: str, image_url: str | None = None) -> Podcast:
+    return Podcast(
+        id=podcast_id,
+        rss_url="https://example.com/feed.xml",
+        title=title,
+        description="",
+        image_url=image_url,
+    )
+
+
+def _episode(
+    episode_id: str,
+    title: str,
+    *,
+    image_url: str | None = None,
+    duration: int | None = None,
+    summary_preview: str | None = None,
+    summary_path: str | None = None,
+) -> Episode:
+    return Episode(
+        id=episode_id,
+        external_id=f"guid-{episode_id}",
+        title=title,
+        description="",
+        audio_url="https://example.com/audio.mp3",
+        pub_date=datetime(2026, 5, 1, 6, 0, tzinfo=timezone.utc),
+        duration=duration,
+        image_url=image_url,
+        summary_preview=summary_preview,
+        summary_path=summary_path,
+    )
+
+
+class TestGetBriefingEpisodes:
+    URL = "/api/briefings/00000000-0000-0000-0000-000000000001/episodes"
+
+    def test_groups_episodes_by_podcast_in_delivery_order(self, client, mock_app_state):
+        briefing = _briefing()
+        mock_app_state.briefing_repository.get.return_value = briefing
+        mock_app_state.inbox_repository.list_episode_ids_in_window.return_value = ["ep-1", "ep-2", "ep-3"]
+        show_a = _podcast("pod-a", "Show A", image_url="https://img/a.jpg")
+        show_b = _podcast("pod-b", "Show B")
+        mock_app_state.repository.get_episodes_by_ids.return_value = {
+            "ep-1": (show_a, _episode("ep-1", "First", duration=3725, summary_preview="Gist one.")),
+            "ep-2": (show_b, _episode("ep-2", "Second", image_url="https://img/ep2.jpg", summary_preview="")),
+            "ep-3": (show_a, _episode("ep-3", "Third", summary_path="third.md", summary_preview="Gist three.")),
+        }
+
+        response = client.get(self.URL)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["briefing_id"] == briefing.id
+        assert data["episode_count"] == 3
+        assert [p["title"] for p in data["podcasts"]] == ["Show A", "Show B"]
+        show_a_out = data["podcasts"][0]
+        assert show_a_out["image_url"] == "https://img/a.jpg"
+        assert [e["id"] for e in show_a_out["episodes"]] == ["ep-1", "ep-3"]
+        first = show_a_out["episodes"][0]
+        assert first["title"] == "First"
+        assert first["duration"] == 3725
+        assert first["duration_formatted"] == "1:02:05"
+        assert first["summary_preview"] == "Gist one."
+        assert first["summary_available"] is False
+        assert first["pub_date"] == "2026-05-01T06:00:00+00:00"
+        second = data["podcasts"][1]["episodes"][0]
+        assert second["image_url"] == "https://img/ep2.jpg"
+        assert second["summary_preview"] is None  # "" (nothing extractable) renders as no preview
+        assert second["duration_formatted"] is None
+        assert show_a_out["episodes"][1]["summary_available"] is True
+
+        # Same window the narration runner resolves: still-eligible rows plus
+        # rows read after the briefing was cut.
+        mock_app_state.inbox_repository.list_episode_ids_in_window.assert_called_once_with(
+            "user-1",
+            since=briefing.cursor_from,
+            until=briefing.cursor_to,
+            states=("unread", "saved"),
+            read_since=briefing.created_at,
+        )
+        mock_app_state.repository.get_episodes_by_ids.assert_called_once_with(["ep-1", "ep-2", "ep-3"])
+
+    def test_skips_episodes_deleted_since_render(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        mock_app_state.inbox_repository.list_episode_ids_in_window.return_value = ["ep-1", "gone"]
+        mock_app_state.repository.get_episodes_by_ids.return_value = {
+            "ep-1": (_podcast("pod-a", "Show A"), _episode("ep-1", "First", summary_preview="x")),
+        }
+
+        response = client.get(self.URL)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["episode_count"] == 1
+        assert [e["id"] for e in data["podcasts"][0]["episodes"]] == ["ep-1"]
+
+    def test_empty_window_returns_no_podcasts(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        mock_app_state.inbox_repository.list_episode_ids_in_window.return_value = []
+        mock_app_state.repository.get_episodes_by_ids.return_value = {}
+
+        response = client.get(self.URL)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            **response.json(),
+            "podcasts": [],
+            "episode_count": 0,
+        }
+
+    def test_404_when_briefing_missing(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = None
+
+        response = client.get(self.URL)
+
+        assert response.status_code == 404
+        mock_app_state.inbox_repository.list_episode_ids_in_window.assert_not_called()
+
+    def test_404_when_briefing_belongs_to_another_user(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing(user_id="someone-else")
+
+        response = client.get(self.URL)
+
+        assert response.status_code == 404
+        mock_app_state.inbox_repository.list_episode_ids_in_window.assert_not_called()

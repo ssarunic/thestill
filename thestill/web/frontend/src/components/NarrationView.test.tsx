@@ -98,7 +98,7 @@ describe('NarrationView', () => {
     expect(screen.getByText('LINK INDEX')).toBeInTheDocument()
   })
 
-  it('toggles between narrated view and link-index when the user clicks "Show link-index"', async () => {
+  it('toggles between narrated view and the episode index when the user clicks "Show episodes"', async () => {
     const user = userEvent.setup()
     mockUseNarration.mockReturnValue({
       data: { id: 'briefing-1-medium', script: {}, markdown: '# Briefing\n' },
@@ -114,7 +114,7 @@ describe('NarrationView', () => {
       ),
     )
     expect(screen.getByRole('heading', { name: 'Briefing' })).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /Show link-index/i }))
+    await user.click(screen.getByRole('button', { name: /Show episodes/i }))
     expect(screen.getByText('LINK INDEX')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Briefing' })).not.toBeInTheDocument()
   })

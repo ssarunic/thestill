@@ -97,6 +97,7 @@ Commands below).
 | `/api/briefings/schedule` | PUT | Upsert schedule (frequency, hour, weekday, timezone, enabled) |
 | `/api/briefings/{briefing_id}` | GET | Briefing metadata + narration variants |
 | `/api/briefings/{briefing_id}/script` | GET | Rendered script markdown |
+| `/api/briefings/{briefing_id}/episodes` | GET | Episodes the briefing covers, grouped by podcast, with artwork and gist (the page's index) |
 | `/api/briefings/{briefing_id}/narrate` | POST | Generate a narration variant (spec #33) |
 | `/api/briefings/{briefing_id}/listened` | POST | Mark briefing listened |
 
@@ -377,7 +378,14 @@ unread coverage exists. It links to the briefing detail page.
 
 ### Briefing Detail Page (`/briefings/{id}`)
 
-- **Script reader**: the rendered morning-briefing markdown
+- **Hero**: the covered shows' artwork as one cover tile (a 2 × 2 mosaic
+  past one show), a "From Show A, Show B and 3 more" line, and the blurred
+  backdrop the episode page uses
+- **Episode index**: artwork cards grouped by show, each with the episode
+  title, gist, date and length, fed by `GET /api/briefings/{id}/episodes`;
+  a card opens the episode in the reader overlay above the briefing
+- **Script reader**: the rendered morning-briefing markdown, shown only
+  when the index is empty (episodes deleted since) or unavailable
 - **Narration variants** (spec #33): short/medium/long length switcher;
   generating a missing length calls `POST /api/briefings/{id}/narrate`
 - **Mark listened**: advances the read state (the next briefing's window
