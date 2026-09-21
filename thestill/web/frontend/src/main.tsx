@@ -7,11 +7,16 @@ import App from './App'
 import { ToastProvider } from './components/Toast'
 import { AuthProvider } from './contexts/AuthContext'
 import { createQueryClient } from './queryClient'
+import ErrorBoundary from './components/ErrorBoundary'
+import { installChunkReloadHandler } from './utils/chunkReload'
 
 const queryClient = createQueryClient()
 
+installChunkReloadHandler()
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
@@ -21,5 +26,6 @@ createRoot(document.getElementById('root')!).render(
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )
