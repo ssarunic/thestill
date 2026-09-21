@@ -8,6 +8,7 @@ const IMPORT_KIND_LABEL: Record<ImportKind, string> = {
   bare_audio: 'Imported (audio file)',
   youtube: 'Imported (YouTube)',
   apple_episode: 'Imported (Apple Podcasts)',
+  spotify_episode: 'Imported (Spotify)',
   rss_episode: 'Imported (RSS episode)',
 }
 

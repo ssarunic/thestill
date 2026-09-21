@@ -21,9 +21,10 @@ clean → summarize → entity branch) runs unchanged in the background; this
 module only handles URL resolution, parent-podcast bootstrap, and inbox-row
 creation.
 
-Resolver lineup is pluggable. The current resolvers cover direct audio URLs
-(.mp3, .m4a, .opus, .ogg, .wav); YouTube and Apple resolvers will plug into
-the same protocol.
+Resolver lineup is pluggable. The current resolvers cover Apple Podcasts
+episode links, YouTube videos, Spotify episode links (spec #79 — matched to
+the show's public feed via the Apple directory) and direct audio URLs
+(.mp3, .m4a, .opus, .ogg, .wav).
 """
 
 import hashlib
@@ -38,6 +39,7 @@ from structlog import get_logger
 from urllib3.util.retry import Retry
 
 from ..core.queue_manager import QueueManager, TaskStage
+from ..core.spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -46,6 +48,7 @@ from ..utils.url_patterns import (
     extract_apple_episode_id,
     extract_apple_podcast_id,
     is_apple_podcast_url,
+    is_spotify_url,
     is_youtube_url,
 )
 from ..utils.youtube_errors import describe_youtube_failure
@@ -125,7 +128,7 @@ class CanonicalSource:
     fall back to the synthetic audio-imports row.
     """
 
-    kind: Literal["bare_audio", "youtube", "apple_episode", "rss_episode"]
+    kind: Literal["bare_audio", "youtube", "apple_episode", "rss_episode", "spotify_episode"]
     canonical_id: str  # e.g. "audio:<sha256>"
     audio_url: str  # what the download stage fetches
     title: str
@@ -744,6 +747,58 @@ class ApplePodcastsResolver:
         )
 
 
+class SpotifyResolver:
+    """
+    Resolver for ``open.spotify.com/episode/...`` share links (spec #79).
+
+    Spotify IDs are opaque, so the link is resolved by metadata matching:
+    Spotify's own episode metadata → the show in the Apple Podcasts directory
+    (which carries the RSS ``feedUrl``) → the episode inside that show,
+    scored on title / release date / duration. See
+    ``core.spotify_resolver`` for the pipeline and its thresholds.
+
+    The canonical id stays ``spotify:<episode_id>`` (what the user pasted)
+    while ``audio_url`` is the feed's enclosure — so the parent-feed ingest
+    in ``ImportService`` attaches the import to the feed's own episode row
+    exactly as for Apple links. Show links (``/show/...``) are rejected here
+    with a pointer to "add podcast", which accepts them.
+    """
+
+    def __init__(self, *, link_resolver: Optional[SpotifyLinkResolver] = None) -> None:
+        self._resolver = link_resolver or SpotifyLinkResolver()
+
+    def matches(self, url: str) -> bool:
+        return is_spotify_url(url)
+
+    def resolve(self, url: str) -> CanonicalSource:
+        try:
+            resolved = self._resolver.resolve_episode(url)
+        except SpotifyResolutionError as exc:
+            raise ResolverError(str(exc)) from exc
+        episode = resolved.episode
+        show = resolved.show
+        spotify = resolved.spotify
+        parent = CanonicalParent(
+            external_id=show.collection_id or show.feed_url,
+            rss_url=show.feed_url,
+            title=show.name,
+            image_url=show.image_url,
+        )
+        return CanonicalSource(
+            kind="spotify_episode",
+            canonical_id=f"spotify:{resolved.episode_id}",
+            audio_url=episode.audio_url,
+            title=episode.title or spotify.title,
+            description=episode.description or spotify.description,
+            duration_seconds=episode.duration_seconds or spotify.duration_seconds,
+            pub_date=episode.pub_date or spotify.release_date,
+            image_url=episode.image_url or show.image_url or spotify.image_url,
+            source_handle=show.name,
+            external_id=resolved.episode_id,
+            parent=parent,
+        )
+
+
 @dataclass(frozen=True)
 class ImportResult:
     """Outcome of ``ImportService.import_url``."""
@@ -800,12 +855,15 @@ class ImportService:
         # it. Best-effort: any failure falls through to the single-episode
         # path so the import still succeeds.
         self._feed_manager = feed_manager
-        # Default order: Apple → YouTube → BareAudio. None of the matchers
-        # overlap (Apple needs podcasts.apple.com, YouTube needs youtube.com /
-        # youtu.be, BareAudio needs an audio extension), so the order is
-        # incidental — kept for documentation.
+        # Default order: Apple → YouTube → Spotify → BareAudio. None of the
+        # matchers overlap (Apple needs podcasts.apple.com, YouTube needs
+        # youtube.com / youtu.be, Spotify needs spotify.com / spotify.link,
+        # BareAudio needs an audio extension), so the order is incidental —
+        # kept for documentation.
         self._resolvers: List[Resolver] = (
-            list(resolvers) if resolvers else [ApplePodcastsResolver(), YouTubeResolver(), BareAudioResolver()]
+            list(resolvers)
+            if resolvers
+            else [ApplePodcastsResolver(), YouTubeResolver(), SpotifyResolver(), BareAudioResolver()]
         )
         logger.info(
             "ImportService initialized",
@@ -882,7 +940,9 @@ class ImportService:
                 except Exception as exc:
                     raise ResolverError(f"{type(resolver).__name__} failed to resolve {url!r}: {exc}") from exc
         raise UnsupportedUrlError(
-            f"No resolver matched URL {url!r}. v1 supports direct audio links " "(.mp3, .m4a, .opus, .ogg, .wav)."
+            f"No resolver matched URL {url!r}. Supported: Apple Podcasts episode links, "
+            "YouTube videos, Spotify episode links, and direct audio links "
+            "(.mp3, .m4a, .opus, .ogg, .wav)."
         )
 
     def _find_or_create_episode(self, canonical: CanonicalSource) -> Tuple[str, bool, Optional[Tuple[str, str, str]]]:

@@ -1397,7 +1397,7 @@ export interface BriefingScheduleUpdate {
 // Imports (spec #31) — POST /api/imports
 // ============================================================================
 
-export type ImportKind = 'bare_audio' | 'youtube' | 'apple_episode' | 'rss_episode'
+export type ImportKind = 'bare_audio' | 'youtube' | 'apple_episode' | 'rss_episode' | 'spotify_episode'
 
 export interface ImportRequest {
   url: string

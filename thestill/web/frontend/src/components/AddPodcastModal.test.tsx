@@ -8,12 +8,14 @@ import type { TopPodcast, TopPodcastsResponse } from '../api/types'
 
 vi.mock('../api/client', () => ({
   addPodcast: vi.fn(),
+  getAddPodcastStatus: vi.fn(),
   getTopPodcasts: vi.fn(),
 }))
 
-import { addPodcast, getTopPodcasts } from '../api/client'
+import { addPodcast, getAddPodcastStatus, getTopPodcasts } from '../api/client'
 
 const mockAddPodcast = addPodcast as ReturnType<typeof vi.fn>
+const mockGetAddPodcastStatus = getAddPodcastStatus as ReturnType<typeof vi.fn>
 const mockGetTopPodcasts = getTopPodcasts as ReturnType<typeof vi.fn>
 
 function row(overrides: Partial<TopPodcast>): TopPodcast {
@@ -105,6 +107,7 @@ describe('AddPodcastModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useRealTimers()
+    mockGetAddPodcastStatus.mockResolvedValue({ status: 'completed', error: null })
   })
 
   it('does not render when closed', () => {
@@ -173,6 +176,30 @@ describe('AddPodcastModal', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('waits for the background add task and surfaces its failure', async () => {
+    mockGetTopPodcasts.mockResolvedValue(
+      response([row({ rank: 1, name: 'The Daily', is_following: false })]),
+    )
+    mockAddPodcast.mockResolvedValue({ status: 'started', message: 'started', task_type: 'add' })
+    mockGetAddPodcastStatus
+      .mockResolvedValueOnce({ status: 'running', error: null })
+      .mockResolvedValue({ status: 'failed', error: 'No public feed for this show' })
+
+    const user = userEvent.setup()
+    render(<AddPodcastModal isOpen={true} onClose={vi.fn()} />, { wrapper: createWrapper() })
+
+    await waitFor(() => {
+      expect(screen.getByText('The Daily')).toBeInTheDocument()
+    })
+    await user.click(screen.getByRole('button', { name: 'Follow' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('No public feed for this show')).toBeInTheDocument()
+    })
+    expect(mockGetAddPodcastStatus).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText('Following')).not.toBeInTheDocument()
+  })
+
   it('switches to URL paste mode when input contains a scheme', async () => {
     mockGetTopPodcasts.mockResolvedValue(response([]))
 
@@ -189,6 +216,29 @@ describe('AddPodcastModal', () => {
     })
     expect(screen.getByText('https://feeds.example.com/x.xml')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument()
+  })
+
+  it('closes after a pasted link is added, but not when the add fails', async () => {
+    mockGetTopPodcasts.mockResolvedValue(response([]))
+    mockAddPodcast.mockResolvedValue({ status: 'started', message: 'started', task_type: 'add' })
+    mockGetAddPodcastStatus.mockResolvedValueOnce({ status: 'failed', error: 'Nope' })
+
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    render(<AddPodcastModal isOpen={true} onClose={onClose} />, { wrapper: createWrapper() })
+
+    await user.type(screen.getByRole('textbox'), 'https://open.spotify.com/show/7CmsP3jwzLoFGLlkUzVTnG')
+    await user.click(await screen.findByRole('button', { name: 'Add' }))
+    await waitFor(() => {
+      expect(screen.getByText('Nope')).toBeInTheDocument()
+    })
+    expect(onClose).not.toHaveBeenCalled()
+
+    // Retry succeeds (default mock: completed) → the modal closes.
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() => {
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('fetches with the typed query after debounce window', async () => {

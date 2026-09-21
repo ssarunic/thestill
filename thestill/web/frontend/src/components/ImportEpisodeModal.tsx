@@ -16,19 +16,6 @@ type ImportState =
   | { kind: 'success'; result: ImportPayload }
   | { kind: 'error'; message: string }
 
-// Spotify exclusives have no enclosure and probably never will, so catch
-// them client-side with a clear message instead of waiting for the backend
-// to return a generic "no resolver" 400. Word boundary ensures we don't
-// match "notspotify.com".
-const SPOTIFY_RE = /\bspotify\.com\//i
-
-function clientSideError(url: string): string | null {
-  if (SPOTIFY_RE.test(url)) {
-    return 'Spotify links are not supported. Try the YouTube or RSS source if available.'
-  }
-  return null
-}
-
 // The shell mounts the content only while open, so the form starts fresh on
 // every open.
 export default function ImportEpisodeModal({ isOpen, onClose }: ImportEpisodeModalProps) {
@@ -47,11 +34,6 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
       const trimmed = url.trim()
       if (!trimmed) {
         setState({ kind: 'error', message: 'Paste a link first.' })
-        return
-      }
-      const earlyError = clientSideError(trimmed)
-      if (earlyError) {
-        setState({ kind: 'error', message: earlyError })
         return
       }
       setState({ kind: 'submitting' })
@@ -110,15 +92,16 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
                 setUrl(e.target.value)
                 if (state.kind === 'error') setState({ kind: 'idle' })
               }}
-              placeholder="Paste a YouTube link, RSS episode URL, or audio file URL"
+              placeholder="Paste a YouTube, Apple Podcasts, or Spotify episode link, or an audio file URL"
               aria-label="Episode URL"
               disabled={submitting}
               className="w-full px-4 py-3 border rounded-lg text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors bg-white disabled:bg-gray-50"
             />
 
             <p className="mt-2 text-xs text-gray-500">
-              Supported: YouTube videos, Apple Podcasts share links, and direct audio links
-              (.mp3, .m4a, .opus, .ogg, .wav).
+              Supported: YouTube videos, Apple Podcasts and Spotify episode links, and direct
+              audio links (.mp3, .m4a, .opus, .ogg, .wav). Spotify links are matched to the
+              show&apos;s public feed, so Spotify exclusives can&apos;t be imported.
             </p>
 
             {state.kind === 'error' && (

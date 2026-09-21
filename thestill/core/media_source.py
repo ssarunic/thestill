@@ -49,8 +49,9 @@ from ..utils.html_utils import resolve_description_variants
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
 from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
-from ..utils.url_patterns import APPLE_PODCAST_ID_RE, extract_apple_podcast_id, looks_like_rss
+from ..utils.url_patterns import APPLE_PODCAST_ID_RE, extract_apple_podcast_id, is_spotify_url, looks_like_rss
 from .refresh_failure import RefreshFailureKind, classify_fetch_exception
+from .spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
 from .youtube_downloader import YouTubeDownloader
 
 if TYPE_CHECKING:
@@ -207,6 +208,7 @@ class RSSMediaSource(MediaSource):
     Handles:
     - Standard RSS podcast feeds
     - Apple Podcasts URLs (resolved to RSS via iTunes API)
+    - Spotify show / episode URLs (resolved to RSS via the Apple directory, spec #79)
     - Feedparser-based episode extraction
     - Saving raw RSS content for debugging (optional)
     """
@@ -227,6 +229,8 @@ class RSSMediaSource(MediaSource):
         """
         self.path_manager = path_manager
         self.session = self._build_session(pool_maxsize)
+        # Injectable so tests resolve Spotify links without the network.
+        self.spotify_resolver: Optional[SpotifyLinkResolver] = None
 
     @staticmethod
     def _build_session(pool_maxsize: int) -> requests.Session:
@@ -269,6 +273,10 @@ class RSSMediaSource(MediaSource):
         if "podcasts.apple.com" in url or "itunes.apple.com" in url:
             return True
 
+        # Spotify show links are resolved to the show's RSS feed (spec #79)
+        if is_spotify_url(url):
+            return True
+
         # Check for common RSS feed URL shapes — this is a hint, not a
         # safety check (the SSRF guard runs before any fetch).
         if looks_like_rss(url):
@@ -306,9 +314,14 @@ class RSSMediaSource(MediaSource):
             if rss_content is not None and parsed_feed is not None:
                 rss_url = url
             else:
-                # Resolve Apple Podcasts URLs to RSS first
-                rss_url = self._extract_rss_from_apple_url(url)
+                # Resolve Apple Podcasts / Spotify URLs to RSS first
+                rss_url = self._extract_rss_from_apple_url(url) or self._extract_rss_from_spotify_url(url)
                 if not rss_url:
+                    if is_spotify_url(url):
+                        # An unresolved Spotify link is never itself a feed —
+                        # fetching its HTML page as RSS would only bury the
+                        # real reason (already logged) under a parse error.
+                        return None
                     rss_url = url  # Assume it's already an RSS URL
 
                 if rss_content is None:
@@ -1009,6 +1022,36 @@ class RSSMediaSource(MediaSource):
         except Exception as e:
             logger.error(f"Error extracting RSS from Apple URL {url}: {e}")
             return None
+
+    def _extract_rss_from_spotify_url(self, url: str) -> Optional[str]:
+        """
+        Resolve a Spotify show (or episode) URL to the show's RSS feed (spec #79).
+
+        Spotify carries no feed URL, so the show is looked up in the Apple
+        Podcasts directory by name / publisher via ``SpotifyLinkResolver``.
+
+        Returns:
+            RSS feed URL, or None when the URL is not a Spotify link or the
+            show has no public feed (Spotify exclusives).
+        """
+        if not is_spotify_url(url):
+            return None
+        try:
+            match = (self.spotify_resolver or SpotifyLinkResolver()).resolve_show(url)
+        except SpotifyResolutionError as exc:
+            logger.warning("spotify_show_feed_unresolved", url=url, error=str(exc))
+            return None
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.error("spotify_show_feed_error", url=url, error=str(exc), exc_info=True)
+            return None
+        logger.info(
+            "spotify_show_feed_resolved",
+            url=url,
+            feed_url=match.feed_url,
+            collection_id=match.collection_id,
+            score=match.score,
+        )
+        return match.feed_url
 
     def _resolve_apple_podcast_redirect(self, url: str) -> Optional[str]:
         """

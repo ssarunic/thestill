@@ -165,6 +165,74 @@ def is_apple_podcast_url(url: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Spotify
+# ---------------------------------------------------------------------------
+
+# Spotify web links: ``open.spotify.com/episode/<id>`` and ``/show/<id>``,
+# optionally behind a locale segment (``/intl-de/episode/<id>``). IDs are
+# base62 and exactly 22 characters, so the id class is fixed-length; the
+# optional locale segment is bounded (``[a-z]{2,5}`` + optional ``-xx``).
+# ``spotify:episode:<id>`` URIs are accepted too because that is what the
+# desktop app's "Copy Spotify URI" produces.
+SPOTIFY_HOST_RE: Final[re.Pattern[str]] = re.compile(r"(?:open|play)\.spotify\.com/", re.IGNORECASE)
+SPOTIFY_ENTITY_RE: Final[re.Pattern[str]] = re.compile(
+    r"spotify\.com/(?:intl-[a-z]{2,5}/|[a-z]{2,5}(?:-[a-z]{2,8})?/)?(episode|show)/([A-Za-z0-9]{22})(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+SPOTIFY_URI_RE: Final[re.Pattern[str]] = re.compile(r"^spotify:(episode|show):([A-Za-z0-9]{22})$")
+# ``spotify.link/<token>`` short links redirect to ``open.spotify.com``; the
+# resolver follows the redirect (SSRF-guarded) and re-parses the target.
+SPOTIFY_SHORT_LINK_RE: Final[re.Pattern[str]] = re.compile(r"spotify\.link/[A-Za-z0-9]{1,32}", re.IGNORECASE)
+
+
+_SPOTIFY_WEB_HOSTS: Final[frozenset[str]] = frozenset({"open.spotify.com", "play.spotify.com"})
+_SPOTIFY_SHORT_HOST: Final[str] = "spotify.link"
+
+
+def _url_host(text: str) -> str:
+    """Lower-cased hostname of ``text`` (scheme optional), or "" when unparseable."""
+    candidate = text if "://" in text else f"https://{text}"
+    try:
+        return (urlparse(candidate).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def is_spotify_short_link(url: str) -> bool:
+    """Return True iff ``url`` is a ``spotify.link`` short link."""
+    text = url.strip()
+    return _url_host(text) == _SPOTIFY_SHORT_HOST and bool(SPOTIFY_SHORT_LINK_RE.search(text))
+
+
+def is_spotify_url(url: str) -> bool:
+    """Return True iff ``url`` is a Spotify web link, short link, or URI.
+
+    The decision is made on the parsed *host*, not a substring search, so
+    ``https://evil.example/?next=open.spotify.com/`` and ``notspotify.link``
+    are not Spotify links.
+    """
+    text = url.strip()
+    if SPOTIFY_URI_RE.match(text):
+        return True
+    return _url_host(text) in _SPOTIFY_WEB_HOSTS or is_spotify_short_link(text)
+
+
+def extract_spotify_entity(text: str) -> tuple[str, str] | None:
+    """Return ``(kind, id)`` for a Spotify episode/show link or URI, else None.
+
+    ``kind`` is ``"episode"`` or ``"show"``. Short links (``spotify.link``)
+    carry no entity id and return None — resolve the redirect first.
+    """
+    stripped = text.strip()
+    match = SPOTIFY_URI_RE.match(stripped)
+    if not match and _url_host(stripped) in _SPOTIFY_WEB_HOSTS:
+        match = SPOTIFY_ENTITY_RE.search(stripped)
+    if not match:
+        return None
+    return match.group(1).lower(), match.group(2)
+
+
+# ---------------------------------------------------------------------------
 # Audit helper
 # ---------------------------------------------------------------------------
 
@@ -178,4 +246,8 @@ ALL_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     APPLE_PODCAST_ID_RE,
     APPLE_EPISODE_ID_RE,
     APPLE_PODCAST_HOST_RE,
+    SPOTIFY_HOST_RE,
+    SPOTIFY_ENTITY_RE,
+    SPOTIFY_URI_RE,
+    SPOTIFY_SHORT_LINK_RE,
 )

@@ -309,6 +309,11 @@ class Config(BaseModel):
     elevenlabs_async_threshold_mb: int = 0  # Use async mode for files > N MB (0 = always async)
     webhook_server_port: int = 8000  # Port for background webhook server during transcription
 
+    # Spotify Web API (optional, spec #79). When both are set, Spotify links are
+    # resolved through the Web API instead of scraping the public page.
+    spotify_client_id: str = ""
+    spotify_client_secret: str = ""
+
     # Dalston Configuration (self-hosted transcription server)
     dalston_base_url: str = ""  # Dalston server URL (e.g., http://localhost:8000)
     dalston_api_key: str = ""  # Optional API key for Dalston authentication
@@ -724,6 +729,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "google_cloud_project_id": os.getenv("GOOGLE_CLOUD_PROJECT_ID", ""),
         "google_storage_bucket": os.getenv("GOOGLE_STORAGE_BUCKET", ""),
         "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY", ""),
+        "spotify_client_id": os.getenv("SPOTIFY_CLIENT_ID", ""),
+        "spotify_client_secret": os.getenv("SPOTIFY_CLIENT_SECRET", ""),
         "elevenlabs_base_url": os.getenv("ELEVENLABS_BASE_URL", ""),
         "elevenlabs_model": os.getenv("ELEVENLABS_MODEL", "scribe_v1"),
         "elevenlabs_webhook_secret": os.getenv("ELEVENLABS_WEBHOOK_SECRET", ""),
