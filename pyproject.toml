@@ -45,7 +45,13 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "aiofiles>=23.2.1",
     "httpx>=0.25.2",
-    "yt-dlp>=2025.10.14",
+    # YouTube changes its player often and an old yt-dlp fails closed: on
+    # 2026-09-21 the locked 2026.07.04 got "HTTP Error 403: Forbidden" on
+    # every video while 2026.08.19 worked. The [default] extra brings
+    # yt-dlp-ejs, the challenge-solver scripts upstream now expects. When
+    # YouTube downloads start returning 403, bump this first:
+    #   uv lock --upgrade-package yt-dlp
+    "yt-dlp[default]>=2026.8.19",
     "ollama>=0.4.0",
     "google-genai>=1.0.0",
     "google-cloud-speech>=2.27.0",
