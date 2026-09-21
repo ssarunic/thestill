@@ -257,9 +257,13 @@ gh run watch                       # or: gh run list --workflow Deploy
 
 The workflow refuses a commit that is not on `main` (no published image
 exists for it) and waits for a still-building image rather than failing
-when a tag lands right after a merge. Rollback is a manual dispatch of the
-same workflow with an older tag (`gh workflow run Deploy -f ref=v1.1.0`);
-migrations remain forward-only. The job runs under the `production`
+when a tag lands right after a merge. Once the deploy is verified, a second
+job publishes a GitHub Release for the tag with auto-generated notes, so
+"Latest" on the repo page means "live in production". That job is the only
+one with write access to the repository and never holds the AWS role; it is
+skipped when the release already exists. Rollback is a manual dispatch of the
+same workflow with an older tag (`gh workflow run Deploy -f ref=v1.1.0`),
+which deliberately publishes no release; migrations remain forward-only. The job runs under the `production`
 GitHub environment, created on the first run — add required reviewers
 there for a manual approval gate.
 
