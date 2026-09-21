@@ -159,10 +159,14 @@ entities = [
     # the ``refined`` PyPI name is a placeholder for an unrelated 0.0.1
     # release. Pin to a tag once amazon-science cuts one.
     "refined @ git+https://github.com/amazon-science/ReFinED.git",
-    # gliner caps ``transformers<5.2``; whisperx (in the
-    # local-transcription extra) caps it below 5 too. Keep the upper
-    # bound generous so future patch bumps stay in range.
-    "transformers>=4.30,<5.18",
+    # Capped below 5: ReFinED calls ``tokenizer.encode_plus`` on every text
+    # and transformers 5.0 removed it. With 5.x installed the resolver
+    # raised on every mention, and (before the resolver learned to fail
+    # loudly) recorded each one as unresolvable - 641 mentions on
+    # 2026-09-19. Do not widen this without running
+    # tests/integration/test_refined_smoke.py against the new version;
+    # Dependabot's "update transformers requirement" PRs are not safe here.
+    "transformers>=4.30,<5",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
