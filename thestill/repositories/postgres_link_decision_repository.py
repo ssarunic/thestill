@@ -88,13 +88,13 @@ class PostgresLinkDecisionRepository(LinkDecisionRepository):
                 (surface_key, *params),
             )
 
-    def podcast_decisions(self, surface_key: str) -> List[Tuple[str, Optional[str]]]:
+    def podcast_decisions(self, surface_key: str) -> List[StoredLinkDecision]:
         with connect(self.dsn) as conn:
             rows = conn.execute(
-                "SELECT podcast_id, qid FROM entity_link_decisions WHERE surface_key = %s AND podcast_id IS NOT NULL",
+                f"SELECT {_COLS} FROM entity_link_decisions WHERE surface_key = %s AND podcast_id IS NOT NULL",
                 (surface_key,),
             ).fetchall()
-            return [(as_str(row["podcast_id"]), row["qid"]) for row in rows]
+            return [self._row_to_decision(row) for row in rows]
 
     def delete(self, surface_key: str) -> int:
         with connect(self.dsn) as conn:

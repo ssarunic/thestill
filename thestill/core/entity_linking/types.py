@@ -91,3 +91,4 @@ class LinkDecision:
     reason: str = ""
     candidate: Optional[Candidate] = None
     from_cache: bool = False
+    cache_scope: str = ""  # "podcast" | "corpus" when from_cache

@@ -23,7 +23,7 @@ arrives already case-folded - never fold it in SQL.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,8 @@ class LinkDecisionRepository(ABC):
         """Count one reuse of the row for this scope."""
 
     @abstractmethod
-    def podcast_decisions(self, surface_key: str) -> List[Tuple[str, Optional[str]]]:
-        """``(podcast_id, qid)`` for every podcast-scoped row of this name."""
+    def podcast_decisions(self, surface_key: str) -> List[StoredLinkDecision]:
+        """Every podcast-scoped row of this name (never the corpus-wide one)."""
 
     @abstractmethod
     def delete(self, surface_key: str) -> int:

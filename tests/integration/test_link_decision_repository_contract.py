@@ -139,7 +139,8 @@ def test_podcast_decisions_lists_podcast_scoped_rows_only(repo):
     repo.upsert(_decision(podcast_id=POD_A, qid="Q1"))
     repo.upsert(_decision(podcast_id=POD_B, qid=None))
     repo.upsert(_decision(podcast_id=None, qid="Q9"))
-    assert sorted(repo.podcast_decisions("dario amodei"), key=lambda r: r[0]) == [(POD_A, "Q1"), (POD_B, None)]
+    rows = sorted(repo.podcast_decisions("dario amodei"), key=lambda r: r.podcast_id)
+    assert [(r.podcast_id, r.qid) for r in rows] == [(POD_A, "Q1"), (POD_B, None)]
 
 
 def test_delete_removes_every_scope_of_the_name_and_nothing_else(repo):
