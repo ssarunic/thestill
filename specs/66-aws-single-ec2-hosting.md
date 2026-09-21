@@ -221,7 +221,11 @@ are recorded because each is a class, not an incident.
    `entities` extra by design, so `extract-entities` raised — and because the
    chain is linear, `reindex` never ran and 105 episodes were readable but
    unsearchable. Entity stages now skip with `skipped_unavailable` and let the
-   chain continue.
+   chain continue. **Update 2026-09-21:** the instance was resized to
+   `t4g.large` (8 GiB, root volume 30 → 40 GB) and the prod image now carries
+   the `entities` extra, with ReFinED's index on the volume via
+   `REFINED_DATA_DIR`. The skip guard stays for images built without it; the
+   episodes skipped in between are drained with `thestill rebuild-entities`.
 4. **Stale paths outlive their files.** Restored rows carried
    `downsampled_audio_path` values whose WAVs were long deleted, and the
    transcribe handler dead-lettered on the missing file instead of falling

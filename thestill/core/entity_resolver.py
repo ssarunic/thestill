@@ -37,6 +37,7 @@ process scope on ``AppState.entity_resolver``.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterable, List, Optional, Protocol
 
@@ -241,7 +242,7 @@ class EntityResolver:
 
         Mirrors ``EntityExtractor.is_available``; see the note there on why
         the entity stages skip rather than raise when the optional extra is
-        absent (spec #66 — the AWS image omits it deliberately).
+        absent (spec #66 — images built without the ``entities`` extra).
         """
         try:
             import refined.inference.processor  # noqa: F401
@@ -260,10 +261,15 @@ class EntityResolver:
             ) from exc
         _patch_autotokenizer_drop_init_method_kwargs()
         _patch_tokenizer_restore_encode_plus()
-        logger.info("refined_model_loading", model=self.model_name, entity_set=self.entity_set)
+        # ReFinED downloads several GB to ``~/.cache/refined`` unless told
+        # otherwise. In the container that is the image layer, so every deploy
+        # would re-fetch it; REFINED_DATA_DIR puts it on the /data volume.
+        data_dir = os.getenv("REFINED_DATA_DIR") or None
+        logger.info("refined_model_loading", model=self.model_name, entity_set=self.entity_set, data_dir=data_dir)
         self._model = Refined.from_pretrained(
             model_name=self.model_name,
             entity_set=self.entity_set,
+            data_dir=data_dir,
         )
         logger.info("refined_model_loaded")
 

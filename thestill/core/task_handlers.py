@@ -1056,12 +1056,13 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         )
         return
 
-    # Spec #66 — the deployment image omits the ``entities`` extra (GLiNER +
-    # ReFinED need 4-6 GB, which does not fit the t4g.medium alongside
-    # Postgres). Raising here would sever the chain: EXTRACT_ENTITIES sits
-    # between SUMMARIZE and REINDEX, so a failure leaves the episode
-    # permanently unsearchable. Skip with a distinct, queryable status and
-    # let the successors run; the backlog drains wherever GLiNER exists.
+    # Spec #66 — a host may lack the ``entities`` extra (the slim/full
+    # images always do; the AWS image did until the 2026-09-21 t4g.large
+    # resize, since GLiNER + ReFinED need 4-6 GB). Raising here would sever
+    # the chain: EXTRACT_ENTITIES sits between SUMMARIZE and REINDEX, so a
+    # failure leaves the episode permanently unsearchable. Skip with a
+    # distinct, queryable status and let the successors run; the backlog
+    # drains wherever GLiNER exists.
     # Only consult the module when we would actually have to build a real
     # extractor: an injected one (tests, or a future remote implementation)
     # is proof enough that extraction is possible here.

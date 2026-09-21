@@ -3,7 +3,7 @@
 # Multi-stage build producing three targets from a single Dockerfile:
 #   - slim: Dalston-only, no ffmpeg (~200-250 MB)
 #   - full: slim + static ffmpeg/ffprobe (~280-330 MB)
-#   - prod: full built with EXTRAS=postgres,s3,ses,search — the AWS
+#   - prod: full built with EXTRAS=postgres,s3,ses,search,entities — the AWS
 #     deployment image (spec #66). Includes psycopg/alembic, boto3, and
 #     sentence-transformers (which pulls CPU torch, so this target is
 #     multi-GB where slim/full stay under ~350 MB).
@@ -14,7 +14,7 @@
 #
 # EXTRAS is a comma-separated list of pyproject optional-dependency groups
 # baked into the wheel set (default: none). The prod target expects
-# `--build-arg EXTRAS=postgres,s3,ses,search`.
+# `--build-arg EXTRAS=postgres,s3,ses,search,entities`.
 
 ARG THESTILL_UID=1000
 ARG THESTILL_GID=1000
@@ -83,7 +83,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATABASE_PATH=/data/podcasts.db \
     LOG_FORMAT=json \
     LOG_LEVEL=INFO \
-    HF_HOME=/data/.cache/huggingface
+    HF_HOME=/data/.cache/huggingface \
+    REFINED_DATA_DIR=/data/.cache/refined
 # On macOS, `id -g` returns 20 (staff), which collides with the `dialout`
 # group baked into python:3.12-slim. Reuse any existing group with that GID
 # instead of failing, then create the `thestill` user inside it so the later
@@ -125,7 +126,10 @@ USER thestill
 # ---------- Target: prod (spec #66 — the AWS deployment image) ----------
 # Identical to full; the difference lives entirely in the shared builder's
 # EXTRAS arg. Build with:
-#   docker build --target prod --build-arg EXTRAS=postgres,s3,ses,search .
+#   docker build --target prod --build-arg EXTRAS=postgres,s3,ses,search,entities .
 # HF_HOME (set in base) lands the ~470 MB sentence-transformers download on
-# the /data volume so container replacements don't re-fetch it.
+# the /data volume so container replacements don't re-fetch it. GLiNER goes
+# through HF_HOME too; ReFinED ignores it and defaults to ``~/.cache/refined``
+# (``/app`` here — the container layer), so REFINED_DATA_DIR points its
+# several-GB Wikidata index at the volume as well.
 FROM full AS prod

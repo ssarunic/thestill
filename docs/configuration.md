@@ -433,6 +433,14 @@ make corpus-backfill         # or: thestill chunks backfill
 `thestill status` reports current chunk count and the embedding model
 in use.
 
+## Entity Model Cache
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REFINED_DATA_DIR` | Where ReFinED downloads its Wikidata index (several GB). Set it to a persistent volume in containers; the prod image uses `/data/.cache/refined` | `~/.cache/refined` |
+
+GLiNER downloads through Hugging Face and follows `HF_HOME`.
+
 ## Entity Enrichment (spec #45)
 
 Wikipedia/Wikidata lookups that enrich resolved entities.
