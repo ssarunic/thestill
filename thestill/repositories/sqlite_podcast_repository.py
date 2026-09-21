@@ -887,6 +887,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: resolution_blacklist created")
 
+        # Migration: live-linker decision cache (spec #81, idempotent). One
+        # row per name per scope: a podcast, or corpus-wide when podcast_id
+        # is NULL. NULLs never collide in a UNIQUE, so each scope gets its
+        # own partial unique index, which is also the upsert's conflict target.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='entity_link_decisions'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating entity_link_decisions table")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS entity_link_decisions (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    surface_key    TEXT NOT NULL,
+                    podcast_id     TEXT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+                    qid            TEXT NULL,
+                    confidence     TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
+                    reason         TEXT NULL,
+                    decided_at     TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                    linker_version TEXT NOT NULL,
+                    hits           INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_podcast
+                    ON entity_link_decisions(surface_key, podcast_id) WHERE podcast_id IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_corpus
+                    ON entity_link_decisions(surface_key) WHERE podcast_id IS NULL;
+                """
+            )
+            logger.info("Migration complete: entity_link_decisions table created")
+
         # spec #45 — entity_enrichment: Tier-0 display data (photo/logo,
         # vital stats, Wikipedia lead, cross-links) fetched from Wikidata
         # + Wikipedia, keyed 1:1 by entity_id. Kept in its own table (not
