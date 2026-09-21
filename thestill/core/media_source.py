@@ -317,6 +317,11 @@ class RSSMediaSource(MediaSource):
                 # Resolve Apple Podcasts / Spotify URLs to RSS first
                 rss_url = self._extract_rss_from_apple_url(url) or self._extract_rss_from_spotify_url(url)
                 if not rss_url:
+                    if is_spotify_url(url):
+                        # An unresolved Spotify link is never itself a feed —
+                        # fetching its HTML page as RSS would only bury the
+                        # real reason (already logged) under a parse error.
+                        return None
                     rss_url = url  # Assume it's already an RSS URL
 
                 if rss_content is None:

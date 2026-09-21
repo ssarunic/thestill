@@ -193,4 +193,17 @@ class TestSpotifyPatterns:
         assert is_spotify_url("https://spotify.link/AbC123")
         assert is_spotify_url(f"spotify:episode:{self._ID}")
         assert not is_spotify_url("https://notspotify.com/episode/x")
+        assert is_spotify_url(f"open.spotify.com/show/{self._ID}")  # scheme-less paste
+
+    def test_spotify_host_is_matched_on_the_parsed_host_not_a_substring(self):
+        lookalikes = [
+            f"https://evil.example/x?next=open.spotify.com/episode/{self._ID}",
+            f"https://feeds.example.com/rss?ref=open.spotify.com/show/{self._ID}",
+            f"https://open.spotify.com.evil.example/episode/{self._ID}",
+            "https://notspotify.link/AbC123",
+            "https://evil.example/spotify.link/AbC123",
+        ]
+        for url in lookalikes:
+            assert not is_spotify_url(url), url
+            assert extract_spotify_entity(url) is None, url
         assert not is_spotify_url("https://podcasts.apple.com/us/podcast/x/id1?i=2")

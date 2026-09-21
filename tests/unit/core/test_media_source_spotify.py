@@ -96,3 +96,11 @@ def test_extract_metadata_resolves_spotify_show_to_feed(source, monkeypatch):
     assert metadata is not None
     assert metadata["rss_url"] == _FEED_URL
     assert metadata["title"] == "Sources with Alex Heath"
+
+
+def test_unresolved_spotify_link_is_not_fetched_as_a_feed(source, monkeypatch):
+    """A Spotify exclusive must fail cleanly — not by parsing Spotify's HTML as RSS."""
+    source.spotify_resolver = _StubResolver(SpotifyResolutionError("Could not find “X”."))
+    monkeypatch.setattr(source, "fetch_rss_content", lambda *a, **k: pytest.fail("must not fetch"))
+
+    assert source.extract_metadata(_SHOW_URL) is None

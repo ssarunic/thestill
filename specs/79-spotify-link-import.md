@@ -91,8 +91,13 @@ dedup, follow CTA and pipeline hand-off all work unchanged.
 
 Layering: the pipeline lives in `core` because `media_source` (core) needs
 it; `services` wraps it. HTTP goes through `utils.url_guard.guarded_session`
-(SSRF guard, redirect re-validation) with a browser User-Agent — iTunes
-returns 403 to non-browser agents.
+(SSRF guard, redirect re-validation). iTunes is called with a browser
+User-Agent (it returns 403 to non-browser agents); Spotify pages are fetched
+with a *non*-browser one, because a browser UA gets the JavaScript
+web-player shell ("Spotify – Web Player", no Open Graph tags) and only
+non-browser agents get the server-rendered metadata page. The shell's
+generic title is rejected outright so it can never be searched as a show
+name.
 
 ### Stage 1 — Spotify metadata
 
@@ -130,11 +135,24 @@ score   = name                                   # publisher unknown
         = 0.75·name + 0.25·max(pub, 0.5·name)    # publisher known
 ```
 
-`title_similarity` = max(token-set ratio, 0.6·token-set + 0.4·sequence
+`title_similarity` = max(token overlap, 0.6·token overlap + 0.4·sequence
 ratio) on normalised text (stdlib `difflib`; `rapidfuzz` is only an
-optional extra). A second search with the subtitle stripped
+optional extra). Token overlap is a soft Jaccard index — shared tokens over
+the union, with near-identical tokens (ratio ≥ 0.8) counting partially.
+It is deliberately *not* fuzzywuzzy's token-set ratio, which scores any
+subset 1.0 and so cannot tell "The Daily" from "The Daily Show: Ears
+Edition" or an exclusive "Science" from "Science Vs". Normalisation is
+Unicode-aware: Latin accents are stripped, every script's letters and
+digits are kept. A second search with the subtitle stripped
 (`"X: Y"`, `"X - Y"`, `"X | Y"` → `"X"`) runs unless the first already scored
-≥ 0.9. Accept at ≥ 0.6; otherwise `SpotifyResolutionError` "Could not find
+≥ 0.9. Candidates are de-duplicated by `feedUrl`; an exact normalised name
+outranks an equal-scoring near match. Different feeds still within 0.01 of
+each other (up to 3; "The Daily" is both a public and a subscriber feed)
+are all returned by `find_apple_show_candidates`: an episode link runs
+Stage 3 against each and keeps the feed that carries the episode, a show
+link has no second signal and is ambiguous (`spotify_show_ambiguous`) →
+miss. Accept
+at ≥ 0.75; otherwise `SpotifyResolutionError` "Could not find
 “<show>” in the Apple Podcasts directory … Spotify exclusive …".
 
 ### Stage 3 — Episode
@@ -153,6 +171,9 @@ Per-candidate score:
 
 ```
 title    = title_similarity(spotify.title, candidate.title)
+           × 0.5 when both titles carry an episode number of the same
+             style ("Ep. 12" / "#12" / "S2 E4", or a bare "12:") and the
+             numbers differ
 date     = 1.0 within ±36 h, linear to 0.3 at 7 d, 0 beyond; 0.5 if unknown
 duration = 1.0 within 2 min, 0.6 within 10 min, 0.2 beyond; 0.5 if unknown
 combined = 0.6·title + 0.25·date + 0.15·duration
@@ -161,8 +182,9 @@ accepted = (combined ≥ 0.72 and title ≥ 0.5)
 ```
 
 `pick_episode` takes the best accepted candidate; if the runner-up is also
-accepted, within 0.01, and has a different normalised title, the result is
-ambiguous (`spotify_episode_ambiguous`) → miss. Duration is deliberately a
+accepted and within 0.01, the result is ambiguous
+(`spotify_episode_ambiguous`) → miss, unless both are the same episode
+listed twice (same enclosure URL or external id). Duration is deliberately a
 tiebreaker: dynamic ad insertion makes Spotify and Apple durations differ
 by minutes.
 

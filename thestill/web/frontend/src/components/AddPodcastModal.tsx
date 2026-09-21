@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { addPodcast, getTopPodcasts } from '../api/client'
+import { addPodcast, getAddPodcastStatus, getTopPodcasts } from '../api/client'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import Button, { CloseIcon } from './Button'
@@ -140,7 +140,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
   useEffect(() => () => abortRef.current?.abort(), [])
 
   const handleFollow = useCallback(
-    async (rssUrl: string) => {
+    async (rssUrl: string, { closeOnSuccess = false } = {}) => {
       if (!rssUrl) return
       if (addInFlight.has(rssUrl) || addDone.has(rssUrl)) return
       setAddInFlight((prev) => {
@@ -151,15 +151,21 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
       setAddError(null)
       try {
         await addPodcast({ url: rssUrl })
+        // The POST only starts a background task. Wait for it, so the list
+        // refetch below sees the new row and a failure (e.g. a Spotify
+        // exclusive with no public feed) is shown instead of a false "done".
+        await waitForAddTask()
         setAddDone((prev) => {
           const next = new Set(prev)
           next.add(rssUrl)
           return next
         })
-        // Refresh the user's followed-list view so the Podcasts page picks
-        // up the new row once the background pipeline finishes adding it.
+        // Refresh the user's followed-list view now that the row exists.
         queryClient.invalidateQueries({ queryKey: ['podcasts'] })
         queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        // A pasted link is a single intent, so we are done. The chart list
+        // stays open: following several shows in a row is the point of it.
+        if (closeOnSuccess) onClose()
       } catch (err) {
         setAddError(err instanceof Error ? err.message : 'Failed to add podcast')
       } finally {
@@ -170,7 +176,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
         })
       }
     },
-    [addInFlight, addDone, queryClient],
+    [addInFlight, addDone, queryClient, onClose],
   )
 
   const handleKeyDown = useCallback(
@@ -182,7 +188,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
       if (parsed.kind === 'url') {
         if (e.key === 'Enter') {
           e.preventDefault()
-          void handleFollow(parsed.value)
+          void handleFollow(parsed.value, { closeOnSuccess: true })
         }
         return
       }
@@ -270,7 +276,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
             </div>
             <FollowButton
               status={statusOf(parsed.value, addInFlight, addDone)}
-              onClick={() => handleFollow(parsed.value)}
+              onClick={() => handleFollow(parsed.value, { closeOnSuccess: true })}
               labels={{ idle: 'Add', pending: 'Adding…', done: 'Added' }}
             />
           </div>
@@ -346,6 +352,20 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
 }
 
 type FollowStatus = 'idle' | 'pending' | 'done'
+
+const ADD_POLL_INTERVAL_MS = 500
+const ADD_POLL_TIMEOUT_MS = 60_000
+
+async function waitForAddTask(): Promise<void> {
+  const deadline = Date.now() + ADD_POLL_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    const task = await getAddPodcastStatus()
+    if (task.status === 'failed') throw new Error(task.error || 'Failed to add podcast')
+    if (task.status === 'completed' || task.status === 'none') return
+    await new Promise((resolve) => setTimeout(resolve, ADD_POLL_INTERVAL_MS))
+  }
+  throw new Error('Adding the podcast is taking longer than expected. Check the Podcasts page in a moment.')
+}
 
 function statusOf(key: string, inFlight: Set<string>, done: Set<string>): FollowStatus {
   if (done.has(key)) return 'done'

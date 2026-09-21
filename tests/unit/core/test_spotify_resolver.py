@@ -25,6 +25,7 @@ from urllib.parse import parse_qs
 
 import pytest
 
+from thestill.core import spotify_resolver
 from thestill.core.spotify_resolver import (
     EPISODE_ACCEPT_THRESHOLD,
     AppleShowMatch,
@@ -36,6 +37,7 @@ from thestill.core.spotify_resolver import (
     candidates_from_feed,
     candidates_from_itunes,
     episode_metadata_from_api,
+    episode_number,
     find_apple_show,
     normalise_title,
     parse_episode_page,
@@ -142,6 +144,39 @@ class TestPageParsing:
         assert meta.description.startswith("Listen to Sources with Alex Heath on Spotify.")
         assert meta.image_url.startswith("https://i.scdn.co/image/")
 
+    def test_web_player_shell_is_not_mistaken_for_a_show(self):
+        # What a browser UA gets: the JS shell, no Open Graph tags.
+        shell = "<html><head><title>Spotify – Web Player</title></head></html>"
+        with pytest.raises(SpotifyResolutionError, match="show name"):
+            parse_show_page(shell, _SHOW_ID)
+        with pytest.raises(SpotifyResolutionError, match="episode title and show name"):
+            parse_episode_page(shell, _EPISODE_ID)
+
+    def test_spotify_pages_are_fetched_with_a_non_browser_user_agent(self, monkeypatch):
+        # Spotify serves the metadata page to non-browser agents only.
+        seen = {}
+
+        class _Resp:
+            status_code, text, url = 200, "<html></html>", "https://open.spotify.com/x"
+
+        class _Session:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get(self, url, **kwargs):
+                return _Resp()
+
+        def fake_session(*, user_agent, retries):
+            seen["ua"] = user_agent
+            return _Session()
+
+        monkeypatch.setattr(spotify_resolver, "guarded_session", fake_session)
+        spotify_resolver.fetch_page("https://open.spotify.com/show/x")
+        assert "Mozilla" not in seen["ua"]
+
     def test_show_page_without_name_raises(self):
         with pytest.raises(SpotifyResolutionError, match="show name"):
             parse_show_page("<html><head></head></html>", _SHOW_ID)
@@ -197,6 +232,10 @@ class TestNormalisation:
             ("Episode 7 | Hello World", "hello world"),
             ("S2 E4 - Return", "return"),
             ("2024 Year in Review", "2024 year in review"),
+            ("Episode 12", "episode 12"),  # marker-only title keeps its marker
+            ("ゆる言語学ラジオ", "ゆる言語学ラジオ"),
+            ("#12 Подкаст о технологиях!", "подкаст о технологиях"),
+            ("snake_case title", "snake case title"),
             ("", ""),
         ],
     )
@@ -205,9 +244,41 @@ class TestNormalisation:
 
     def test_token_set_ratio_ignores_order_and_prefix_noise(self):
         assert token_set_ratio("Ep 12: Muse and Meta", "Meta and Muse") == 1.0
-        assert token_set_ratio("Alpha Beta Gamma", "Alpha Beta Gamma Delta Epsilon") > 0.7
         assert token_set_ratio("Completely different", "Nothing alike here") < 0.5
         assert token_set_ratio("", "x") == 0.0
+
+    def test_token_set_ratio_penalises_unmatched_tokens(self):
+        # A subset is evidence, not a perfect match (fuzzywuzzy scores it 1.0).
+        assert token_set_ratio("Alpha Beta Gamma", "Alpha Beta Gamma Delta Epsilon") == pytest.approx(0.6)
+        assert token_set_ratio("The Daily", "Daily") == pytest.approx(0.5)
+        assert token_set_ratio("The Daily", "The Daily Show: Ears Edition") < 0.5
+
+    def test_token_set_ratio_tolerates_typos(self):
+        assert 0.9 < token_set_ratio("Mark Zuckerberg on Muse", "Mark Zuckerburg on Muse") < 1.0
+
+    def test_non_latin_titles_are_compared_not_discarded(self):
+        assert token_set_ratio("ゆる言語学ラジオ", "ゆる言語学ラジオ") == 1.0
+        assert token_set_ratio("ゆる言語学ラジオ", "コテンラジオ") < 0.75
+        # The Latin fragment alone must not make two different titles equal.
+        assert token_set_ratio("AI 日本語", "AI ニュース") < 1.0
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("Episode 12: Weekly update", ("keyword", 12)),
+            ("#45 – Hello", ("keyword", 45)),
+            ("S2 E4 - Return", ("keyword", 4)),
+            ("12: Weekly update", ("bare", 12)),
+            ("2024 Year in Review", None),
+            ("Weekly update", None),
+        ],
+    )
+    def test_episode_number(self, raw, expected):
+        assert episode_number(raw) == expected
+
+    def test_blank_titles_never_match(self):
+        assert token_set_ratio("", "") == 0.0
+        assert token_set_ratio("🎧", "!!!") == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +339,41 @@ class TestShowMatch:
     def test_publisher_unknown_scores_on_name_only(self):
         match = find_apple_show("Hard Fork", None, search=lambda p: [_show_result("Hard Fork", "The New York Times")])
         assert match.publisher == "The New York Times"
+
+    @pytest.mark.parametrize("order", [("Daily", "The Daily"), ("The Daily", "Daily")])
+    def test_exact_name_beats_subset_regardless_of_apple_order(self, order):
+        results = [
+            _show_result(name, "x", cid=i, feed=f"https://feeds.example.com/{i}.xml") for i, name in enumerate(order)
+        ]
+        match = find_apple_show("The Daily", None, search=lambda p: results)
+        assert match.name == "The Daily"
+
+    def test_superset_name_is_not_a_match_for_an_exclusive(self):
+        # "Science" (exclusive) must not silently become "Science Vs".
+        results = [
+            _show_result("Science Vs", "Spotify Studios", cid=1, feed="https://feeds.example.com/1.xml"),
+            _show_result("Science Friday", "WNYC", cid=2, feed="https://feeds.example.com/2.xml"),
+        ]
+        with pytest.raises(SpotifyResolutionError, match="Could not find"):
+            find_apple_show("Science", None, search=lambda p: results)
+
+    def test_two_feeds_with_the_same_name_are_ambiguous(self):
+        results = [
+            _show_result("Science", "A", cid=1, feed="https://feeds.example.com/1.xml"),
+            _show_result("Science", "B", cid=2, feed="https://feeds.example.com/2.xml"),
+        ]
+        with pytest.raises(SpotifyResolutionError, match="More than one show"):
+            find_apple_show("Science", None, search=lambda p: results)
+        # ...but the publisher settles it when Spotify supplies one.
+        assert find_apple_show("Science", "B", search=lambda p: results).collection_id == "2"
+
+    def test_same_feed_listed_twice_is_not_ambiguous(self):
+        results = [_show_result("Hard Fork", "NYT", cid=1), _show_result("Hard Fork", "NYT", cid=1)]
+        assert find_apple_show("Hard Fork", None, search=lambda p: results).name == "Hard Fork"
+
+    def test_non_latin_show_name_resolves(self):
+        match = find_apple_show("ゆる言語学ラジオ", None, search=lambda p: [_show_result("ゆる言語学ラジオ", "x")])
+        assert match.score == 1.0
 
     def test_exclusive_show_not_found_is_a_clean_error(self):
         with pytest.raises(SpotifyResolutionError, match="Spotify exclusive"):
@@ -351,6 +457,38 @@ class TestEpisodeScoring:
             ],
         )
         assert picked is None
+
+    def test_episode_number_separates_identically_titled_episodes(self):
+        # No date / duration on either side: the number is the only signal.
+        meta = _meta(title="Episode 12: Weekly update", release_date=None, duration_seconds=None)
+        candidates = [
+            EpisodeCandidate(title="Episode 13: Weekly update", audio_url="u13"),
+            EpisodeCandidate(title="Episode 12: Weekly update", audio_url="u12"),
+        ]
+        picked = pick_episode(meta, candidates)
+        assert picked is not None and picked[0].audio_url == "u12"
+        assert not score_episode_candidate(meta, candidates[0]).accepted
+
+    def test_same_title_a_day_apart_is_ambiguous(self):
+        # Spotify dates are day-precision and ±36 h is "tight", so both score 1.0 on date.
+        meta = _meta(title="Morning Briefing", duration_seconds=None)
+        picked = pick_episode(
+            meta,
+            [
+                _candidate("Morning Briefing", hours=29, duration=None, audio="next-day"),
+                _candidate("Morning Briefing", hours=5, duration=None, audio="same-day"),
+            ],
+        )
+        assert picked is None
+
+    def test_same_episode_listed_twice_is_not_ambiguous(self):
+        meta = _meta(title="Morning Briefing")
+        picked = pick_episode(meta, [_candidate("Morning Briefing"), _candidate("Morning Briefing")])
+        assert picked is not None
+
+    def test_subset_title_without_corroboration_is_rejected(self):
+        meta = _meta(title="Inflation", release_date=None, duration_seconds=None)
+        assert pick_episode(meta, [EpisodeCandidate(title="Inflation, tariffs and the Fed", audio_url="z")]) is None
 
     def test_pick_breaks_tie_on_duration(self):
         meta = _meta(title="Interview Part", duration_seconds=3600)
@@ -486,6 +624,28 @@ class TestResolveEpisode:
         assert kinds == ["episode_meta", "search", "lookup"]
         # Page URL handed to the metadata fetcher is canonical (no ?si= tracking).
         assert net.calls[0][2] == f"https://open.spotify.com/episode/{_EPISODE_ID}"
+
+    def test_same_named_feeds_are_settled_by_the_episode(self):
+        # "The Daily" is two feeds in Apple's directory; an episode link has
+        # no publisher to split them, but only one feed carries the episode.
+        title = "Mark Zuckerberg on Muse, Meta's biggest AI bet yet"
+        net = _Net(
+            show_results=[
+                _show_result(
+                    "Sources with Alex Heath", "Subscriber feed", cid=1, feed="https://feeds.example.com/sub.xml"
+                ),
+                _show_result("Sources with Alex Heath", "Alex Heath", cid=2, feed="https://feeds.example.com/pub.xml"),
+            ],
+            window=[_itunes_episode(title, cid=2)],  # lookup filters by collectionId → only show 2 matches
+            meta=_meta(publisher=None),
+        )
+        resolved = net.resolver().resolve_episode(_EPISODE_URL)
+        assert resolved.show.collection_id == "2"
+        assert resolved.episode.title == title
+
+        # The show link has no such second signal and stays ambiguous.
+        with pytest.raises(SpotifyResolutionError, match="More than one show"):
+            find_apple_show("Sources with Alex Heath", None, search=net.search)
 
     def test_tier2_itunes_episode_search_when_window_misses(self):
         net = _Net(

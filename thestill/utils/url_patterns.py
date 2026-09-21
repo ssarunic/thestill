@@ -185,10 +185,36 @@ SPOTIFY_URI_RE: Final[re.Pattern[str]] = re.compile(r"^spotify:(episode|show):([
 SPOTIFY_SHORT_LINK_RE: Final[re.Pattern[str]] = re.compile(r"spotify\.link/[A-Za-z0-9]{1,32}", re.IGNORECASE)
 
 
-def is_spotify_url(url: str) -> bool:
-    """Return True iff ``url`` is a Spotify web link, short link, or URI."""
+_SPOTIFY_WEB_HOSTS: Final[frozenset[str]] = frozenset({"open.spotify.com", "play.spotify.com"})
+_SPOTIFY_SHORT_HOST: Final[str] = "spotify.link"
+
+
+def _url_host(text: str) -> str:
+    """Lower-cased hostname of ``text`` (scheme optional), or "" when unparseable."""
+    candidate = text if "://" in text else f"https://{text}"
+    try:
+        return (urlparse(candidate).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def is_spotify_short_link(url: str) -> bool:
+    """Return True iff ``url`` is a ``spotify.link`` short link."""
     text = url.strip()
-    return bool(SPOTIFY_HOST_RE.search(text) or SPOTIFY_SHORT_LINK_RE.search(text) or SPOTIFY_URI_RE.match(text))
+    return _url_host(text) == _SPOTIFY_SHORT_HOST and bool(SPOTIFY_SHORT_LINK_RE.search(text))
+
+
+def is_spotify_url(url: str) -> bool:
+    """Return True iff ``url`` is a Spotify web link, short link, or URI.
+
+    The decision is made on the parsed *host*, not a substring search, so
+    ``https://evil.example/?next=open.spotify.com/`` and ``notspotify.link``
+    are not Spotify links.
+    """
+    text = url.strip()
+    if SPOTIFY_URI_RE.match(text):
+        return True
+    return _url_host(text) in _SPOTIFY_WEB_HOSTS or is_spotify_short_link(text)
 
 
 def extract_spotify_entity(text: str) -> tuple[str, str] | None:
@@ -198,7 +224,9 @@ def extract_spotify_entity(text: str) -> tuple[str, str] | None:
     carry no entity id and return None — resolve the redirect first.
     """
     stripped = text.strip()
-    match = SPOTIFY_URI_RE.match(stripped) or SPOTIFY_ENTITY_RE.search(stripped)
+    match = SPOTIFY_URI_RE.match(stripped)
+    if not match and _url_host(stripped) in _SPOTIFY_WEB_HOSTS:
+        match = SPOTIFY_ENTITY_RE.search(stripped)
     if not match:
         return None
     return match.group(1).lower(), match.group(2)

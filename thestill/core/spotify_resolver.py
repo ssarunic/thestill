@@ -65,7 +65,7 @@ from urllib3.util.retry import Retry
 from ..utils.datetime_utils import parse_struct_time_utc
 from ..utils.duration import parse_duration
 from ..utils.url_guard import guarded_session
-from ..utils.url_patterns import SPOTIFY_SHORT_LINK_RE, extract_spotify_entity
+from ..utils.url_patterns import extract_spotify_entity, is_spotify_short_link
 
 logger = get_logger(__name__)
 
@@ -75,6 +75,10 @@ class SpotifyResolutionError(Exception):
 
     The message is user-facing: the import API surfaces it verbatim.
     """
+
+    def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +171,11 @@ _BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 )
+# Spotify does the opposite: a browser UA gets the JavaScript web-player shell
+# ("Spotify – Web Player", no Open Graph tags); the server-rendered page with
+# the metadata is only served to non-browser agents (link unfurlers, bots).
+_SPOTIFY_PAGE_USER_AGENT = "Thestill/1.0"
+_SPOTIFY_SHELL_TITLE = "spotify web player"
 _HTTP_TIMEOUT = 15
 # Open Graph tags live in <head>; bounding the scanned prefix keeps the
 # meta-tag regexes cheap on Spotify's multi-hundred-KB pages.
@@ -186,25 +195,31 @@ def _retry_policy() -> Retry:
     )
 
 
-def _guarded_get(url: str, *, label: str, headers: Optional[Dict[str, str]] = None) -> requests.Response:
+def _guarded_get(
+    url: str,
+    *,
+    label: str,
+    headers: Optional[Dict[str, str]] = None,
+    user_agent: str = _BROWSER_USER_AGENT,
+) -> requests.Response:
     try:
-        with guarded_session(user_agent=_BROWSER_USER_AGENT, retries=_retry_policy()) as session:
+        with guarded_session(user_agent=user_agent, retries=_retry_policy()) as session:
             resp = session.get(url, timeout=_HTTP_TIMEOUT, headers=headers)
     except requests.RequestException as exc:
         raise SpotifyResolutionError(f"{label} fetch failed: {exc}") from exc
     if resp.status_code != 200:
-        raise SpotifyResolutionError(f"{label} returned HTTP {resp.status_code}")
+        raise SpotifyResolutionError(f"{label} returned HTTP {resp.status_code}", status_code=resp.status_code)
     return resp
 
 
 def fetch_page(url: str) -> str:
-    """GET a Spotify page and return its HTML (guarded, browser UA)."""
-    return str(_guarded_get(url, label="Spotify page").text)
+    """GET a Spotify page and return its server-rendered HTML (guarded, non-browser UA)."""
+    return str(_guarded_get(url, label="Spotify page", user_agent=_SPOTIFY_PAGE_USER_AGENT).text)
 
 
 def expand_short_link(url: str) -> str:
     """Follow a ``spotify.link`` short link and return the final URL."""
-    return str(_guarded_get(url, label="Spotify short link").url)
+    return str(_guarded_get(url, label="Spotify short link", user_agent=_SPOTIFY_PAGE_USER_AGENT).url)
 
 
 def itunes_search(params: str) -> list:
@@ -266,7 +281,10 @@ def parse_meta_tags(page_html: str) -> Dict[str, str]:
 
 def _page_title(page_html: str) -> str:
     match = _TITLE_TAG_RE.search(page_html[:_MAX_PAGE_SCAN_BYTES])
-    return html.unescape(match.group(1)).strip() if match else ""
+    title = html.unescape(match.group(1)).strip() if match else ""
+    # The JS shell's generic title is not a show name — treating it as one
+    # would send "Spotify – Web Player" to the Apple search.
+    return "" if normalise_title(title) == _SPOTIFY_SHELL_TITLE else title
 
 
 def _strip_spotify_title_suffix(text: str) -> str:
@@ -444,11 +462,11 @@ class SpotifyWebApi:
             raise SpotifyResolutionError(f"Spotify token request failed: {exc}") from exc
         if resp.status_code != 200:
             raise SpotifyResolutionError(f"Spotify token request returned HTTP {resp.status_code}")
-        token = (
-            resp.json().get("access_token")
-            if resp.headers.get("content-type", "").startswith("application/json")
-            else None
-        )
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SpotifyResolutionError(f"Spotify token response was not JSON: {exc}") from exc
+        token = body.get("access_token") if isinstance(body, dict) else None
         if not isinstance(token, str) or not token:
             raise SpotifyResolutionError("Spotify token response carried no access_token")
         return token
@@ -461,25 +479,32 @@ class SpotifyWebApi:
             label="Spotify API",
             headers={"Authorization": f"Bearer {self._token}"},
         )
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise SpotifyResolutionError(f"Spotify API returned non-JSON: {exc}") from exc
         if not isinstance(payload, dict):
             raise SpotifyResolutionError("Spotify API returned an unexpected payload")
         return payload
 
-    def episode(self, episode_id: str) -> SpotifyEpisodeMetadata:
+    def _get_with_market_fallback(self, path: str) -> dict:
         # ``market`` is required for client-credentials tokens; US first, then
-        # unrestricted, so a region-locked episode still resolves.
+        # unrestricted, so a region-locked entity still resolves. Only a
+        # "not available here" answer is worth the second call — a 429 / 5xx
+        # has already been retried by the session and would fail again.
         try:
-            payload = self._get(f"/episodes/{episode_id}?market=US")
-        except SpotifyResolutionError:
-            payload = self._get(f"/episodes/{episode_id}")
+            return self._get(f"{path}?market=US")
+        except SpotifyResolutionError as exc:
+            if exc.status_code not in (400, 404):
+                raise
+            return self._get(path)
+
+    def episode(self, episode_id: str) -> SpotifyEpisodeMetadata:
+        payload = self._get_with_market_fallback(f"/episodes/{episode_id}")
         return episode_metadata_from_api(payload, episode_id)
 
     def show(self, show_id: str) -> SpotifyShowMetadata:
-        try:
-            payload = self._get(f"/shows/{show_id}?market=US")
-        except SpotifyResolutionError:
-            payload = self._get(f"/shows/{show_id}")
+        payload = self._get_with_market_fallback(f"/shows/{show_id}")
         return show_metadata_from_api(payload, show_id)
 
 
@@ -547,25 +572,65 @@ def show_metadata_from_api(payload: dict, show_id: str) -> SpotifyShowMetadata:
 
 # "Ep. 12 –", "Episode 12:", "#12", "No. 12", "S2 E4 -" and a bare "12:" /
 # "12 -" are dropped; a bare leading number with no separator ("2024 Year in
-# Review") is content and stays.
+# Review") is content and stays. The number itself is kept separately (see
+# :func:`episode_number`) — it is the only thing telling "Episode 12: Weekly
+# update" from "Episode 13: Weekly update".
 _EPISODE_PREFIX_RE = re.compile(
-    r"^(?:(?:ep(?:isode)?\.?|#|no\.?|s\d{1,3}\s*e)\s*\d{1,5}[a-z]?\s*[:.\-–—|)]?\s*|\d{1,5}\s*[:.\-–—|)]\s*)",
+    r"^(?:(?P<keyword>(?:ep(?:isode)?\.?|#|no\.?|s\d{1,3}\s*e)\s*(?P<kw_num>\d{1,5})[a-z]?\s*[:.\-–—|)]?\s*)"
+    r"|(?P<bare_num>\d{1,5})\s*[:.\-–—|)]\s*)",
     re.IGNORECASE,
 )
-_NON_WORD_RE = re.compile(r"[^0-9a-z\s]+")
-_STOPWORDS = frozenset({"the", "a", "an", "and", "of", "with", "on", "in", "to", "for", "at", "by", "from", "vs"})
+# Unicode-aware: ``\w`` keeps letters / digits of every script, so Japanese
+# or Cyrillic titles survive normalisation instead of collapsing to "".
+_NON_WORD_RE = re.compile(r"[^\w\s]+|_+")
+_FUZZY_TOKEN_FLOOR = 0.8
+
+
+def _strip_latin_accents(char: str) -> str:
+    # Accents are noise on Latin letters ("Café" / "Cafe") but part of the
+    # letter elsewhere: stripping marks turns ジ into シ and й into и.
+    decomposed = unicodedata.normalize("NFD", char)
+    if len(decomposed) > 1 and unicodedata.name(decomposed[0], "").startswith("LATIN"):
+        return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return char
+
+
+def _fold(text: str) -> str:
+    composed = unicodedata.normalize("NFKC", text)
+    stripped = "".join(_strip_latin_accents(ch) for ch in composed)
+    return stripped.lower().replace("&", " and ")
+
+
+def _squash(text: str) -> str:
+    return " ".join(_NON_WORD_RE.sub(" ", text).split())
 
 
 def normalise_title(text: str) -> str:
-    """Lower-case, strip accents / punctuation / emoji, drop ``Ep. 123 –`` prefixes."""
+    """Lower-case, strip accents / punctuation / emoji, drop ``Ep. 123 –`` prefixes.
+
+    A title that is *only* an episode marker ("Episode 12") keeps it — an
+    empty string would make every such title look identical.
+    """
     if not text:
         return ""
-    decomposed = unicodedata.normalize("NFKD", text)
-    ascii_text = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-    lowered = ascii_text.lower().replace("&", " and ")
-    lowered = _EPISODE_PREFIX_RE.sub("", lowered, count=1)
-    lowered = _NON_WORD_RE.sub(" ", lowered)
-    return " ".join(lowered.split())
+    folded = _fold(text)
+    return _squash(_EPISODE_PREFIX_RE.sub("", folded, count=1)) or _squash(folded)
+
+
+def episode_number(text: str) -> Optional[Tuple[str, int]]:
+    """``(style, number)`` for a leading episode marker, else None.
+
+    ``style`` is ``"keyword"`` ("Ep. 12", "#12", "S2 E4") or ``"bare"``
+    ("12: ..."). Callers only compare numbers of the same style: a bare
+    number may be content ("1984: the book"), so it is never held against
+    an explicit "Ep. 5".
+    """
+    match = _EPISODE_PREFIX_RE.match(_fold(text or "").strip())
+    if not match:
+        return None
+    if match.group("kw_num") is not None:
+        return "keyword", int(match.group("kw_num"))
+    return "bare", int(match.group("bare_num"))
 
 
 def _tokens(text: str) -> List[str]:
@@ -573,38 +638,53 @@ def _tokens(text: str) -> List[str]:
 
 
 def token_set_ratio(left: str, right: str) -> float:
-    """fuzzywuzzy-style token-set similarity in ``[0, 1]`` on stdlib ``difflib``."""
+    """Order-insensitive token overlap in ``[0, 1]`` (a soft Jaccard index).
+
+    Identical token sets score 1.0. Tokens present on one side only *lower*
+    the score — deliberately unlike fuzzywuzzy's ``token_set_ratio``, which
+    scores any subset as a perfect match and so cannot tell "The Daily"
+    from "The Daily Show: Ears Edition". Near-identical tokens (typos,
+    plurals) count as a partial match.
+    """
     left_tokens, right_tokens = set(_tokens(left)), set(_tokens(right))
     if not left_tokens or not right_tokens:
         return 0.0
-    if left_tokens == right_tokens:
-        return 1.0
-    shared = " ".join(sorted(left_tokens & right_tokens))
-    left_only = " ".join(sorted(left_tokens - right_tokens))
-    right_only = " ".join(sorted(right_tokens - left_tokens))
-    combined_left = f"{shared} {left_only}".strip()
-    combined_right = f"{shared} {right_only}".strip()
-    pairs = ((shared, combined_left), (shared, combined_right), (combined_left, combined_right))
-    return max(SequenceMatcher(None, a, b).ratio() for a, b in pairs if a and b)
+    shared = left_tokens & right_tokens
+    matched = float(len(shared))
+    right_rest = sorted(right_tokens - shared)
+    for token in sorted(left_tokens - shared):
+        best_ratio, best_other = 0.0, None
+        for other in right_rest:
+            ratio = SequenceMatcher(None, token, other).ratio()
+            if ratio > best_ratio:
+                best_ratio, best_other = ratio, other
+        if best_other is not None and best_ratio >= _FUZZY_TOKEN_FLOOR:
+            matched += best_ratio
+            right_rest.remove(best_other)
+    fuzzy_pairs = len(right_tokens - shared) - len(right_rest)
+    union = len(left_tokens | right_tokens) - fuzzy_pairs
+    return matched / union
 
 
 def _title_similarity(left: str, right: str) -> float:
-    """Token-set ratio blended with a whole-string ratio so word order still counts a little."""
+    """Token overlap blended with a whole-string ratio (rescues spacing / spelling variants)."""
+    left_norm, right_norm = normalise_title(left), normalise_title(right)
+    if not left_norm or not right_norm:
+        return 0.0
     set_ratio = token_set_ratio(left, right)
-    seq_ratio = SequenceMatcher(None, normalise_title(left), normalise_title(right)).ratio()
+    seq_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
     return max(set_ratio, 0.6 * set_ratio + 0.4 * seq_ratio)
-
-
-def _content_tokens(text: str) -> set:
-    return {tok for tok in _tokens(text) if tok not in _STOPWORDS}
 
 
 # ---------------------------------------------------------------------------
 # Apple show match
 # ---------------------------------------------------------------------------
 
-SHOW_ACCEPT_THRESHOLD = 0.6
+SHOW_ACCEPT_THRESHOLD = 0.75
 _SHOW_SEARCH_LIMIT = 25
+_SHOW_AMBIGUITY_MARGIN = 0.01
+# Tied feeds tried for an episode link — each costs up to three fetches.
+_SHOW_MAX_TIED = 3
 
 
 def score_show_candidate(show_name: str, publisher: Optional[str], candidate: dict) -> float:
@@ -628,40 +708,8 @@ def _show_search_terms(show_name: str) -> List[str]:
     return terms
 
 
-def find_apple_show(
-    show_name: str,
-    publisher: Optional[str],
-    *,
-    search: Callable[[str], list] = itunes_search,
-) -> AppleShowMatch:
-    """Resolve a Spotify show name (+ publisher) to an Apple directory entry with a feed URL."""
-    best_score = -1.0
-    best_entry: Optional[dict] = None
-    for term in _show_search_terms(show_name):
-        params = f"term={quote_plus(term)}&media=podcast&entity=podcast&limit={_SHOW_SEARCH_LIMIT}"
-        for candidate in search(params):
-            if not isinstance(candidate, dict) or not candidate.get("feedUrl"):
-                continue
-            score = score_show_candidate(show_name, publisher, candidate)
-            if score > best_score:
-                best_score, best_entry = score, candidate
-        if best_score >= 0.9:
-            break
-    if best_entry is None or best_score < SHOW_ACCEPT_THRESHOLD:
-        logger.info(
-            "spotify_show_unmatched",
-            show_name=show_name,
-            publisher=publisher,
-            best_score=round(best_score, 3) if best_entry is not None else None,
-            best_candidate=best_entry.get("collectionName") if best_entry is not None else None,
-        )
-        raise SpotifyResolutionError(
-            f"Could not find “{show_name}” in the Apple Podcasts directory. If this show "
-            "is a Spotify exclusive it has no public feed to import from; otherwise paste "
-            "the show's RSS feed or its Apple Podcasts link instead."
-        )
-    score, entry = best_score, best_entry
-    match = AppleShowMatch(
+def _apple_show_match(entry: dict, show_name: str, score: float) -> AppleShowMatch:
+    return AppleShowMatch(
         collection_id=str(entry.get("collectionId") or ""),
         name=str(entry.get("collectionName") or show_name),
         feed_url=str(entry["feedUrl"]),
@@ -669,6 +717,92 @@ def find_apple_show(
         image_url=entry.get("artworkUrl600") or entry.get("artworkUrl100"),
         score=round(score, 3),
     )
+
+
+def find_apple_show_candidates(
+    show_name: str,
+    publisher: Optional[str],
+    *,
+    search: Callable[[str], list] = itunes_search,
+) -> List[AppleShowMatch]:
+    """The best Apple directory entry for a Spotify show, plus any other feed it ties with.
+
+    Usually one entry. More than one means the name (+ publisher) cannot
+    separate them — "The Daily" is both the public feed and a subscriber
+    feed — and the caller needs another signal: the episode match for an
+    episode link, nothing for a show link (see :func:`find_apple_show`).
+    Entries keep Apple's relevance order. Raises when nothing clears
+    :data:`SHOW_ACCEPT_THRESHOLD`.
+    """
+    # One entry per feed: (score, exact-name flag, candidate). An exact name
+    # outranks an equal-scoring near match.
+    wanted = normalise_title(show_name)
+    by_feed: Dict[str, Tuple[float, bool, dict]] = {}
+    for term in _show_search_terms(show_name):
+        params = f"term={quote_plus(term)}&media=podcast&entity=podcast&limit={_SHOW_SEARCH_LIMIT}"
+        for candidate in search(params):
+            if not isinstance(candidate, dict) or not candidate.get("feedUrl"):
+                continue
+            feed_url = str(candidate["feedUrl"])
+            score = score_show_candidate(show_name, publisher, candidate)
+            if feed_url not in by_feed or score > by_feed[feed_url][0]:
+                exact = normalise_title(str(candidate.get("collectionName") or "")) == wanted
+                by_feed[feed_url] = (score, exact, candidate)
+        if any(score >= 0.9 for score, _, _ in by_feed.values()):
+            break
+    ranked = sorted(
+        by_feed.values(),
+        key=lambda item: item[0] + (_SHOW_AMBIGUITY_MARGIN if item[1] else 0.0),
+        reverse=True,
+    )
+    if not ranked or ranked[0][0] < SHOW_ACCEPT_THRESHOLD:
+        logger.info(
+            "spotify_show_unmatched",
+            show_name=show_name,
+            publisher=publisher,
+            best_score=round(ranked[0][0], 3) if ranked else None,
+            best_candidate=ranked[0][2].get("collectionName") if ranked else None,
+        )
+        raise SpotifyResolutionError(
+            f"Could not find “{show_name}” in the Apple Podcasts directory. If this show "
+            "is a Spotify exclusive it has no public feed to import from; otherwise paste "
+            "the show's RSS feed or its Apple Podcasts link instead."
+        )
+    best_score, best_exact, _ = ranked[0]
+    tied = [
+        item
+        for item in ranked[:_SHOW_MAX_TIED]
+        if item[1] == best_exact and best_score - item[0] < _SHOW_AMBIGUITY_MARGIN
+    ]
+    return [_apple_show_match(entry, show_name, score) for score, _, entry in tied]
+
+
+def find_apple_show(
+    show_name: str,
+    publisher: Optional[str],
+    *,
+    search: Callable[[str], list] = itunes_search,
+) -> AppleShowMatch:
+    """Resolve a Spotify show name (+ publisher) to one Apple directory entry with a feed URL.
+
+    Two different feeds that tie are reported as ambiguous rather than
+    resolved by whichever one Apple happened to list first.
+    """
+    candidates = find_apple_show_candidates(show_name, publisher, search=search)
+    if len(candidates) > 1:
+        logger.info(
+            "spotify_show_ambiguous",
+            show_name=show_name,
+            publisher=publisher,
+            candidates=[f"{c.name} ({c.publisher})" for c in candidates],
+            score=candidates[0].score,
+        )
+        raise SpotifyResolutionError(
+            f"More than one show in the Apple Podcasts directory matches “{show_name}” equally "
+            "well, so the right feed can't be picked safely. Paste the show's RSS feed or its "
+            "Apple Podcasts link instead."
+        )
+    match = candidates[0]
     logger.info(
         "spotify_show_matched",
         show_name=show_name,
@@ -690,6 +824,7 @@ _DATE_LOOSE_HOURS = 24.0 * 7
 _DURATION_TIGHT_SECONDS = 120
 _DURATION_LOOSE_SECONDS = 600
 _AMBIGUITY_MARGIN = 0.01
+_EPISODE_NUMBER_MISMATCH_FACTOR = 0.5
 
 
 def _date_score(left: Optional[datetime], right: Optional[datetime]) -> float:
@@ -719,6 +854,12 @@ def _duration_score(left: Optional[int], right: Optional[int]) -> float:
 def score_episode_candidate(meta: SpotifyEpisodeMetadata, candidate: EpisodeCandidate) -> EpisodeScore:
     """Score one candidate against the Spotify metadata (see module docstring)."""
     title = _title_similarity(meta.title, candidate.title)
+    wanted_number, candidate_number = episode_number(meta.title), episode_number(candidate.title)
+    if wanted_number and candidate_number and wanted_number[0] == candidate_number[0]:
+        if wanted_number[1] != candidate_number[1]:
+            # Same numbering style, different number: a different episode,
+            # however alike the rest of the title ("Episode 13: Weekly update").
+            title *= _EPISODE_NUMBER_MISMATCH_FACTOR
     date = _date_score(meta.release_date, candidate.pub_date)
     duration = _duration_score(meta.duration_seconds, candidate.duration_seconds)
     combined = 0.6 * title + 0.25 * date + 0.15 * duration
@@ -734,14 +875,22 @@ def score_episode_candidate(meta: SpotifyEpisodeMetadata, candidate: EpisodeCand
     )
 
 
+def _same_episode(left: EpisodeCandidate, right: EpisodeCandidate) -> bool:
+    """True when two candidates are one episode listed twice (same enclosure or id)."""
+    if left.audio_url == right.audio_url:
+        return True
+    return bool(left.external_id) and left.external_id == right.external_id
+
+
 def pick_episode(
     meta: SpotifyEpisodeMetadata, candidates: Sequence[EpisodeCandidate]
 ) -> Optional[Tuple[EpisodeCandidate, EpisodeScore]]:
     """Return the best accepted candidate, or None when nothing clears the bar.
 
     Two accepted candidates within :data:`_AMBIGUITY_MARGIN` of each other
-    (a "Part 1" / "Part 2" pair with identical dates, say) are treated as
-    unresolvable rather than picked arbitrarily.
+    (a "Part 1" / "Part 2" pair with identical dates, or two same-titled
+    daily episodes a day apart) are treated as unresolvable rather than
+    picked arbitrarily — unless they are the same episode listed twice.
     """
     scored = [(cand, score_episode_candidate(meta, cand)) for cand in candidates if cand.audio_url]
     scored.sort(key=lambda pair: pair[1].combined, reverse=True)
@@ -749,7 +898,7 @@ def pick_episode(
         return None
     if len(scored) > 1 and scored[1][1].accepted:
         gap = scored[0][1].combined - scored[1][1].combined
-        if gap < _AMBIGUITY_MARGIN and normalise_title(scored[0][0].title) != normalise_title(scored[1][0].title):
+        if gap < _AMBIGUITY_MARGIN and not _same_episode(scored[0][0], scored[1][0]):
             logger.info(
                 "spotify_episode_ambiguous",
                 spotify_episode_id=meta.episode_id,
@@ -886,7 +1035,7 @@ class SpotifyLinkResolver:
     def identify(self, url: str) -> Tuple[str, str]:
         """``(kind, id)`` for the pasted link, following ``spotify.link`` shorteners."""
         entity = extract_spotify_entity(url)
-        if entity is None and SPOTIFY_SHORT_LINK_RE.search(url):
+        if entity is None and is_spotify_short_link(url):
             expanded = self._expand(url.strip())
             entity = extract_spotify_entity(expanded)
         if entity is None:
@@ -915,15 +1064,18 @@ class SpotifyLinkResolver:
             has_release_date=meta.release_date is not None,
             has_duration=meta.duration_seconds is not None,
         )
-        show = find_apple_show(meta.show_name, meta.publisher, search=self._search)
-        picked = self._match_episode(meta, show)
-        if picked is None:
+        # Same-named feeds ("The Daily" public + subscriber) are settled by
+        # the episode itself: the feed that carries it wins, best score first,
+        # Apple's relevance order on a tie.
+        shows = find_apple_show_candidates(meta.show_name, meta.publisher, search=self._search)
+        matches = [(show, picked) for show in shows if (picked := self._match_episode(meta, show)) is not None]
+        if not matches:
             raise SpotifyResolutionError(
-                f"Found “{show.name}” in the Apple Podcasts directory but could not confidently "
+                f"Found “{shows[0].name}” in the Apple Podcasts directory but could not confidently "
                 f"match the episode “{meta.title}” in its feed. Paste the Apple Podcasts episode "
                 "link or the show's RSS feed instead."
             )
-        candidate, score = picked
+        show, (candidate, score) = max(matches, key=lambda pair: pair[1][1].combined)
         logger.info(
             "spotify_episode_matched",
             spotify_episode_id=entity_id,

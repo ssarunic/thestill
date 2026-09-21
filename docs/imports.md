@@ -122,22 +122,31 @@ with its scores so a wrong or missing match can be diagnosed.
 2. **Show → feed.** `itunes.apple.com/search?term=<show>&entity=podcast`
    results are fuzzy-scored on `collectionName` (and `artistName` against
    the publisher when known). The best result above the threshold supplies
-   `collectionId` and `feedUrl`. A subtitle-stripped retry handles names like
-   "The Rest Is Politics: US". No match ⇒ "Could not find … in the Apple
+   `collectionId` and `feedUrl`; an exact name outranks an equal-scoring near
+   match. Two different feeds that still tie ("The Daily" is both a public
+   and a subscriber feed) are settled by the episode for an episode link —
+   the feed that carries it wins — and reported as ambiguous for a show
+   link, rather than picked by Apple's listing order. A subtitle-stripped retry
+   handles names like "The Rest Is Politics: US". No match ⇒ "Could not find … in the Apple
    Podcasts directory", which is the normal outcome for Spotify exclusives.
 3. **Episode.** Candidates come from, in order: the show's iTunes
    200-episode window (`lookup?id=<collectionId>&entity=podcastEpisode`),
    an iTunes episode-title search filtered to the show, and finally the RSS
    feed itself (full history). Each candidate scores
    `0.6 × title + 0.25 × date + 0.15 × duration`, where the title score is a
-   token-set similarity over a normalised title (lower-case, accents /
-   punctuation / emoji stripped, `Ep. 123 –` prefixes dropped), the date
+   token-overlap similarity over a normalised title (lower-case, Latin
+   accents / punctuation / emoji stripped, `Ep. 123 –` prefixes dropped;
+   non-Latin scripts are kept). Words present on only one side lower the
+   score, so a title that merely *contains* the Spotify title is not a
+   perfect match, and a different episode number in the same style
+   ("Episode 12" vs "Episode 13") halves it. The date
    score is 1.0 within ±36 h decaying to 0 at a week, and duration is 1.0
    within 2 min / 0.6 within 10 min (dynamic ad insertion) / 0.2 beyond.
    Accepted at ≥ 0.72 with a title score ≥ 0.5, or an exact title with a
    compatible date or duration. Two accepted candidates within 0.01 of each
-   other ("Part 1" / "Part 2" on the same day) are reported as ambiguous
-   rather than guessed.
+   other ("Part 1" / "Part 2" on the same day, or a same-titled daily show's
+   neighbouring episodes) are reported as ambiguous rather than guessed —
+   unless they are the same episode listed twice (same enclosure or id).
 
 The winning candidate's enclosure URL becomes the episode's `audio_url`, so
 the parent-feed ingest that follows binds the import to the feed's own
