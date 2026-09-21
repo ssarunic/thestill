@@ -166,7 +166,7 @@ entities = [
     # 2026-09-19. Do not widen this without running
     # tests/integration/test_refined_smoke.py against the new version;
     # Dependabot's "update transformers requirement" PRs are not safe here.
-    "transformers>=4.30,<5",
+    "transformers>=4.30,<6",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on
     # short canonical names than stdlib difflib.
