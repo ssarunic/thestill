@@ -1217,15 +1217,16 @@ def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=
 
     touched_entity_ids: set[str] = set()
     for r in run.results:
-        repo.upsert_entity(r.entity)
-        entity_id_for_mention = r.entity.id if r.status == "resolved" else None
+        entity = _with_stable_identity(repo, r.entity)
+        repo.upsert_entity(entity)
+        entity_id_for_mention = entity.id if r.status == "resolved" else None
         repo.resolve_mention(
             mention_id=r.mention_id,
             entity_id=entity_id_for_mention,
             status=r.status,
             method=r.method.value,
         )
-        touched_entity_ids.add(r.entity.id)
+        touched_entity_ids.add(entity.id)
 
     # Spec §1.13.5 — within-episode coref pass. Walks unresolved
     # person mentions, looks for a single resolved long-form
@@ -1249,6 +1250,35 @@ def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=
     if run.merged_pairs:
         logger.info("alias_merge_inline", merged_pairs=run.merged_pairs, episode_id=episode_id)
     return run
+
+
+def _with_stable_identity(repo, entity):
+    """The id this entity must be stored under so that no other entity's
+    identity changes.
+
+    An id is a slug of the name, and names are not unique: Wikidata has many
+    "Alex Smith"s, each its own QID. ``upsert_entity`` writes the incoming
+    QID over the row's, so storing a second Alex Smith under
+    ``person:alex-smith`` would silently repoint every existing mention of
+    the first. A QID is the identity; the slug is only its handle.
+
+    - this QID already has a row: use that row, whatever its name became;
+    - the slug is free, or held by this QID, or by a local entity with no
+      QID yet (which this link now grounds): use the slug;
+    - the slug belongs to a different QID: take a QID-suffixed id.
+    """
+    qid = entity.wikidata_qid
+    if not qid:
+        return entity
+    known = repo.find_entity_by_qid(qid)
+    if known is not None:
+        return entity if known.id == entity.id else entity.model_copy(update={"id": known.id})
+    holder = repo.get_entity(entity.id)
+    if holder is None or holder.wikidata_qid in (None, qid):
+        return entity
+    distinct_id = f"{entity.id}-{qid.lower()}"
+    logger.info("entity_id_disambiguated_by_qid", entity_id=distinct_id, qid=qid, slug_held_by=holder.wikidata_qid)
+    return entity.model_copy(update={"id": distinct_id})
 
 
 def build_link_context(repo, podcast, episode):

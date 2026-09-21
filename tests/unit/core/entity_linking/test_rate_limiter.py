@@ -83,6 +83,24 @@ def test_hold_off_never_shortens_an_existing_wait():
     assert fake.sleeps == [30]
 
 
+def test_a_caller_already_waiting_honours_a_hold_off_that_arrives_meanwhile():
+    """Another worker gets a 429 while this one sleeps on its reserved slot."""
+    fake = FakeTime()
+    limiter = _limiter(5, fake)
+    limiter.acquire()  # takes the slot at 100.0; the next is 100.2
+
+    def sleep_and_get_a_429(seconds):
+        fake.sleeps.append(round(seconds, 6))
+        fake.now += seconds
+        if len(fake.sleeps) == 1:
+            limiter.hold_off(30)  # arrives at 100.2, so nobody sends before 130.2
+
+    limiter._sleep = sleep_and_get_a_429
+    limiter.acquire()
+    assert fake.now >= 130.2
+    assert fake.sleeps[0] == 0.2 and len(fake.sleeps) == 2
+
+
 def test_rejects_a_non_positive_rate():
     with pytest.raises(ValueError):
         WikidataRateLimiter(0)

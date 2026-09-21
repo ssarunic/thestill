@@ -76,6 +76,8 @@ def _state(linker, pending, episode=None):
     repo.list_resolved_persons_for_episode.return_value = []
     repo.list_unresolved_person_mentions.return_value = []
     repo.get_episode_anchors.return_value = []
+    repo.find_entity_by_qid.return_value = None
+    repo.get_entity.return_value = None
     state.entity_resolver = linker
     return state
 

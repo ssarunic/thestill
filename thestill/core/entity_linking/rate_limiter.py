@@ -44,24 +44,35 @@ class WikidataRateLimiter:
         self._sleep = sleep
         self._lock = threading.Lock()
         self._next_slot = 0.0
+        self._held_until = 0.0
 
     def acquire(self) -> None:
         """Block until this caller's slot. Slots are handed out under the
-        lock; the wait happens outside it so callers queue, not convoy."""
-        with self._lock:
-            now = self._clock()
-            slot = max(now, self._next_slot)
-            self._next_slot = slot + self._interval
-        wait = slot - now
-        if wait > 0:
-            self._sleep(wait)
+        lock; the wait happens outside it so callers queue, not convoy.
+
+        A caller that wakes to find a hold-off arrived while it slept gives
+        its slot up and queues again behind the new deadline. Otherwise the
+        callers already waiting would all fire into the 429 that another
+        worker was just told to back off from.
+        """
+        while True:
+            with self._lock:
+                now = self._clock()
+                slot = max(now, self._next_slot, self._held_until)
+                self._next_slot = slot + self._interval
+            if slot > now:
+                self._sleep(slot - now)
+            with self._lock:
+                if self._clock() >= self._held_until:
+                    return
 
     def hold_off(self, seconds: float) -> None:
-        """Push every future slot at least seconds out (Retry-After)."""
+        """Nobody sends before ``seconds`` from now (``Retry-After``),
+        including callers already waiting on a slot."""
         if seconds <= 0:
             return
         with self._lock:
-            self._next_slot = max(self._next_slot, self._clock() + seconds)
+            self._held_until = max(self._held_until, self._clock() + seconds)
 
 
 _shared: Optional[WikidataRateLimiter] = None

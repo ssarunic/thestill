@@ -3017,6 +3017,9 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
             incomplete += 1
             click.echo(f"⚠️  {eid}: {len(run.results)} of {len(pending)} mentions processed - {run.failure}", err=True)
         else:
+            # ``thestill status`` sends people here to finish deferred
+            # episodes, so finishing one has to clear the marker.
+            podcast_repo.settle_linking_deferred(eid)
             click.echo(f"✓ {eid}: {len(run.results)} mentions processed")
 
     click.echo(

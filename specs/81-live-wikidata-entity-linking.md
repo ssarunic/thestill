@@ -499,11 +499,20 @@ post-2022 names to be swept again.
   is what the eval runs. Eval output goes to the run directory as files, as
   [#53](53-eval-runs-and-summary-rubric.md) requires — there is no scratch
   table, so "one new table" holds.
-- **Entity ids can differ between linkers for the same QID.** ReFinED names
-  an entity by its Wikipedia title ("Amazon (company)"), the live linker by
-  its Wikidata label ("Amazon"), and the id is a slug of the name. The
-  existing inline QID-duplicate merge in the resolve core folds the two rows
-  together. Worth watching in the shadow phase.
+- **A QID is the identity; the slug id is only its handle.** Ids are a slug
+  of the name, and Wikidata labels are not unique: two "Alex Smith"s with
+  different QIDs would both become `person:alex-smith`, and `upsert_entity`
+  would write the second QID over the first, repointing every existing
+  mention. The resolve core therefore settles the id before storing
+  (`_with_stable_identity`): a QID that already has a row keeps it, whatever
+  the name became (ReFinED names by Wikipedia title, "Amazon (company)"; the
+  live linker by label, "Amazon"); a free slug, or one held by a local entity
+  with no QID yet, is used as is; a slug held by a *different* QID gets a
+  QID-suffixed id (`person:alex-smith-q222`). It sits in the shared core, so
+  it protects the ReFinED path as well.
+- **`Retry-After` holds back callers that are already waiting.** A caller
+  that wakes from its reserved slot and finds a hold-off arrived meanwhile
+  queues again behind the new deadline.
 - **Not in this PR:** the frontend `EntityBacklogNotice` does not yet show the
   deferred count (the API carries it), and the Postgres half of the
   repository contract suite has only run in CI.

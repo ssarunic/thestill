@@ -137,6 +137,30 @@ def test_an_outage_keeps_what_was_decided_leaves_the_rest_pending_and_exits_non_
     assert "incomplete" in result.output
 
 
+def _episode_status(db_path, episode_id, set_to=None):
+    with sqlite3.connect(db_path) as conn:
+        if set_to:
+            conn.execute("UPDATE episodes SET entity_extraction_status = ? WHERE id = ?", (set_to, episode_id))
+        return conn.execute("SELECT entity_extraction_status FROM episodes WHERE id = ?", (episode_id,)).fetchone()[0]
+
+
+def test_finishing_a_deferred_episode_clears_the_marker(cli_db, monkeypatch):
+    """``thestill status`` sends people here to drain deferred episodes."""
+    _repo, episode_id, db_path = cli_db
+    _episode_status(db_path, episode_id, set_to="linking_deferred")
+    result = _run(monkeypatch, FakeLinker(), "--episode-id", episode_id)
+    assert result.exit_code == 0, result.output
+    assert {status for status, _m, _e in _rows(db_path).values()} <= {"resolved", "unresolvable"}
+    assert _episode_status(db_path, episode_id) == "complete"
+
+
+def test_an_incomplete_run_leaves_the_episode_deferred(cli_db, monkeypatch):
+    _repo, episode_id, db_path = cli_db
+    _episode_status(db_path, episode_id, set_to="linking_deferred")
+    _run(monkeypatch, FakeLinker(unavailable=True), "--episode-id", episode_id)
+    assert _episode_status(db_path, episode_id) == "linking_deferred"
+
+
 def test_dry_run_builds_no_linker(cli_db, monkeypatch):
     _repo, _episode_id, db_path = cli_db
 
