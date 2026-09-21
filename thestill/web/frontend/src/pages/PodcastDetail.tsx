@@ -117,6 +117,13 @@ export default function PodcastDetail() {
       ) : podcast ? (
         <PageHero
           artwork={<Artwork role="card" sources={[podcast.image_url]} alt={`${podcast.title} artwork`} loading="eager" />}
+          below={
+            podcast.description ? (
+              <ExpandableDescription html={podcast.description} maxLines={3} />
+            ) : (
+              <p className="text-gray-600">No description</p>
+            )
+          }
           eyebrow={
             <MetaEyebrow
               items={[
@@ -199,11 +206,6 @@ export default function PodcastDetail() {
               ) : null
             }
           />
-          {podcast.description ? (
-            <ExpandableDescription html={podcast.description} maxLines={3} />
-          ) : (
-            <p className="text-gray-600">No description</p>
-          )}
         </PageHero>
       ) : null}
 

@@ -13,15 +13,20 @@ interface PageHeroProps {
   titleRef?: Ref<HTMLHeadingElement>
   /** The identity row under the title: show row, byline. */
   identity?: ReactNode
-  /** Action row, description — anything that belongs in the title column. */
+  /** Action row — anything that belongs in the title column. */
   children?: ReactNode
+  /**
+   * Spans the artwork and the title column — the description, which in the
+   * title column alone runs to half the width and twice the length.
+   */
+  below?: ReactNode
   className?: string
 }
 
 /**
  * Spec #76 §3.1 / §5 — the detail-page hero: artwork centred on phones and
  * left of the text block from ``sm``, then eyebrow, title and identity row,
- * all left-aligned at every width. Layout only; the page decides what goes
+ * all left-aligned at every width; ``below`` runs under both at full width. Layout only; the page decides what goes
  * in each slot, which is what lets Episode, Podcast and Briefing detail
  * share it without a discriminator prop.
  */
@@ -33,6 +38,7 @@ export default function PageHero({
   titleRef,
   identity,
   children,
+  below,
   className = '',
 }: PageHeroProps) {
   return (
@@ -62,6 +68,7 @@ export default function PageHero({
           {children && <div className="space-y-4 pt-2">{children}</div>}
         </div>
       </div>
+      {below && <div className="mt-4">{below}</div>}
     </header>
   )
 }
