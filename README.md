@@ -1,5 +1,3 @@
-# thestill
-
 Turn podcasts into readable content. Automatically.
 
 ## The Problem
