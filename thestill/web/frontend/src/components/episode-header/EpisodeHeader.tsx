@@ -65,6 +65,7 @@ export default function EpisodeHeader({
         />
       }
       backdropSources={[episode.image_url, episode.podcast_image_url]}
+      below={description ? <ExpandableDescription html={description} maxLines={3} /> : undefined}
       eyebrow={
         <MetaEyebrow
           items={[
@@ -131,7 +132,6 @@ export default function EpisodeHeader({
           </>
         }
       />
-      {description && <ExpandableDescription html={description} maxLines={3} />}
     </PageHero>
   )
 }
@@ -154,12 +154,12 @@ export function EpisodeHeaderSkeleton() {
             <div className="h-11 w-11 rounded-full bg-gray-200" />
             <div className="h-11 w-11 rounded-full bg-gray-200" />
           </div>
-          <div className="space-y-2 pt-2">
-            <div className="h-4 w-full rounded bg-gray-200" />
-            <div className="h-4 w-full rounded bg-gray-200" />
-            <div className="h-4 w-3/4 rounded bg-gray-200" />
-          </div>
         </div>
+      </div>
+      <div className="mt-4 space-y-2">
+        <div className="h-4 w-full rounded bg-gray-200" />
+        <div className="h-4 w-full rounded bg-gray-200" />
+        <div className="h-4 w-3/4 rounded bg-gray-200" />
       </div>
     </div>
   )
