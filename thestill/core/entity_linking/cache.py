@@ -41,6 +41,23 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def invalidate_link_decisions(link_decisions: Optional[LinkDecisionRepository], surface_form: str) -> int:
+    """Forget what the live linker decided for a name, in every scope.
+
+    Every path that records a human correction calls this, so the name is
+    decided afresh instead of answered from memory. The cache also heals
+    itself around a blacklist entry, but an override scoped to one episode
+    says "this name was probably linked wrongly" about every other episode
+    too. ``None`` is accepted for callers built without the repository.
+    """
+    if link_decisions is None:
+        return 0
+    removed = link_decisions.delete(surface_key(surface_form))
+    if removed:
+        logger.info("entity_link_decisions_invalidated", removed=removed)
+    return removed
+
+
 class LinkDecisionCache:
     def __init__(
         self,
@@ -121,4 +138,4 @@ class LinkDecisionCache:
     def invalidate(self, surface_form: str) -> int:
         """Forget a name in every scope. A human correction must never be
         overridden by a remembered machine answer."""
-        return self._repo.delete(surface_key(surface_form))
+        return invalidate_link_decisions(self._repo, surface_form)

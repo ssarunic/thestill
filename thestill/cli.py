@@ -28,6 +28,7 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
+from .core.entity_linking.cache import invalidate_link_decisions
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
@@ -4363,6 +4364,7 @@ def mention_drop(ctx, mention_id, reason, scope_episode):
         kind="drop",
         reason=reason,
     )
+    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
     repo.resolve_mention(
         mention_id=mention_id,
         entity_id=None,
@@ -4400,6 +4402,7 @@ def mention_repoint(ctx, mention_id, entity_id, reason, scope_global):
         entity_id=entity_id,
         reason=reason,
     )
+    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
     repo.resolve_mention(
         mention_id=mention_id,
         entity_id=entity_id,
@@ -4439,6 +4442,7 @@ def resolution_blacklist(ctx, subcommand, surface_form, wrong_qid, reason):
         click.echo("Usage: resolution-blacklist add <surface_form> <wrong_qid> [--reason ...]", err=True)
         ctx.exit(1)
     repo.add_blacklist_entry(surface_form=surface_form, wrong_qid=wrong_qid, reason=reason)
+    invalidate_link_decisions(ctx.obj.link_decision_repository, surface_form)
     click.echo(f"✓ Blacklisted: {surface_form!r} ↛ {wrong_qid}")
 
 

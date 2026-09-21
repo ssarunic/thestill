@@ -53,11 +53,13 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from structlog import get_logger
 
 from ..models.entities import EntityRecord, EntityType
-from .entity_resolver import _build_entity_id
+from .entity_linking.cache import invalidate_link_decisions
+from .entity_linking.shared import _build_entity_id
 from .entity_type_rules import ALLOWED_P31_BY_TYPE, classify_entity_type
 from .queue_manager import TaskStage
 
 if TYPE_CHECKING:  # avoid import cost / cycles at runtime
+    from ..repositories.link_decision_repository import LinkDecisionRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from .queue_manager import QueueManager
     from .wikidata_client import WikidataClient
@@ -246,6 +248,7 @@ def apply_correction(
     repo: "SqliteEntityRepository",
     queue_manager: "QueueManager",
     wikidata_client: "Optional[WikidataClient]" = None,
+    link_decisions: "Optional[LinkDecisionRepository]" = None,
     action: str,
     surface_form: str,
     episode_id: Optional[str] = None,
@@ -324,6 +327,10 @@ def apply_correction(
             reason=reason,
             created_by=created_by,
         )
+
+    # Spec #81 — before re-resolving, or the live linker would answer the
+    # re-resolution from the very decision being corrected.
+    invalidate_link_decisions(link_decisions, surface_form)
 
     affected, episodes_enqueued = _reresolve_surface(
         repo=repo, queue_manager=queue_manager, surface_form=surface_form, episode_id=episode_id

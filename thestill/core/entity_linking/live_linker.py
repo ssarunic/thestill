@@ -164,6 +164,11 @@ class LiveWikidataLinker:
         misses: List[NameGroup] = []
         for group in groups:
             cached = self._cache.lookup(group.surface_key, context.podcast_id)
+            if cached is not None and cached.qid and validator.blacklisted(group.surface_form, cached.qid):
+                # A reviewer has since ruled this link out. Decide the name
+                # again, so a correction heals the cache even if nobody
+                # remembered to invalidate it.
+                cached = None
             if cached is None:
                 misses.append(group)
             else:
@@ -180,7 +185,14 @@ class LiveWikidataLinker:
         for group in misses:
             if group.surface_key in fetched.failed:
                 continue
-            if fetched.candidates[group.surface_key]:
+            # The chooser is never offered what a reviewer ruled out, so it
+            # picks among the rest instead of re-proposing it.
+            offered = [
+                c for c in fetched.candidates[group.surface_key] if not validator.blacklisted(group.surface_form, c.qid)
+            ]
+            outcome.rejected_blacklisted += len(fetched.candidates[group.surface_key]) - len(offered)
+            fetched.candidates[group.surface_key] = offered
+            if offered:
                 to_ask.append(group)
             else:
                 # Wikidata has nothing by this name: a decision, and no LLM call.

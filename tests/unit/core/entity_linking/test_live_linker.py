@@ -114,19 +114,27 @@ def test_low_confidence_is_unresolvable_but_the_guess_is_remembered(decisions):
     assert (row.qid, row.confidence) == ("Q214801", "low")
 
 
-def test_a_blacklisted_pair_is_never_linked(decisions):
-    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [pick_first_candidate])
+def test_a_blacklisted_candidate_is_never_offered_to_the_chooser(decisions):
+    linker, provider = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT, FILM]}), [pick_first_candidate])
     (result,) = linker.resolve([mention(1, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q11613")
-    assert result.status == "unresolvable"
-    assert decisions.get("truman", POD).qid is None
+    assert "Q11613" not in provider.user_messages[0]
+    assert result.entity.wikidata_qid == "Q214801"
 
 
-def test_a_remembered_link_is_dropped_if_it_was_blacklisted_since(decisions):
-    wikidata = FakeWikidata({"Truman": [PRESIDENT]})
-    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
-    linker.resolve([mention(1, "Truman")], context=CTX)
-    (again,) = linker.resolve([mention(2, "Truman")], context=CTX, is_blacklisted=lambda s, q: True)
-    assert again.status == "unresolvable"
+def test_a_name_whose_only_candidate_is_blacklisted_is_unresolvable_without_an_llm_call(decisions):
+    linker, provider = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [])
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX, is_blacklisted=lambda s, q: True)
+    assert result.status == "unresolvable" and provider.user_messages == []
+
+
+def test_a_remembered_link_that_was_blacklisted_since_is_decided_again(decisions):
+    wikidata = FakeWikidata({"Truman": [PRESIDENT, FILM]})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate, pick_first_candidate])
+    (first,) = linker.resolve([mention(1, "Truman")], context=CTX)
+    assert first.entity.wikidata_qid == "Q11613"
+    (again,) = linker.resolve([mention(2, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q11613")
+    assert again.entity.wikidata_qid == "Q214801"
+    assert decisions.get("truman", POD).qid == "Q214801"  # the cache healed itself
 
 
 def test_the_second_episode_is_answered_from_the_cache(decisions):

@@ -660,6 +660,7 @@ def post_correction(
             repo=state.entity_repository,
             queue_manager=state.queue_manager,
             wikidata_client=WikidataClient(),
+            link_decisions=state.link_decision_repository,
             action=request.action,
             surface_form=request.surface_form,
             episode_id=request.episode_id,
