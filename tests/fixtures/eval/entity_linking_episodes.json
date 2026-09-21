@@ -1,0 +1,105 @@
+{
+  "description": "Pinned episode set for the entity-linking eval (spec #81, the cutover gate). Pass to `thestill eval run --rubric entity-linking --episodes-file`. 20 episodes across 20 podcasts, picked from PRODUCTION on 2026-09-21: two Croatian, one known ambiguity trap, a dozen 2026 AI/tech episodes where ReFinED is weakest, and four episodes where it is strongest, as the regression check. Every episode had 40-160 distinct names decided by ReFinED when pinned. The slugs are production slugs, so the run must read the production database. Do not rotate members casually: comparisons across linker versions assume the same inputs.",
+  "episodes": [
+    {
+      "podcast_slug": "netokracija-podcast",
+      "episode_slug": "moze-li-europa-sustici-kinu-u-ai-ju",
+      "why": "Croatian, AI policy: language-scoped search with English fallback"
+    },
+    {
+      "podcast_slug": "lood",
+      "episode_slug": "206-neuroznanstvenik-tvrdi-mozgom-upravlja-nas-um-ali-tko-onda-upravlja-umom",
+      "why": "Croatian, neuroscience: non-English names and topics"
+    },
+    {
+      "podcast_slug": "deep-questions-with-cal-newport",
+      "episode_slug": "the-truth-about-brain-rot",
+      "why": "ambiguity trap: 'Truman' linked to Harry S. Truman 21x in a Truman Show discussion (2026-09-21)"
+    },
+    {
+      "podcast_slug": "the-artificial-intelligence-show",
+      "episode_slug": "ep-228-more-rogue-ai-agents-ai-lab-staff-ask-washington-to-pace-development-continuing-battle-over-o",
+      "why": "2026 AI news: dense in post-2022 people and companies"
+    },
+    {
+      "podcast_slug": "unsupervised-learning-with-jacob-effron",
+      "episode_slug": "ai-vibe-check-chinese-open-models-distillation-the-hugging-face-breach",
+      "why": "2026 AI: Chinese labs and open models"
+    },
+    {
+      "podcast_slug": "big-technology-podcast",
+      "episode_slug": "leopold-blows-up-openai-drastically-cuts-prices-microsofts-best-day",
+      "why": "2026 AI business news"
+    },
+    {
+      "podcast_slug": "training-data",
+      "episode_slug": "chai-discovery-s-bitter-lesson-drug-design-is-another-scaling-problem",
+      "why": "AI x biotech startup founders"
+    },
+    {
+      "podcast_slug": "latent-space-the-ai-engineer-podcast",
+      "episode_slug": "codex-from-0-to-10m-users-building-chatgpt-work-akshay-nathan-openai",
+      "why": "AI engineering: product names that are also common words (Codex)"
+    },
+    {
+      "podcast_slug": "the-twenty-minute-vc-20vc-venture-capital-startup-funding-the-pitch",
+      "episode_slug": "20vc-70-of-neolabs-will-die-there-will-be-a-100bn-us-open-source-model-data-is-a-trillion-market-gov",
+      "why": "VC: many young companies, 153 names"
+    },
+    {
+      "podcast_slug": "better-offline",
+      "episode_slug": "ai-mania-is-eviscerating-global-decision-making-w-nik-suresh",
+      "why": "AI criticism: Ed Zitron's show, host unresolvable under ReFinED"
+    },
+    {
+      "podcast_slug": "the-times-tech-podcast",
+      "episode_slug": "china-vs-usa-should-trump-ban-open-source-ai",
+      "why": "UK tech news"
+    },
+    {
+      "podcast_slug": "this-week-in-ai",
+      "episode_slug": "are-we-already-in-the-singularity-e24",
+      "why": "2026 AI panel"
+    },
+    {
+      "podcast_slug": "max-agency",
+      "episode_slug": "the-misaligned-incentives-behind-ai-coding-agents-russell-kaplan-cognition",
+      "why": "AI coding agents: very new companies"
+    },
+    {
+      "podcast_slug": "the-pragmatic-engineer",
+      "episode_slug": "formal-methods-with-hillel-wayne",
+      "why": "software engineering: technical topics, 151 names"
+    },
+    {
+      "podcast_slug": "prof-g-markets",
+      "episode_slug": "how-leverage-turned-an-ai-boom-into-a-crash",
+      "why": "markets: tickers and funds, ReFinED links heavily here"
+    },
+    {
+      "podcast_slug": "the-rest-is-history",
+      "episode_slug": "693-elizabeth-i-vs-the-catholics-englands-greatest-hero-part-3",
+      "why": "regression check: pre-2022 knowledge where ReFinED is strongest"
+    },
+    {
+      "podcast_slug": "the-rest-is-politics",
+      "episode_slug": "558-the-cockroach-uprising-and-should-we-stop-data-centres",
+      "why": "regression check: UK politics, mixed old and new"
+    },
+    {
+      "podcast_slug": "startalk-radio",
+      "episode_slug": "cosmic-queries-planet-9",
+      "why": "regression check: astronomy, mostly unresolvable topics under ReFinED"
+    },
+    {
+      "podcast_slug": "the-louis-theroux-podcast",
+      "episode_slug": "s8-ep9-mo-gilligan-on-being-quoted-by-drake-his-surprising-shopping-addiction-and-eating-fried-chick",
+      "why": "regression check: celebrity interview, many people"
+    },
+    {
+      "podcast_slug": "the-knowledge-project",
+      "episode_slug": "the-mindset-behind-building-billion-dollar-companies-brad-jacobs",
+      "why": "business interview, 147 names"
+    }
+  ]
+}

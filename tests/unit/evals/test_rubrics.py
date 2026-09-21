@@ -27,6 +27,7 @@ PINNED_PROMPT_HASHES = {
     ("raw-transcript", "1"): "8ef093c39df4f2eea9fa4eb70527debad8aef89670a8622a9de5eb2e1f92c8a9",
     ("clean-transcript", "1"): "7d47e7ed70a24dd5680d1c7213a901d505d1fb00cd623896540f5b2855fa6f90",
     ("summary", "1"): "ac8c836313d3f3bc85bc4588d4b11d9f118b9ba6d8c91df769ce39ef3ba9080e",
+    ("entity-linking", "1"): "234ab034612d798bde207cbc6636a71ef6b74222d7bdb0367c6be03ab11ec618",
 }
 
 
@@ -35,10 +36,20 @@ def test_every_rubric_prompt_hash_is_pinned():
     assert actual == PINNED_PROMPT_HASHES
 
 
-@pytest.mark.parametrize("rubric", RUBRICS.values(), ids=lambda r: r.name)
+# ``entity-linking`` (spec #81) is the one rubric whose judge does not score:
+# it settles disagreements, and the dimensions are derived from its verdicts.
+_JUDGE_SCORED = [r for r in RUBRICS.values() if "scores" in r.report_model.model_fields]
+
+
+@pytest.mark.parametrize("rubric", _JUDGE_SCORED, ids=lambda r: r.name)
 def test_dimensions_match_report_model(rubric):
     scores_model = rubric.report_model.model_fields["scores"].annotation
     assert set(rubric.dimensions) == set(scores_model.model_fields)
+
+
+def test_only_entity_linking_derives_its_dimensions():
+    derived = {r.name for r in RUBRICS.values()} - {r.name for r in _JUDGE_SCORED}
+    assert derived == {"entity-linking"}
 
 
 @pytest.mark.parametrize("rubric", RUBRICS.values(), ids=lambda r: r.name)

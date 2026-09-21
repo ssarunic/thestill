@@ -26,10 +26,11 @@ runner for the unchanged prompts remain comparable with historical intent.
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional, Tuple, Type
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Type
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ..utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE
 from .models import CleanTranscriptReport, RawTranscriptReport, SummaryReport
 from .summary_checks import run_summary_checks
 
@@ -198,6 +199,46 @@ def _render_summary_message(artifacts: Dict[str, str]) -> str:
     )
 
 
+# --- entity-linking (spec #81) ------------------------------------------------
+# Pairwise and categorical, unlike the three above: the judge settles each
+# name the two linkers disagree on, and ``evals/entity_linking.py`` derives
+# the 0-10 dimensions from its verdicts. No artifact files: the evidence is
+# in the database, so ``inputs`` is empty and the runner is a subclass.
+ENTITY_LINKING = "entity-linking"
+
+_ENTITY_LINKING_PROMPT_V1 = """You check entity links made from podcast transcripts.
+
+For each numbered item you get a name as it was transcribed, up to three \
+excerpts where it was spoken, and two proposed answers, A and B. Each answer \
+is either a Wikidata entity (QID, label, description) or "no link", meaning \
+the name is not a specific entity or has no Wikidata entry.
+
+Say which answer is correct for how the name is used in the excerpts:
+- "a" or "b" when exactly one is correct;
+- "both" when A and B are both acceptable (for example the same real-world \
+thing under two entries);
+- "neither" when both are wrong. "no link" is wrong when the excerpts clearly \
+name a specific, notable entity;
+- "unclear" when the excerpts do not let you tell.
+
+Judge the link, not the transcription: a slightly misspelled name still \
+refers to whoever the speakers mean. Do not prefer an answer for being a \
+link, or for being "no link".
+
+Return JSON: {"verdicts": [{"id": "n1", "correct": "a", "reason": "one short sentence"}]}
+One verdict per item id. Do not add, drop or rename ids."""
+
+
+class Verdict(BaseModel):
+    id: str
+    correct: Literal["a", "b", "both", "neither", "unclear"]
+    reason: str = ""
+
+
+class LinkingJudgeReport(BaseModel):
+    verdicts: List[Verdict] = Field(default_factory=list)
+
+
 RUBRICS: Dict[str, Rubric] = {
     "raw-transcript": Rubric(
         name="raw-transcript",
@@ -227,6 +268,14 @@ RUBRICS: Dict[str, Rubric] = {
         report_model=SummaryReport,
         render_user_message=_render_summary_message,
         deterministic_checks=run_summary_checks,
+    ),
+    ENTITY_LINKING: Rubric(
+        name=ENTITY_LINKING,
+        version="1",
+        system_prompt=_ENTITY_LINKING_PROMPT_V1 + UNTRUSTED_CONTENT_PREAMBLE,
+        dimensions=("agreement", "no_regression", "new_link_precision", "recall_gain"),
+        inputs=(),
+        report_model=LinkingJudgeReport,
     ),
 }
 

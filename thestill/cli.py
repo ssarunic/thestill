@@ -35,7 +35,7 @@ from .core.google_transcriber import GoogleCloudTranscriber
 from .core.llm_provider import create_llm_provider_from_config
 from .core.post_processor import EpisodeMetadata, TranscriptSummarizer
 from .evals.compare import compare_runs
-from .evals.rubrics import RUBRICS, get_rubric
+from .evals.rubrics import ENTITY_LINKING, RUBRICS, get_rubric
 from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
 from .models.podcast import EpisodeState
@@ -2599,6 +2599,41 @@ def eval_group():
     """Append-only LLM-as-judge evaluation runs (spec #53)."""
 
 
+def _echo_linking_gate(run_dir):
+    """The cutover decision (spec #81) is made on the corpus-level counts,
+    not on the per-episode 0-10 scores shown above."""
+    from .evals.entity_linking import TOTALS_FILENAME
+
+    totals = json.loads((run_dir / TOTALS_FILENAME).read_text(encoding="utf-8"))
+    click.echo(f"\n🔗 Linking gate over {totals['counts']['names']} names:")
+    for name, value in totals["metrics"].items():
+        click.echo(f"  {name:<20} {'n/a' if value is None else f'{value:.1%}'}")
+    for name, ok in totals["criteria"].items():
+        click.echo(f"  {'✓' if ok else '✗'} {name}")
+    click.echo(f"  → {'PASS' if totals['passed'] else 'FAIL'}")
+
+
+def _eval_runner_for(ctx, rubric):
+    """Most rubrics judge artifact files. ``entity-linking`` (spec #81) judges
+    the live linker against what is stored, so it needs the entity repository
+    and a linker that remembers nothing and leaves no trace."""
+    if rubric.name != ENTITY_LINKING:
+        return EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
+    from .core.entity_linking.factory import build_linker
+    from .core.task_handlers import build_link_context
+    from .evals.entity_linking import LinkingEvalRunner, no_memory
+
+    config = ctx.obj.config.model_copy(update={"entity_linker": "live"})
+    return LinkingEvalRunner(
+        ctx.obj.config,
+        ctx.obj.path_manager,
+        ctx.obj.feed_manager,
+        entity_repository=ctx.obj.entity_repository,
+        linker=build_linker(config, no_memory()),
+        context_builder=build_link_context,
+    )
+
+
 @eval_group.command("run")
 @click.option(
     "--rubric",
@@ -2647,7 +2682,7 @@ def eval_run(
     Nothing is ever overwritten; re-running creates a new run directory.
     """
     rubric = get_rubric(rubric_name)
-    runner = EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
+    runner = _eval_runner_for(ctx, rubric)
     podcast_rss_url, episode_external_id = _resolve_podcast_rss_or_exit(ctx, podcast_id, episode_id)
 
     try:
@@ -2693,6 +2728,8 @@ def eval_run(
 
     click.echo(f"\n📊 Run {manifest.run_id}: {manifest.counts['ok']} ok, {manifest.counts['failed']} failed")
     click.echo(f"📁 {ctx.obj.path_manager.evaluation_run_dir(manifest.run_id)}")
+    if rubric.name == ENTITY_LINKING:
+        _echo_linking_gate(ctx.obj.path_manager.evaluation_run_dir(manifest.run_id))
     if manifest.counts["failed"]:
         ctx.exit(1)
 

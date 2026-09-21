@@ -388,6 +388,28 @@ def test_list_pending_mentions_scoped_ordered_limited(repo):
     assert len(repo.list_pending_mentions(limit=2)) == 2
 
 
+def test_list_linker_decided_mentions_keeps_only_what_a_linker_decided(repo):
+    """Spec #81 - the linking eval compares linkers on these, and only these."""
+    repo.upsert_entity(EntityRecord(id="company:openai", type=EntityType.COMPANY, canonical_name="OpenAI"))
+    repo.insert_mentions(
+        [_mention(segment_id=i, surface=f"S{i}") for i in range(1, 7)] + [_mention(episode_id=EP_2, surface="Other")]
+    )
+    by_surface = {m.surface_form: m.id for m in repo.list_pending_mentions()}
+    for surface, status, method, entity_id in [
+        ("S1", "resolved", "direct", "company:openai"),
+        ("S2", "unresolvable", "unresolvable", None),
+        ("S3", "resolved", "llm_linked", "company:openai"),
+        ("S4", "resolved", "anchor", "company:openai"),
+        ("S5", "dropped", "override", None),
+        ("Other", "resolved", "direct", "company:openai"),
+    ]:
+        repo.resolve_mention(mention_id=by_surface[surface], entity_id=entity_id, status=status, method=method)
+    # S6 stays pending: no linker has decided it yet
+    decided = repo.list_linker_decided_mentions(EP_1)
+    assert [m.surface_form for m in decided] == ["S1", "S2", "S3"]  # ordered by id, this episode only
+    assert [m.resolution_method.value for m in decided] == ["direct", "unresolvable", "llm_linked"]
+
+
 def test_get_mention_roundtrips_all_fields(repo):
     repo.insert_mentions([_mention(sentiment=-0.25)])
     m = repo.list_pending_mentions()[0]

@@ -1,6 +1,6 @@
 # Live Wikidata Entity Linking Specification
 
-> **Status:** 🚧 Phase 1 in progress — linker, cache, config switch and deferral implemented on `feat/81-live-wikidata-entity-linking` (2026-09-21, default still `refined`); the `entity-linking` eval is the second PR
+> **Status:** 🚧 Phase 1 built, gate not yet run — linker, cache, config switch and deferral (PR #244) and the `entity-linking` eval rubric with its pinned 20-episode set (2026-09-21). Default is still `refined`. Next: run the eval against production data
 > **Created:** 2026-09-21
 > **Updated:** 2026-09-21
 > **Priority:** High — the 494-episode entity backfill on prod waits on this
@@ -437,32 +437,54 @@ Estimates, to be replaced by Phase 1 measurements:
 
 ## Evaluation (the cutover gate)
 
-No cutover on impressions. Built on the #53 eval runner, as a new rubric
-`entity-linking`:
+No cutover on impressions. Built on the #53 eval runner as the rubric
+`entity-linking` ([evals/entity_linking.py](../thestill/evals/entity_linking.py),
+usage in [docs/evals.md](../docs/evals.md)).
 
-1. **Fixed set:** 20 episodes across at least 8 podcasts, chosen to include
-   2025–2026 AI/tech episodes (where ReFinED is weakest), two non-English
-   episodes, and one episode with a known ambiguity trap.
-2. **Both linkers run on the same GLiNER mentions.** The live linker writes
-   to a scratch table, not to `entity_mentions`.
-3. **Agreement is free:** where both return the same QID, count it and move
+1. **Fixed set:** 20 episodes across 20 podcasts, pinned from production in
+   [entity_linking_episodes.json](../tests/fixtures/eval/entity_linking_episodes.json):
+   two Croatian, the *Truman Show* ambiguity trap, a dozen 2026 AI/tech
+   episodes where ReFinED is weakest, and four history, politics, science and
+   interview episodes where it is strongest — the regression check.
+2. **The baseline is what is stored**, not a fresh ReFinED run: the links
+   ReFinED actually wrote to `entity_mentions`. That measures the thing being
+   replaced and needs no several-GB model on the eval host. Only mentions a
+   linker decided are compared (`direct`, `llm_linked`, `unresolvable`);
+   a name the live linker already decided has no baseline and is skipped.
+3. **The live linker runs with no memory** — it reads no cached decision and
+   writes nothing, through `LiveWikidataLinker.link()`. Eval output is files
+   in the run directory; there is no scratch table.
+4. **Agreement is free:** where both give the same answer, count it and move
    on.
-4. **Disagreements are judged** by the pinned judge model, given the name,
-   context, and both candidates' Wikidata descriptions: which is right,
-   both wrong, or genuinely ambiguous. A 50-item sample of judge verdicts is
-   spot-checked by a human to confirm the judge is trustworthy here.
-5. **Deterministic checks:** every accepted QID exists; none was outside its
-   candidate list; no blacklisted pair was accepted.
+5. **Disagreements are judged blind.** The pinned judge sees the name, its
+   excerpts and two answers, A and B, each a Wikidata entity or "no link". It
+   is never told which linker gave which; the side is fixed per name by a
+   hash, so a rerun asks the same question and neither side is always the
+   newer system. Verdicts: `a`, `b`, `both`, `neither`, `unclear`. A 50-item
+   sample of verdicts is spot-checked by a human before the result is trusted.
+6. **Deterministic checks:** no blacklisted link accepted; the linker was
+   reachable for every name (`rejected_not_offered` is reported alongside).
 
-**Pass criteria:**
+The framework scores 0–10 per dimension per episode, so the verdicts become
+four derived dimensions (`agreement`, `no_regression`, `new_link_precision`,
+`recall_gain`) and `eval list/show/compare` work unchanged. **The decision is
+made on `totals.json`**, the counts summed across episodes: a mean of
+per-episode ratios would let a three-name episode outvote a ninety-name one.
 
-- on names ReFinED links, the live linker is judged wrong where ReFinED was
-  right in **under 2%** of cases;
-- the live linker links **at least 25%** of the names ReFinED left
-  unresolvable, with judged precision **≥ 90%**;
+**Pass criteria** (a starting position; the first real run revises them):
+
+- `regression_rate` — of the names the baseline linked, those where the
+  judge found the baseline right and the live linker wrong — **under 2%**;
+- `recall_gain` — of the names the baseline left unlinked, those the live
+  linker linked correctly — **at least 25%**;
+- `new_link_precision` — of the live linker's links on those names, the ones
+  judged right — **at least 90%**;
 - zero deterministic-check failures.
 
-Thresholds are a starting position; Phase 1 sets them from the first run.
+Each item report also records `baseline_split`: how often ReFinED gave one
+name two different answers within an episode. That is the evidence for or
+against the live linker's one-answer-per-name simplification (Open
+questions).
 
 ---
 

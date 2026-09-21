@@ -13,6 +13,7 @@ always answerable.
 | `raw-transcript` | ASR output quality | — | accuracy, completeness, entity_handling, structural_clarity |
 | `clean-transcript` | LLM cleanup quality | raw transcript (when present) | fidelity, formatting_clarity, readability, enhancements_value |
 | `summary` | episode summary quality | clean transcript | coverage, faithfulness, attribution, insight_value |
+| `entity-linking` | the live Wikidata linker, against the links already stored | stored `entity_mentions` (what ReFinED wrote) | agreement, no_regression, new_link_precision, recall_gain (derived — see below) |
 
 All scores are 0–10, judged by an LLM. The `summary` rubric additionally
 runs **deterministic checks** in Python (required sections present,
@@ -173,3 +174,52 @@ evidence accumulates.
 as wrappers for one release: single-file standalone mode still works,
 batch mode delegates to `eval run`. The old overwrite-in-place reports
 under `data/evaluations/{raw,clean}/` are frozen legacy artifacts.
+
+## The `entity-linking` rubric (spec #81)
+
+This rubric is the gate for switching `ENTITY_LINKER` from `refined` to
+`live`. It is pairwise, not a score sheet:
+
+1. for each episode, the live linker decides the same names the pipeline's
+   linker already decided (`direct`, `llm_linked` and `unresolvable`
+   mentions; anchors, coreference and overrides are left out);
+2. names where both answers match cost nothing;
+3. every disagreement goes to the judge, which sees two answers labelled A
+   and B and is never told which linker gave which. The side is fixed per
+   name, so a rerun asks the same question.
+
+The baseline is what is **stored**, not a fresh ReFinED run, so the eval host
+needs no `entities` extra. The live linker runs with no memory: it reads no
+cached decision and writes nothing, to the cache or to `entity_mentions`.
+
+```bash
+thestill eval run --rubric entity-linking \
+    --episodes-file tests/fixtures/eval/entity_linking_episodes.json --label p1
+```
+
+The pinned set holds production slugs, so point the command at the
+production database. A run makes real Wikidata requests (paced by
+`WIKIDATA_MAX_RPS`) and real LLM calls: roughly 2–3 linker calls and one
+judge call per episode.
+
+The four dimensions are 0–10 views of ratios, for `eval list/show/compare`.
+A dimension with nothing to measure in an episode is left out, not scored.
+**The decision is made on `totals.json`**, which sums the counts across
+episodes — a mean of per-episode ratios would let a three-name episode
+outvote a ninety-name one:
+
+| Criterion | Meaning | Pass |
+|---|---|---|
+| `regression_rate` | of the names the baseline linked, those where the judge found the baseline right and the live linker wrong | under 2% |
+| `recall_gain` | of the names the baseline left unlinked, those the live linker linked correctly | at least 25% |
+| `new_link_precision` | of the live linker's links on names the baseline left unlinked, those judged right ("unclear" left out) | at least 90% |
+| deterministic checks | no blacklisted link accepted; the linker was reachable for every name | all ok |
+
+Each item report lists every name with both answers, the outcome, the
+verdict and the judge's reason, plus `baseline_split`: how often ReFinED gave
+one name two answers within an episode, which is the evidence for or against
+the live linker's one-answer-per-name simplification.
+
+Prefer a judge from a different model family than `ENTITY_LINKING_MODEL`: a
+model grading its own choices is the self-preference bias the judge pin
+exists to avoid.
