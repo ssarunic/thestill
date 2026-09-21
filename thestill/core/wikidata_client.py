@@ -27,7 +27,9 @@ doesn't hammer Wikidata for the same QID twice.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Dict, Iterable, List, Optional
 
@@ -35,6 +37,7 @@ import requests
 from structlog import get_logger
 
 from ..models.enrichment import EnrichmentUnavailable
+from .refresh_failure import parse_retry_after
 
 logger = get_logger(__name__)
 
@@ -45,6 +48,32 @@ DEFAULT_TIMEOUT_SEC = 5.0
 DEFAULT_USER_AGENT = "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)"
 # wbgetentities accepts up to 50 ids per request.
 _LABEL_BATCH_SIZE = 50
+
+
+_QID_RE = re.compile(r"^Q[1-9][0-9]*$")
+
+
+class WikidataUnavailable(Exception):
+    """Wikidata could not answer. Retry later; never treat as "no results"."""
+
+    def __init__(self, message: str, *, retry_after_seconds: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+@dataclass(frozen=True)
+class WikidataSearchHit:
+    qid: str
+    label: str
+    description: str
+
+
+def _retry_after_seconds(raw: Optional[str]) -> Optional[float]:
+    now = datetime.now(timezone.utc)
+    retry_at = parse_retry_after(raw, now)
+    if retry_at is None:
+        return None
+    return max(0.0, (retry_at - now).total_seconds())
 
 
 class WikidataClient:
@@ -113,6 +142,63 @@ class WikidataClient:
             logger.warning("wikidata_parse_failed", qid=qid, error=str(exc))
             return []
         return _extract_p31_qids(payload, qid)
+
+    # ------------------------------------------------------------------
+    # Spec #81 — candidate search for the live linker
+    # ------------------------------------------------------------------
+
+    def search_entities(self, name: str, *, language: str = "en", limit: int = 8) -> List["WikidataSearchHit"]:
+        """Entities whose label or alias matches ``name`` (``wbsearchentities``).
+
+        An empty list means Wikidata answered and has nothing by that name,
+        which the linker caches as a decision. Anything else raises
+        :class:`WikidataUnavailable` - a failure must never look like "no
+        such entity" (failure-mode catalogue: errors-as-empty-results).
+        Not memoised: the linker's decision cache sits above this.
+        """
+        params = {
+            "action": "wbsearchentities",
+            "search": name,
+            "language": language,
+            "uselang": language,
+            "type": "item",
+            "limit": str(limit),
+            "maxlag": "5",
+            "format": "json",
+        }
+        try:
+            resp = requests.get(
+                WIKIDATA_API_URL,
+                params=params,
+                timeout=self.timeout_sec,
+                headers={"User-Agent": self.user_agent, "Accept": "application/json"},
+            )
+        except requests.RequestException as exc:
+            raise WikidataUnavailable(f"wikidata search failed: {type(exc).__name__}") from exc
+        retry_after = _retry_after_seconds(resp.headers.get("Retry-After"))
+        if resp.status_code != 200:
+            raise WikidataUnavailable(f"wikidata search returned {resp.status_code}", retry_after_seconds=retry_after)
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise WikidataUnavailable("wikidata search unparseable") from exc
+        if not isinstance(payload, dict) or "error" in payload or "search" not in payload:
+            # ``maxlag`` exceeded arrives as a 200 with an ``error`` body.
+            code = (payload.get("error") or {}).get("code") if isinstance(payload, dict) else None
+            raise WikidataUnavailable(f"wikidata search error: {code or 'malformed'}", retry_after_seconds=retry_after)
+        hits: List[WikidataSearchHit] = []
+        for item in payload["search"]:
+            qid = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(qid, str) or not _QID_RE.match(qid):
+                continue
+            hits.append(
+                WikidataSearchHit(
+                    qid=qid,
+                    label=str(item.get("label") or ""),
+                    description=str(item.get("description") or ""),
+                )
+            )
+        return hits
 
     # ------------------------------------------------------------------
     # Spec #45 — enrichment surface (facts + label resolution)
