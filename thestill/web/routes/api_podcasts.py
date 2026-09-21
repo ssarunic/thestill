@@ -257,6 +257,10 @@ def get_podcast(
                 "website_url": info.website_url,
                 "is_complete": info.is_complete,
                 "copyright": info.copyright,
+                # Chart-sourced store links (spec #73 follow-up); null when
+                # the podcast is not on any Top Podcasts chart.
+                "apple_url": info.apple_url,
+                "youtube_url": info.youtube_url,
             },
         }
     )

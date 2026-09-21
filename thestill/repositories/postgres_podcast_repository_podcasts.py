@@ -90,6 +90,7 @@ _MTIME_EPSILON = 1e-6
 _PODCAST_COLS = """id, created_at, rss_url, title, slug, description, image_url, language,
        primary_category_id, secondary_category_id,
        author, explicit, show_type, website_url, is_complete, copyright,
+       apple_url, youtube_url,
        last_processed, last_processed_at, etag, last_modified, updated_at"""
 
 # Same projection with a ``p.`` table alias for JOIN queries.
@@ -583,7 +584,7 @@ class PodcastsMixin(CategoryCacheMixin):
 
         ``COALESCE`` keeps an existing link when the chart row has none.
         Restricted to one row when ``podcast_id`` is given. Same statement
-        shape as migration 0009's backfill.
+        shape as migration 0010's backfill.
         """
         params: Tuple[Any, ...] = ()
         scope = ""
@@ -1537,8 +1538,8 @@ class PodcastsMixin(CategoryCacheMixin):
                 explicit=_opt_bool(row["explicit"]),
                 show_type=row["show_type"],
                 website_url=row["website_url"],
-                apple_url=row.get("apple_url"),
-                youtube_url=row.get("youtube_url"),
+                apple_url=row["apple_url"],
+                youtube_url=row["youtube_url"],
                 is_complete=bool(row["is_complete"]) if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=row["last_processed"],
