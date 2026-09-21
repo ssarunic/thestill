@@ -391,3 +391,66 @@ class TestGetTopPodcasts:
             )
         rows = repo.get_top_podcasts("us")
         assert rows[0]["image_url"] == "https://cdn/local.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Chart store links on the local podcast row (spec #73 follow-up)
+# ---------------------------------------------------------------------------
+
+
+class TestPodcastChartUrls:
+    def test_migration_adds_columns_and_backfills_from_chart(self, repo_with_charts):
+        """A pre-existing database (no ``podcasts.apple_url``/``youtube_url``)
+        gains the columns on open and existing rows matched on ``rss_url``
+        are backfilled from ``top_podcasts``."""
+        from thestill.models.podcast import Podcast
+
+        build, chart_dir = repo_with_charts
+        repo = build(
+            {
+                "us": [
+                    _entry(
+                        "Charted",
+                        "https://e/charted",
+                        1,
+                        apple_url="https://podcasts.apple.com/us/podcast/charted/id1",
+                        youtube_url="https://www.youtube.com/@charted",
+                    )
+                ]
+            }
+        )
+        repo.save(Podcast(rss_url="https://e/charted", title="Charted", description=""))
+        repo.save(Podcast(rss_url="https://e/indie", title="Indie", description=""))
+
+        # Simulate the legacy schema: drop the columns, then re-open.
+        with repo._get_connection() as conn:
+            conn.execute("ALTER TABLE podcasts DROP COLUMN apple_url")
+            conn.execute("ALTER TABLE podcasts DROP COLUMN youtube_url")
+        reopened = SqlitePodcastRepository(str(repo.db_path))
+
+        charted = reopened.get_by_url("https://e/charted")
+        assert charted.apple_url == "https://podcasts.apple.com/us/podcast/charted/id1"
+        assert charted.youtube_url == "https://www.youtube.com/@charted"
+        indie = reopened.get_by_url("https://e/indie")
+        assert (indie.apple_url, indie.youtube_url) == (None, None)
+
+    def test_reseeding_a_region_refreshes_stored_links(self, repo_with_charts):
+        """When a region's chart JSON changes, local podcasts on that chart
+        pick up the new links on the next open — without a resolve call."""
+        from thestill.models.podcast import Podcast
+
+        build, chart_dir = repo_with_charts
+        repo = build({"us": [_entry("Charted", "https://e/charted", 1)]})
+        repo.save(Podcast(rss_url="https://e/charted", title="Charted", description=""))
+        assert repo.get_by_url("https://e/charted").apple_url is None
+
+        chart_path = chart_dir / "top_podcasts_us.json"
+        _write_chart(
+            chart_path,
+            "us",
+            [_entry("Charted", "https://e/charted", 1, apple_url="https://podcasts.apple.com/us/podcast/c/id9")],
+        )
+        # Force a visibly different mtime so the seeder treats the region as changed.
+        os.utime(chart_path, (2_000_000_000, 2_000_000_000))
+        reopened = SqlitePodcastRepository(str(repo.db_path))
+        assert reopened.get_by_url("https://e/charted").apple_url == "https://podcasts.apple.com/us/podcast/c/id9"
