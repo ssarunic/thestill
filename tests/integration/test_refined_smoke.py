@@ -25,11 +25,15 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_transformers_is_a_version_refined_can_use():
-    import importlib.metadata as metadata
+def test_tokenizers_have_the_encode_plus_refined_calls():
+    from transformers import PreTrainedTokenizerBase
 
-    major = int(metadata.version("transformers").split(".")[0])
-    assert major < 5, "transformers 5 removed tokenizer.encode_plus, which ReFinED calls on every text"
+    from thestill.core.entity_resolver import _patch_tokenizer_restore_encode_plus
+
+    _patch_tokenizer_restore_encode_plus()
+    assert hasattr(
+        PreTrainedTokenizerBase, "encode_plus"
+    ), "transformers 5 removed tokenizer.encode_plus, which ReFinED calls on every text"
 
 
 def test_resolver_links_an_obvious_entity_end_to_end():

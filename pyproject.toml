@@ -165,13 +165,15 @@ entities = [
     # the ``refined`` PyPI name is a placeholder for an unrelated 0.0.1
     # release. Pin to a tag once amazon-science cuts one.
     "refined @ git+https://github.com/amazon-science/ReFinED.git",
-    # Capped below 5: ReFinED calls ``tokenizer.encode_plus`` on every text
-    # and transformers 5.0 removed it. With 5.x installed the resolver
-    # raised on every mention, and (before the resolver learned to fail
-    # loudly) recorded each one as unresolvable - 641 mentions on
-    # 2026-09-19. Do not widen this without running
-    # tests/integration/test_refined_smoke.py against the new version;
-    # Dependabot's "update transformers requirement" PRs are not safe here.
+    # ReFinED calls ``tokenizer.encode_plus`` on every text and transformers
+    # 5.0 removed it. With 5.x installed the resolver raised on every
+    # mention, and (before the resolver learned to fail loudly) recorded
+    # each one as unresolvable - 641 mentions on 2026-09-19. 5.x works now
+    # only because ``entity_resolver._patch_tokenizer_restore_encode_plus``
+    # puts the method back (verified against 5.10.1). Do not widen this
+    # past 6 without running tests/integration/test_refined_smoke.py
+    # against the new version; Dependabot's "update transformers
+    # requirement" PRs are not safe here.
     "transformers>=4.30,<6",
     # Spec #28 §1.6 — Levenshtein distance for the alias-merge job.
     # rapidfuzz is ~0.5MB, CPU-only, with much better accuracy on

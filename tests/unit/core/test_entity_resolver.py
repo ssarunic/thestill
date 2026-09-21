@@ -381,3 +381,32 @@ class TestP31Gating:
 
     def test_empty_string(self):
         assert _char_overlap("", "anything") == 0
+
+
+class TestEncodePlusShim:
+    """transformers 5 dropped ``encode_plus``; the resolver puts it back for
+    ReFinED as a plain delegate to ``tokenizer(...)``."""
+
+    def test_missing_encode_plus_is_restored_and_forwards_to_call(self, monkeypatch):
+        transformers = pytest.importorskip("transformers")
+        from thestill.core.entity_resolver import _patch_tokenizer_restore_encode_plus
+
+        base = transformers.PreTrainedTokenizerBase
+        monkeypatch.delattr(base, "encode_plus", raising=False)
+        _patch_tokenizer_restore_encode_plus()
+        monkeypatch.setattr(base, "__call__", lambda self, text, text_pair=None, **kw: (text, text_pair, kw))
+
+        result = base.encode_plus(object.__new__(base), "hello", add_special_tokens=False)
+
+        assert result == ("hello", None, {"add_special_tokens": False})
+        monkeypatch.delattr(base, "encode_plus", raising=False)
+
+    def test_an_existing_encode_plus_is_left_alone(self, monkeypatch):
+        transformers = pytest.importorskip("transformers")
+        from thestill.core.entity_resolver import _patch_tokenizer_restore_encode_plus
+
+        base = transformers.PreTrainedTokenizerBase
+        sentinel = lambda self, *a, **kw: "native"  # noqa: E731
+        monkeypatch.setattr(base, "encode_plus", sentinel, raising=False)
+        _patch_tokenizer_restore_encode_plus()
+        assert base.encode_plus is sentinel

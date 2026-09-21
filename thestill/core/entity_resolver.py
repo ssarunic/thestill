@@ -259,6 +259,7 @@ class EntityResolver:
                 "refined is not installed — install the entities extra: " 'pip install -e ".[entities]"'
             ) from exc
         _patch_autotokenizer_drop_init_method_kwargs()
+        _patch_tokenizer_restore_encode_plus()
         logger.info("refined_model_loading", model=self.model_name, entity_set=self.entity_set)
         self._model = Refined.from_pretrained(
             model_name=self.model_name,
@@ -561,3 +562,24 @@ def _patch_autotokenizer_drop_init_method_kwargs() -> None:
 
     AutoTokenizer.from_pretrained = from_pretrained  # type: ignore[assignment]
     _AUTOTOKENIZER_PATCHED = True
+
+
+def _patch_tokenizer_restore_encode_plus() -> None:
+    """Give tokenizers back ``encode_plus`` on transformers ≥ 5.
+
+    transformers 5.0 removed ``PreTrainedTokenizerBase.encode_plus``; in 4.x
+    it was a thin wrapper over ``__call__`` with the same keyword arguments
+    and the same ``BatchEncoding`` result. ReFinED calls it on every text
+    (``doc_preprocessing.preprocessor``, ``inference.standalone_md``), so
+    without this every mention raises ``AttributeError``. A no-op where the
+    method still exists, and idempotent.
+    """
+    from transformers import PreTrainedTokenizerBase
+
+    if hasattr(PreTrainedTokenizerBase, "encode_plus"):
+        return
+
+    def encode_plus(self, text, text_pair=None, **kwargs):
+        return self(text, text_pair, **kwargs)
+
+    PreTrainedTokenizerBase.encode_plus = encode_plus  # type: ignore[attr-defined]
