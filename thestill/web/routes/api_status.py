@@ -83,6 +83,7 @@ def get_status(state: AppState = Depends(get_app_state)):
             "entity_extraction": {
                 "available": stats.entity_extraction_available,
                 "skipped_unavailable": stats.episodes_entities_skipped_unavailable,
+                "linking_deferred": stats.episodes_entities_linking_deferred,
                 "by_status": stats.entity_extraction_by_status,
             },
             # Spec #60 — feed refresh health (parked/quarantined by reason).

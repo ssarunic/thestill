@@ -1362,6 +1362,11 @@ def status(ctx):
     if backlog:
         click.echo("    ^ owed work: these episodes have no entity mentions. Backfill on a host with")
         click.echo("      the `entities` extra: thestill rebuild-entities (see specs/66).")
+    deferred = stats.episodes_entities_linking_deferred
+    click.echo(f"  Linking deferred (outage):         {deferred:,}")
+    if deferred:
+        click.echo("    ^ owed work: Wikidata or the LLM was unreachable, so these episodes' mentions are")
+        click.echo("      still pending. Searchable meanwhile. Finish them with: thestill resolve-entities")
     click.echo("")
     # Spec #60 — feed refresh health: make a mass park/quarantine visible
     # instead of silent (the 2026-07-15 incident's second half).
