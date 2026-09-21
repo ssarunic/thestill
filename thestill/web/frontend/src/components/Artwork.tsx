@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import SmartImage from './SmartImage'
-import { ARTWORK_ROLE, type ArtworkRole } from './artworkRoles'
+import { ARTWORK_ROLE, LANDSCAPE_MIN_RATIO, type ArtworkRole } from './artworkRoles'
 
 export type { ArtworkRole } from './artworkRoles'
 
@@ -14,7 +15,10 @@ interface ArtworkProps {
 }
 
 export default function Artwork({ sources, role, alt = '', loading = 'lazy', className = '' }: ArtworkProps) {
-  const { box, radius, px, glyph } = ARTWORK_ROLE[role]
+  const { box, radius, px, glyph, landscapeBox } = ARTWORK_ROLE[role]
+  // Only known once the image has loaded; roles without a landscape frame stay square.
+  const [landscape, setLandscape] = useState(false)
+  const frame = landscape && landscapeBox ? landscapeBox : `${box} aspect-square`
   return (
     <SmartImage
       sources={sources}
@@ -22,7 +26,15 @@ export default function Artwork({ sources, role, alt = '', loading = 'lazy', cla
       width={px}
       height={px}
       loading={loading}
-      className={`${box} ${radius} object-cover shrink-0 aspect-square bg-gray-100 ${className}`}
+      onLoad={
+        landscapeBox
+          ? (e) => {
+              const { naturalWidth, naturalHeight } = e.currentTarget
+              setLandscape(naturalHeight > 0 && naturalWidth / naturalHeight >= LANDSCAPE_MIN_RATIO)
+            }
+          : undefined
+      }
+      className={`${frame} ${radius} object-cover shrink-0 bg-gray-100 ${className}`}
       fallback={
         <div
           aria-hidden={alt ? undefined : 'true'}

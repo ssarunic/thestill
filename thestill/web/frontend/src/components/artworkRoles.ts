@@ -2,7 +2,19 @@
 // seven size/radius combinations spec #73 §2 counted.
 export type ArtworkRole = 'inline' | 'bar' | 'rowSm' | 'row' | 'sheet' | 'card' | 'collage' | 'hero'
 
-export const ARTWORK_ROLE: Record<ArtworkRole, { box: string; radius: string; px: number; glyph: string }> = {
+interface ArtworkRoleSpec {
+  box: string
+  radius: string
+  px: number
+  glyph: string
+  /** Replaces ``box`` + ``aspect-square`` once the loaded image turns out to be landscape. */
+  landscapeBox?: string
+}
+
+/** Width ÷ height above which artwork counts as landscape (a 4:3 video thumbnail is 1.33). */
+export const LANDSCAPE_MIN_RATIO = 1.2
+
+export const ARTWORK_ROLE: Record<ArtworkRole, ArtworkRoleSpec> = {
   /** 28 px — the show row under a title, the collapsed bar. */
   inline: { box: 'w-7 h-7', radius: 'rounded-md', px: 28, glyph: 'w-3.5 h-3.5' },
   /** 32 px — the collapsed header bar. */
@@ -24,9 +36,18 @@ export const ARTWORK_ROLE: Record<ArtworkRole, { box: string; radius: string; px
   /**
    * Episode hero: 40 vw capped at 160 px on phones (the largest size that
    * keeps the tabs above the fold at 393 × 852, spec #76 §7.1), 200 px
-   * from ``sm``.
+   * from ``sm``. A landscape image (a YouTube thumbnail) keeps those heights
+   * and widens to 16:9 instead of losing both sides to the square crop, so
+   * the tabs stay where they were; 200 px waits for ``lg`` because a 356 px
+   * wide frame would squeeze the title column before that.
    */
-  hero: { box: 'w-[40vw] max-w-[160px] sm:w-[200px] sm:max-w-none', radius: 'rounded-xl', px: 200, glyph: 'w-12 h-12' },
+  hero: {
+    box: 'w-[40vw] max-w-[160px] sm:w-[200px] sm:max-w-none',
+    radius: 'rounded-xl',
+    px: 200,
+    glyph: 'w-12 h-12',
+    landscapeBox: 'h-[min(40vw,160px)] w-auto aspect-video sm:h-[160px] lg:h-[200px]',
+  },
 }
 
 /** Box + radius classes for a role, so skeletons stay in step with the real artwork. */
