@@ -25,8 +25,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Protocol
 
+from structlog import get_logger
+
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
+from ..entity_type_rules import classify_entity_type
+
+logger = get_logger(__name__)
 
 
 class _P31Lookup(Protocol):
@@ -111,6 +116,53 @@ def unresolvable_result(mention: EntityMention) -> ResolutionResult:
         ),
         status="unresolvable",
         method=ResolutionMethod.UNRESOLVABLE,
+    )
+
+
+def linked_result(
+    mention: EntityMention,
+    *,
+    qid: str,
+    canonical_name: str,
+    description: Optional[str],
+    fallback_type: EntityType,
+    method: ResolutionMethod,
+    wikidata_client: Optional[_P31Lookup] = None,
+) -> ResolutionResult:
+    """A mention linked to ``qid``, whichever linker found it.
+
+    Spec #28 §5.2 — Wikidata P31 gating. Re-bucket entities whose
+    ``instance of`` contradicts the extractor's guess (e.g. countries that
+    GLiNER labelled "company"). Without a client the unchecked type stands.
+    """
+    p31_qids: List[str] = []
+    entity_type = fallback_type
+    if wikidata_client is not None:
+        p31_qids = wikidata_client.fetch_p31(qid)
+        classified = classify_entity_type(p31_qids, fallback_type)
+        if classified is not None and classified != fallback_type:
+            logger.info(
+                "entity_type_reclassified",
+                surface_form=mention.surface_form,
+                qid=qid,
+                from_type=fallback_type.value,
+                to_type=classified.value,
+                p31=p31_qids,
+            )
+        entity_type = classified or fallback_type
+    return ResolutionResult(
+        mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
+        entity=EntityRecord(
+            id=_build_entity_id(entity_type, canonical_name, qid),
+            type=entity_type,
+            canonical_name=canonical_name,
+            wikidata_qid=qid,
+            aliases=[mention.surface_form] if _is_plausible_alias(mention.surface_form, canonical_name) else [],
+            description=description,
+            wikidata_instance_of=p31_qids,
+        ),
+        status="resolved",
+        method=method,
     )
 
 

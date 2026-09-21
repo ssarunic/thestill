@@ -1,3 +1,17 @@
+# Copyright 2025-2026 Thestill
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Spec #81 Stage 4 - decision cache rules, on a real SQLite repository."""
 
 import sqlite3
@@ -5,8 +19,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from thestill.core.entity_linking.cache import LinkDecisionCache
+from thestill.core.entity_linking.cache import LinkDecisionCache, invalidate_link_decisions
 from thestill.core.entity_linking.types import Candidate, LinkDecision
+from thestill.repositories.link_decision_repository import StoredLinkDecision
 from thestill.repositories.sqlite_link_decision_repository import SqliteLinkDecisionRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
@@ -49,6 +64,23 @@ def _decision(qid="Q1", confidence="high", key="mercury", reason="because"):
     return LinkDecision(surface_key=key, qid=qid, confidence=confidence, reason=reason, candidate=candidate)
 
 
+def _corpus_row(repo, clock, qid="Q1"):
+    """Only promotion writes this row; tests that need one put it there."""
+    repo.upsert(
+        StoredLinkDecision(
+            surface_key="mercury",
+            podcast_id=None,
+            qid=qid,
+            label="Mercury",
+            description="a thing called Mercury",
+            confidence="high",
+            reason=None,
+            decided_at=clock.now,
+            linker_version="v1",
+        )
+    )
+
+
 def test_a_miss_is_none(cache):
     assert cache.lookup("mercury", PODS[0]) is None
 
@@ -61,8 +93,8 @@ def test_a_recorded_decision_is_found_for_its_podcast_only(cache):
     assert cache.lookup("mercury", PODS[1]) is None
 
 
-def test_podcast_scope_wins_over_corpus_scope(cache):
-    cache.record(_decision(qid="Q-planet"), None)
+def test_podcast_scope_wins_over_corpus_scope(cache, repo, clock):
+    _corpus_row(repo, clock, qid="Q-planet")
     cache.record(_decision(qid="Q-freddie"), PODS[0])
     assert cache.lookup("mercury", PODS[0]).qid == "Q-freddie"
     other = cache.lookup("mercury", PODS[1])
@@ -127,16 +159,22 @@ def test_lookup_is_read_only_and_hits_are_counted_explicitly(cache, repo):
     assert repo.get("mercury", PODS[0]).hits == 1
 
 
-def test_a_corpus_hit_is_counted_on_the_corpus_row(cache, repo):
-    cache.record(_decision(), None)
+def test_a_corpus_hit_is_counted_on_the_corpus_row(cache, repo, clock):
+    _corpus_row(repo, clock)
     cache.record_hit(cache.lookup("mercury", PODS[0]), PODS[0])
     assert repo.get("mercury", None).hits == 1
 
 
-def test_invalidate_folds_the_spoken_name_and_clears_every_scope(cache):
-    cache.record(_decision(), PODS[0])
+def test_without_a_podcast_nothing_is_remembered(cache, repo):
+    """The corpus-wide answer is earned by agreement, never written directly."""
     cache.record(_decision(), None)
-    assert cache.invalidate("  MERCURY ") == 2
+    assert repo.get("mercury", None) is None
+
+
+def test_invalidate_folds_the_spoken_name_and_clears_every_scope(cache, repo, clock):
+    cache.record(_decision(), PODS[0])
+    _corpus_row(repo, clock)
+    assert invalidate_link_decisions(repo, "  MERCURY ") == 2
     assert cache.lookup("mercury", PODS[0]) is None
 
 

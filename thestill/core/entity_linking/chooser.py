@@ -158,7 +158,12 @@ class LLMCandidateChooser:
                 # truncated answer surfaces here too. Whatever it was, these
                 # names have no answer; the linker decides what that means.
                 outcome.call_errors += 1
-                logger.warning("entity_linking_chooser_call_failed", error_type=type(exc).__name__, names=len(batch))
+                logger.warning(
+                    "entity_linking_chooser_call_failed",
+                    episode_id=context.episode_id,
+                    error_type=type(exc).__name__,
+                    names=len(batch),
+                )
                 missing.extend(batch)
                 continue
             answered: Set[str] = set()

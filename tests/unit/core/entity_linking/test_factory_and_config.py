@@ -1,3 +1,17 @@
+# Copyright 2025-2026 Thestill
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Spec #81 - configuration and the linker factory."""
 
 from types import SimpleNamespace
@@ -103,7 +117,7 @@ def test_build_linker_follows_the_switch():
     assert isinstance(factory.build_linker(_config(entity_linker="refined"), repo), EntityResolver)
 
 
-def test_the_live_linker_is_always_available_and_refined_follows_its_extra():
+def test_the_live_linker_needs_no_install_and_refined_follows_its_extra():
     assert factory.linker_is_available(_config()) is True
     with patch.object(EntityResolver, "is_available", return_value=False):
         assert factory.linker_is_available(_config(entity_linker="refined")) is False

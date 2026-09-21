@@ -21,6 +21,7 @@ from typing import Dict, List, Protocol, Set
 
 from structlog import get_logger
 
+from ...utils.text_sanitizer import sanitize_text
 from ..wikidata_client import WikidataSearchHit, WikidataUnavailable
 from .rate_limiter import WikidataRateLimiter
 from .types import Candidate, NameGroup
@@ -44,14 +45,26 @@ class CandidateFetch:
     skipped_generic: int = 0
 
 
-def is_generic_noun(group: NameGroup) -> bool:
-    """A single lowercase word GLiNER called a topic: "agent", "founder".
-
-    The alias cleanup found these make up most junk mentions. The chooser
-    would reject them anyway; skipping the lookup is a cost control.
+# Words the extractor tags as entities that never are one. Taken from what
+# the 2026-09 alias cleanup removed ("agent", "people", "founder", "ceo"...).
+# A closed list on purpose: "any lowercase word tagged topic" would also
+# swallow "bitcoin", "ozempic" and "kubernetes", and a skipped name is
+# remembered as "no such entity" - the failure this linker exists to fix.
+GENERIC_NOUNS = frozenset(
     """
-    name = group.surface_form.strip()
-    return (group.surface_label or "").lower() == "topic" and name.isalpha() and name.islower()
+    agent agents app apps boss book business ceo cfo chairman city companies company corporation country
+    cto customer customers data director doctor economy employee employees episode film founder founders
+    government guest guy guys host idea ideas internet investor investors man manager market markets model
+    models money movie patient patients people person podcast policy politics president price prices
+    product products show startup team tech technology thinking user users woman world
+    """.split()
+)
+
+
+def is_generic_noun(group: NameGroup) -> bool:
+    """The chooser would reject these anyway; skipping the lookup is a cost
+    control, never a quality rule."""
+    return group.surface_key in GENERIC_NOUNS
 
 
 class WikidataCandidateSource:
@@ -60,7 +73,7 @@ class WikidataCandidateSource:
         self._limiter = limiter
         self._limit = limit
 
-    def fetch(self, groups: List[NameGroup], *, language: str = "en") -> CandidateFetch:
+    def fetch(self, groups: List[NameGroup], *, language: str = "en", episode_id: str = "") -> CandidateFetch:
         """One search per name, in the episode's language then English.
 
         A failed name does not stop the others: whatever is answered can be
@@ -79,14 +92,25 @@ class WikidataCandidateSource:
             except WikidataUnavailable as exc:
                 if exc.retry_after_seconds:
                     self._limiter.hold_off(exc.retry_after_seconds)
-                logger.warning("entity_linking_candidate_search_failed", error=str(exc))
+                # The name is spoken content and stays out of the log; the
+                # error text carries only a status code or an exception type.
+                logger.warning("entity_linking_candidate_search_failed", episode_id=episode_id, error=str(exc))
                 out.failed.add(group.surface_key)
                 continue
             out.candidates[group.surface_key] = [
-                Candidate(qid=h.qid, label=h.label, description=h.description) for h in hits
+                Candidate(qid=h.qid, label=_clean(h.label), description=_clean(h.description)) for h in hits
             ]
         return out
 
     def _search(self, name: str, language: str) -> List[WikidataSearchHit]:
         self._limiter.acquire()
         return self._client.search_entities(name, language=language, limit=self._limit)
+
+
+def _clean(text: str) -> str:
+    """Wikidata is publicly editable, and its labels end up as entity names.
+    Scrub control characters here, and say so (spec #42 FM-4)."""
+    clean, removed = sanitize_text(text or "")
+    if removed:
+        logger.warning("wikidata_control_chars_stripped", removed=removed)
+    return clean.strip()

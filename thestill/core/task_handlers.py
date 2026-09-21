@@ -1502,12 +1502,14 @@ def _get_or_create_entity_extractor(state: "AppState"):
 
 
 def _get_or_create_entity_resolver(state: "AppState"):
-    """Lazy-init the process-scope ``EntityResolver``.
+    """Lazy-init the process-scope linker, whichever ``ENTITY_LINKER`` picks.
 
-    ReFinED loads several GB of LMDB-indexed Wikidata on first use
-    (~30-60s, ~4-6GB RAM). Same lock pattern as the extractor: defer
-    until the first ``resolve-entities`` task fires, cache on
-    ``AppState``, prevent concurrent double-load.
+    The field keeps its ``entity_resolver`` name from when ReFinED was the
+    only choice. ReFinED loads several GB of LMDB-indexed Wikidata on first
+    use (~30-60s, ~4-6GB RAM); the live linker (spec #81) builds in
+    milliseconds and holds two HTTP clients. Same lock pattern as the
+    extractor either way: defer until the first ``resolve-entities`` task
+    fires, cache on ``AppState``, prevent concurrent double-load.
     """
     with _resolver_init_lock:
         if state.entity_resolver is None:

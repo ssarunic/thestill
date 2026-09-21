@@ -50,6 +50,7 @@ from .entity_linking.shared import (  # noqa: F401 — re-exported; existing imp
     _build_entity_id,
     _is_plausible_alias,
     _P31Lookup,
+    linked_result,
     unresolvable_result,
 )
 from .entity_type_rules import classify_entity_type
@@ -289,42 +290,14 @@ class EntityResolver:
             or getattr(match.predicted_entity, "human_readable_name", None)
             or mention.surface_form
         )
-        fallback_type = self._infer_entity_type(mention, getattr(match, "coarse_type", None))
-        # Spec #28 §5.2 — Wikidata P31 gating. Re-bucket entities whose
-        # ``instance of`` contradicts the GLiNER/coarse-type guess
-        # (e.g. countries that GLiNER labelled "company"). When the
-        # client isn't injected we fall through with the unchecked
-        # type — same behavior as before this commit.
-        p31_qids: List[str] = []
-        if self._wikidata_client is not None and wikidata_qid:
-            p31_qids = self._wikidata_client.fetch_p31(wikidata_qid)
-            classified = classify_entity_type(p31_qids, fallback_type)
-            if classified is not None and classified != fallback_type:
-                logger.info(
-                    "entity_type_reclassified",
-                    surface_form=mention.surface_form,
-                    qid=wikidata_qid,
-                    from_type=fallback_type.value,
-                    to_type=classified.value,
-                    p31=p31_qids,
-                )
-            entity_type = classified or fallback_type
-        else:
-            entity_type = fallback_type
-        entity_id = _build_entity_id(entity_type, canonical_name, wikidata_qid)
-        return ResolutionResult(
-            mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
-            entity=EntityRecord(
-                id=entity_id,
-                type=entity_type,
-                canonical_name=canonical_name,
-                wikidata_qid=wikidata_qid,
-                aliases=[mention.surface_form] if _is_plausible_alias(mention.surface_form, canonical_name) else [],
-                description=getattr(match.predicted_entity, "description", None),
-                wikidata_instance_of=p31_qids,
-            ),
-            status="resolved",
+        return linked_result(
+            mention,
+            qid=wikidata_qid,
+            canonical_name=canonical_name,
+            description=getattr(match.predicted_entity, "description", None),
+            fallback_type=self._infer_entity_type(mention, getattr(match, "coarse_type", None)),
             method=ResolutionMethod.DIRECT,
+            wikidata_client=self._wikidata_client,
         )
 
     def _unresolvable_result(self, mention: EntityMention) -> ResolutionResult:

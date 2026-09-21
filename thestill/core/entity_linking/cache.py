@@ -106,7 +106,13 @@ class LinkDecisionCache:
         """Store a fresh decision, then consider promotion. The decision is
         durable before promotion reads it back, so a crash in between leaves
         a valid podcast-scoped row (failure-mode catalogue: checkpoint
-        before durability)."""
+        before durability).
+
+        Without a podcast nothing is remembered: the corpus-wide row is
+        written only by promotion, so one caller that forgot its context
+        cannot decide a name for every podcast."""
+        if podcast_id is None:
+            return
         stored = StoredLinkDecision(
             surface_key=decision.surface_key,
             podcast_id=podcast_id,
@@ -119,7 +125,7 @@ class LinkDecisionCache:
             linker_version=self._linker_version,
         )
         self._repo.upsert(stored)
-        if podcast_id is not None and decision.qid is not None and decision.confidence != "low":
+        if decision.qid is not None and decision.confidence != "low":
             self._maybe_promote(stored)
 
     def _maybe_promote(self, stored: StoredLinkDecision) -> None:
@@ -134,8 +140,3 @@ class LinkDecisionCache:
             return
         self._repo.upsert(replace(stored, podcast_id=None, reason=None))
         logger.info("entity_link_decision_promoted", qid=stored.qid, podcasts=len(rows))
-
-    def invalidate(self, surface_form: str) -> int:
-        """Forget a name in every scope. A human correction must never be
-        overridden by a remembered machine answer."""
-        return invalidate_link_decisions(self._repo, surface_form)

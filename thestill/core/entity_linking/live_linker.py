@@ -26,13 +26,13 @@ turns them into one result per mention.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from structlog import get_logger
 
-from ...models.entities import EntityMention, EntityRecord, ResolutionMethod
-from ..entity_type_rules import classify_entity_type
+from ...models.entities import EntityMention, ResolutionMethod
 from .cache import LinkDecisionCache
 from .candidates import WikidataCandidateSource
 from .chooser import LLMCandidateChooser
@@ -40,10 +40,9 @@ from .protocol import IsBlacklisted
 from .shared import (
     EntityLinkerBrokenError,
     ResolutionResult,
-    _build_entity_id,
-    _is_plausible_alias,
     _P31Lookup,
     infer_entity_type_from_label,
+    linked_result,
     unresolvable_result,
 )
 from .types import LinkContext, LinkDecision, NameGroup, surface_key
@@ -79,12 +78,18 @@ class LinkOutcome:
     names: int = 0
     cache_hits: int = 0
     asked: int = 0
-    unusable_answers: int = 0  # omitted by the model, or a QID it was not offered
+    omitted: int = 0  # asked, reachable, and still no answer after the re-ask
     rejected_not_offered: int = 0
     rejected_blacklisted: int = 0
     skipped_generic: int = 0
     llm_calls: int = 0
     unreachable: bool = False  # a search or an LLM call failed outright
+
+    @property
+    def unusable_answers(self) -> int:
+        """Names the chooser was reachable for and still gave nothing usable:
+        left out twice, or answered with a QID it was not offered."""
+        return self.omitted + self.rejected_not_offered
 
     @property
     def broken(self) -> bool:
@@ -141,11 +146,6 @@ class LiveWikidataLinker:
         self._wikidata_client = wikidata_client
         self._min_confidence = min_confidence
 
-    @staticmethod
-    def is_available() -> bool:
-        """Nothing to install: the dependencies are Wikidata and the LLM."""
-        return True
-
     # ------------------------------------------------------------------
     # Pure core
     # ------------------------------------------------------------------
@@ -175,8 +175,18 @@ class LiveWikidataLinker:
                 outcome.decisions[group.surface_key] = cached
                 outcome.cache_hits += 1
 
-        fetched = self._candidates.fetch(misses, language=context.language)
+        started = time.monotonic()
+        fetched = self._candidates.fetch(misses, language=context.language, episode_id=context.episode_id)
         outcome.skipped_generic = fetched.skipped_generic
+        logger.info(
+            "entity_linking_candidates_fetched",
+            episode_id=context.episode_id,
+            names=len(misses),
+            with_candidates=sum(1 for c in fetched.candidates.values() if c),
+            failed=len(fetched.failed),
+            skipped_generic=fetched.skipped_generic,
+            wikidata_ms=int((time.monotonic() - started) * 1000),
+        )
         if fetched.failed:
             outcome.unreachable = True
             outcome.unanswered |= fetched.failed
@@ -204,7 +214,7 @@ class LiveWikidataLinker:
             outcome.llm_calls = chosen.llm_calls
             outcome.unreachable = outcome.unreachable or chosen.call_errors > 0
             outcome.unanswered |= chosen.unanswered
-            outcome.unusable_answers = len(chosen.unanswered) if chosen.call_errors == 0 else 0
+            outcome.omitted = len(chosen.unanswered) if chosen.call_errors == 0 else 0
             for group in to_ask:
                 choice = chosen.decisions.get(group.surface_key)
                 if choice is None:
@@ -212,12 +222,25 @@ class LiveWikidataLinker:
                 checked = validator.validate(choice, fetched.candidates[group.surface_key], group)
                 if checked.rejection == NOT_OFFERED:
                     outcome.rejected_not_offered += 1
-                    outcome.unusable_answers += 1
                     outcome.unanswered.add(group.surface_key)
                     continue
                 if checked.rejection == BLACKLISTED:
                     outcome.rejected_blacklisted += 1
                 outcome.decisions[group.surface_key] = checked.decision  # type: ignore[assignment]
+            fresh = [outcome.decisions[g.surface_key] for g in to_ask if g.surface_key in outcome.decisions]
+            logger.info(
+                "entity_linking_chosen",
+                episode_id=context.episode_id,
+                asked=outcome.asked,
+                llm_calls=outcome.llm_calls,
+                linked=sum(1 for d in fresh if d.qid and d.confidence != "low"),
+                none=sum(1 for d in fresh if d.qid is None),
+                low_confidence=sum(1 for d in fresh if d.qid and d.confidence == "low"),
+                omitted=outcome.omitted,
+                # above zero means the model is inventing QIDs: look at the prompt
+                rejected_not_offered=outcome.rejected_not_offered,
+                rejected_blacklisted=outcome.rejected_blacklisted,
+            )
         return outcome
 
     # ------------------------------------------------------------------
@@ -233,6 +256,7 @@ class LiveWikidataLinker:
     ) -> List[ResolutionResult]:
         if not mentions:
             return []
+        started = time.monotonic()
         context = context or LinkContext(episode_id=mentions[0].episode_id)
         groups = group_mentions(mentions)
         logger.info("entity_linking_started", episode_id=context.episode_id, names=len(groups), mentions=len(mentions))
@@ -278,6 +302,7 @@ class LiveWikidataLinker:
             unanswered_names=len(outcome.unanswered),
             rejected_not_offered=outcome.rejected_not_offered,
             rejected_blacklisted=outcome.rejected_blacklisted,
+            duration_ms=int((time.monotonic() - started) * 1000),
         )
 
         if outcome.unanswered and outcome.unreachable:
@@ -291,32 +316,19 @@ class LiveWikidataLinker:
     def _accepted(self, decision: LinkDecision, group: NameGroup, is_blacklisted: Optional[IsBlacklisted]) -> bool:
         if decision.qid is None or not meets_confidence(decision.confidence, self._min_confidence):
             return False
-        # Checked again here because a remembered decision may predate the
-        # blacklist entry.
-        return not DecisionValidator(is_blacklisted=is_blacklisted).blacklisted(group.surface_form, decision.qid)
+        # ``link`` already re-decides a remembered link that was ruled out
+        # since; this is the last line of defence before a mention is written.
+        return not (is_blacklisted is not None and is_blacklisted(group.surface_form, decision.qid))
 
     def _linked_result(self, mention: EntityMention, decision: LinkDecision) -> ResolutionResult:
-        qid = decision.qid
-        assert qid is not None
-        canonical_name = (decision.candidate.label if decision.candidate else "") or mention.surface_form
-        fallback_type = infer_entity_type_from_label(mention)
-        p31_qids: List[str] = []
-        entity_type = fallback_type
-        if self._wikidata_client is not None:
-            # Same P31 re-bucketing the ReFinED path applies (spec #28 §5.2).
-            p31_qids = self._wikidata_client.fetch_p31(qid)
-            entity_type = classify_entity_type(p31_qids, fallback_type) or fallback_type
-        return ResolutionResult(
-            mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
-            entity=EntityRecord(
-                id=_build_entity_id(entity_type, canonical_name, qid),
-                type=entity_type,
-                canonical_name=canonical_name,
-                wikidata_qid=qid,
-                aliases=[mention.surface_form] if _is_plausible_alias(mention.surface_form, canonical_name) else [],
-                description=(decision.candidate.description if decision.candidate else None) or None,
-                wikidata_instance_of=p31_qids,
-            ),
-            status="resolved",
+        assert decision.qid is not None
+        candidate = decision.candidate
+        return linked_result(
+            mention,
+            qid=decision.qid,
+            canonical_name=(candidate.label if candidate else "") or mention.surface_form,
+            description=(candidate.description if candidate else None) or None,
+            fallback_type=infer_entity_type_from_label(mention),
             method=ResolutionMethod.LLM_LINKED,
+            wikidata_client=self._wikidata_client,
         )

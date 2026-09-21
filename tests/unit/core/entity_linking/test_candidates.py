@@ -1,3 +1,17 @@
+# Copyright 2025-2026 Thestill
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Spec #81 Stage 1 - Wikidata candidate search."""
 
 from unittest.mock import MagicMock, patch
@@ -80,14 +94,28 @@ def test_generic_nouns_are_not_searched():
     "name, label, generic",
     [
         ("agent", "topic", True),
-        ("brain rot", "topic", False),  # two words: could be a real topic
-        ("Rationalism", "topic", False),  # capitalised: spoken as a name
-        ("apple", "company", False),  # GLiNER saw a company
-        ("gpt4", "topic", False),
+        ("Founder", "person", True),  # the word, whatever it was tagged as
+        ("brain rot", "topic", False),
+        # single lowercase words tagged "topic" that ARE entities: a broad
+        # rule would remember these as "no such entity" for a month
+        ("bitcoin", "topic", False),
+        ("ozempic", "topic", False),
+        ("kubernetes", "topic", False),
+        ("rationalism", "topic", False),
+        ("apple", "company", False),
     ],
 )
 def test_generic_noun_rule(name, label, generic):
     assert is_generic_noun(_group(name, label)) is generic
+
+
+def test_control_characters_in_wikidata_text_are_stripped():
+    dirty = WikidataSearchHit(qid="Q1", label="Dario\x00 Amodei", description=" AI\x07 researcher ")
+    fetched = WikidataCandidateSource(ScriptedSearch({("Dario Amodei", "en"): [dirty]}), _limiter()).fetch(
+        [_group("Dario Amodei")]
+    )
+    (candidate,) = fetched.candidates["dario amodei"]
+    assert (candidate.label, candidate.description) == ("Dario Amodei", "AI researcher")
 
 
 def test_retry_after_holds_back_every_later_request():

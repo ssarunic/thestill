@@ -171,9 +171,13 @@ re-bucketing as today.
   which is a prior, not a judgement — the chooser does the judging.
 - **Generic nouns are dropped before search.** The alias cleanup found that
   most junk mentions are common nouns ("agent", "people", "founder", "ceo").
-  Names that are a single lowercase dictionary word with a GLiNER label of
-  `topic` skip the lookup and stay unresolved. This is a cost control, not
-  a quality rule; the chooser would reject them anyway.
+  A closed stoplist of such words skips the lookup. It is deliberately *not*
+  "any lowercase word tagged `topic`": that rule would also swallow
+  "bitcoin", "ozempic" and "kubernetes", and a skipped name is remembered as
+  "no such entity" — the failure this linker exists to fix. A cost control,
+  not a quality rule; the chooser would reject these words anyway.
+- **Labels and descriptions are sanitised** as candidates are built. Wikidata
+  is publicly editable and its labels become entity names.
 - **Politeness.** Descriptive `User-Agent` (already set), a process-wide
   rate limit (default 5 requests/s, `WIKIDATA_MAX_RPS`), honour
   `Retry-After` and `maxlag`. Wikimedia's API etiquette asks for serial or
@@ -281,9 +285,11 @@ New table `entity_link_decisions`:
 | `linker_version` | prompt + model fingerprint |
 | `hits` | times reused |
 
-Lookup order: podcast-scoped, then corpus-wide. A decision is written
-podcast-scoped first; it is promoted to corpus-wide once the same name has
-resolved to the same QID in three different podcasts with no disagreement.
+Lookup order: podcast-scoped, then corpus-wide. A decision is always written
+podcast-scoped; the corpus-wide row is written **only by promotion**, once
+the same name has resolved to the same QID in three different podcasts with
+no disagreement. A call with no podcast remembers nothing, so one caller that
+forgot its context cannot decide a name for every podcast.
 Names with disagreement across podcasts stay podcast-scoped — "Mercury" on a
 science show and on a music show are different things.
 

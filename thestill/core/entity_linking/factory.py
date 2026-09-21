@@ -17,7 +17,7 @@ come through here, so ``ENTITY_LINKER`` means the same thing in both."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from ...repositories.link_decision_repository import LinkDecisionRepository
 from ..llm_provider import LLMProvider, create_llm_provider, provider_kwargs_from_config
@@ -26,6 +26,7 @@ from .cache import LinkDecisionCache
 from .candidates import WikidataCandidateSource
 from .chooser import LLMCandidateChooser
 from .live_linker import LiveWikidataLinker
+from .protocol import EntityLinker
 from .rate_limiter import get_shared_rate_limiter
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ def build_linker(
     *,
     wikidata_client: Optional[WikidataClient] = None,
     provider: Optional[LLMProvider] = None,
-) -> Any:
+) -> EntityLinker:
     wikidata_client = wikidata_client or WikidataClient()
     if config.entity_linker != "live":
         from ..entity_resolver import EntityResolver
