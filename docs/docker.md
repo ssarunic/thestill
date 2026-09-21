@@ -16,7 +16,7 @@ All variants are built from the same `Dockerfile` via multi-stage targets:
 | ----------- | --------------------------------------------------------- | -------------------------------------------- |
 | `:slim`     | Cloud deps only, no `ffmpeg`                              | Dalston is your only transcription provider |
 | `:full`     | `:slim` + static `ffmpeg` and `ffprobe` (~80 MB more)     | You need Google Cloud Speech or ElevenLabs  |
-| `:prod`     | `:full` built with `EXTRAS=postgres,s3,ses,search` (multi-GB — pulls CPU `torch`) | AWS production (spec #66); published to GHCR by CI |
+| `:prod`     | `:full` built with `EXTRAS=postgres,s3,ses,search,entities` (multi-GB — pulls CPU `torch`) | AWS production (spec #66); published to GHCR by CI |
 
 `slim` and `full` include no `torch`, `openai-whisper`, `whisperx`, or
 `pyannote.audio`. Local transcription requires building your own image that

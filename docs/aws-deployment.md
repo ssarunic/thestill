@@ -95,7 +95,7 @@ recovering when something needs doing by hand.
 
 ## 1. Provision
 
-1. **Instance**: `t4g.medium` (Graviton/arm64), 30 GB gp3, Amazon Linux 2023
+1. **Instance**: `t4g.large` (Graviton/arm64), 40 GB gp3, Amazon Linux 2023
    arm64 AMI, public subnet with a public IPv4. Same VPC (or a peered VPC in
    the same region) as the Dalston node.
 2. **Security group (app)**: inbound 80/443 from `0.0.0.0/0`. Nothing else —

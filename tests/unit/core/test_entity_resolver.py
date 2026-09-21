@@ -410,3 +410,52 @@ class TestEncodePlusShim:
         monkeypatch.setattr(base, "encode_plus", sentinel, raising=False)
         _patch_tokenizer_restore_encode_plus()
         assert base.encode_plus is sentinel
+
+
+# ---------------------------------------------------------------------------
+# REFINED_DATA_DIR — where the model download lands
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_refined(monkeypatch, calls: list) -> None:
+    """Stand in for ``refined.inference.processor`` so ``_load_model`` runs
+    without the several-GB download (or the package being installed)."""
+    import sys
+    from types import ModuleType
+
+    import thestill.core.entity_resolver as mod
+
+    class FakeRefined:
+        @classmethod
+        def from_pretrained(cls, **kwargs):
+            calls.append(kwargs)
+            return StubReFinED({})
+
+    processor = ModuleType("refined.inference.processor")
+    processor.Refined = FakeRefined
+    monkeypatch.setitem(sys.modules, "refined", ModuleType("refined"))
+    monkeypatch.setitem(sys.modules, "refined.inference", ModuleType("refined.inference"))
+    monkeypatch.setitem(sys.modules, "refined.inference.processor", processor)
+    monkeypatch.setattr(mod, "_patch_autotokenizer_drop_init_method_kwargs", lambda: None)
+    monkeypatch.setattr(mod, "_patch_tokenizer_restore_encode_plus", lambda: None)
+
+
+def test_load_model_passes_refined_data_dir_from_env(monkeypatch, tmp_path):
+    calls: list = []
+    _install_fake_refined(monkeypatch, calls)
+    monkeypatch.setenv("REFINED_DATA_DIR", str(tmp_path))
+
+    EntityResolver()._load_model()
+
+    assert calls[0]["data_dir"] == str(tmp_path)
+
+
+def test_load_model_leaves_data_dir_unset_by_default(monkeypatch):
+    calls: list = []
+    _install_fake_refined(monkeypatch, calls)
+    monkeypatch.delenv("REFINED_DATA_DIR", raising=False)
+
+    EntityResolver()._load_model()
+
+    # None lets ReFinED fall back to its own ``~/.cache/refined`` default.
+    assert calls[0]["data_dir"] is None

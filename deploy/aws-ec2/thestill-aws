@@ -92,8 +92,8 @@ STATE_FILE = STATE_DIR / "aws-state.json"
 AUDIT_LOG = STATE_DIR / "audit.log"
 
 DEFAULT_REGION = "eu-west-2"
-INSTANCE_TYPE = "t4g.medium"
-ROOT_VOLUME_SIZE = 30
+INSTANCE_TYPE = "t4g.large"
+ROOT_VOLUME_SIZE = 40
 SSM_PREFIX = "/thestill/prod/"
 # Deployment state mirrored to SSM so a second laptop or a CI runner can
 # `reconcile` without ~/.thestill/aws-state.json. Deliberately OUTSIDE

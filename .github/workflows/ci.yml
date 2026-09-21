@@ -233,7 +233,7 @@ jobs:
           context: .
           target: prod
           build-args: |
-            EXTRAS=postgres,s3,ses,search
+            EXTRAS=postgres,s3,ses,search,entities
           platforms: linux/arm64
           push: true
           tags: |
