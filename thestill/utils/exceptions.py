@@ -215,3 +215,17 @@ __all__ = [
     "TransientError",
     "FatalError",
 ]
+
+
+class StoragePathError(FatalError, ValueError):
+    """A path was handed to FileStorage that is not under the storage root.
+
+    This is an invariant violation in our own code - a caller built the wrong
+    path - so no retry can ever succeed. It is a ``FatalError`` so the task
+    goes straight to the Dead Letter Queue with an honest "needs a fix" label
+    instead of burning three retries under "this may be a temporary issue"
+    (2026-09-21: the YouTube downloader returned an absolute temp path).
+
+    Also a ``ValueError``, which is what ``PathManager.to_relative`` raised
+    before and what its callers and docs still expect.
+    """
