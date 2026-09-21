@@ -137,6 +137,47 @@ def test_post_imports_youtube_returns_parent(client, app_state, fake_youtube_vid
     assert parent["id"]
 
 
+def test_post_imports_youtube_starts_at_download_not_transcribe(client, app_state, fake_youtube_video_info):
+    """A YouTube episode's ``audio_url`` is the watch page, not an audio file.
+
+    Imports used to start every episode at TRANSCRIBE, so Dalston was handed
+    the watch URL, fetched HTML, and the episode was dead-lettered on arrival:
+    ``[400] Unsupported content type: text/html``. yt-dlp has to download it
+    first, even with a provider that fetches by URL.
+    """
+    app_state.import_service = ImportService(
+        repository=app_state.repository,
+        inbox_repository=app_state.inbox_repository,
+        queue_manager=app_state.queue_manager,
+        resolvers=[YouTubeResolver(metadata_fetcher=lambda url: fake_youtube_video_info)],
+        transcription_provider="dalston",
+    )
+
+    response = client.post("/api/imports", json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+    assert response.status_code == 200, response.text
+    episode_id = response.json()["import"]["episode_id"]
+
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE) is None
+    task = app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD)
+    assert task is not None and task.episode_id == episode_id
+    assert task.metadata == {"run_full_pipeline": True, "initiated_by": "import"}
+
+
+def test_post_imports_without_a_url_fetching_provider_starts_at_download(client, app_state):
+    """TRANSCRIBE-first is a Dalston shortcut. With any other provider the
+    transcribe handler needs a local file, so the import must download first."""
+    app_state.import_service = ImportService(
+        repository=app_state.repository,
+        inbox_repository=app_state.inbox_repository,
+        queue_manager=app_state.queue_manager,
+        transcription_provider="whisper",
+    )
+    response = client.post("/api/imports", json={"url": "https://example.com/ep.mp3"})
+    assert response.status_code == 200, response.text
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE) is None
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.DOWNLOAD) is not None
+
+
 def test_post_imports_youtube_dedup_still_returns_parent(client, app_state, fake_youtube_video_info):
     """Dedup hit also returns the parent so re-imports drive the same CTA."""
     app_state.import_service = ImportService(

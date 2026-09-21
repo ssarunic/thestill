@@ -81,6 +81,7 @@ def _existing_transcript_is_valid(config, relative_transcript_path: str) -> bool
 from ..models.podcast import Episode, Podcast
 from ..models.transcription import TranscribeOptions
 from ..utils.console import ConsoleOutput
+from ..utils.url_patterns import is_remote_fetchable_audio_url
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
 from .error_classifier import classify_and_raise
@@ -363,15 +364,25 @@ def handle_transcribe(
 
     config = state.config
 
-    # Dalston can fetch audio directly via URL, skipping download/downsample
+    # Dalston can fetch audio directly via URL, skipping download/downsample -
+    # but only when the URL is an audio file. A YouTube episode's audio_url is
+    # the watch page (HTML); sending it produced "[400] Unsupported content
+    # type: text/html" and a dead-lettered episode.
+    audio_url_str = str(episode.audio_url) if episode.audio_url else None
+    url_fetchable = is_remote_fetchable_audio_url(audio_url_str)
     use_dalston_url = (
-        config.transcription_provider == "dalston" and episode.audio_url and not episode.downsampled_audio_path
+        config.transcription_provider == "dalston" and url_fetchable and not episode.downsampled_audio_path
     )
 
     audio_key: Optional[str] = None
     audio_file = None
     if not use_dalston_url:
         if not episode.downsampled_audio_path:
+            if audio_url_str and not url_fetchable:
+                raise FatalError(
+                    "This episode's source is a YouTube page, not an audio file, so it has to be "
+                    "downloaded before it can be transcribed. Re-run it from the download stage."
+                )
             raise FatalError(f"No downsampled audio path for episode: {task.episode_id}")
 
         # Verify audio file exists via FileStorage (one HeadObject on S3).
@@ -385,7 +396,7 @@ def handle_transcribe(
             # an episode whose source audio is still perfectly reachable —
             # Dalston fetches the URL itself, so recover onto that path
             # instead of failing fatally.
-            if config.transcription_provider == "dalston" and episode.audio_url:
+            if config.transcription_provider == "dalston" and url_fetchable:
                 logger.warning(
                     "downsampled_audio_missing_using_url_fetch",
                     episode_id=episode.id,

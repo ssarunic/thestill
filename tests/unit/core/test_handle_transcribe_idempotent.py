@@ -214,3 +214,47 @@ def test_missing_downsampled_file_still_fatal_for_non_dalston_providers():
         else:
             raise AssertionError("only Dalston can fetch by URL; others must still fail")
     create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A YouTube episode's ``audio_url`` is its watch page, not an audio file.
+#
+# 2026-09-21: an imported YouTube video reached TRANSCRIBE with nothing
+# downloaded; the handler sent the watch URL to Dalston, which fetched HTML and
+# answered ``[400] Unsupported content type: text/html``. The handler must never
+# hand a non-audio URL to a transcriber, whatever enqueued the task.
+# ---------------------------------------------------------------------------
+
+YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v=7xTGNNLPyMI"
+
+
+def test_youtube_page_is_never_sent_to_the_transcriber_and_the_error_says_what_to_do():
+    storage = _FakeStorage()
+    state = _build_state(storage)
+    _, episode = state.repository.get_episode.return_value
+    episode.audio_url = YOUTUBE_WATCH_URL
+    episode.downsampled_audio_path = None
+    state.config.transcription_provider = "dalston"
+
+    with patch("thestill.core.task_handlers.create_transcriber") as create:
+        try:
+            handle_transcribe(_make_task(), state)
+        except Exception as exc:  # FatalError
+            assert "YouTube" in str(exc) and "download" in str(exc)
+        else:
+            raise AssertionError("a YouTube watch URL must not be transcribed by URL")
+    create.assert_not_called()
+
+
+def test_youtube_with_a_stale_downsampled_path_does_not_fall_back_to_url_fetch():
+    storage = _FakeStorage()
+    state = _build_state_with_stale_downsampled(storage, audio_url=YOUTUBE_WATCH_URL)
+
+    with patch("thestill.core.task_handlers.create_transcriber") as create:
+        try:
+            handle_transcribe(_make_task(), state)
+        except Exception as exc:
+            assert "Downsampled audio file not found" in str(exc)
+        else:
+            raise AssertionError("the URL fallback only applies to URLs that are audio")
+    create.assert_not_called()

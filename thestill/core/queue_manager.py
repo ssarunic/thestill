@@ -67,6 +67,7 @@ from structlog import get_logger
 
 from ..models.podcast import EpisodeState
 from ..utils.datetime_utils import now_utc
+from ..utils.url_patterns import is_remote_fetchable_audio_url
 
 logger = get_logger(__name__)
 
@@ -139,7 +140,7 @@ def starting_stage_for(
     episode_state: EpisodeState,
     *,
     transcription_provider: Optional[str] = None,
-    has_audio_url: bool = False,
+    has_fetchable_audio_url: bool = False,
     has_downsampled_audio: bool = False,
 ) -> Optional[TaskStage]:
     """The pipeline stage an episode should (re)start at, given its state.
@@ -150,8 +151,13 @@ def starting_stage_for(
     and the per-stage web commands). Maps the episode's current state to the
     next stage, with one provider-specific shortcut: when the transcription
     provider is Dalston it fetches audio directly from the URL, so a DISCOVERED
-    episode that still has its ``audio_url`` (and no downsampled copy) SKIPS
-    local download/downsample and starts at TRANSCRIBE.
+    episode whose ``audio_url`` Dalston can actually download (and which has no
+    downsampled copy) SKIPS local download/downsample and starts at TRANSCRIBE.
+
+    ``has_fetchable_audio_url`` must come from
+    ``url_patterns.is_remote_fetchable_audio_url``, never ``bool(audio_url)``:
+    a YouTube episode's ``audio_url`` is the watch page, so it has to go
+    through DOWNLOAD (yt-dlp) first.
 
     Returns ``None`` when the episode is already SUMMARIZED (or FAILED) and has
     no next stage.
@@ -159,7 +165,7 @@ def starting_stage_for(
     if (
         transcription_provider == "dalston"
         and episode_state == EpisodeState.DISCOVERED
-        and has_audio_url
+        and has_fetchable_audio_url
         and not has_downsampled_audio
     ):
         return TaskStage.TRANSCRIBE
@@ -917,7 +923,7 @@ class QueueManager:
             starting_stage_for(
                 EpisodeState.DISCOVERED,
                 transcription_provider=transcription_provider,
-                has_audio_url=bool(audio_url),
+                has_fetchable_audio_url=is_remote_fetchable_audio_url(audio_url),
             )
             or TaskStage.DOWNLOAD
         )

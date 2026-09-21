@@ -30,6 +30,7 @@ from ...models.user import User
 from ...services.playback import build_playback_manifest
 from ...services.podcast_service import resolve_summary_preview
 from ...utils.duration import format_duration
+from ...utils.url_patterns import is_remote_fetchable_audio_url
 from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import bad_request, conflict, not_found, paginated_response, parse_iso_datetime
 from .api_commands import _get_starting_stage
@@ -219,7 +220,9 @@ def bulk_process_episodes(
         next_stage = _get_starting_stage(
             episode.state,
             transcription_provider=app_state.config.transcription_provider,
-            has_audio_url=bool(episode.audio_url),
+            has_fetchable_audio_url=is_remote_fetchable_audio_url(
+                str(episode.audio_url) if episode.audio_url else None
+            ),
             has_downsampled_audio=bool(episode.downsampled_audio_path),
         )
         if not next_stage:

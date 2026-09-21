@@ -66,6 +66,7 @@ def _service_with(repo, inbox_repo, queue, info):
         inbox_repository=inbox_repo,
         queue_manager=queue,
         resolvers=[YouTubeResolver(metadata_fetcher=lambda url: info)],
+        transcription_provider="dalston",
     )
 
 
@@ -115,10 +116,12 @@ def test_youtube_import_upserts_channel_as_auto_added(
         assert ep["podcast_id"] != SYNTHETIC_AUDIO_IMPORTS_ID
         assert ep["canonical_id"] == "youtube:dQw4w9WgXcQ"
 
-    # Pipeline kicked off — imports start at TRANSCRIBE (URL mode), no DOWNLOAD.
-    task = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
+    # Pipeline kicked off at DOWNLOAD, even with Dalston: the episode's
+    # audio_url is the YouTube watch page, which no transcriber can fetch as
+    # audio. (This test used to assert TRANSCRIBE - the 2026-09-21 bug.)
+    task = queue.get_next_task(stage=TaskStage.DOWNLOAD)
     assert task is not None and task.episode_id == result.episode_id
-    assert queue.get_next_task(stage=TaskStage.DOWNLOAD) is None
+    assert queue.get_next_task(stage=TaskStage.TRANSCRIBE) is None
 
 
 # ============================================================================
@@ -184,7 +187,7 @@ def test_two_users_share_episode_and_channel(repo, inbox_repo, queue, user_repo,
     # Pipeline runs exactly once across both imports.
     seen = []
     while True:
-        t = queue.get_next_task(stage=TaskStage.TRANSCRIBE)
+        t = queue.get_next_task(stage=TaskStage.DOWNLOAD)
         if t is None:
             break
         seen.append(t)

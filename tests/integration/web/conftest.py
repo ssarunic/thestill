@@ -98,6 +98,7 @@ def app_state(app_config: Config) -> AppState:
         repository=repository,
         inbox_repository=inbox_repository,
         queue_manager=queue_manager,
+        transcription_provider="dalston",  # as app.py wires it from config
     )
 
     from thestill.repositories.sqlite_briefing_repository import SqliteBriefingRepository
