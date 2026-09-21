@@ -844,6 +844,7 @@ class ImportService:
         queue_manager: QueueManager,
         resolvers: Optional[Sequence[Resolver]] = None,
         feed_manager: Optional[Any] = None,
+        transcription_provider: Optional[str] = None,
     ) -> None:
         self._repository = repository
         self._inbox_repo = inbox_repository
@@ -855,6 +856,8 @@ class ImportService:
         # it. Best-effort: any failure falls through to the single-episode
         # path so the import still succeeds.
         self._feed_manager = feed_manager
+        # Decides where a new import enters the pipeline (see import_url).
+        self._transcription_provider = transcription_provider
         # Default order: Apple → YouTube → Spotify → BareAudio. None of the
         # matchers overlap (Apple needs podcasts.apple.com, YouTube needs
         # youtube.com / youtu.be, Spotify needs spotify.com / spotify.link,
@@ -881,14 +884,18 @@ class ImportService:
             source="import",
         )
         if episode_created:
-            # Imports start at TRANSCRIBE: the Dalston transcribe handler detects
-            # `audio_url` + no downsampled path and fetches the audio itself, so
-            # we skip the local download/downsample stages entirely. `run_full_pipeline`
-            # keeps clean → summarize → entities chaining after transcribe.
-            self._queue.add_task(
+            # The shared entry-stage rule, not a hard-coded TRANSCRIBE. Imports
+            # used to assume the transcriber could always fetch `audio_url`
+            # itself; for a YouTube link that URL is the watch page, Dalston got
+            # HTML and the episode was dead-lettered on arrival. The rule starts
+            # at TRANSCRIBE only when the provider fetches by URL *and* the URL
+            # is an audio file; otherwise at DOWNLOAD. `run_full_pipeline` keeps
+            # clean → summarize → entities chaining either way.
+            self._queue.enqueue_full_pipeline(
                 episode_id=episode_id,
-                stage=TaskStage.TRANSCRIBE,
-                metadata={"run_full_pipeline": True, "initiated_by": "import"},
+                audio_url=canonical.audio_url,
+                transcription_provider=self._transcription_provider or "",
+                initiated_by="import",
             )
             logger.info(
                 "import_pipeline_enqueued",

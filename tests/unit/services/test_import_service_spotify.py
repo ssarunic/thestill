@@ -39,12 +39,7 @@ from thestill.models.user import User
 from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
-from thestill.services.import_service import (
-    ImportService,
-    ResolverError,
-    SpotifyResolver,
-    UnsupportedUrlError,
-)
+from thestill.services.import_service import ImportService, ResolverError, SpotifyResolver, UnsupportedUrlError
 
 _EPISODE_ID = "7kQ2xN9pZ1aB3cD4eF5gH6"
 _SPOTIFY_URL = f"https://open.spotify.com/episode/{_EPISODE_ID}?si=share-token"
@@ -131,7 +126,7 @@ def _service_with(repo, inbox_repo, queue, outcome, **kwargs):
         inbox_repository=inbox_repo,
         queue_manager=queue,
         resolvers=[SpotifyResolver(link_resolver=_StubLinkResolver(outcome))],
-        **kwargs,
+        **{"transcription_provider": "dalston", **kwargs},
     )
 
 

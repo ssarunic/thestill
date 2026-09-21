@@ -38,7 +38,7 @@ Rules for new patterns:
 from __future__ import annotations
 
 import re
-from typing import Final
+from typing import Final, Optional
 from urllib.parse import parse_qs, urlparse
 
 # ---------------------------------------------------------------------------
@@ -62,6 +62,19 @@ YOUTUBE_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
 def is_youtube_url(url: str) -> bool:
     """Return True iff ``url`` looks like a YouTube video, channel, or playlist."""
     return any(p.search(url) for p in YOUTUBE_PATTERNS)
+
+
+def is_remote_fetchable_audio_url(url: Optional[str]) -> bool:
+    """True iff a remote transcriber can download audio from ``url`` itself.
+
+    ``episodes.audio_url`` is not always an audio file. For YouTube episodes
+    it is the *watch page* - HTML - and the audio only exists after yt-dlp
+    has extracted it locally. Handing that URL to a transcriber that fetches
+    by URL (Dalston) fails with "Unsupported content type: text/html", so
+    every decision to skip the local download must go through this check
+    rather than ``bool(audio_url)``.
+    """
+    return bool(url) and not is_youtube_url(str(url))
 
 
 # YouTube video ids are exactly 11 URL-safe base64 characters. Anchored

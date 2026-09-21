@@ -244,6 +244,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         inbox_repository=inbox_repository,
         queue_manager=queue_manager,
         feed_manager=feed_manager,
+        transcription_provider=config.transcription_provider,
     )
 
     # Spec #40 — pending transcription operations (backend-resolved).

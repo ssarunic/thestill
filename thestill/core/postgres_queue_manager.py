@@ -57,6 +57,7 @@ from structlog import get_logger
 from ..models.podcast import EpisodeState
 from ..utils.datetime_utils import now_utc
 from ..utils.postgres_ext import as_str, connect
+from ..utils.url_patterns import is_remote_fetchable_audio_url
 from .queue_manager import (
     _IDEMPOTENT_STAGES,
     ErrorType,
@@ -233,7 +234,7 @@ class PostgresQueueManager:
             starting_stage_for(
                 EpisodeState.DISCOVERED,
                 transcription_provider=transcription_provider,
-                has_audio_url=bool(audio_url),
+                has_fetchable_audio_url=is_remote_fetchable_audio_url(audio_url),
             )
             or TaskStage.DOWNLOAD
         )

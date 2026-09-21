@@ -107,7 +107,7 @@ class AudioDownloader:
             # Note: YouTube source will return None on failure, but we should NOT
             # fall back to HTTP download for YouTube URLs as they require yt-dlp
             if source_result is not None:
-                return source_result
+                return self._as_storage_relative(source_result, podcast)
 
             # Check if this is a YouTube URL - if so, don't try HTTP fallback
             from .youtube_downloader import YouTubeDownloader
@@ -298,6 +298,29 @@ class AudioDownloader:
                 logger.info("cleanup_completed", files_count=removed_count)
 
         return removed_count
+
+    def _as_storage_relative(self, source_result: str, podcast: Podcast) -> str:
+        """Give a source-handled download the same return contract as HTTP ones.
+
+        The HTTP branch returns ``{podcast_slug}/{filename}`` relative to
+        ``storage_path``, and ``handle_download`` builds the FileStorage key
+        from exactly that shape. The YouTube source returns the *absolute* path
+        yt-dlp wrote, flat in ``storage_path``. Since downloads moved to a
+        tempdir (spec #35) that absolute temp path reached the storage-root
+        guard and every YouTube download failed with "is not under storage
+        root". Move the file under the podcast's subdirectory and return the
+        relative path, so both branches agree (path drift, spec #42 FM-6).
+        """
+        produced = Path(source_result)
+        if not produced.is_absolute():
+            return produced.as_posix()
+        safe_podcast = podcast.slug or self._sanitize_filename(podcast.title)
+        podcast_dir = self.storage_path / safe_podcast
+        podcast_dir.mkdir(parents=True, exist_ok=True)
+        destination = podcast_dir / produced.name
+        if produced.resolve() != destination.resolve():
+            produced.replace(destination)
+        return f"{safe_podcast}/{produced.name}"
 
     def _sanitize_filename(self, filename: str) -> str:
         """Remove/replace invalid filename characters"""

@@ -264,16 +264,22 @@ class TestDownloadEpisode:
             episodes=[youtube_episode],
         )
 
-        # Mock YouTube source to handle download
+        # Mock YouTube source to handle download. Like the real one, it writes
+        # the file into the download dir and returns its absolute path.
+        produced = Path(audio_downloader.storage_path) / "youtube.m4a"
+        produced.write_bytes(b"audio")
         mock_youtube_source = Mock()
-        mock_youtube_source.download_episode.return_value = "/path/to/youtube.m4a"
+        mock_youtube_source.download_episode.return_value = str(produced)
         audio_downloader.media_source_factory.detect_source.return_value = mock_youtube_source
 
         # Execute
         result = audio_downloader.download_episode(youtube_episode, youtube_podcast)
 
-        # Verify
-        assert result == "/path/to/youtube.m4a"
+        # Verify: relative to the download dir, like every other download
+        # (this used to assert the absolute path - the contract mismatch that
+        # broke handle_download for YouTube).
+        assert result == "youtube-channel/youtube.m4a"
+        assert (Path(audio_downloader.storage_path) / result).exists()
         audio_downloader.media_source_factory.detect_source.assert_called_once_with(
             "https://www.youtube.com/watch?v=abc123"
         )
@@ -604,3 +610,39 @@ class TestEdgeCases:
         # Verify - error message should contain the actual failure reason
         assert "Disk full" in str(exc_info.value)
         assert episode.title in str(exc_info.value)
+
+
+class TestSourceHandledDownloadsReturnARelativePath:
+    """2026-09-21: every YouTube download failed with
+    ``path PosixPath('/var/folders/.../thestill_download_x/video.m4a') is not
+    under storage root``. The YouTube source returns the absolute path yt-dlp
+    wrote; the HTTP branch returns ``{podcast_slug}/{filename}``, and
+    ``handle_download`` builds the FileStorage key from that relative shape.
+    """
+
+    def _youtube_like_source(self, produced_path):
+        source = MagicMock()
+        source.download_episode.return_value = str(produced_path)
+        return source
+
+    def test_absolute_result_is_moved_under_the_podcast_dir_and_returned_relative(
+        self, audio_downloader, sample_episode, sample_podcast, temp_storage
+    ):
+        produced = Path(temp_storage) / "Andrej_Karpathy_Deep_Dive_7xTGNNLPyMI.m4a"
+        produced.write_bytes(b"audio")
+        audio_downloader.media_source_factory = MagicMock()
+        audio_downloader.media_source_factory.detect_source.return_value = self._youtube_like_source(produced)
+
+        result = audio_downloader.download_episode(sample_episode, sample_podcast)
+
+        assert not Path(result).is_absolute()
+        slug = sample_podcast.slug or audio_downloader._sanitize_filename(sample_podcast.title)
+        assert result == f"{slug}/{produced.name}"
+        # What handle_download does next: join onto the download dir.
+        assert (Path(temp_storage) / result).read_bytes() == b"audio"
+        assert not produced.exists()
+
+    def test_an_already_relative_result_is_passed_through(self, audio_downloader, sample_episode, sample_podcast):
+        audio_downloader.media_source_factory = MagicMock()
+        audio_downloader.media_source_factory.detect_source.return_value = self._youtube_like_source("some-show/ep.m4a")
+        assert audio_downloader.download_episode(sample_episode, sample_podcast) == "some-show/ep.m4a"

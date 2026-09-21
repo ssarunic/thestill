@@ -40,6 +40,7 @@ from ...core.queue_manager import TaskStatus as QueueTaskStatus
 from ...core.queue_manager import is_feed_scoped_stage, starting_stage_for
 from ...models.podcast import EpisodeState
 from ...models.user import User
+from ...utils.url_patterns import is_remote_fetchable_audio_url
 from ..dependencies import AppState, get_app_state, require_admin, require_auth
 from ..task_manager import TaskStatus, TaskType
 
@@ -640,7 +641,7 @@ def _get_starting_stage(
     episode_state: EpisodeState,
     *,
     transcription_provider: Optional[str] = None,
-    has_audio_url: bool = False,
+    has_fetchable_audio_url: bool = False,
     has_downsampled_audio: bool = False,
 ) -> Optional[TaskStage]:
     """
@@ -652,7 +653,8 @@ def _get_starting_stage(
     Args:
         episode_state: Current episode state
         transcription_provider: Active transcription provider name
-        has_audio_url: Whether the episode has an audio URL
+        has_fetchable_audio_url: Whether the transcriber can download the
+            episode's audio_url itself (False for YouTube watch pages)
         has_downsampled_audio: Whether the episode already has downsampled audio
 
     Returns:
@@ -661,7 +663,7 @@ def _get_starting_stage(
     return starting_stage_for(
         episode_state,
         transcription_provider=transcription_provider,
-        has_audio_url=has_audio_url,
+        has_fetchable_audio_url=has_fetchable_audio_url,
         has_downsampled_audio=has_downsampled_audio,
     )
 
@@ -899,7 +901,7 @@ def run_pipeline(
     starting_stage = _get_starting_stage(
         episode.state,
         transcription_provider=state.config.transcription_provider,
-        has_audio_url=bool(episode.audio_url),
+        has_fetchable_audio_url=is_remote_fetchable_audio_url(str(episode.audio_url) if episode.audio_url else None),
         has_downsampled_audio=bool(episode.downsampled_audio_path),
     )
 

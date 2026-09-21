@@ -123,7 +123,10 @@ def queue(db_path):
 
 @pytest.fixture
 def service(repo, inbox_repo, queue):
-    return ImportService(repository=repo, inbox_repository=inbox_repo, queue_manager=queue)
+    # Wired as app.py wires it; a bare-audio URL is something Dalston can fetch.
+    return ImportService(
+        repository=repo, inbox_repository=inbox_repo, queue_manager=queue, transcription_provider="dalston"
+    )
 
 
 def _make_user(user_repo, email):
