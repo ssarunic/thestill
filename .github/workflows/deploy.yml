@@ -110,3 +110,35 @@ jobs:
           python deploy/aws-ec2/thestill-aws status \
             --expect-image-tag "prod-${{ steps.rev.outputs.sha }}" \
             --wait 300 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # A GitHub Release is published only after the deploy above has been
+  # verified, so "Latest" on the repo page means "live in production" and
+  # cannot drift from the tags the way it did between v1.0.0 and v1.6.0.
+  #
+  # Separate job on purpose: it is the only place that can write to the
+  # repository, and it never holds the AWS role. Tag pushes only — a
+  # rollback dispatched with an older ref must not publish or re-mark a
+  # release.
+  release:
+    name: Publish GitHub Release
+    needs: deploy
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create the release for this tag (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            --title "$TAG" | tee -a "$GITHUB_STEP_SUMMARY"
