@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft
 > **Created:** 2026-09-21
-> **Updated:** 2026-09-21
+> **Updated:** 2026-09-21 (amended: clipboard-aware Import / Add modals replace the paste button)
 > **Author:** Product & Engineering
 > **Priority:** Medium (turns every podcast app on the phone into a Thestill input; no account linking, no new backend surface)
 > **Related:** [#31 import-arbitrary-episodes](31-import-arbitrary-episodes.md) (the import endpoint this rides on), [#79 spotify-link-import](79-spotify-link-import.md) (Spotify/Apple/YouTube resolution), [#27 add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) (show links → follow), [#06 authentication](06-authentication.md) (login round trip), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP, cookies, open-redirect rules), [#74 refresh-on-open](74-refresh-on-open.md) (resolve endpoint)
@@ -29,10 +29,19 @@ login round trip so a logged-out share completes after sign-in, plus
 serving the manifest and icons from the site root.
 
 Android and desktop Chrome get the native share-sheet experience. iOS
-Safari does not implement the Web Share Target API, so iOS gets two
-documented fallbacks that reuse the same route: an Apple Shortcut that
-appears in the share sheet, and a one-tap **Paste link** button on the
-inbox.
+Safari does not implement the Web Share Target API, so iOS gets a
+documented Apple Shortcut that appears in the share sheet and opens the
+same route.
+
+Independently of the share sheet, the **Import episode** and **Follow
+podcast** modals become clipboard-aware on every platform: tapping the
+button that opens them reads the clipboard inside that tap, and if it
+holds a supported link the field is pre-filled and labelled "from your
+clipboard". The browser owns the consent (Safari's and Firefox's native
+Paste callout, Chrome's one-time permission), nothing is ever
+auto-submitted, and anything that is not a supported link is discarded on
+the spot. Copy a link in Spotify, open Thestill, tap Import, tap Paste:
+done.
 
 ---
 
@@ -44,7 +53,7 @@ inbox.
 | O2 | **A shared show becomes a follow.** Sharing a show/channel link (Spotify `/show/`, Apple show page, YouTube channel) follows it rather than erroring with "this is a show link". | Vitest `SharePage` show branch + E2E |
 | O3 | **Logged-out shares survive login.** In multi-user mode a share from a phone that is not signed in goes through Google login and then completes, without the user re-sharing. | pytest `test_auth_next.py` + Vitest `ProtectedRoute`/`Login` + manual |
 | O4 | **Clear result, never a blank page.** The share page always shows one of: imported (episode card + Open / Inbox), followed (podcast card + Open), or the resolver's own error message with a way to try another link. Nothing is silently dropped. | Vitest `SharePage` states |
-| O5 | **iOS has a working path.** An iOS user can install a documented Shortcut once and then share from the share sheet, or tap **Paste link** on the inbox after copying a link. | Vitest paste button + manual iOS checklist |
+| O5 | **Copied links are one tap away, on every platform.** After copying a link in another app, tapping **Import** or **Follow podcast** pre-fills the field (behind the browser's own Paste consent where it has one). The user never types or long-presses to paste. On iOS this, plus a documented Shortcut for the share sheet, is the path. | Vitest clipboard helper + modal tests, E2E `clipboard-prefill.spec.ts`, manual iOS/Android checklist |
 | O6 | **No new trust surface.** No third-party account is connected, no token stored, nothing new persisted. The user's data footprint after a share is identical to a paste into the Import modal. | Non-goals §5, code review |
 | O7 | **Duplicates and retries are harmless.** Sharing the same link twice, or reloading the share page, never creates a second inbox row. | Vitest StrictMode test + existing server-side dedup |
 
@@ -68,9 +77,10 @@ inbox.
    Keeping the app free of a service worker avoids the whole offline/cache
    invalidation problem that spec #68 and PR #239 just fought.
 4. **Classify on the client, decide on the server.** A small pure helper
-   sorts the shared link into `episode`, `show` or `unknown` using the same
-   URL shapes `utils/url_patterns.py` recognises. `episode` and `unknown`
-   go to `POST /api/imports`; `show` goes to `POST /api/podcasts/resolve`
+   sorts the shared link into `episode`, `show`, `feed` or `unknown` using
+   the same URL shapes `utils/url_patterns.py` recognises. `episode` and
+   `unknown` go to `POST /api/imports`; `show` and `feed` go to
+   `POST /api/podcasts/resolve`
    then `POST /api/podcasts/{slug}/follow`. Anything the client cannot
    classify is still sent, so the server's resolver, not the client, has
    the last word.
@@ -79,9 +89,16 @@ inbox.
    current path, `Login` passes it to `/api/auth/google/login?next=`, the
    callback returns to it. The value is accepted only as a same-origin
    relative path.
-6. **Meet each platform where it is.** Android and desktop Chrome: native.
-   iOS: Shortcut + Paste button, both hitting the same `/share` route so
-   there is one code path to test. No native app.
+6. **Meet each platform where it is.** Android and desktop Chrome: native
+   share sheet. iOS: a Shortcut that opens the same `/share` route, so
+   there is one share code path to test. No native app.
+7. **Let the browser own clipboard consent.** The modals read the
+   clipboard only inside the tap that opens them, through
+   `navigator.clipboard.readText()`. Safari and Firefox show their native
+   Paste callout for every read; Chrome asks once per site and remembers.
+   We never add our own paste button, never poll, never read on focus or
+   on page load, and never submit what we read. That keeps the feature
+   inside what every engine permits and inside what users expect.
 
 ---
 
@@ -164,7 +181,7 @@ New route `share` under the protected `Layout` in
   Android shares `"<Episode> https://open.spotify.com/episode/…?si=…"` in
   `text` with an empty `url`; YouTube shares the `youtu.be` link in `text`;
   Apple Podcasts shares the `podcasts.apple.com/…?i=` link in `url`.
-- `classifyShareUrl(url)` returns `'episode' | 'show' | 'unknown'`:
+- `classifyShareUrl(url)` returns `'episode' | 'show' | 'feed' | 'unknown'`:
   - Spotify: `/episode/<22 chars>` or `spotify:episode:` → episode;
     `/show/` or `spotify:show:` → show; `spotify.link/` → unknown (the
     server expands it).
@@ -173,8 +190,9 @@ New route `share` under the protected `Layout` in
   - YouTube: `watch?v=`, `youtu.be/`, `/shorts/`, `/live/` → episode;
     `/channel/`, `/c/`, `/user/`, `/@handle` → show; `playlist?list=` →
     unknown (the server rejects it with its own message).
-  - `.mp3/.m4a/.opus/.ogg/.wav` path → episode. Everything else →
-    unknown.
+  - `.mp3/.m4a/.opus/.ogg/.wav` path → episode.
+  - Path ending in `.xml` or `.rss`, or containing `/feed` or `/rss` →
+    feed. Everything else → unknown.
 
 **Behaviour.**
 
@@ -183,7 +201,7 @@ New route `share` under the protected `Layout` in
 | `empty` | no URL extracted | "Nothing to import" + the shared text (if any) rendered as plain text + **Paste a link** (opens `ImportEpisodeModal`) |
 | `working` | URL extracted | spinner, "Importing from Spotify…" (host name only) |
 | `imported` | `POST /api/imports` 200 | `EpisodeCard`-style row from `ImportPayload`, buttons **Open episode** (`/podcasts/{parent.slug}/episodes/{episode slug}` when a parent exists, else Inbox) and **Go to inbox**; "Already in your inbox" note when `deduplicated` |
-| `followed` | resolve 200 then follow 201 or 409 | podcast title, **Open podcast** (`/podcasts/{slug}`); 409 renders "Already following" |
+| `followed` | (`show` or `feed`) resolve 200 then follow 201 or 409 | podcast title, **Open podcast** (`/podcasts/{slug}`); 409 renders "Already following" |
 | `error` | any 4xx/5xx | the server's `detail` verbatim (React-escaped) + **Try another link** (opens `ImportEpisodeModal` pre-filled with the URL) + **Go to inbox** |
 
 The request fires exactly once per distinct URL (a `useRef` keyed on the
@@ -233,19 +251,84 @@ running standalone (`matchMedia('(display-mode: standalone)')`):
 - Dismissal is stored in `localStorage` (`thestill.installNudge.dismissedAt`)
   and suppresses the card for 30 days. The card never blocks content.
 
-### 3.7 iOS fallbacks
+### 3.7 iOS share-sheet fallback: Shortcut
 
-- **Shortcut.** Documented in `docs/imports.md` with an iCloud link once
-  published: *Receive URLs from Share Sheet → URL-encode Shortcut Input →
-  Open URL `https://<host>/share?url=<encoded>`*. Because it opens the
-  same route, it inherits O2–O4 and O7 with no extra code.
-- **Paste link.** A `PasteLinkButton` in the inbox header (touch devices,
-  `navigator.clipboard.readText` available). On tap it reads the clipboard
-  (iOS shows its own paste prompt) and navigates to
-  `/share?url=<encoded>`. If the clipboard has no usable URL or the API is
-  unavailable, it opens `ImportEpisodeModal` instead.
+Documented in `docs/imports.md` with an iCloud link once published:
+*Receive URLs from Share Sheet → URL-encode Shortcut Input → Open URL
+`https://<host>/share?url=<encoded>`*. Because it opens the same route, it
+inherits O2–O4 and O7 with no extra code.
 
-### 3.8 Security notes
+### 3.8 Clipboard-aware Import and Follow modals
+
+**What the platforms allow.** `navigator.clipboard.readText()` needs a
+secure context and a transient user activation; outside a gesture it
+rejects with `NotAllowedError`. Each engine then adds its own consent:
+
+| Engine | Consent | Remembered? |
+|---|---|---|
+| Safari (iOS/macOS) | Native "Paste" callout next to the tap when the clipboard was written by another app or origin; tapping it resolves the read, ignoring it rejects | No, every read |
+| Chrome / Edge (Android, desktop) | One permission prompt ("see text and images copied to the clipboard") | Yes, per site. Android 12+ also shows the system "pasted from your clipboard" toast on every read |
+| Firefox (125+) | Small "Paste" confirmation popup | No, every read |
+
+There is no engine in which a page can read the clipboard silently
+without the user having agreed at least once, which is exactly the
+guarantee that makes this acceptable.
+
+**Helper.** `src/utils/clipboardLink.ts` exports
+`readClipboardLink(accept: Set<ShareKind>): Promise<string | null>`:
+
+- Returns `null` immediately (no rejection, no read) when
+  `navigator.clipboard?.readText` is missing or `window.isSecureContext`
+  is false.
+- Calls `readText()` **synchronously** inside the caller's event handler
+  (the promise may be awaited later, but the call must happen before any
+  `await`, or Safari and Chrome treat it as outside the gesture).
+- Runs the text through `extractSharedUrl({ text })` (§3.4), then
+  `classifyShareUrl`. Returns the URL only when its kind is in `accept`;
+  everything else returns `null`. The raw clipboard text is never stored,
+  logged or passed anywhere else.
+- Any rejection (denied, dismissed callout, empty clipboard, unsupported)
+  resolves to `null`. The helper never throws.
+
+`classifyShareUrl` gains a `'feed'` kind for RSS-shaped URLs (path ends in
+`.xml` or `.rss`, or contains `/feed` or `/rss`). The Import modal accepts
+`episode`; the Follow modal accepts `show` and `feed`.
+
+**Wiring.** The handlers that open the modals —
+[Inbox.tsx](../thestill/web/frontend/src/pages/Inbox.tsx) (`ImportEpisodeModal`)
+and [Podcasts.tsx](../thestill/web/frontend/src/pages/Podcasts.tsx)
+(`AddPodcastModal`) — start the read and open the modal in the same tick:
+
+```ts
+const prefill = readClipboardLink(ACCEPT_EPISODE)   // sync call, no await
+setImportOpen(true)
+setPrefillPromise(prefill)
+```
+
+The modal opens **immediately** (under Safari's callout, or under Chrome's
+permission bar) so the user never waits on the clipboard. When the promise
+resolves with a URL and the field is still empty and untouched, the modal
+fills it, focuses the submit button, and shows a small "From your
+clipboard" label with a clear control. If the user has already typed, the
+result is dropped. Each tap performs a fresh read; nothing is cached
+between opens.
+
+Both modals gain `initialUrl?: string` / `initialUrlPromise?: Promise<string | null>`
+props (the `/share` page's **Try another link** reuses `initialUrl`).
+
+**Rules.**
+
+- Never auto-submit. After Chrome's first grant the read is silent, so the
+  submit tap is the only confirmation the user gives.
+- Only a supported link is ever surfaced. An unrelated URL, a password, a
+  paragraph: discarded in the helper, never rendered.
+- No reads outside the opening tap: not on focus, not on visibility
+  change, not on an interval.
+- Graceful everywhere: any failure means the modal opens empty, exactly as
+  today. The autofocused empty field keeps the zero-code baseline (iOS
+  shows its Paste callout on tap; Gboard offers the copied link as a chip).
+
+### 3.9 Security notes
 
 - The only new server input is `next`; it is validated as an open-redirect
   guard both when set and when read (§3.5).
@@ -256,6 +339,9 @@ running standalone (`matchMedia('(display-mode: standalone)')`):
   fetch of its own.
 - Root static serving is allowlisted to real files under the build root,
   resolved and containment-checked (§3.2).
+- Clipboard text is read only inside a tap, filtered to a supported link
+  in memory, and never stored, logged, or sent unless the user submits it
+  (§3.8).
 
 ---
 
@@ -271,9 +357,9 @@ Ordered by dependency. Each task lists its files and its done criterion.
 | T4 | Share page + route | `frontend/src/pages/Share.tsx` (+ `.test.tsx`), `frontend/src/App.tsx`, `frontend/src/api/types.ts` if an episode-slug field is missing from `ImportPayload` | Tests §7.2 (f) pass; route reachable at `/share` |
 | T5 | `next` through login | `thestill/web/routes/auth.py`, `tests/unit/web/test_auth_next.py`, `frontend/src/components/ProtectedRoute.tsx`, `frontend/src/pages/Login.tsx`, `frontend/src/contexts/AuthContext.tsx` (+ tests) | Tests §7.1 (b) and §7.2 (g) pass |
 | T6 | Install nudge | `frontend/src/components/InstallNudge.tsx` (+ test), `frontend/src/pages/Inbox.tsx` | Tests §7.2 (h) pass; card absent in standalone mode |
-| T7 | Paste link button | `frontend/src/components/PasteLinkButton.tsx` (+ test), `frontend/src/pages/Inbox.tsx` | Tests §7.2 (i) pass |
-| T8 | E2E | `frontend/tests/share-target.spec.ts`, `frontend/tests/manifest.spec.ts` | §7.3 green in `npm run test:e2e:ci` |
-| T9 | Docs + index | `docs/imports.md` ("Share from your phone": Android install, iOS Shortcut, Paste link), `docs/web-server.md` (`next` on the login route, root static files), `specs/README.md` row | Reviewed; links resolve |
+| T7 | Clipboard-aware modals | `frontend/src/utils/clipboardLink.ts` (+ `.test.ts`), `frontend/src/utils/shareTarget.ts` (`feed` kind), `frontend/src/components/ImportEpisodeModal.tsx`, `frontend/src/components/AddPodcastModal.tsx` (+ tests), `frontend/src/pages/Inbox.tsx`, `frontend/src/pages/Podcasts.tsx` | Tests §7.2 (i) and (j) pass; no read happens outside the opening tap |
+| T8 | E2E | `frontend/tests/share-target.spec.ts`, `frontend/tests/manifest.spec.ts`, `frontend/tests/clipboard-prefill.spec.ts` | §7.3 green in `npm run test:e2e:ci` |
+| T9 | Docs + index | `docs/imports.md` ("Share from your phone": Android install, iOS Shortcut; "Copied a link?": what the modals do and what each browser asks), `docs/web-server.md` (`next` on the login route, root static files), `specs/README.md` row | Reviewed; links resolve |
 | T10 | Device verification | — | §7.4 checklist completed on one Android and one iOS device and recorded in this spec's status line |
 
 Estimated effort: T1–T7 about one engineering day; T8–T10 half a day.
@@ -294,6 +380,9 @@ Estimated effort: T1–T7 about one engineering day; T8–T10 half a day.
 | **Handling shared text with no URL** | Renders the "Nothing to import" state. We do not search the corpus or guess. |
 | **Android App Links / iOS Universal Links for our own domain** | Unrelated to receiving shares; would need `assetlinks.json` and Apple association files. Separate spec if ever wanted. |
 | **First-run onboarding changes** | The first-run experience (corpus-seeded inbox, interest chips) is its own spec. The install nudge is the only onboarding-adjacent UI here. |
+| **A dedicated paste button, or reading the clipboard outside the opening tap** | The browser's own Paste consent is the affordance. No polling, no read on focus/visibility/load, no custom button. |
+| **Auto-submitting a clipboard link** | After Chrome's one-time grant the read is silent; the submit tap must remain the user's confirmation. |
+| **Surfacing non-link clipboard content** | Anything that is not a supported link is discarded in memory. No "we noticed you copied…" for arbitrary text. |
 | **Cross-origin `next` targets or full URLs** | Only same-origin relative paths are accepted; there is no allowlist of external hosts. |
 | **Standalone-mode polish on iOS** (splash screens, status bar styling) | Icons and `apple-touch-icon` only. The rest is cosmetic and can follow. |
 
@@ -313,6 +402,16 @@ Estimated effort: T1–T7 about one engineering day; T8–T10 half a day.
   than a second request.
 - **Icon design.** Placeholder monogram in T1; a designed icon replaces
   the PNGs without a code change.
+- **Safari callout placement.** The Paste callout anchors to the tap that
+  triggered the read. Because the modal opens in the same tick, T10 must
+  confirm the callout stays visible above the modal on iPhone and is not
+  covered by the sheet animation; if it is, delay the modal's open by one
+  frame, not the read.
+- **Android toast fatigue.** Chrome on Android 12+ shows the system
+  "pasted from your clipboard" toast on every silent read. Since a read
+  only happens when the user taps Import/Follow, this is expected; if
+  feedback says otherwise, the read can be gated behind a Settings toggle
+  (default on).
 
 ---
 
@@ -366,7 +465,8 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 2. Apple with `?i=` → `episode`; without → `show`.
 3. YouTube `watch?v=`, `youtu.be/`, `/shorts/`, `/live/` → `episode`; `/channel/`, `/@handle`, `/c/`, `/user/` → `show`; `playlist?list=` → `unknown`.
 4. `.mp3`, `.m4a`, `.opus`, `.ogg`, `.wav` paths → `episode`.
-5. `https://example.com/blog` → `unknown`.
+5. `https://feeds.example.com/show.xml`, `https://example.com/podcast.rss`, `https://example.com/feed/`, `https://example.com/rss` → `feed`.
+6. `https://example.com/blog` → `unknown`.
 
 **(f) `pages/Share.test.tsx`** (API client mocked, router at `/share?…`):
 
@@ -396,12 +496,30 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 4. iOS user agent, no `beforeinstallprompt` → iOS variant with the docs link.
 5. `localStorage` throwing → card still renders and dismiss does not crash.
 
-**(i) `components/PasteLinkButton.test.tsx`:**
+**(i) `utils/clipboardLink.test.ts` — `readClipboardLink`:**
 
-1. `navigator.clipboard.readText` resolves to a URL → navigates to `/share?url=<encoded>`.
-2. Resolves to non-URL text → opens `ImportEpisodeModal`, no navigation.
-3. `readText` rejects (permission denied) → opens `ImportEpisodeModal`.
-4. `navigator.clipboard` undefined → button not rendered.
+1. `navigator.clipboard` undefined → resolves `null`, no throw.
+2. `window.isSecureContext === false` → resolves `null`, `readText` never called.
+3. `readText` resolves a Spotify episode URL, `accept = {episode}` → that URL.
+4. `readText` resolves a Spotify show URL, `accept = {episode}` → `null`; with `accept = {show, feed}` → the URL.
+5. `readText` resolves share prose (`'Listen to X https://open.spotify.com/episode/…?si=1'`) → the extracted URL.
+6. `readText` resolves `https://feeds.example.com/show.xml`, `accept = {show, feed}` → the URL; `accept = {episode}` → `null`.
+7. `readText` resolves unrelated text, an unrelated `https://example.com/blog`, or `javascript:…` → `null`.
+8. `readText` rejects with `NotAllowedError` → `null`; rejects with a generic error → `null`.
+9. `readText` is invoked synchronously: a spy asserts it was called before the helper's returned promise is awaited (no `await` precedes the call).
+10. Two calls → two reads (no caching).
+
+**(j) modal tests — additions to `ImportEpisodeModal.test.tsx`, `AddPodcastModal.test.tsx`, `Inbox.test.tsx`, `Podcasts.test.tsx`:**
+
+1. `initialUrl` given → field pre-filled, submit enabled, "From your clipboard" label visible; clear control empties the field and hides the label.
+2. `initialUrlPromise` resolving **after** the user typed → typed value preserved, no label.
+3. `initialUrlPromise` resolving **before** typing → field filled, submit button focused.
+4. `initialUrlPromise` resolving `null` → field stays empty, no label.
+5. Pre-filled value is never auto-submitted: `importEpisode` / `resolvePodcast` not called until the submit button is clicked.
+6. Inbox **Import** click: `readText` spy called synchronously inside the click; the modal is in the document before the promise resolves.
+7. Podcasts **Follow Podcast** click: same as 6, with `accept = {show, feed}`; a copied episode URL does **not** pre-fill the Follow modal.
+8. Re-opening the modal performs a fresh read (spy call count increments per open).
+9. `/share` page **Try another link** passes `initialUrl` (label reads "from the shared link", not "clipboard").
 
 ### 7.3 End-to-end (Playwright, hermetic, runs in CI)
 
@@ -420,6 +538,14 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 2. The shell has `link[rel=manifest]` and `meta[name=theme-color]`.
 3. Each declared icon URL returns 200 with `image/png`.
 
+**(l) `tests/clipboard-prefill.spec.ts`** (Chromium; `context.grantPermissions(['clipboard-read', 'clipboard-write'])`, `/api/**` stubbed):
+
+1. Write a Spotify episode URL to the clipboard, open `/inbox`, tap **Import** → the field shows the URL and the "From your clipboard" label; tap submit → the import stub received exactly that URL.
+2. Write a Spotify show URL, open `/podcasts`, tap **Follow Podcast** → pre-filled; open `/inbox`, tap **Import** → empty (kind filter).
+3. Write plain text → both modals open empty, no label.
+4. Revoke the permission (`context.clearPermissions()`) → modals open empty; no unhandled rejection in the console.
+5. With the modal open, no further clipboard reads occur over 5 s of idle (spy on `readText` via `addInitScript`).
+
 ### 7.4 Manual device checklist (recorded in the status line, not CI)
 
 - [ ] Android Chrome: install from the nudge; Thestill appears in the share sheet.
@@ -429,7 +555,11 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 - [ ] Sign out, share from Spotify → Google login → import completes without re-sharing.
 - [ ] Share the same episode twice → one inbox row, "Already in your inbox".
 - [ ] iOS: install the Shortcut, share from Spotify → `/share` opens in Safari and imports.
-- [ ] iOS: copy a link, tap **Paste link** → imports.
+- [ ] iOS Safari: copy an episode link in Spotify (Share → Copy link), open Thestill, tap **Import** → the Paste callout appears above the modal; tap it → field pre-filled with the "From your clipboard" label; submit → inbox row.
+- [ ] iOS Safari: tap **Import**, ignore the callout → modal opens empty; nothing else changes.
+- [ ] Android Chrome: first **Import** tap asks for clipboard permission; allow → pre-filled. Second tap → pre-filled silently (system toast visible). Deny → modal empty, and no repeated prompting on later taps.
+- [ ] Podcasts page, Spotify show link copied → **Follow Podcast** pre-filled; an episode link copied → not pre-filled.
+- [ ] Clipboard holding unrelated text or an unrelated URL → both modals open empty, nothing surfaced.
 - [ ] iOS: home-screen app, logged out, share via Shortcut → login completes (§6 open question resolved either way).
 - [ ] Desktop Chrome: Thestill appears as a share target after install.
 - [ ] Lighthouse "installable" audit passes on the production build.
