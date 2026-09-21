@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
 
@@ -1166,15 +1167,113 @@ _related_compute_lock = threading.Lock()
 _enrichment_lock = threading.Lock()
 
 
+@dataclass
+class ResolutionRun:
+    """What one pass over an episode's pending mentions did.
+
+    ``failure`` is set when the linker could not finish. Whatever it did
+    decide, and every human override, is already recorded by then; the
+    caller decides whether to retry, defer or give up.
+    """
+
+    results: list = field(default_factory=list)
+    forced: list = field(default_factory=list)
+    coref_decisions: list = field(default_factory=list)
+    merged_pairs: int = 0
+    failure: Optional[Exception] = None
+
+
+def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=None) -> ResolutionRun:
+    """Overrides, linking, recording, coreference and the scoped alias-merge.
+
+    The one implementation of "resolve this episode's mentions": the worker
+    and ``thestill resolve-entities`` both call it, so a human override, the
+    blacklist and the recorded method mean the same thing on either path.
+    """
+    from .entity_coref import resolve_coreferences_for_episode
+    from .entity_linking.live_linker import LinkerUnavailableError
+    from .entity_linking.shared import EntityLinkerBrokenError
+
+    run = ResolutionRun()
+
+    # Spec #28 §1.13.7 — overrides apply BEFORE the linker sees a mention.
+    # Only un-overridden rows go through model resolution. This is the
+    # "human corrections survive reindex" invariant.
+    run.forced, remaining = _apply_overrides(repo, pending)
+
+    linked: list = []
+    try:
+        # The linker consults the blacklist for every QID before accepting it.
+        linked = linker.resolve(remaining, is_blacklisted=repo.is_blacklisted, context=context)
+    except LinkerUnavailableError as exc:
+        # Part of the episode was decided before the outage. Those are real
+        # decisions; the names left out stay pending.
+        linked = exc.results
+        run.failure = exc
+    except EntityLinkerBrokenError as exc:
+        run.failure = exc
+
+    run.results = run.forced + linked
+
+    touched_entity_ids: set[str] = set()
+    for r in run.results:
+        repo.upsert_entity(r.entity)
+        entity_id_for_mention = r.entity.id if r.status == "resolved" else None
+        repo.resolve_mention(
+            mention_id=r.mention_id,
+            entity_id=entity_id_for_mention,
+            status=r.status,
+            method=r.method.value,
+        )
+        touched_entity_ids.add(r.entity.id)
+
+    # Spec §1.13.5 — within-episode coref pass. Walks unresolved
+    # person mentions, looks for a single resolved long-form
+    # anchor whose canonical name contains the surface as a
+    # token, and either repoints (RESOLVED) or marks AMBIGUOUS.
+    run.coref_decisions = resolve_coreferences_for_episode(repo, episode_id)
+
+    # Spec §1.6 — inline scoped alias-merge for the entities just
+    # touched. Cheap (only checks duplicates whose QID matches one
+    # of the entities resolved in this episode); the full-corpus
+    # sweep runs via ``thestill merge-aliases``.
+    #
+    # Held under ``_qid_merge_lock`` so parallel resolve workers
+    # can't both pick the same duplicate pair off a stale
+    # ``find_duplicate_qid_pairs`` snapshot and race on the
+    # repoint+delete sequence. Without this, the second worker
+    # FK-fails when its UPDATE/INSERT references an entity row
+    # the first worker has already deleted.
+    with _qid_merge_lock:
+        run.merged_pairs = _merge_qid_duplicates_for(repo, touched_entity_ids)
+    if run.merged_pairs:
+        logger.info("alias_merge_inline", merged_pairs=run.merged_pairs, episode_id=episode_id)
+    return run
+
+
+def build_link_context(repo, podcast, episode):
+    """What the live linker's chooser knows beyond the excerpts (spec #81)."""
+    from .entity_linking.types import LinkContext
+
+    anchors = [repo.get_entity(entity_id) for entity_id in repo.get_episode_anchors(episode.id)]
+    return LinkContext(
+        episode_id=episode.id,
+        podcast_id=podcast.id,
+        language=(getattr(podcast, "language", None) or "en")[:2].lower(),
+        podcast_title=podcast.title or "",
+        episode_title=episode.title or "",
+        anchor_names=[a.canonical_name for a in anchors if a is not None],
+    )
+
+
 def handle_resolve_entities(task: Task, state: "AppState") -> None:
     """Spec #28 §1.5 — resolve pending mentions to Wikidata entities.
 
     Reads all ``resolution_status='pending'`` mentions for the task's
-    episode, runs ReFinED, upserts the resulting ``EntityRecord``s,
-    flips each mention's status to ``resolved`` or ``unresolvable``,
-    runs an inline scoped alias-merge for the touched entities (spec
-    §1.6), then triggers an episode-scoped co-occurrence rebuild
-    (spec §1.7).
+    episode, runs the configured linker (``ENTITY_LINKER``, spec #81),
+    upserts the resulting ``EntityRecord``s, flips each mention's status to
+    ``resolved`` or ``unresolvable``, and runs an inline scoped alias-merge
+    for the touched entities (spec §1.6).
 
     Idempotent: re-running on an episode whose mentions are already
     resolved returns immediately because ``list_pending_mentions``
@@ -1183,7 +1282,9 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
 
     Failure isolation: errors here flip
     ``episodes.entity_extraction_status='failed'`` (via the worker's
-    ``_NON_USER_FAILING_STAGES`` rule), never ``failed_at_stage``.
+    ``_NON_USER_FAILING_STAGES`` rule), never ``failed_at_stage``. A linker
+    that still cannot finish on the last retry does not fail the task at
+    all — see ``_retry_or_defer``.
     """
     logger.info("entity_resolution_started", episode_id=task.episode_id)
 
@@ -1196,11 +1297,11 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
     # ahead of REINDEX, so raising for a missing optional dependency would
     # strand the episode unsearchable. With no pending mentions the stage is
     # already a no-op; the guard only matters when mentions exist (e.g.
-    # carried over by a restore) and ReFinED is absent.
+    # carried over by a restore) and the configured linker cannot run here.
     if pending:
-        from .entity_resolver import EntityResolver as _EntityResolver
+        from .entity_linking.factory import linker_is_available
 
-        if state.entity_resolver is None and not _EntityResolver.is_available():
+        if state.entity_resolver is None and not linker_is_available(state.config):
             logger.warning(
                 "entity_resolution_skipped_unavailable",
                 episode_id=episode.id,
@@ -1210,61 +1311,15 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             return
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
-        results: list = []
-        coref_decisions: list = []
-        forced_results: list = []
-
+        run = ResolutionRun()
         if pending:
-            resolver = _get_or_create_entity_resolver(state)
-
-            # Spec §1.13.7 — overrides apply BEFORE we even hand the
-            # mention to ReFinED. Pre-route mentions matching a stored
-            # override into their forced bucket; only un-overridden rows
-            # go through model resolution. This is the "human corrections
-            # survive reindex" invariant.
-            forced_results, remaining = _apply_overrides(repo, pending)
-
-            # The resolver consults the blacklist for every QID candidate
-            # before accepting it (see ``EntityResolver.resolve``).
-            resolver_results = resolver.resolve(remaining, is_blacklisted=repo.is_blacklisted)
-
-            results = forced_results + resolver_results
-
-            touched_entity_ids: set[str] = set()
-            for r in results:
-                repo.upsert_entity(r.entity)
-                entity_id_for_mention = r.entity.id if r.status == "resolved" else None
-                repo.resolve_mention(
-                    mention_id=r.mention_id,
-                    entity_id=entity_id_for_mention,
-                    status=r.status,
-                    method=r.method.value,
-                )
-                touched_entity_ids.add(r.entity.id)
-
-            # Spec §1.13.5 — within-episode coref pass. Walks unresolved
-            # person mentions, looks for a single resolved long-form
-            # anchor whose canonical name contains the surface as a
-            # token, and either repoints (RESOLVED) or marks AMBIGUOUS.
-            from .entity_coref import resolve_coreferences_for_episode
-
-            coref_decisions = resolve_coreferences_for_episode(repo, episode.id)
-
-            # Spec §1.6 — inline scoped alias-merge for the entities just
-            # touched. Cheap (only checks duplicates whose QID matches one
-            # of the entities resolved in this episode); the full-corpus
-            # sweep runs via ``thestill merge-aliases``.
-            #
-            # Held under ``_qid_merge_lock`` so parallel resolve workers
-            # can't both pick the same duplicate pair off a stale
-            # ``find_duplicate_qid_pairs`` snapshot and race on the
-            # repoint+delete sequence. Without this, the second worker
-            # FK-fails when its UPDATE/INSERT references an entity row
-            # the first worker has already deleted.
-            with _qid_merge_lock:
-                merged = _merge_qid_duplicates_for(repo, touched_entity_ids)
-            if merged:
-                logger.info("alias_merge_inline", merged_pairs=merged, episode_id=episode.id)
+            run = resolve_pending_mentions(
+                repo,
+                _get_or_create_entity_resolver(state),
+                pending,
+                episode_id=episode.id,
+                context=build_link_context(repo, podcast, episode),
+            )
 
         # Spec §1.7 — cooccurrences are rebuilt by the dedicated
         # ``rebuild-cooccurrences`` stage at the tail of the entity
@@ -1278,12 +1333,53 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             "entity_resolution_completed",
             episode_id=episode.id,
             podcast_slug=podcast.slug,
-            mentions=len(results),
-            resolved=sum(1 for r in results if r.status == "resolved"),
-            unresolvable=sum(1 for r in results if r.status == "unresolvable"),
-            override_forced=len(forced_results),
-            coref_decisions=len(coref_decisions),
+            mentions=len(run.results),
+            resolved=sum(1 for r in run.results if r.status == "resolved"),
+            unresolvable=sum(1 for r in run.results if r.status == "unresolvable"),
+            override_forced=len(run.forced),
+            coref_decisions=len(run.coref_decisions),
+            complete=run.failure is None,
         )
+
+        if run.failure is not None:
+            _retry_or_defer(task, state, episode, run.failure)
+        elif pending:
+            # A deferred episode that has now linked is no longer owed work.
+            state.repository.settle_linking_deferred(episode.id)
+
+
+def _retry_or_defer(task: Task, state: "AppState", episode, failure: Exception) -> None:
+    """Retry while there is budget; on the last attempt, let the chain go on.
+
+    ``resolve-entities`` sits ahead of ``reindex`` in a linear chain, so a
+    task that dead-letters here leaves its episode unsearchable — the
+    lesson of the spec #66 cutover — and a linker with network dependencies
+    makes that far likelier. Search must never depend on the linker: on the
+    last attempt the mentions stay pending, the episode is marked as owed
+    work where ``thestill status`` can see it, and the handler returns so
+    ``reindex`` runs. Loud and queryable, not a silent skip (failure-mode
+    catalogue: silent degradation).
+
+    Raised as an ``item``-class error on purpose: an ``infra`` error is
+    rescheduled without spending retry budget, so during an outage the last
+    attempt would never come.
+    """
+    from .entity_linking.shared import EntityLinkerBrokenError
+
+    broken = isinstance(failure, EntityLinkerBrokenError)
+    # retry_count is what earlier attempts consumed; schedule_retry counts
+    # this attempt only after it fails.
+    if task.retry_count < task.max_retries - 1:
+        raise TransientError(f"entity linking incomplete: {failure}", error_class="item") from failure
+    status = "failed" if broken else "linking_deferred"
+    state.repository.update_entity_extraction_status(episode_id=episode.id, status=status)
+    logger.error(
+        "entity_linking_broken_final" if broken else "entity_linking_deferred",
+        episode_id=episode.id,
+        attempts=task.retry_count + 1,
+        error=str(failure),
+        note="mentions stay pending; reindex proceeds",
+    )
 
 
 def _apply_overrides(repo, mentions):
@@ -1294,7 +1390,7 @@ def _apply_overrides(repo, mentions):
     away. Remaining mentions go through the model.
     """
     from ..models.entities import EntityRecord, EntityType, ResolutionMethod
-    from .entity_resolver import ResolutionResult, _build_entity_id
+    from .entity_linking.shared import ResolutionResult, _build_entity_id
 
     forced: list = []
     remaining: list = []
@@ -1354,7 +1450,7 @@ def _local_unresolvable_entity(mention):
     handler can fabricate it without a model load.
     """
     from ..models.entities import EntityRecord, EntityType
-    from .entity_resolver import SURFACE_LABEL_TO_ENTITY_TYPE, _build_entity_id
+    from .entity_linking.shared import SURFACE_LABEL_TO_ENTITY_TYPE, _build_entity_id
 
     inferred = SURFACE_LABEL_TO_ENTITY_TYPE.get((mention.surface_label or "").lower()) or EntityType.TOPIC
     return EntityRecord(
@@ -1415,10 +1511,10 @@ def _get_or_create_entity_resolver(state: "AppState"):
     """
     with _resolver_init_lock:
         if state.entity_resolver is None:
-            from .entity_resolver import EntityResolver
-            from .wikidata_client import WikidataClient
+            from .entity_linking.factory import build_linker
 
-            state.entity_resolver = EntityResolver(wikidata_client=WikidataClient())
+            # Spec #81 — ``ENTITY_LINKER`` picks ReFinED or the live linker.
+            state.entity_resolver = build_linker(state.config, state.link_decision_repository)
     return state.entity_resolver
 
 

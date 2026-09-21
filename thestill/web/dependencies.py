@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
     from ..repositories.inbox_repository import InboxRepository
+    from ..repositories.link_decision_repository import LinkDecisionRepository
     from ..repositories.pending_operations_repository import PendingOperationsRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
@@ -144,6 +145,9 @@ class AppState:
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the
     # cost on processes that never run resolve-entities tasks.
     entity_resolver: "Optional[EntityResolver]" = None
+    # Spec #81 — the live linker's decision cache. The linker (whichever
+    # ``ENTITY_LINKER`` picks) is built lazily into ``entity_resolver``.
+    link_decision_repository: "Optional[LinkDecisionRepository]" = None
     # Spec #47 — lazy-init enricher for the ENRICH_ENTITIES stage. Cheap to
     # build (two HTTP clients), so unlike the resolver this is only cached
     # to avoid rebuilding clients/label-caches on every coalesced task.

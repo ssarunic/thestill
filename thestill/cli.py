@@ -92,6 +92,7 @@ class CLIContext:
         embedding_model=None,
         follower_service=None,
         legacy_claim_service=None,
+        link_decision_repository=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -105,6 +106,8 @@ class CLIContext:
         self.console = console
         self.auth_service = auth_service
         self.entity_repository = entity_repository
+        # Spec #81 — the live linker's decision cache.
+        self.link_decision_repository = link_decision_repository
         self.follower_repository = follower_repository
         self.inbox_repository = inbox_repository
         self.inbox_service = inbox_service
@@ -273,6 +276,7 @@ def main(ctx, config, quiet):
             embedding_model=embedding_model,
             follower_service=follower_service,
             legacy_claim_service=legacy_claim_service,
+            link_decision_repository=repos.link_decision,
         )
 
     except Exception as e:
@@ -2918,18 +2922,17 @@ def evaluate_clean_transcript(
 
 
 def _get_or_create_cli_resolver(ctx):
-    """Lazy ReFinED resolver for CLI commands.
+    """Lazy linker for CLI commands, picked by ``ENTITY_LINKER`` (spec #81).
 
-    Same pattern as ``task_handlers._get_or_create_entity_resolver``
+    Same factory as ``task_handlers._get_or_create_entity_resolver``
     but scoped to ``CLIContext`` rather than ``AppState``. Single-
     threaded by construction (CLI commands run in the main thread),
     so no lock needed here.
     """
     if ctx.obj.entity_resolver is None:
-        from .core.entity_resolver import EntityResolver
-        from .core.wikidata_client import WikidataClient
+        from .core.entity_linking.factory import build_linker
 
-        ctx.obj.entity_resolver = EntityResolver(wikidata_client=WikidataClient())
+        ctx.obj.entity_resolver = build_linker(ctx.obj.config, ctx.obj.link_decision_repository)
     return ctx.obj.entity_resolver
 
 
@@ -2944,13 +2947,16 @@ def _get_or_create_cli_resolver(ctx):
 def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
     """Resolve pending ``entity_mentions`` to Wikidata entities.
 
-    Manual driver for the ``resolve-entities`` pipeline stage. By
-    default resolves every episode that has pending mentions; use
-    ``--episode-id`` for a one-shot run, ``--podcast-id`` to scope
-    by podcast, ``--max-episodes`` to cap the batch.
+    Manual driver for the ``resolve-entities`` pipeline stage, and the same
+    code: human overrides, the blacklist, coreference, the scoped alias-merge
+    and the recorded method all apply. By default resolves every episode that
+    has pending mentions; use ``--episode-id`` for a one-shot run,
+    ``--podcast-id`` to scope by podcast, ``--max-episodes`` to cap the batch.
+
+    An episode the linker cannot finish (Wikidata or the LLM unreachable)
+    keeps its unanswered mentions pending; run the command again later.
     """
-    from .core.entity_resolver import EntityResolver  # noqa: F401  (warm import)
-    from .models.entities import EntityExtractionStatus
+    from .core.task_handlers import build_link_context, resolve_pending_mentions
 
     repo = ctx.obj.entity_repository
     podcast_repo = ctx.obj.repository
@@ -2979,35 +2985,41 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
     resolver = _get_or_create_cli_resolver(ctx)
     total_resolved = 0
     total_unresolvable = 0
+    incomplete = 0
     for eid in episode_ids:
         pending = repo.list_pending_mentions(episode_id=eid)
         if not pending:
             continue
-        results = resolver.resolve(pending)
-        for r in results:
-            repo.upsert_entity(r.entity)
-            repo.resolve_mention(
-                mention_id=r.mention_id,
-                entity_id=r.entity.id if r.status == "resolved" else None,
-                status=r.status,
-            )
-            if r.status == "resolved":
-                total_resolved += 1
-            else:
-                total_unresolvable += 1
-        # Inline scoped maintenance — same as the handler.
+        found = podcast_repo.get_episode(eid)
+        if not found:
+            click.echo(f"⚠️  {eid}: episode not found, skipped", err=True)
+            continue
+        podcast, episode = found
+        run = resolve_pending_mentions(
+            repo,
+            resolver,
+            pending,
+            episode_id=eid,
+            context=build_link_context(repo, podcast, episode),
+        )
+        total_resolved += sum(1 for r in run.results if r.status == "resolved")
+        total_unresolvable += sum(1 for r in run.results if r.status == "unresolvable")
+        # The worker leaves this to the trailing ``rebuild-cooccurrences``
+        # stage; a manual run has no chain behind it.
         repo.rebuild_cooccurrences(episode_ids=[eid])
-        # Mirror the handler: keep the per-episode status consistent
-        # with the resolved state. Extraction set this to 'complete'
-        # already — leaving it untouched matches the spec's
-        # per-mention-status model.
-        _ = EntityExtractionStatus  # silence unused-import; kept for future status writes
-        click.echo(f"✓ {eid}: {len(results)} mentions processed")
+        if run.failure is not None:
+            incomplete += 1
+            click.echo(f"⚠️  {eid}: {len(run.results)} of {len(pending)} mentions processed - {run.failure}", err=True)
+        else:
+            click.echo(f"✓ {eid}: {len(run.results)} mentions processed")
 
     click.echo(
         f"\n🎉 Resolved {total_resolved} mentions, "
         f"{total_unresolvable} unresolvable, across {len(episode_ids)} episode(s)"
     )
+    if incomplete:
+        click.echo(f"⚠️  {incomplete} episode(s) incomplete; their unanswered mentions stay pending.", err=True)
+        ctx.exit(1)
 
 
 @main.command("rebuild-cooccurrences")
@@ -3094,7 +3106,7 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, dry_run):
     episode before running corpus-wide. ``--dry-run`` reports the
     planned changes without writing.
     """
-    from .core.entity_resolver import _build_entity_id
+    from .core.entity_linking.shared import _build_entity_id
     from .core.entity_type_rules import classify_entity_type
     from .core.wikidata_client import WikidataClient
     from .models.entities import EntityRecord

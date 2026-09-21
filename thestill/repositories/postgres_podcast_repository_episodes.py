@@ -1067,9 +1067,8 @@ class EpisodesMixin(CategoryCacheMixin):
 
         Spec #28 §6 ("Failure isolation rule"): the entity branch progresses
         independently of the user-facing pipeline — this lives in its own
-        status column and never touches ``failed_at_stage``. Allowed values:
-        ``pending`` | ``complete`` | ``failed`` | ``skipped_legacy``
-        (validation is the caller's responsibility).
+        status column and never touches ``failed_at_stage``. Allowed values are
+        ``EntityExtractionStatus`` (validation is the caller's responsibility).
         """
         now = datetime.now(timezone.utc)
         with connect(self.dsn) as conn:
@@ -1095,6 +1094,29 @@ class EpisodesMixin(CategoryCacheMixin):
                     episode_id=episode_id,
                 )
             return updated
+
+    def settle_linking_deferred(self, episode_id: str) -> bool:
+        """``linking_deferred`` -> ``complete``, and only that (spec #81).
+
+        Called when an episode whose linking was deferred has now linked.
+        Conditional in SQL because the episode model does not carry the
+        status, and because ``failed`` may belong to another entity stage.
+        """
+        now = datetime.now(timezone.utc)
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET entity_extraction_status = 'complete',
+                    updated_at = %s
+                WHERE id = %s AND entity_extraction_status = 'linking_deferred'
+                """,
+                (now, episode_id),
+            )
+            settled = cursor.rowcount > 0
+            if settled:
+                logger.info("entity_linking_deferred_settled", episode_id=episode_id)
+            return settled
 
     def get_failed_episodes(self, limit: int = 100) -> List[Tuple[Podcast, Episode]]:
         """

@@ -4531,7 +4531,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         episode card red); it lives in its own status column.
 
         Allowed values: ``pending`` | ``complete`` | ``failed`` |
-        ``skipped_legacy``. Validation is the caller's responsibility —
+        ``skipped_legacy`` | ``skipped_unavailable`` | ``linking_deferred``
+        (``EntityExtractionStatus``). Validation is the caller's responsibility —
         the column has no CHECK constraint so we don't reject ``NULL``
         explicitly here either.
         """
@@ -4559,6 +4560,29 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     episode_id=episode_id,
                 )
             return updated
+
+    def settle_linking_deferred(self, episode_id: str) -> bool:
+        """``linking_deferred`` -> ``complete``, and only that (spec #81).
+
+        Called when an episode whose linking was deferred has now linked.
+        Conditional in SQL because the episode model does not carry the
+        status, and because ``failed`` may belong to another entity stage.
+        """
+        now = datetime.now(timezone.utc)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET entity_extraction_status = 'complete',
+                    updated_at = ?
+                WHERE id = ? AND entity_extraction_status = 'linking_deferred'
+                """,
+                (now.isoformat(), episode_id),
+            )
+            settled = cursor.rowcount > 0
+            if settled:
+                logger.info("entity_linking_deferred_settled", episode_id=episode_id)
+            return settled
 
     def get_failed_episodes(self, limit: int = 100) -> List[Tuple[Podcast, Episode]]:
         """

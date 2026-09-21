@@ -350,6 +350,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_delivery_service=briefing_delivery_service,
         pending_ops_repository=pending_ops_repository,
         entity_repository=entity_repository,
+        link_decision_repository=repos.link_decision,
         search_backend=search_backend,
         embedding_model=embedding_model,
         narration_runner=_build_narration_runner(
