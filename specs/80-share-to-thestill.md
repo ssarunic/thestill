@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft
 > **Created:** 2026-09-21
-> **Updated:** 2026-09-21 (amended: clipboard-aware Import / Add modals replace the paste button)
+> **Updated:** 2026-09-21 (amended: clipboard-aware Import / Add modals replace the paste button; review at `c99828a`: confirm before mutating, structured show-link error, durable redirect after success, `inbox_created` for the inbox note)
 > **Author:** Product & Engineering
 > **Priority:** Medium (turns every podcast app on the phone into a Thestill input; no account linking, no new backend surface)
 > **Related:** [#31 import-arbitrary-episodes](31-import-arbitrary-episodes.md) (the import endpoint this rides on), [#79 spotify-link-import](79-spotify-link-import.md) (Spotify/Apple/YouTube resolution), [#27 add-podcast-search-discoverability](27-add-podcast-search-discoverability.md) (show links → follow), [#06 authentication](06-authentication.md) (login round trip), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP, cookies, open-redirect rules), [#74 refresh-on-open](74-refresh-on-open.md) (resolve endpoint)
@@ -19,14 +19,19 @@ Inbox → Import → paste → submit. This spec makes Thestill a **share
 target**: once the web app is installed to the home screen, it appears in
 the phone's share sheet, and "Share → Thestill" from Spotify, YouTube,
 Apple Podcasts, Pocket Casts or a browser lands the episode in the inbox
-in two taps.
+in three taps: Share, Thestill, Add.
 
 The feature is a thin client route plus installability. It adds **no
 backend endpoint and no schema**: the share page extracts the link from
-what the OS hands over and calls the existing import or resolve+follow
-APIs. The only backend change is carrying a `next` path through the Google
-login round trip so a logged-out share completes after sign-in, plus
-serving the manifest and icons from the site root.
+what the OS hands over, shows what it is about to do, and on the user's
+tap calls the existing import or resolve+follow APIs. The share page
+never mutates on arrival: a URL alone is not proof of intent, because any
+website can navigate a signed-in user to `/share?url=…`. The backend
+changes are carrying a `next` path through the Google login round trip so
+a logged-out share completes after sign-in, serving the manifest and icons
+from the site root, and one additive field (`code`) on the import
+endpoint's error body so the client can tell "this is a show" apart from
+other failures.
 
 Android and desktop Chrome get the native share-sheet experience. iOS
 Safari does not implement the Web Share Target API, so iOS gets a
@@ -49,20 +54,21 @@ done.
 
 | # | Outcome | How we know it is met |
 |---|---|---|
-| O1 | **Two taps from any podcast app.** On Android, after a one-time "Add to home screen", the user taps Share in Spotify/YouTube/Apple Podcasts/Chrome, picks Thestill, and the episode is in their inbox with the pipeline pill running. | E2E `share-target.spec.ts` + manual Android checklist (§7.4) |
+| O1 | **Three taps from any podcast app.** On Android, after a one-time "Add to home screen", the user taps Share in Spotify/YouTube/Apple Podcasts/Chrome, picks Thestill, sees what will be added, taps **Add**, and the episode is in their inbox with the pipeline pill running. | E2E `share-target.spec.ts` + manual Android checklist (§7.4) |
 | O2 | **A shared show becomes a follow.** Sharing a show/channel link (Spotify `/show/`, Apple show page, YouTube channel) follows it rather than erroring with "this is a show link". | Vitest `SharePage` show branch + E2E |
 | O3 | **Logged-out shares survive login.** In multi-user mode a share from a phone that is not signed in goes through Google login and then completes, without the user re-sharing. | pytest `test_auth_next.py` + Vitest `ProtectedRoute`/`Login` + manual |
-| O4 | **Clear result, never a blank page.** The share page always shows one of: imported (episode card + Open / Inbox), followed (podcast card + Open), or the resolver's own error message with a way to try another link. Nothing is silently dropped. | Vitest `SharePage` states |
+| O4 | **Clear result, never a blank page.** The share page always shows one of: what it is about to add (with an **Add** button), a durable destination after success (the inbox with the new row, or the podcast page), or the resolver's own error message with a way to try another link. Nothing is silently dropped, and nothing is added without a tap. | Vitest `SharePage` states |
 | O5 | **Copied links are one tap away, on every platform.** After copying a link in another app, tapping **Import** or **Follow podcast** pre-fills the field (behind the browser's own Paste consent where it has one). The user never types or long-presses to paste. On iOS this, plus a documented Shortcut for the share sheet, is the path. | Vitest clipboard helper + modal tests, E2E `clipboard-prefill.spec.ts`, manual iOS/Android checklist |
 | O6 | **No new trust surface.** No third-party account is connected, no token stored, nothing new persisted. The user's data footprint after a share is identical to a paste into the Import modal. | Non-goals §5, code review |
-| O7 | **Duplicates and retries are harmless.** Sharing the same link twice, or reloading the share page, never creates a second inbox row. | Vitest StrictMode test + existing server-side dedup |
+| O7 | **Duplicates and retries are harmless.** Sharing the same link twice, reloading the share page, or a stray link from another site never creates a second inbox row and never adds anything the user did not confirm. | Vitest `SharePage` tests + existing server-side dedup |
+| O8 | **A link from another site cannot act on the user's behalf.** Opening `/share?url=…` from any origin shows the confirmation screen and performs no request until the user taps. | Vitest `SharePage` (no call on mount) + E2E + manual |
 
 ---
 
 ## 2. Strategy
 
-1. **Reuse, do not add.** The share page is a client route that calls the
-   two APIs that already exist. Every URL kind the share sheet can produce
+1. **Reuse, do not add.** The share page is a client route that, on an
+   explicit tap, calls the two APIs that already exist. Every URL kind the share sheet can produce
    is one the resolver chain already accepts (`ImportService` default
    lineup: YouTube, Apple, Spotify, bare audio; `RSSMediaSource` for show
    links). The error copy users see is the resolver's own, so behaviour is
@@ -83,7 +89,10 @@ done.
    `POST /api/podcasts/resolve`
    then `POST /api/podcasts/{slug}/follow`. Anything the client cannot
    classify is still sent, so the server's resolver, not the client, has
-   the last word.
+   the last word. When the server discovers that an `unknown` link (a
+   `spotify.link` short link, say) is a show, it says so with a machine-
+   readable `code`, and the client switches to the follow flow instead of
+   showing a dead end.
 5. **Auth continuity is a `next` path, validated like an open redirect.**
    `ProtectedRoute` already bounces to `/login`; it learns to carry the
    current path, `Login` passes it to `/api/auth/google/login?next=`, the
@@ -92,7 +101,15 @@ done.
 6. **Meet each platform where it is.** Android and desktop Chrome: native
    share sheet. iOS: a Shortcut that opens the same `/share` route, so
    there is one share code path to test. No native app.
-7. **Let the browser own clipboard consent.** The modals read the
+7. **Receiving is not applying.** Chrome's share-target guidance draws
+   this line and so do we: the share sheet, the Shortcut, the login
+   round trip and a link on any web page all *deliver* a URL to `/share`;
+   only a tap on that page *applies* it. `SameSite=strict` protects the
+   first navigation, not the same-origin `fetch` the page would make next,
+   so without the tap the route would be a cross-site request forgery
+   vector. The confirmation screen is also where the show-versus-episode
+   branch becomes visible to the user.
+8. **Let the browser own clipboard consent.** The modals read the
    clipboard only inside the tap that opens them, through
    `navigator.clipboard.readText()`. Safari and Firefox show their native
    Paste callout for every read; Chrome asks once per site and remembers.
@@ -194,22 +211,58 @@ New route `share` under the protected `Layout` in
   - Path ending in `.xml` or `.rss`, or containing `/feed` or `/rss` →
     feed. Everything else → unknown.
 
-**Behaviour.**
+**Behaviour.** No request is made on mount. Arriving at `/share` with a
+URL renders a confirmation; the mutation happens only on the user's tap.
 
 | State | Trigger | UI |
 |---|---|---|
 | `empty` | no URL extracted | "Nothing to import" + the shared text (if any) rendered as plain text + **Paste a link** (opens `ImportEpisodeModal`) |
-| `working` | URL extracted | spinner, "Importing from Spotify…" (host name only) |
-| `imported` | `POST /api/imports` 200 | `EpisodeCard`-style row from `ImportPayload`, buttons **Open episode** (`/podcasts/{parent.slug}/episodes/{episode slug}` when a parent exists, else Inbox) and **Go to inbox**; "Already in your inbox" note when `deduplicated` |
-| `followed` | (`show` or `feed`) resolve 200 then follow 201 or 409 | podcast title, **Open podcast** (`/podcasts/{slug}`); 409 renders "Already following" |
-| `error` | any 4xx/5xx | the server's `detail` verbatim (React-escaped) + **Try another link** (opens `ImportEpisodeModal` pre-filled with the URL) + **Go to inbox** |
+| `confirm` | URL extracted | Card built **without any network call**: the shared `title` (or the URL's host when absent) as plain text, the host as source ("from open.spotify.com"), the URL itself in a muted line. One primary button labelled by classification: **Import episode** (`episode`), **Follow podcast** (`show`/`feed`), **Add to Thestill** (`unknown`). Secondary: **Not now** → `/inbox`. |
+| `working` | primary button tapped | button disabled with spinner; "Importing from open.spotify.com…" |
+| success (import) | `POST /api/imports` 200 | `navigate('/inbox', { replace: true, state: { justImported: <episode_id>, source: <host>, alreadyInInbox: !inbox_created } })`. The Inbox reads `location.state` once and shows a dismissible banner ("Imported from open.spotify.com" or "Already in your inbox") above the list, with the row scrolled into view. A reload shows the plain inbox: the row is durable, the banner is not. |
+| success (follow) | resolve 200, then follow 201 or 409 | `navigate('/podcasts/{slug}', { replace: true, state: { justFollowed: true \| 'already' } })`; the podcast page shows the matching banner once. |
+| `show_link` | import 400 with `detail.code === 'show_link'` | The page switches to the follow flow **automatically** (the user already tapped **Add to Thestill** for an `unknown` link) and calls resolve+follow with the original URL; the resolver expands short links itself. If the user had tapped **Import episode** (client classified `episode`, server disagrees), show "This link is a show, not an episode" with a **Follow podcast** button instead: no second mutation without a tap. |
+| `error` | any other 4xx/5xx, or network failure | the server's `detail.error` (or string `detail`) verbatim, React-escaped, + **Try again**, **Try another link** (opens `ImportEpisodeModal` pre-filled with the URL) + **Go to inbox**. The query string is kept, so a reload returns to `confirm` with the same link. |
 
-The request fires exactly once per distinct URL (a `useRef` keyed on the
-URL; React StrictMode double-invokes effects in dev). On the first
-transition out of `working`, the page calls `history.replaceState` to
-drop the query string so a reload or Back shows the result, not a re-run.
+Because the page mutates only on a tap, React StrictMode's double effects
+and browser prefetching are harmless: mounting never sends a request. A
+second tap while `working` is ignored (button disabled). After success the
+share URL is replaced in history by the destination, so Back does not
+return to a live **Add** button for the same link; the destination itself
+is durable across reloads.
+
 The page is inside `ProtectedRoute`, so an unauthenticated multi-user
-visit goes to login first (§3.5).
+visit goes to login first (§3.5) and returns to `confirm`, never straight
+into a mutation.
+
+**"Already in your inbox".** `ImportPayload.deduplicated` means the
+episode already existed in the *shared corpus* (`not episode_created`),
+which is true for another user's first import of a popular episode. The
+per-user fact is `inbox_created`: the banner says "Already in your inbox"
+only when `inbox_created === false`; when `deduplicated && inbox_created`
+it says "Imported" like any other success.
+
+**Structured show-link error (additive API change).** `POST /api/imports`
+today returns `400 {"detail": "<message>"}` for every resolver failure.
+Two of those failures are not failures of the link but of the *flow*: a
+Spotify show link (`SpotifyLinkResolver.resolve_episode`, "This is a
+Spotify show link…") and a show-only Apple link (`ApplePodcastsResolver`,
+"missing ?i=…"). Both gain a `code`:
+
+- `ResolverError` and `SpotifyResolutionError` get an optional `code:
+  str | None` attribute (default `None`); the two raises above pass
+  `code="show_link"`.
+- `api_imports.create_import` raises `HTTPException(400, detail={"error":
+  <message>, "code": <code>})` when `code` is set, and the unchanged string
+  `detail` otherwise. `api/client.ts` already reads `detail.error`; it
+  additionally exposes `code` on the thrown error (`ImportApiError`).
+- Documented in [02-api-reference.md](02-api-reference.md) as additive;
+  the Import modal keeps rendering `detail.error` and gains a "Follow this
+  show instead" button for `show_link`.
+
+The client still classifies first, so this path is reached only for
+links it could not classify (short links) or misclassified; it is a
+safety net, not the primary route.
 
 The route is ordinary SPA navigation, so the initial GET from the share
 sheet never needs the session cookie (it is `SameSite=strict`; an
@@ -342,6 +395,11 @@ props (the `/share` page's **Try another link** reuses `initialUrl`).
 - Clipboard text is read only inside a tap, filtered to a supported link
   in memory, and never stored, logged, or sent unless the user submits it
   (§3.8).
+- `/share` performs no request on mount. A cross-site navigation to it
+  (link, redirect, `window.open`) can only render the confirmation. The
+  same-origin `fetch` that mutates runs solely in the handler of the
+  user's tap, so the route is not a CSRF vector even though the session
+  cookie would be attached to that fetch (§3.4).
 
 ---
 
@@ -354,7 +412,8 @@ Ordered by dependency. Each task lists its files and its done criterion.
 | T1 | Manifest, icons, HTML head | `frontend/public/manifest.webmanifest`, `frontend/public/icons/{icon-192,icon-512,icon-maskable-512,apple-touch-icon}.png`, `frontend/index.html` | `npm run build` emits the files at the build root; `<link rel="manifest">` present; favicon no longer points at `vite.svg` |
 | T2 | Serve root static files | `thestill/web/app.py` (`serve_spa`) | Tests §7.1 (a) pass: manifest/icons served with correct types, client routes still get the shell, traversal refused |
 | T3 | Share helpers | `frontend/src/utils/shareTarget.ts` (+ `.test.ts`) | Tests §7.2 (d)(e) pass |
-| T4 | Share page + route | `frontend/src/pages/Share.tsx` (+ `.test.tsx`), `frontend/src/App.tsx`, `frontend/src/api/types.ts` if an episode-slug field is missing from `ImportPayload` | Tests §7.2 (f) pass; route reachable at `/share` |
+| T4 | Share page + route | `frontend/src/pages/Share.tsx` (+ `.test.tsx`), `frontend/src/App.tsx`, `frontend/src/pages/Inbox.tsx` and `PodcastDetail` (one-shot `location.state` banner), `frontend/src/api/client.ts` (`ImportApiError` with `code`) | Tests §7.2 (f) pass; route reachable at `/share`; no request on mount |
+| T4b | Structured show-link error | `thestill/services/import_service.py` (`ResolverError.code`), `thestill/core/spotify_resolver.py` (`SpotifyResolutionError.code`, show-link raise), `thestill/web/routes/api_imports.py`, `tests/unit/web/test_api_imports_show_link.py`, `specs/02-api-reference.md`, `frontend/src/components/ImportEpisodeModal.tsx` ("Follow this show instead") | Tests §7.1 (c) pass; string `detail` unchanged for every other error |
 | T5 | `next` through login | `thestill/web/routes/auth.py`, `tests/unit/web/test_auth_next.py`, `frontend/src/components/ProtectedRoute.tsx`, `frontend/src/pages/Login.tsx`, `frontend/src/contexts/AuthContext.tsx` (+ tests) | Tests §7.1 (b) and §7.2 (g) pass |
 | T6 | Install nudge | `frontend/src/components/InstallNudge.tsx` (+ test), `frontend/src/pages/Inbox.tsx` | Tests §7.2 (h) pass; card absent in standalone mode |
 | T7 | Clipboard-aware modals | `frontend/src/utils/clipboardLink.ts` (+ `.test.ts`), `frontend/src/utils/shareTarget.ts` (`feed` kind), `frontend/src/components/ImportEpisodeModal.tsx`, `frontend/src/components/AddPodcastModal.tsx` (+ tests), `frontend/src/pages/Inbox.tsx`, `frontend/src/pages/Podcasts.tsx` | Tests §7.2 (i) and (j) pass; no read happens outside the opening tap |
@@ -380,6 +439,8 @@ Estimated effort: T1–T7 about one engineering day; T8–T10 half a day.
 | **Handling shared text with no URL** | Renders the "Nothing to import" state. We do not search the corpus or guess. |
 | **Android App Links / iOS Universal Links for our own domain** | Unrelated to receiving shares; would need `assetlinks.json` and Apple association files. Separate spec if ever wanted. |
 | **First-run onboarding changes** | The first-run experience (corpus-seeded inbox, interest chips) is its own spec. The install nudge is the only onboarding-adjacent UI here. |
+| **Importing on arrival at `/share`** | A URL is not consent. Every mutation is behind a tap on the confirmation screen, whatever brought the user there (share sheet, Shortcut, login return, a link on a web page). |
+| **Verifying share-sheet provenance instead of confirming** | GET share targets carry no intent signal a page can trust: `Referer` is attacker-controlled, `display-mode: standalone` also applies to link-captured navigations, and the Shortcut is an ordinary URL open. Confirmation is the only reliable check. |
 | **A dedicated paste button, or reading the clipboard outside the opening tap** | The browser's own Paste consent is the affordance. No polling, no read on focus/visibility/load, no custom button. |
 | **Auto-submitting a clipboard link** | After Chrome's one-time grant the read is silent; the submit tap must remain the user's confirmation. |
 | **Surfacing non-link clipboard content** | Anything that is not a supported link is discarded in memory. No "we noticed you copied…" for arbitrary text. |
@@ -445,6 +506,15 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 6. Callback with no `oauth_next` cookie → 302 to `/` (existing behaviour, regression guard).
 7. Single-user mode: `GET /api/auth/google/login?next=/share` → 400 as today.
 
+**(c) `tests/unit/web/test_api_imports_show_link.py`** (import service mocked at the resolver seam):
+
+1. `POST /api/imports` with `https://open.spotify.com/show/<22 chars>` → 400, body `{"detail": {"error": "This is a Spotify show link…", "code": "show_link"}}`.
+2. `POST /api/imports` with `https://spotify.link/abc123` whose expansion is a show → same structured 400 (resolver expands, then raises with `code`).
+3. `POST /api/imports` with `https://podcasts.apple.com/us/podcast/x/id123` (no `?i=`) → 400 with `code: "show_link"`.
+4. A resolver failure without a code (Spotify exclusive, "Could not find … in the Apple Podcasts directory") → 400 with the **string** `detail` exactly as before (regression guard).
+5. `UnsupportedUrlError` → 400 string `detail`, unchanged.
+6. Success response unchanged: `deduplicated == (not episode_created)`, `inbox_created` present; a fixture with `episode_created=False, inbox_created=True` serialises `deduplicated: true, inbox_created: true`.
+
 ### 7.2 Frontend unit (vitest)
 
 **(d) `utils/shareTarget.test.ts` — `extractSharedUrl`:**
@@ -470,16 +540,19 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 
 **(f) `pages/Share.test.tsx`** (API client mocked, router at `/share?…`):
 
-1. Episode URL → `importEpisode` called once with exactly the extracted URL, `working` state shown first, then `imported` with the episode title, **Open episode** and **Go to inbox** links.
-2. Same test rendered inside `React.StrictMode` → `importEpisode` still called exactly once.
-3. `deduplicated: true` → "Already in your inbox" note visible.
-4. Show URL → `resolvePodcast` called with the URL, then `followPodcast` with the returned slug; `followed` state with **Open podcast** linking to `/podcasts/{slug}`.
-5. Show URL where `followPodcast` rejects with a 409-style error → still `followed` with "Already following".
-6. `importEpisode` rejects with `Error('Could not find "X" in the Apple Podcasts directory…')` → that text is rendered verbatim, **Try another link** opens `ImportEpisodeModal` with the URL pre-filled, **Go to inbox** present.
-7. `unknown` classification (`https://example.com/blog`) → sent to `importEpisode` (server decides).
-8. No URL (`/share?text=hello`) → "Nothing to import", the text `hello` rendered as text, **Paste a link** present; no API call.
-9. After success, `window.location.search` is empty (query dropped via `replaceState`).
-10. Shared `title` containing `<img onerror>` renders as literal text (no element created).
+1. **No request on mount.** Episode URL → after render and a flushed tick, `importEpisode`, `resolvePodcast` and `followPodcast` have **zero** calls; the `confirm` card shows the shared title, "from open.spotify.com" and an **Import episode** button. Same assertion inside `React.StrictMode`.
+2. Tap **Import episode** → `importEpisode` called exactly once with exactly the extracted URL; a second tap while pending does not call again; on 200 the router location is `/inbox` with `state.justImported === episode_id` and `history.length` unchanged (replace, not push).
+3. Response `{ deduplicated: true, inbox_created: false }` → navigation state `alreadyInInbox: true` and the Inbox banner reads "Already in your inbox".
+4. Response `{ deduplicated: true, inbox_created: true }` → `alreadyInInbox: false`; the banner reads "Imported from open.spotify.com" (the corpus already had it, this user did not).
+5. Show URL → button reads **Follow podcast**; tap → `resolvePodcast` with the URL, then `followPodcast` with the returned slug; location becomes `/podcasts/{slug}` (replace) with `state.justFollowed === true`.
+6. Show URL where `followPodcast` rejects with a 409-style error → still navigates with `state.justFollowed === 'already'`.
+7. `unknown` link (`https://spotify.link/abc123`) → button reads **Add to Thestill**; tap → `importEpisode` rejects with `ImportApiError{ code: 'show_link' }` → `resolvePodcast` and `followPodcast` are called with the **original** URL, no further tap required; location becomes `/podcasts/{slug}`.
+8. `episode`-classified link whose import rejects with `code: 'show_link'` → no automatic follow; "This link is a show, not an episode" and a **Follow podcast** button; tapping it performs resolve+follow.
+9. `importEpisode` rejects with `Error('Could not find "X" in the Apple Podcasts directory…')` → that text rendered verbatim, **Try again** re-invokes once, **Try another link** opens `ImportEpisodeModal` with the URL pre-filled, **Go to inbox** present; `window.location.search` still contains the original query.
+10. No URL (`/share?text=hello`) → "Nothing to import", the text `hello` rendered as text, **Paste a link** present; no API call.
+11. **Not now** → `/inbox`, no API call.
+12. Shared `title` containing `<img onerror>` renders as literal text (no element created), on the `confirm` card.
+13. Inbox with `location.state.justImported` renders the banner once; navigating away and back (no state) renders no banner; a simulated reload (fresh render at `/inbox` without state) renders no banner.
 
 **(g) auth continuity:**
 
@@ -523,22 +596,25 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 
 ### 7.3 End-to-end (Playwright, hermetic, runs in CI)
 
-**(j) `tests/share-target.spec.ts`** at a 393 px phone viewport with
+**(k) `tests/share-target.spec.ts`** at a 393 px phone viewport with
 `/api/**` stubbed (auth status authenticated, multi-user):
 
-1. `goto('/share?title=…&text=Listen%20to%20X%20https%3A%2F%2Fopen.spotify.com%2Fepisode%2F7kQ2xN9pZ1aB3cD4eF5gH6%3Fsi%3D1')` with `POST /api/imports` stubbed 200 → the stub received `{ url: 'https://open.spotify.com/episode/7kQ2xN9pZ1aB3cD4eF5gH6?si=1' }`; success card visible; **Go to inbox** lands on `/inbox`.
-2. Show link with resolve and follow stubs → both called in order; **Open podcast** lands on `/podcasts/<slug>`.
-3. Import stub returns 400 `{ detail: 'Spotify exclusive …' }` → the message is visible; **Try another link** opens the modal with the URL in the input.
-4. Every button and link on the result screen is at least 44 × 44 px.
-5. Unauthenticated stub → URL becomes `/login?next=…` carrying the share path.
+1. `goto('/share?title=…&text=Listen%20to%20X%20https%3A%2F%2Fopen.spotify.com%2Fepisode%2F7kQ2xN9pZ1aB3cD4eF5gH6%3Fsi%3D1')` → the confirmation card is visible and **no** request to `/api/imports`, `/api/podcasts/resolve` or `/follow` has been made after a 2 s settle (route-level counters).
+2. Tap **Import episode** with `POST /api/imports` stubbed 200 → the stub received `{ url: 'https://open.spotify.com/episode/7kQ2xN9pZ1aB3cD4eF5gH6?si=1' }`; the page is now `/inbox` with the "Imported from open.spotify.com" banner; `page.goBack()` does **not** return to `/share`; `page.reload()` shows the inbox without the banner.
+3. Show link → **Follow podcast**; tap → resolve and follow stubs called in order; page is `/podcasts/<slug>` with the "Following" banner.
+4. `https://spotify.link/abc123` → **Add to Thestill**; import stub returns 400 `{ detail: { error: 'This is a Spotify show link…', code: 'show_link' } }` → resolve and follow stubs are called with `https://spotify.link/abc123`; page is `/podcasts/<slug>`.
+5. Import stub returns 400 `{ detail: 'Spotify exclusive …' }` → the message is visible; the URL still carries the query; `page.reload()` returns to the confirmation with the same link; **Try another link** opens the modal with the URL in the input.
+6. Every button and link on the confirmation and error screens is at least 44 × 44 px.
+7. Unauthenticated stub → URL becomes `/login?next=…` carrying the share path; after a stubbed login redirect back, the confirmation card is shown and no mutation has occurred.
+8. **Cross-site arrival.** From a page on a different origin (`page.goto('data:text/html,<a href="http://localhost:4173/share?url=…">x</a>')`, then click) → the confirmation renders and no mutation request is made.
 
-**(k) `tests/manifest.spec.ts`:**
+**(l) `tests/manifest.spec.ts`:**
 
 1. `page.request.get('/manifest.webmanifest')` → 200, JSON, `share_target.action === '/share'`, three icons declared.
 2. The shell has `link[rel=manifest]` and `meta[name=theme-color]`.
 3. Each declared icon URL returns 200 with `image/png`.
 
-**(l) `tests/clipboard-prefill.spec.ts`** (Chromium; `context.grantPermissions(['clipboard-read', 'clipboard-write'])`, `/api/**` stubbed):
+**(m) `tests/clipboard-prefill.spec.ts`** (Chromium; `context.grantPermissions(['clipboard-read', 'clipboard-write'])`, `/api/**` stubbed):
 
 1. Write a Spotify episode URL to the clipboard, open `/inbox`, tap **Import** → the field shows the URL and the "From your clipboard" label; tap submit → the import stub received exactly that URL.
 2. Write a Spotify show URL, open `/podcasts`, tap **Follow Podcast** → pre-filled; open `/inbox`, tap **Import** → empty (kind filter).
@@ -554,6 +630,9 @@ lint`, `tsc -b`, `vitest run`, `npm run test:e2e:ci`) stay green.
 - [ ] Share a Spotify show link → podcast followed, detail page opens.
 - [ ] Sign out, share from Spotify → Google login → import completes without re-sharing.
 - [ ] Share the same episode twice → one inbox row, "Already in your inbox".
+- [ ] Share a Spotify **short** show link (`spotify.link/…` from the Spotify app's Share → Copy link on a show) → **Add to Thestill** → podcast followed.
+- [ ] Open a link to `https://<host>/share?url=…` from a note or a web page while signed in → confirmation screen only; nothing in the inbox until **Import episode** is tapped.
+- [ ] After a successful share, press Back → the inbox or podcast page stays; the share screen does not reappear. Reload → same page, banner gone, row present.
 - [ ] iOS: install the Shortcut, share from Spotify → `/share` opens in Safari and imports.
 - [ ] iOS Safari: copy an episode link in Spotify (Share → Copy link), open Thestill, tap **Import** → the Paste callout appears above the modal; tap it → field pre-filled with the "From your clipboard" label; submit → inbox row.
 - [ ] iOS Safari: tap **Import**, ignore the callout → modal opens empty; nothing else changes.
