@@ -1,6 +1,6 @@
 # Live Wikidata Entity Linking Specification
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Phase 1 in progress — linker, cache, config switch and deferral implemented on `feat/81-live-wikidata-entity-linking` (2026-09-21, default still `refined`); the `entity-linking` eval is the second PR
 > **Created:** 2026-09-21
 > **Updated:** 2026-09-21
 > **Priority:** High — the 494-episode entity backfill on prod waits on this
@@ -159,8 +159,11 @@ ReFinED's removal.
 `WikidataClient` ([wikidata_client.py](../thestill/core/wikidata_client.py))
 gains `search_entities(name, *, language, limit)` on the existing
 `WIKIDATA_API_URL`, using `wbsearchentities`. It returns, per hit: QID,
-label, description, matched alias. P31 ("instance of") comes from the
-existing `fetch_p31` so the chooser sees "human", "business", "film".
+label and description. The description ("1998 film", "33rd president of the
+United States") is what the chooser disambiguates on. P31 is **not** fetched
+per candidate — at 8 candidates × 92 names that would be ~700 extra requests
+an episode — only for the QID finally accepted, where it drives the same type
+re-bucketing as today.
 
 - **One search per distinct name per episode**, case-folded. An episode
   averages 92 distinct names before the cache and far fewer after it.
@@ -177,6 +180,12 @@ existing `fetch_p31` so the chooser sees "human", "business", "film".
   lightly parallel requests from a single client.
 - **No candidates** is a real answer: the name resolves to `none` without an
   LLM call.
+- **A failure is never an empty result.** `search_entities` raises
+  `WikidataUnavailable` for a timeout, a non-200, an unparseable body or a
+  `maxlag` error body; only a well-formed empty `search` list means "nothing
+  by that name". One name failing does not stop the others.
+- **Blacklisted candidates are removed before the chooser sees them**, so it
+  picks among the rest instead of re-proposing what a reviewer ruled out.
 
 ### Stage 2 — Choice
 
@@ -197,9 +206,17 @@ anchor entities (hosts and guests already known). This is context ReFinED
 never had, and it is what should separate *The Truman Show* from the
 president.
 
-Output (Pydantic response model): for each name, `qid: Optional[str]`,
-`confidence: Literal["high", "medium", "low"]`, and a one-line `reason`
-kept for the trace and the review queue, never shown to users.
+Names are addressed by a short id (`n1`, `n2`, …) so the answer does not
+depend on the model echoing a transcribed name exactly. Everything spoken,
+scraped or fetched is fenced with `wrap_untrusted` and the system prompt
+carries `UNTRUSTED_CONTENT_PREAMBLE`; only the ids and the layout are ours.
+
+Output (Pydantic response model): for each id, `qid: Optional[str]`,
+`confidence: Literal["high", "medium", "low"]`, and a one-line `reason`.
+The reason is stored, sanitised and cut to 200 characters, in the decision
+row — it is the review queue's source. It is never logged and never shown to
+users. ([#75](75-llm-call-tracing.md) tracing is not built yet, so there is
+no trace to send it to.)
 
 The prompt instructs: choose only from the listed candidates; answer `none`
 when no candidate fits, when the name is a generic noun, or when the context
@@ -209,25 +226,31 @@ ReFinED resolves per mention, but in practice an episode that uses "Apple"
 for both the company and the fruit is rare, and the `ambiguous` status
 exists for the coref pass to flag it. See Open questions.
 
-Model: `ENTITY_LINKING_PROVIDER` / `ENTITY_LINKING_MODEL`, defaulting to the
-cleaning provider and model (Gemini Flash in prod). The call goes through
-the normal provider seam, so [#75](75-llm-call-tracing.md) tracing captures
-it when enabled.
+Model: `ENTITY_LINKING_PROVIDER` / `ENTITY_LINKING_MODEL`, defaulting to
+`CLEANING_PROVIDER` / `CLEANING_MODEL` (Gemini Flash). Note that these two
+settings are *not* what the `clean-transcript` stage runs on — that uses the
+global `LLM_PROVIDER`; they are read here literally, as the project's
+"cheap, fast model" pair. Provider and model are resolved as a coupled pair,
+the way the eval judge's are. The call goes through the normal provider seam,
+so [#75](75-llm-call-tracing.md) tracing will capture it once it exists.
 
 ### Stage 3 — Validation
 
 Applied to every returned item before anything is written:
 
 1. **The QID must be in the candidate list offered for that name.** Anything
-   else is discarded and the name treated as unanswered. This makes invented
-   identifiers structurally impossible.
-2. **Blacklist.** `is_blacklisted(surface_form, qid)` is consulted exactly as
-   today; a blacklisted pair falls through to the next-best behaviour,
-   which is `none`.
-3. **Confidence.** `low` is recorded as `unresolvable` with the candidate
-   kept in the review queue. `medium` and `high` are accepted. The threshold
-   is a config value (`ENTITY_LINKING_MIN_CONFIDENCE`, default `medium`) and
-   is one of the things the evaluation tunes.
+   else is discarded and the name treated as unanswered — not as `none`.
+   This makes invented identifiers structurally impossible.
+2. **Blacklist.** `is_blacklisted(surface_form, qid)` is consulted three
+   times: candidates are filtered before the chooser, the chooser's answer
+   is checked, and a *remembered* decision is checked again when it is
+   reused — a link that has since been ruled out is decided afresh, so the
+   cache heals itself even if nobody invalidated it.
+3. **Confidence.** `low` is recorded as `unresolvable`, with the guessed QID
+   kept in the decision row for the review queue. `medium` and `high` are
+   accepted. The threshold (`ENTITY_LINKING_MIN_CONFIDENCE`, default
+   `medium`) is applied when a decision is *used*, not when it is stored, so
+   changing it takes effect without re-asking.
 4. **Sanitise.** Labels and reasons pass through `sanitize_text`
    ([text_sanitizer.py:41](../thestill/utils/text_sanitizer.py#L41)) before
    storage or logging (failure-mode catalogue: unsanitised LLM output).
@@ -251,6 +274,8 @@ New table `entity_link_decisions`:
 | `surface_key` | case-folded, whitespace-normalised name |
 | `podcast_id` | nullable; `NULL` = corpus-wide decision |
 | `qid` | nullable; `NULL` = decided "none" |
+| `label`, `description` | the chosen entity's Wikidata label and description, so a cache hit builds the entity with no network call |
+| `reason` | the chooser's one-line reason, sanitised, ≤200 chars; review-queue source, never logged |
 | `confidence` | high / medium / low |
 | `decided_at` | ISO-8601 UTC |
 | `linker_version` | prompt + model fingerprint |
@@ -262,12 +287,21 @@ resolved to the same QID in three different podcasts with no disagreement.
 Names with disagreement across podcasts stay podcast-scoped — "Mercury" on a
 science show and on a music show are different things.
 
-- **`none` decisions expire** (`ENTITY_LINKING_NONE_TTL_DAYS`, default 30).
-  This is the freshness mechanism: someone without a Wikidata entry today
-  gets re-checked next month. Positive decisions do not expire.
-- **A correction invalidates the cache.** `POST /entities/corrections` and
-  any blacklist write delete the matching decisions, so a human fix is never
-  overridden by a cached machine answer.
+- **Unlinked names expire** (`ENTITY_LINKING_NONE_TTL_DAYS`, default 30):
+  a `none`, and a `low`-confidence guess. This is the freshness mechanism:
+  someone without a Wikidata entry today gets re-checked next month. Links
+  do not expire.
+- **A correction invalidates the cache.** All four paths that record one —
+  `POST /entities/corrections`, `mention drop`, `mention repoint`,
+  `resolution-blacklist add` — call `invalidate_link_decisions` *before*
+  re-resolution is queued. A source-scanning test fails if a module writes an
+  override or a blacklist entry without calling it.
+- **Uniqueness per scope** is two partial unique indexes (podcast-scoped,
+  and corpus-wide where `podcast_id IS NULL`), because NULLs never collide in
+  a plain UNIQUE. They are also the upsert's conflict target, so two episodes
+  deciding the same name at once both succeed without a lock.
+- **Keys are folded in Python** (`casefold`, whitespace collapsed), never in
+  SQL: SQLite's `LOWER` is ASCII-only and Postgres's follows the collation.
 - **`linker_version` change** makes older decisions eligible for re-decision
   lazily, not in bulk.
 
@@ -281,6 +315,7 @@ the same three places as every table since #44.
 | Wikidata unreachable, 429, or 5xx for a name | `TransientError`; task retries with backoff; mentions stay `pending` |
 | LLM call fails or returns unparseable output | same |
 | Still failing on the last retry | **defer, do not fail** — see below |
+| Part of an episode decided before an outage | those decisions are recorded and remembered; only the unanswered names stay `pending`, so the retry is cheap |
 | LLM omits some names from its answer | those names are re-asked once in a smaller batch; still missing → stay `pending`, task succeeds for the rest |
 | More than half of an episode's names unanswered | raise `EntityLinkerBrokenError` — the successor of `EntityResolverBrokenError` ([entity_resolver.py:534](../thestill/core/entity_resolver.py#L534)); nothing is recorded |
 | No candidates / chooser says `none` | `unresolvable`, final (until the `none` TTL) |
@@ -292,16 +327,31 @@ ever written for a *decision*, never for a *failure*.
 in a linear chain, so a task that dead-letters leaves its episode
 unsearchable — the lesson of the #66 cutover. A network dependency makes
 that far more likely than a local model did. So on the final attempt
-(`task.retry_count == task.max_retries`) a transient linker failure does
-not raise: the handler leaves the mentions `pending`, sets
-`entity_extraction_status = 'linking_deferred'`, logs
-`entity_linking_deferred` at error level, and returns so `reindex` runs.
-`thestill status` reports the deferred count next to the existing
-"skipped (extractor unavailable)" line, and `thestill relink-unresolvable
---deferred` (Phase 4's command) drains it. This is a visible, queryable
-backlog rather than a silent skip (failure-mode catalogue: silent
-degradation). `EntityLinkerBrokenError` is the exception: a linker that is
-broken rather than unreachable still fails the task loudly.
+(`task.retry_count >= task.max_retries - 1` — `retry_count` is what earlier
+attempts consumed; the queue counts this attempt only after it fails) a
+linker failure does not raise: the handler leaves the mentions `pending`,
+marks the episode, logs at error level, and returns so `reindex` runs.
+
+- **Unreachable** (Wikidata or the LLM): `entity_extraction_status =
+  'linking_deferred'`, event `entity_linking_deferred`.
+- **Broken** (`EntityLinkerBrokenError`): status `failed`, event
+  `entity_linking_broken_final`. Decided 2026-09-21: search never depends on
+  the linker, so even a broken one does not block `reindex`.
+
+Both are counted in `thestill status`, `/api/status`, the dashboard API and
+the MCP `get_status` tool, next to the existing "skipped (extractor
+unavailable)" line. `thestill resolve-entities` drains them, and a later
+successful pass settles `linking_deferred` back to `complete` with a
+conditional update. A visible, queryable backlog rather than a silent skip
+(failure-mode catalogue: silent degradation).
+
+Before the last attempt the failure is raised as an **`item`-class**
+`TransientError`, deliberately. The worker reschedules `infra`-class errors
+without spending retry budget, so during a real outage the retry count would
+never advance and the last attempt would never come.
+
+The rule lives in the handler, so it protects the ReFinED path too — which
+is what prod runs until Phase 3.
 
 ### Configuration
 
@@ -429,6 +479,28 @@ post-2022 names to be swept again.
 | **LLM links from its own knowledge, no candidates** | Invented QIDs, and the model's knowledge has its own cutoff. Candidate-constrained choice avoids both. |
 
 ---
+
+## Implementation notes (Phase 1, first PR)
+
+- **One resolve core.** `resolve_pending_mentions` in
+  [task_handlers.py](../thestill/core/task_handlers.py) is the single
+  implementation of overrides → linking → recording → coreference →
+  alias-merge. `thestill resolve-entities` used to hard-code ReFinED and skip
+  overrides, the blacklist, coreference and the recorded method; it now calls
+  the same function and follows `ENTITY_LINKER`.
+- **`link()` writes nothing.** `LiveWikidataLinker.resolve` remembers
+  decisions and builds results; `link` is the same core with no writes, which
+  is what the eval runs. Eval output goes to the run directory as files, as
+  [#53](53-eval-runs-and-summary-rubric.md) requires — there is no scratch
+  table, so "one new table" holds.
+- **Entity ids can differ between linkers for the same QID.** ReFinED names
+  an entity by its Wikipedia title ("Amazon (company)"), the live linker by
+  its Wikidata label ("Amazon"), and the id is a slug of the name. The
+  existing inline QID-duplicate merge in the resolve core folds the two rows
+  together. Worth watching in the shadow phase.
+- **Not in this PR:** the frontend `EntityBacklogNotice` does not yet show the
+  deferred count (the API carries it), and the Postgres half of the
+  repository contract suite has only run in CI.
 
 ## Open questions / follow-ups
 
