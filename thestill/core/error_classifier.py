@@ -29,9 +29,11 @@ Usage:
         classify_and_raise(e, context="downloading audio")
 """
 
+import json
 import re
 from typing import Optional
 
+from pydantic import ValidationError as PydanticValidationError
 from structlog import get_logger
 
 from thestill.utils.exceptions import VALID_ERROR_CLASSES, FatalError, TransientError
@@ -324,6 +326,37 @@ def _extract_http_status_code(exception: Exception) -> Optional[int]:
     return None
 
 
+# Exception types that mean "our code, or a library we called, was handed
+# something it cannot work with". None of them changes on a retry.
+_PROGRAMMING_ERROR_TYPES = (
+    TypeError,
+    KeyError,
+    IndexError,
+    AttributeError,
+    AssertionError,
+    NotImplementedError,
+    ValueError,
+)
+
+# ValueError subclasses that are about *data that arrived*, not about code.
+# A truncated or garbled response is worth fetching again, and an LLM that
+# returned a malformed structure may well return a valid one next time
+# (pydantic's ValidationError is a ValueError).
+_DATA_ERROR_TYPES = (json.JSONDecodeError, UnicodeError, PydanticValidationError)
+
+
+def is_programming_error(exception: Exception) -> bool:
+    """True for exception types no retry can fix (see ``_PROGRAMMING_ERROR_TYPES``).
+
+    2026-09-21: a ``ValueError`` from the storage-root guard matched no
+    message pattern, defaulted to transient, was retried three times and told
+    the user "this may be a temporary issue".
+    """
+    if isinstance(exception, _DATA_ERROR_TYPES):
+        return False
+    return isinstance(exception, _PROGRAMMING_ERROR_TYPES)
+
+
 def classify_and_raise(
     exception: Exception,
     context: str = "",
@@ -362,6 +395,14 @@ def classify_and_raise(
     if is_transient_error(exception):
         logger.debug(f"Classified as transient: {error_msg}")
         raise TransientError(error_msg) from exception
+
+    # A programming error re-runs the same code on the same input, so a retry
+    # cannot help. Checked AFTER the transient rules on purpose: a network
+    # failure can surface as one of these types (``json.JSONDecodeError`` is a
+    # ``ValueError``), and those must keep their retries.
+    if is_programming_error(exception):
+        logger.debug(f"Classified as fatal (programming error): {error_msg}")
+        raise FatalError(error_msg) from exception
 
     # Unknown error - use default
     if default_transient:

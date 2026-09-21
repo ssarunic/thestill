@@ -14,6 +14,8 @@
 
 """Tests for :mod:`thestill.core.error_classifier`."""
 
+import json
+
 import pytest
 
 from thestill.core.audio_downloader import DownloadError
@@ -168,3 +170,98 @@ class TestClassifyAndRaiseDefaults:
         with pytest.raises(FatalError) as caught:
             classify_and_raise(original)
         assert caught.value is original
+
+
+class TestProgrammingErrorsAreFatal:
+    """2026-09-21: the storage-root guard raised a ``ValueError`` whose text
+    matched no pattern, so it defaulted to transient - three pointless
+    retries and "this may be a temporary issue" on an error no retry could
+    ever fix. A programming error re-runs the same code on the same input.
+    """
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ValueError("some value our code rejected"),
+            TypeError("unsupported operand type(s) for +: 'int' and 'str'"),
+            KeyError("episode_id"),
+            IndexError("list index out of range"),
+            AttributeError("'NoneType' object has no attribute 'slug'"),
+            AssertionError("invariant broken"),
+            NotImplementedError("backend does not implement this"),
+        ],
+    )
+    def test_programming_errors_raise_fatal_instead_of_defaulting_to_transient(self, exc):
+        with pytest.raises(FatalError):
+            classify_and_raise(exc, context="downloading audio for X")
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            json.JSONDecodeError("Expecting value", "<html>502 Bad Gateway</html>", 0),
+            UnicodeDecodeError("utf-8", b"\xff\xfe", 0, 1, "invalid start byte"),
+            ValueError("connection reset by peer"),  # transient pattern wins over the type
+            TypeError("request timed out"),
+        ],
+    )
+    def test_network_shaped_failures_keep_their_retries(self, exc):
+        """The type rule must not make the classifier trigger-happy: a garbled
+        or truncated response is worth fetching again, even though
+        ``JSONDecodeError`` is a ``ValueError``."""
+        with pytest.raises(TransientError):
+            classify_and_raise(exc, context="fetching feed")
+
+    def test_malformed_llm_output_keeps_its_retries(self):
+        """pydantic's ValidationError is a ValueError, but a fresh LLM sample
+        may validate, so it is not a programming error."""
+        from pydantic import BaseModel, ValidationError
+
+        class Summary(BaseModel):
+            title: str
+
+        with pytest.raises(ValidationError) as excinfo:
+            Summary.model_validate({"headline": "wrong key"})
+        with pytest.raises(TransientError):
+            classify_and_raise(excinfo.value, context="summarizing")
+
+    def test_unknown_non_programming_errors_still_default_to_transient(self):
+        class SomethingOdd(Exception):
+            pass
+
+        with pytest.raises(TransientError):
+            classify_and_raise(SomethingOdd("never seen before"))
+
+
+class TestTodaysThreeYouTubeErrors:
+    """The three real failures from the 2026-09-21 YouTube import, verbatim."""
+
+    def test_dalston_html_400_is_fatal(self):
+        exc = _HttpError(
+            '[400] {"error":{"code":"invalid_request","message":"Unsupported content type: text/html; '
+            'charset=utf-8. Expected audio file (MP3, WAV, FLAC, OGG, M4A, etc.)"}}',
+            400,
+        )
+        with pytest.raises(FatalError):
+            classify_and_raise(exc, context="transcribing Deep Dive into LLMs like ChatGPT")
+
+    def test_ytdlp_403_is_fatal_it_needs_a_ytdlp_bump_not_a_retry(self):
+        exc = Exception("YouTube download failed: ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        with pytest.raises(FatalError):
+            classify_and_raise(exc, context="downloading audio")
+
+    def test_storage_root_violation_is_fatal_end_to_end(self, tmp_path):
+        """Through the real guard, not a hand-built exception."""
+        from pathlib import Path
+
+        from thestill.utils.exceptions import StoragePathError
+        from thestill.utils.path_manager import PathManager
+
+        manager = PathManager(str(tmp_path / "data"))
+        outside = Path("/var/folders/3l/T/thestill_download_x/Andrej_Karpathy_Deep_Dive_7xTGNNLPyMI.m4a")
+        with pytest.raises(StoragePathError) as excinfo:
+            manager.to_relative(outside)
+        assert isinstance(excinfo.value, ValueError)  # what callers and docs expected before
+
+        with pytest.raises(FatalError) as classified:
+            classify_and_raise(excinfo.value, context="downloading audio for Deep Dive")
+        assert classified.value is excinfo.value  # already classified: passed through untouched

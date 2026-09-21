@@ -32,6 +32,8 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
+from .exceptions import StoragePathError
+
 # Spec #28 — only the three entity types that get rendered pages on
 # disk (per the corpus layout in Strategy §1). ``product`` exists in the
 # entity database but does not produce a Markdown page in v1.
@@ -696,7 +698,8 @@ class PathManager:
             Relative forward-slash string (e.g. ``"original_audio/ep.mp3"``).
 
         Raises:
-            ValueError: If ``absolute`` is not under ``storage_path``.
+            StoragePathError: If ``absolute`` is not under ``storage_path``. A
+                ``ValueError`` and a ``FatalError``: a caller bug, never retryable.
         """
         try:
             return absolute.relative_to(self._storage_root_resolved).as_posix()
@@ -705,7 +708,10 @@ class PathManager:
         try:
             return absolute.resolve().relative_to(self._storage_root_resolved).as_posix()
         except ValueError as exc:
-            raise ValueError(f"path {absolute!r} is not under storage root {self.storage_path!r}") from exc
+            raise StoragePathError(
+                f"path {absolute!r} is not under storage root {self.storage_path!r}",
+                path=str(absolute),
+            ) from exc
 
     def require_file_exists(self, file_path: Path, error_message: str) -> Path:
         """
