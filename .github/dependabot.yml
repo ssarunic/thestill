@@ -34,6 +34,26 @@ updates:
           - minor
           - patch
 
+  # Workflow actions. Without this entry they are never bumped and drift
+  # onto deprecated Node runtimes (they sat on node20 until 2026-09).
+  # astral-sh/setup-uv publishes no floating major tags since v8, so it is
+  # pinned to an exact version and relies on this entry for updates.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Etc/UTC
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: docker
     directory: /
     schedule:
