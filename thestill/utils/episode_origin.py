@@ -32,6 +32,7 @@ _PREFIX_TO_IMPORT_KIND = {
     "youtube": "youtube",
     "apple": "apple_episode",
     "rss": "rss_episode",
+    "spotify": "spotify_episode",
 }
 
 

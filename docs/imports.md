@@ -1,6 +1,6 @@
 # Importing Episodes
 
-> Status: shipped (spec [#31](../specs/31-import-arbitrary-episodes.md), phases 1–4)
+> Status: shipped (spec [#31](../specs/31-import-arbitrary-episodes.md), phases 1–4; Spotify links per spec [#79](../specs/79-spotify-link-import.md))
 
 Thestill lets you paste a URL and have the resulting episode land in your
 inbox immediately. The transcription, cleaning, and summarisation pipeline
@@ -17,14 +17,14 @@ point of the feature.
 |---|---|---|
 | YouTube video | `https://www.youtube.com/watch?v=dQw4w9WgXcQ` | Also `youtu.be/...` and `/shorts/...`. A watch URL that carries a `list=` param imports just that video — the playlist context is ignored. Pasting a bare `youtube.com/playlist?list=...` index page is not supported (importing a whole playlist/channel is not a goal of this feature; use "follow" instead). The episode's parent channel is upserted into the system as an `auto_added` podcast row, hidden from refresh until you follow it. |
 | Apple Podcasts share link | `https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000` | Resolved via the iTunes Search API to the show's RSS feed and the episode's audio URL. Show-only links (no `?i=...`) are rejected — paste an episode link from the Share menu. |
+| Spotify episode link | `https://open.spotify.com/episode/7kQ2xN9pZ1aB3cD4eF5gH6` | Also `spotify:episode:<id>` URIs, locale paths (`/intl-de/episode/...`) and `spotify.link/...` short links. Spotify IDs are opaque, so the episode is resolved by **metadata matching**: Spotify's own title / show / release date / duration → the show in the Apple Podcasts directory (which carries the RSS feed URL) → the episode in that feed, scored on title, date (±36 h) and duration. Spotify exclusives and video-only shows have no public feed and are rejected with a clear message. Show links (`/show/...`) belong on the Podcasts page (see below). See [Spotify resolution](#spotify-resolution). |
 | Direct audio file | `https://cdn.example.com/episode.mp3` | Any URL ending in `.mp3`, `.m4a`, `.opus`, `.ogg`, or `.wav`. Falls back to a synthetic `audio-imports` parent. |
 
 ### Not supported
 
-- **Spotify share links.** Spotify exclusives have no enclosure URL we can
-  fetch; non-exclusives need API auth that isn't worth the operational
-  cost. The modal catches Spotify URLs client-side and shows a clear
-  message — try the YouTube or RSS link for the same episode instead.
+- **Spotify exclusives.** A show that exists only on Spotify has no public
+  RSS feed, so there is nothing to import; the error names the show and
+  suggests the Apple / RSS link when one exists.
 - **Pocket Casts share links.** Defer until there's user demand.
 - **Shortened links** (e.g. `apple.co/...`, `youtu.be` redirects). Most
   short links work because they redirect to a supported host before
@@ -76,8 +76,9 @@ HTTP/1.1 200 OK
 `parent` is `null` when the import falls back to the synthetic
 `audio-imports` row (i.e. bare `.mp3` URLs with no deducible parent).
 
-The endpoint returns `400 Bad Request` for unsupported URLs (Spotify,
-Vimeo, anything no resolver matches).
+The endpoint returns `400 Bad Request` for unsupported URLs (Vimeo,
+anything no resolver matches) and for Spotify links that cannot be matched
+to a public feed.
 
 ## Idempotency
 
@@ -96,15 +97,62 @@ The canonical id is derived per resolver:
 |---|---|
 | YouTube | `youtube:<video_id>` |
 | Apple | `apple:<itunes_track_id>` |
+| Spotify | `spotify:<spotify_episode_id>` |
 | Bare audio | `audio:<sha256_of_normalised_url>` |
 
 Cross-source dedup (same episode pasted as YouTube link vs. Apple link)
 is **not** currently supported — those collapse to different canonical
 ids. Most URL variants of the same source dedup correctly.
 
+## Spotify resolution
+
+There is no deterministic mapping from a Spotify episode to an RSS item,
+so `SpotifyResolver` (`thestill/core/spotify_resolver.py`) runs a
+three-stage matching pipeline. Every stage is logged (`spotify_*` events)
+with its scores so a wrong or missing match can be diagnosed.
+
+1. **Spotify metadata.** The public `open.spotify.com/episode/...` page is
+   fetched (SSRF-guarded, no auth) and its Open Graph tags read: `og:title`
+   (episode), the show name from `<title>` / `og:description`,
+   `music:release_date`, `music:duration`, `og:image`. With
+   `SPOTIFY_CLIENT_ID` + `SPOTIFY_CLIENT_SECRET` set the Web API
+   (`/v1/episodes/{id}`, client-credentials) is used instead; it also
+   returns the publisher and does not depend on Spotify's page layout. The
+   page scrape remains the fallback if the API call fails.
+2. **Show → feed.** `itunes.apple.com/search?term=<show>&entity=podcast`
+   results are fuzzy-scored on `collectionName` (and `artistName` against
+   the publisher when known). The best result above the threshold supplies
+   `collectionId` and `feedUrl`. A subtitle-stripped retry handles names like
+   "The Rest Is Politics: US". No match ⇒ "Could not find … in the Apple
+   Podcasts directory", which is the normal outcome for Spotify exclusives.
+3. **Episode.** Candidates come from, in order: the show's iTunes
+   200-episode window (`lookup?id=<collectionId>&entity=podcastEpisode`),
+   an iTunes episode-title search filtered to the show, and finally the RSS
+   feed itself (full history). Each candidate scores
+   `0.6 × title + 0.25 × date + 0.15 × duration`, where the title score is a
+   token-set similarity over a normalised title (lower-case, accents /
+   punctuation / emoji stripped, `Ep. 123 –` prefixes dropped), the date
+   score is 1.0 within ±36 h decaying to 0 at a week, and duration is 1.0
+   within 2 min / 0.6 within 10 min (dynamic ad insertion) / 0.2 beyond.
+   Accepted at ≥ 0.72 with a title score ≥ 0.5, or an exact title with a
+   compatible date or duration. Two accepted candidates within 0.01 of each
+   other ("Part 1" / "Part 2" on the same day) are reported as ambiguous
+   rather than guessed.
+
+The winning candidate's enclosure URL becomes the episode's `audio_url`, so
+the parent-feed ingest that follows binds the import to the feed's own
+episode row (see below) exactly as it does for Apple links. The canonical
+id stays `spotify:<id>` so re-pasting the same link dedups.
+
+**Spotify show links on the Podcasts page.** `Add podcast` accepts
+`open.spotify.com/show/...` (and episode links) too: stages 1–2 run and the
+resolved RSS feed is what gets followed — the Spotify URL itself is never
+stored as a feed.
+
 ## What happens to the parent podcast
 
-When the resolver can deduce a parent (YouTube channel, Apple show), the
+When the resolver can deduce a parent (YouTube channel, Apple or Spotify
+show), the
 podcast is upserted into `podcasts` with `auto_added=1`. These rows:
 
 - **Are hidden** from `Browse podcasts` until at least one user follows
@@ -162,6 +210,20 @@ Requests` with a clear message; the API surface won't change otherwise.
 - **"iTunes lookup found no episode"** — the Apple share link's `?i=`
   track id no longer exists (the show was unpublished or the episode
   was withdrawn).
+- **"Could not find “<show>” in the Apple Podcasts directory"** — the
+  Spotify show has no entry on Apple, i.e. it is (almost always) a Spotify
+  exclusive with no public feed. If the show *is* on Apple under a
+  different name, paste its Apple or RSS link.
+- **"Found “<show>” … but could not confidently match the episode"** —
+  the show resolved but no feed item cleared the score threshold: a
+  Spotify-only bonus episode, a heavily retitled episode, or a trailer.
+  Look for `spotify_episode_unmatched` / `spotify_episode_ambiguous` in the
+  logs for the tiers tried and the best scores; paste the Apple episode link
+  or RSS feed to import it directly.
+- **"Spotify's episode page did not expose the episode title and show
+  name"** — Spotify changed its page markup. Set `SPOTIFY_CLIENT_ID` /
+  `SPOTIFY_CLIENT_SECRET` to switch to the Web API, or paste an Apple /
+  RSS link meanwhile.
 - **Inbox row stuck on `Downloading…`** — check the `Failed Tasks`
   page or the `download` stage worker logs. Common causes: blocked
   audio CDN, expired CDN URL (some publishers rotate), or yt-dlp /

@@ -75,6 +75,20 @@ See [transcription-providers.md](transcription-providers.md) for provider-specif
 | `ELEVENLABS_WEBHOOK_SECRET` | Webhook signature verification | - |
 | `ELEVENLABS_WEBHOOK_REQUIRE_METADATA` | Require episode_id in webhook | `true` |
 
+## Spotify (optional)
+
+Spotify episode and show links are resolved by matching Spotify's metadata
+against the Apple Podcasts directory (see [imports.md](imports.md)). No
+credentials are needed: the public `open.spotify.com` page is read for the
+title, show name, release date and duration. Setting both variables switches
+that first step to the Spotify Web API (client-credentials flow), which does
+not depend on Spotify's page layout and also returns the publisher.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SPOTIFY_CLIENT_ID` | Spotify developer app client id | - |
+| `SPOTIFY_CLIENT_SECRET` | Spotify developer app client secret | - |
+
 ## Dalston
 
 | Variable | Description | Default |

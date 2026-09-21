@@ -62,6 +62,7 @@ Each step is independent. Failed at transcription? Fix it and continue - no need
 
 - RSS feeds
 - Apple Podcasts
+- Spotify shows (resolved to the show's public RSS feed)
 - YouTube channels & playlists
 
 ## Quick Start
@@ -113,7 +114,7 @@ thestill server
 
 ```bash
 # Podcast management
-thestill add <url>          # Add podcast (RSS, Apple, YouTube)
+thestill add <url>          # Add podcast (RSS, Apple, Spotify, YouTube)
 thestill list               # List podcasts
 thestill remove <id>        # Remove podcast
 thestill status             # System stats

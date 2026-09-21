@@ -240,7 +240,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
           value={input}
           onChange={(e) => handleInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search top 500 or paste an RSS URL…"
+          placeholder="Search top 500 or paste an RSS, Apple, or Spotify show URL…"
           aria-label="Search top podcasts or paste a URL"
           aria-activedescendant={cursorIdx >= 0 ? `top-podcast-row-${cursorIdx}` : undefined}
           className="w-full px-4 py-3 border rounded-lg text-gray-900 placeholder-gray-400 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 transition-colors bg-white"

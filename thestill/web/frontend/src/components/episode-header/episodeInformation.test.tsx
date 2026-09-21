@@ -66,5 +66,6 @@ describe('buildEpisodeInformationRows (spec #76 §3.6)', () => {
   it('labels imports without a known kind plainly', () => {
     expect(values(buildEpisodeInformationRows(episode({ origin: 'import', import_kind: null }))).Source).toBe('Imported')
     expect(values(buildEpisodeInformationRows(episode({ origin: 'import', import_kind: 'youtube' }))).Source).toBe('Imported (YouTube)')
+    expect(values(buildEpisodeInformationRows(episode({ origin: 'import', import_kind: 'spotify_episode' }))).Source).toBe('Imported (Spotify)')
   })
 })

@@ -32,7 +32,9 @@ from thestill.utils.url_patterns import (
     APPLE_PODCAST_ID_RE,
     extract_apple_episode_id,
     extract_apple_podcast_id,
+    extract_spotify_entity,
     is_apple_podcast_url,
+    is_spotify_url,
     is_youtube_url,
     looks_like_rss,
 )
@@ -151,9 +153,7 @@ class TestExtractAppleEpisodeId:
 
 class TestIsApplePodcastUrl:
     def test_canonical_share_link(self):
-        assert is_apple_podcast_url(
-            "https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000"
-        )
+        assert is_apple_podcast_url("https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000620312000")
 
     def test_show_only_link_still_classifies_as_apple(self):
         # Resolver rejects show-only links separately; the URL classifier
@@ -165,3 +165,32 @@ class TestIsApplePodcastUrl:
 
     def test_youtube_is_not_apple(self):
         assert not is_apple_podcast_url("https://www.youtube.com/watch?v=abc")
+
+
+class TestSpotifyPatterns:
+    _ID = "4rOoJ6Egrf8K2IrywzwOMk"
+
+    def test_episode_and_show_links(self):
+        assert extract_spotify_entity(f"https://open.spotify.com/episode/{self._ID}?si=abc") == ("episode", self._ID)
+        assert extract_spotify_entity(f"https://open.spotify.com/show/{self._ID}") == ("show", self._ID)
+
+    def test_locale_prefixes(self):
+        assert extract_spotify_entity(f"https://open.spotify.com/intl-de/episode/{self._ID}") == ("episode", self._ID)
+        assert extract_spotify_entity(f"https://open.spotify.com/pt-br/show/{self._ID}") == ("show", self._ID)
+
+    def test_uri_form(self):
+        assert extract_spotify_entity(f"spotify:episode:{self._ID}") == ("episode", self._ID)
+        assert extract_spotify_entity(f"  spotify:show:{self._ID}\n") == ("show", self._ID)
+
+    def test_rejects_wrong_length_or_other_entities(self):
+        assert extract_spotify_entity("https://open.spotify.com/episode/tooshort") is None
+        assert extract_spotify_entity(f"https://open.spotify.com/episode/{self._ID}X") is None
+        assert extract_spotify_entity("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M") is None
+        assert extract_spotify_entity("https://spotify.link/AbC123") is None
+
+    def test_is_spotify_url(self):
+        assert is_spotify_url(f"https://open.spotify.com/episode/{self._ID}")
+        assert is_spotify_url("https://spotify.link/AbC123")
+        assert is_spotify_url(f"spotify:episode:{self._ID}")
+        assert not is_spotify_url("https://notspotify.com/episode/x")
+        assert not is_spotify_url("https://podcasts.apple.com/us/podcast/x/id1?i=2")

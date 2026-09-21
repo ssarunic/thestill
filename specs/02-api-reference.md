@@ -485,7 +485,7 @@ Get a specific episode by podcast and episode slugs.
 
 - `podcast_author`, `podcast_language`: show facts read from the podcast row (no extra request).
 - `origin`: `feed` for episodes discovered from a followed feed, `import` for spec #31 imports.
-- `import_kind`: `bare_audio`, `youtube`, `apple_episode` or `rss_episode` for imports; `null` for feed episodes or an unrecognised import source.
+- `import_kind`: `bare_audio`, `youtube`, `apple_episode`, `spotify_episode` or `rss_episode` for imports; `null` for feed episodes or an unrecognised import source.
 
 **Description Fields:**
 

@@ -83,15 +83,46 @@ describe('ImportEpisodeModal', () => {
     expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled()
   })
 
-  it('rejects Spotify links client-side without calling the API', async () => {
+  it('sends Spotify episode links to the API and shows the follow CTA for the matched show', async () => {
+    mockImportEpisode.mockResolvedValue(
+      bareAudioResponse({
+        canonical_id: 'spotify:4rOoJ6Egrf8K2IrywzwOMk',
+        kind: 'spotify_episode',
+        title: 'Mark Zuckerberg on Muse',
+        source_handle: 'Sources with Alex Heath',
+        parent: { id: 'p-2', title: 'Sources with Alex Heath', slug: 'sources-with-alex-heath' },
+      }),
+    )
     const user = userEvent.setup()
     render(<ImportEpisodeModal isOpen={true} onClose={vi.fn()} />, {
       wrapper: createWrapper(),
     })
-    await user.type(screen.getByRole('textbox'), 'https://open.spotify.com/episode/abc')
+    await user.type(screen.getByRole('textbox'), 'https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk')
     await user.click(screen.getByRole('button', { name: 'Import' }))
-    expect(await screen.findByText(/Spotify links are not supported/)).toBeInTheDocument()
-    expect(mockImportEpisode).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(screen.getByText('Mark Zuckerberg on Muse')).toBeInTheDocument()
+    })
+    expect(mockImportEpisode).toHaveBeenCalledWith({
+      url: 'https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk',
+    })
+    expect(screen.getByRole('link', { name: 'View channel' })).toHaveAttribute(
+      'href',
+      '/podcasts/sources-with-alex-heath',
+    )
+  })
+
+  it('surfaces the backend message when a Spotify exclusive cannot be matched', async () => {
+    mockImportEpisode.mockRejectedValue(
+      new Error('Could not find “Exclusive Show” in the Apple Podcasts directory.'),
+    )
+    const user = userEvent.setup()
+    render(<ImportEpisodeModal isOpen={true} onClose={vi.fn()} />, {
+      wrapper: createWrapper(),
+    })
+    await user.type(screen.getByRole('textbox'), 'https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk')
+    await user.click(screen.getByRole('button', { name: 'Import' }))
+    expect(await screen.findByText(/Could not find “Exclusive Show”/)).toBeInTheDocument()
   })
 
   it('shows the bare-audio success state with no follow CTA', async () => {
