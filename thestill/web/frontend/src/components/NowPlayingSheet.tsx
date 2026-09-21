@@ -9,7 +9,7 @@ import { selectTopEntities } from '../utils/mentionDensity'
 import { entityStyle } from '../utils/entityColors'
 import { formatClock } from '../utils/formatClock'
 import Artwork from './Artwork'
-import Button, { CloseIcon, PauseIcon, PlayIcon } from './Button'
+import Button, { CloseIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon } from './Button'
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
@@ -26,28 +26,6 @@ const FOCUSABLE_SELECTOR =
 
 // Swipe-down on the phone sheet's drag handle closes past this travel.
 const SWIPE_CLOSE_PX = 80
-
-// Material "replay" / "forward" rings (Apache-2.0) with the skip length set
-// inside, so the buttons read as ±15 s without a caption. Rendered as button
-// children rather than through ``icon`` so the glyph can be 32 px — the
-// ``icon`` wrapper's 20 px is too small for the digits.
-const SkipBackIcon = () => (
-  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
-    <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
-    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
-      15
-    </text>
-  </svg>
-)
-
-const SkipForwardIcon = () => (
-  <svg fill="currentColor" viewBox="0 0 24 24" className="h-8 w-8" aria-hidden="true">
-    <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
-    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
-      15
-    </text>
-  </svg>
-)
 
 const VolumeIcon = ({ muted }: { muted: boolean }) => (
   <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
@@ -337,7 +315,10 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             disabled={!hasDuration}
             aria-label="Back 15 seconds"
           >
-            <SkipBackIcon />
+            {/* A child, not ``icon`` — that wrapper's 20 px is too small for the digits. */}
+            <span className="block h-8 w-8">
+              <SkipBackIcon />
+            </span>
             <span className="sr-only">Back 15 seconds</span>
           </Button>
           <Button
@@ -357,7 +338,9 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             disabled={!hasDuration}
             aria-label="Forward 15 seconds"
           >
-            <SkipForwardIcon />
+            <span className="block h-8 w-8">
+              <SkipForwardIcon />
+            </span>
             <span className="sr-only">Forward 15 seconds</span>
           </Button>
         </div>

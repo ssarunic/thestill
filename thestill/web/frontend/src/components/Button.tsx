@@ -158,6 +158,28 @@ export const PauseIcon = () => (
   </svg>
 )
 
+// Material "replay" / "forward" rings (Apache-2.0) with the skip length set
+// inside, so the buttons read as ±15 s without a caption. Shared by the mini
+// player and the now-playing sheet so a skip never looks like next/previous
+// episode. Size the wrapper at 28 px or more — below that the digits blur.
+export const SkipBackIcon = () => (
+  <svg fill="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
+  </svg>
+)
+
+export const SkipForwardIcon = () => (
+  <svg fill="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="7" fontWeight="700">
+      15
+    </text>
+  </svg>
+)
+
 export const YouTubeIcon = () => (
   <svg fill="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
     <path d="M21.6 7.2a2.5 2.5 0 00-1.76-1.77C18.25 5 12 5 12 5s-6.25 0-7.84.43A2.5 2.5 0 002.4 7.2 26.2 26.2 0 002 12c0 1.62.13 3.23.4 4.8a2.5 2.5 0 001.76 1.77C5.75 19 12 19 12 19s6.25 0 7.84-.43a2.5 2.5 0 001.76-1.77c.27-1.57.4-3.18.4-4.8 0-1.62-.13-3.23-.4-4.8zM10 15.5v-7l6 3.5-6 3.5z" />

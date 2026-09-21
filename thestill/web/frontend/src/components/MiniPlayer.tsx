@@ -5,7 +5,7 @@ import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { PLAYER_HEIGHT_VAR } from '../constants/layers'
 import Artwork from './Artwork'
-import { ChevronUpIcon } from './Button'
+import { ChevronUpIcon, SkipBackIcon, SkipForwardIcon } from './Button'
 
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00'
@@ -250,11 +250,9 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
             disabled={!hasDuration}
             className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
-              <path d="M11 17l-5-5 5-5" />
-              <path d="M18 17l-5-5 5-5" />
-            </svg>
-            <span className="sr-only">15</span>
+            <span className="block w-7 h-7">
+              <SkipBackIcon />
+            </span>
           </button>
 
           <button
@@ -288,11 +286,9 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
             disabled={!hasDuration}
             className="flex w-11 h-11 sm:w-9 sm:h-9 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24">
-              <path d="M13 17l5-5-5-5" />
-              <path d="M6 17l5-5-5-5" />
-            </svg>
-            <span className="sr-only">15</span>
+            <span className="block w-7 h-7">
+              <SkipForwardIcon />
+            </span>
           </button>
         </div>
 
