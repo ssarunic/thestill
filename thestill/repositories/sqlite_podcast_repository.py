@@ -901,6 +901,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     surface_key    TEXT NOT NULL,
                     podcast_id     TEXT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
                     qid            TEXT NULL,
+                    label          TEXT NULL,
+                    description    TEXT NULL,
                     confidence     TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
                     reason         TEXT NULL,
                     decided_at     TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),

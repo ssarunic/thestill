@@ -31,6 +31,8 @@ class StoredLinkDecision:
     surface_key: str
     podcast_id: Optional[str]  # None = corpus-wide
     qid: Optional[str]  # None = decided "none"
+    label: Optional[str]  # the entity's Wikidata label and description, so a
+    description: Optional[str]  # cache hit builds the entity without a lookup
     confidence: str
     reason: Optional[str]
     decided_at: datetime

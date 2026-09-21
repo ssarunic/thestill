@@ -29,7 +29,7 @@ from typing import Callable, Optional
 from structlog import get_logger
 
 from ...repositories.link_decision_repository import LinkDecisionRepository, StoredLinkDecision
-from .types import LinkDecision, surface_key
+from .types import Candidate, LinkDecision, surface_key
 
 logger = get_logger(__name__)
 
@@ -67,6 +67,7 @@ class LinkDecisionCache:
                     qid=row.qid,
                     confidence=row.confidence,
                     reason=row.reason or "",
+                    candidate=Candidate(row.qid, row.label or "", row.description or "") if row.qid else None,
                     from_cache=True,
                     cache_scope="corpus" if scope is None else "podcast",
                 )
@@ -93,6 +94,8 @@ class LinkDecisionCache:
             surface_key=decision.surface_key,
             podcast_id=podcast_id,
             qid=decision.qid,
+            label=decision.candidate.label if decision.candidate else None,
+            description=decision.candidate.description if decision.candidate else None,
             confidence=decision.confidence,
             reason=decision.reason[:REASON_MAX_CHARS] or None,
             decided_at=self._clock(),

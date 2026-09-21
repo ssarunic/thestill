@@ -491,6 +491,8 @@ CREATE TABLE IF NOT EXISTS entity_link_decisions (
     surface_key text NOT NULL,
     podcast_id uuid NULL REFERENCES podcasts(id) ON DELETE CASCADE,
     qid text NULL,
+    label text NULL,
+    description text NULL,
     confidence text NOT NULL CHECK (confidence IN ('high','medium','low')),
     reason text NULL,
     decided_at timestamptz NOT NULL DEFAULT now(),

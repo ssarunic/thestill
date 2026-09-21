@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from thestill.core.entity_linking.cache import LinkDecisionCache
-from thestill.core.entity_linking.types import LinkDecision
+from thestill.core.entity_linking.types import Candidate, LinkDecision
 from thestill.repositories.sqlite_link_decision_repository import SqliteLinkDecisionRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
@@ -45,7 +45,8 @@ def cache(repo, clock):
 
 
 def _decision(qid="Q1", confidence="high", key="mercury", reason="because"):
-    return LinkDecision(surface_key=key, qid=qid, confidence=confidence, reason=reason)
+    candidate = Candidate(qid, "Mercury", "a thing called Mercury") if qid else None
+    return LinkDecision(surface_key=key, qid=qid, confidence=confidence, reason=reason, candidate=candidate)
 
 
 def test_a_miss_is_none(cache):
@@ -56,6 +57,7 @@ def test_a_recorded_decision_is_found_for_its_podcast_only(cache):
     cache.record(_decision(), PODS[0])
     hit = cache.lookup("mercury", PODS[0])
     assert (hit.qid, hit.confidence, hit.from_cache, hit.cache_scope) == ("Q1", "high", True, "podcast")
+    assert (hit.candidate.label, hit.candidate.description) == ("Mercury", "a thing called Mercury")
     assert cache.lookup("mercury", PODS[1]) is None
 
 

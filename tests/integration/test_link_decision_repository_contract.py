@@ -79,6 +79,8 @@ def _decision(**overrides) -> StoredLinkDecision:
         surface_key="dario amodei",
         podcast_id=POD_A,
         qid="Q100",
+        label="Dario Amodei",
+        description="American AI researcher",
         confidence="high",
         reason="named as Anthropic's CEO",
         decided_at=NOW,
@@ -96,7 +98,7 @@ def test_upsert_then_get_round_trips(repo):
 
 
 def test_a_decided_none_round_trips_as_a_null_qid(repo):
-    repo.upsert(_decision(qid=None, confidence="medium", reason=None))
+    repo.upsert(_decision(qid=None, label=None, description=None, confidence="medium", reason=None))
     got = repo.get("dario amodei", POD_A)
     assert got is not None and got.qid is None and got.reason is None
 

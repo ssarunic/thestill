@@ -141,8 +141,12 @@ class EntityResolver:
         mentions: List[EntityMention],
         *,
         is_blacklisted=None,
+        context=None,  # pylint: disable=unused-argument
     ) -> List[ResolutionResult]:
         """Resolve a list of pending mentions in one pass.
+
+        ``context`` is part of the shared linker contract (spec #81) and is
+        ignored here: ReFinED works from each mention's excerpt alone.
 
         Each mention is resolved independently against its
         ``quote_excerpt``. Mentions sharing a ``surface_form`` are NOT

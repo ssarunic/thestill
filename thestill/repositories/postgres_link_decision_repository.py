@@ -30,15 +30,18 @@ from .link_decision_repository import LinkDecisionRepository, StoredLinkDecision
 
 logger = get_logger(__name__)
 
-_COLS = "surface_key, podcast_id, qid, confidence, reason, decided_at, linker_version, hits"
+_COLS = "surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version, hits"
 
 # The conflict target must repeat the partial index's predicate, so each
 # scope has its own statement.
 _UPSERT = """
-    INSERT INTO entity_link_decisions (surface_key, podcast_id, qid, confidence, reason, decided_at, linker_version)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    INSERT INTO entity_link_decisions
+        (surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT {target} DO UPDATE SET
         qid = EXCLUDED.qid,
+        label = EXCLUDED.label,
+        description = EXCLUDED.description,
         confidence = EXCLUDED.confidence,
         reason = EXCLUDED.reason,
         decided_at = EXCLUDED.decided_at,
@@ -73,6 +76,8 @@ class PostgresLinkDecisionRepository(LinkDecisionRepository):
                     decision.surface_key,
                     decision.podcast_id,
                     decision.qid,
+                    decision.label,
+                    decision.description,
                     decision.confidence,
                     decision.reason,
                     decision.decided_at,
@@ -107,6 +112,8 @@ class PostgresLinkDecisionRepository(LinkDecisionRepository):
             surface_key=row["surface_key"],
             podcast_id=as_str(row["podcast_id"]) if row["podcast_id"] is not None else None,
             qid=row["qid"],
+            label=row["label"],
+            description=row["description"],
             confidence=row["confidence"],
             reason=row["reason"],
             decided_at=row["decided_at"],

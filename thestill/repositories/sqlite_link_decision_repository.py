@@ -27,15 +27,18 @@ from .link_decision_repository import LinkDecisionRepository, StoredLinkDecision
 
 logger = get_logger(__name__)
 
-_COLS = "surface_key, podcast_id, qid, confidence, reason, decided_at, linker_version, hits"
+_COLS = "surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version, hits"
 
 # The conflict target must repeat the partial index's predicate, so each
 # scope has its own statement.
 _UPSERT = """
-    INSERT INTO entity_link_decisions (surface_key, podcast_id, qid, confidence, reason, decided_at, linker_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO entity_link_decisions
+        (surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT {target} DO UPDATE SET
         qid = excluded.qid,
+        label = excluded.label,
+        description = excluded.description,
         confidence = excluded.confidence,
         reason = excluded.reason,
         decided_at = excluded.decided_at,
@@ -76,6 +79,8 @@ class SqliteLinkDecisionRepository(LinkDecisionRepository):
                     decision.surface_key,
                     decision.podcast_id,
                     decision.qid,
+                    decision.label,
+                    decision.description,
                     decision.confidence,
                     decision.reason,
                     decision.decided_at.isoformat(),
@@ -110,6 +115,8 @@ class SqliteLinkDecisionRepository(LinkDecisionRepository):
             surface_key=row["surface_key"],
             podcast_id=row["podcast_id"],
             qid=row["qid"],
+            label=row["label"],
+            description=row["description"],
             confidence=row["confidence"],
             reason=row["reason"],
             decided_at=datetime.fromisoformat(row["decided_at"]),
