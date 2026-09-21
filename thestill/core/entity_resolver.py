@@ -38,29 +38,26 @@ process scope on ``AppState.entity_resolver``.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterable, List, Optional, Protocol
+from typing import TYPE_CHECKING, Iterable, List, Optional
 
 from structlog import get_logger
 
 from ..models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
-from ..utils.slug import generate_slug
+from .entity_linking.shared import (  # noqa: F401 — re-exported; existing import sites use this module
+    SURFACE_LABEL_TO_ENTITY_TYPE,
+    EntityLinkerBrokenError,
+    ResolutionResult,
+    _build_entity_id,
+    _is_plausible_alias,
+    _P31Lookup,
+    unresolvable_result,
+)
 from .entity_type_rules import classify_entity_type
 
 if TYPE_CHECKING:
     # ``refined`` is an optional dep — imported lazily inside
     # ``_load_model`` so this module imports cleanly without it.
     from refined.inference.processor import Refined  # noqa: F401
-
-
-class _P31Lookup(Protocol):
-    """Structural type matching :class:`thestill.core.wikidata_client.WikidataClient`.
-
-    Lets the resolver accept either the real client or the
-    ``NullWikidataClient`` test stub without an import-time dependency.
-    """
-
-    def fetch_p31(self, qid: str) -> List[str]: ...
 
 
 logger = get_logger(__name__)
@@ -100,39 +97,6 @@ COARSE_TYPE_TO_ENTITY_TYPE = {
     "EVENT": EntityType.TOPIC,
     "MISC": EntityType.TOPIC,
 }
-
-
-# Map GLiNER's surface_label (the Phase 1.2 extractor label) to
-# ``EntityType``. Direct one-to-one — the four types are the same.
-SURFACE_LABEL_TO_ENTITY_TYPE = {
-    "person": EntityType.PERSON,
-    "company": EntityType.COMPANY,
-    "product": EntityType.PRODUCT,
-    "topic": EntityType.TOPIC,
-}
-
-
-@dataclass(frozen=True)
-class ResolutionResult:
-    """One mention's resolution output.
-
-    ``entity`` is the canonical ``EntityRecord`` to upsert into the
-    ``entities`` table. ``mention_id`` and ``status`` drive the
-    per-row ``resolve_mention`` UPDATE. When ``status='unresolvable'``
-    the ``entity`` is still populated — the handler creates a local
-    slug-only entity (no QID) so future occurrences of the same
-    surface form can be merged into it.
-
-    ``method`` records *how* the resolver landed on this entity (spec
-    §1.13.6) — ``direct`` for ReFinED hits, ``override`` when a
-    persisted ``mention_overrides`` row forced the answer,
-    ``unresolvable`` when the threshold rejected the QID, etc.
-    """
-
-    mention_id: int
-    entity: EntityRecord
-    status: str  # "resolved" | "unresolvable"
-    method: ResolutionMethod = ResolutionMethod.DIRECT
 
 
 class EntityResolver:
@@ -360,30 +324,7 @@ class EntityResolver:
         )
 
     def _unresolvable_result(self, mention: EntityMention) -> ResolutionResult:
-        """Build the local-slug fallback entity.
-
-        Spec §1.5: "create local ``entity_id`` for unresolved entities
-        (slugified surface form)." The mention's ``resolution_status``
-        flips to ``unresolvable`` but we still produce an
-        ``EntityRecord`` so future occurrences of the same surface
-        form land in the same local entity. Phase 1.6's alias-merge
-        nightly job collapses these into resolved entities once a QID
-        becomes available.
-        """
-        entity_type = self._infer_entity_type(mention, coarse_type=None)
-        entity_id = _build_entity_id(entity_type, mention.surface_form, qid=None)
-        return ResolutionResult(
-            mention_id=mention.id,  # type: ignore[arg-type]
-            entity=EntityRecord(
-                id=entity_id,
-                type=entity_type,
-                canonical_name=mention.surface_form,
-                wikidata_qid=None,
-                aliases=[],
-            ),
-            status="unresolvable",
-            method=ResolutionMethod.UNRESOLVABLE,
-        )
+        return unresolvable_result(mention)
 
     def _infer_entity_type(self, mention: EntityMention, coarse_type: Optional[str]) -> EntityType:
         """Prefer the GLiNER label persisted with the mention; fall
@@ -455,32 +396,6 @@ def _pick_best_span(spans, surface_form: str):
     return overlaps[0][0]
 
 
-def _is_plausible_alias(surface_form: str, canonical_name: str) -> bool:
-    """Defense-in-depth: only persist ``surface_form`` as an alias of
-    ``canonical_name`` when the two share lexical content. Stops the
-    resolver from quietly recording wildly unrelated phrases as
-    aliases when ReFinED returns a low-confidence match — historical
-    contamination case: ``"consumer preferences"`` was stored as an
-    alias of ``Henry Ford`` because both phrases co-occurred in one
-    excerpt. After the ``_pick_best_span`` fix this should not happen
-    in the first place; this guard is the second line of defense.
-
-    Returns ``True`` when the alias is worth keeping:
-    - one is a substring of the other (case-insensitive), OR
-    - they share at least one whitespace token
-
-    Returns ``False`` for identical strings (no alias needed) and
-    for empty strings.
-    """
-    s = surface_form.lower().strip()
-    c = canonical_name.lower().strip()
-    if not s or not c or s == c:
-        return False
-    if s in c or c in s:
-        return True
-    return bool(set(s.split()) & set(c.split()))
-
-
 def _char_overlap(a: str, b: str) -> int:
     """Length of the longest common substring (used for span-pick
     fallback only). Cheap O(n*m) DP — fine for the ≤30-char strings
@@ -506,32 +421,12 @@ def _char_overlap(a: str, b: str) -> int:
     return best
 
 
-def _build_entity_id(entity_type: EntityType, canonical_name: str, qid: Optional[str]) -> str:
-    """Produce ``"{type}:{slug}"``.
-
-    Slug source preference:
-    1. Slug of canonical_name when it produces something useful
-    2. ``q{qid}`` when slug degrades to ``unnamed`` (unicode-only
-       surface forms transliterate to empty)
-    3. ``q{qid}`` directly (lowercase) when ``canonical_name`` is
-       empty or whitespace-only
-
-    The QID-derived id keeps disambiguation stable across surface-form
-    changes — re-resolving the same canonical entity later doesn't
-    create a duplicate row even if its ``canonical_name`` shifted.
-    """
-    base_slug = generate_slug(canonical_name)
-    if base_slug == "unnamed" and qid:
-        base_slug = qid.lower()
-    return f"{entity_type.value}:{base_slug}"
-
-
 # A batch is treated as "resolver broken" rather than "mentions unresolvable"
 # when at least this many mentions raised AND they are half the batch or more.
 _BROKEN_MIN_FAILURES = 3
 
 
-class EntityResolverBrokenError(RuntimeError):
+class EntityResolverBrokenError(EntityLinkerBrokenError):
     """ReFinED is failing systematically; nothing from this batch was recorded."""
 
 
