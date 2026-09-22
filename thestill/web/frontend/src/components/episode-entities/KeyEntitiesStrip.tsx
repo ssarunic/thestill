@@ -18,27 +18,13 @@ export interface KeyEntitiesStripProps {
   entities: EpisodeEntity[]
   hiddenTypes: Set<EntityType>
   onToggleType: (type: EntityType) => void
-  onSeek?: (seconds: number) => void
-  // Click on a strip pill — when the pill is clicked (not the play
-  // affordance), the parent may want to scroll the transcript to the
-  // first mention rather than navigate to the entity page. We default
-  // to navigation for the pill body and provide a play-▷ button for
-  // the seek action.
   topN?: number
-}
-
-function formatTimestamp(ms: number): string {
-  const total = Math.floor(ms / 1000)
-  const mm = Math.floor(total / 60)
-  const ss = total % 60
-  return `${mm}:${ss.toString().padStart(2, '0')}`
 }
 
 export default function KeyEntitiesStrip({
   entities,
   hiddenTypes,
   onToggleType,
-  onSeek,
   topN = 5,
 }: KeyEntitiesStripProps) {
   const visible = selectTopEntities(
@@ -63,29 +49,15 @@ export default function KeyEntitiesStrip({
       {visible.map((item) => {
         const style = entityStyle(item.entity.type)
         return (
-          <span key={item.entity.id} className="inline-flex items-center">
-            <Link
-              to={entityHref(item.entity.type, item.entity.id)}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors hover:brightness-95 ${style.pillBg} ${style.pillText} ${style.pillBorder}`}
-            >
-              <span className={`inline-block h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
-              {item.entity.canonical_name}
-              <span className="opacity-70">{item.mention_count}×</span>
-            </Link>
-            {onSeek && (
-              <button
-                type="button"
-                onClick={() => onSeek(item.first_mention_ms / 1000)}
-                title={`Play first mention at ${formatTimestamp(item.first_mention_ms)}`}
-                aria-label={`Play first mention of ${item.entity.canonical_name} at ${formatTimestamp(item.first_mention_ms)}`}
-                className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 hover:bg-white hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-              >
-                <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
-              </button>
-            )}
-          </span>
+          <Link
+            key={item.entity.id}
+            to={entityHref(item.entity.type, item.entity.id)}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors hover:brightness-95 ${style.pillBg} ${style.pillText} ${style.pillBorder}`}
+          >
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
+            {item.entity.canonical_name}
+            <span className="opacity-70">{item.mention_count}×</span>
+          </Link>
         )
       })}
       {visible.length === 0 && (

@@ -574,7 +574,6 @@ export default function EpisodeReader({
           entities={entities}
           hiddenTypes={hiddenEntityTypes}
           onToggleType={toggleEntityType}
-          onSeek={handleSegmentSeek}
         />
       )}
 
