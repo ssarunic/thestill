@@ -68,6 +68,47 @@ class ModelLimits(NamedTuple):
 # - Gemini: Supported via response_schema parameter (all models)
 # - Ollama: No native schema validation, falls back to JSON mode + Pydantic validation
 MODEL_CONFIGS: Dict[str, ModelLimits] = {
+    # OpenAI 2026 generation (checked against the model pages, 2026-09-22).
+    # GPT-6 Astra: $10/$50 per 1M, reasoning effort low..max (no 'none', so
+    # never a temperature). GPT-5.6 Sol $4/$20, Terra $2/$12, Luna $0.20/$1.20:
+    # effort none..max, temperature only with 'none'. Tier-1 limits 500 RPM /
+    # 500K TPM. All: 1.05M window (922K input), 128K output.
+    "gpt-6-astra": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=922000,  # 1.05M window, 922K max input
+        max_output_tokens=128000,
+        supports_temperature=False,  # no 'none' effort level
+        supports_structured_output=False,  # docs list JSON schema; the provider's reasoning-family fallback stays until verified
+    ),
+    "gpt-5.6-sol": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=922000,  # 1.05M window, 922K max input
+        max_output_tokens=128000,
+        supports_temperature=False,  # only with reasoning_effort='none'
+        supports_structured_output=False,  # docs list JSON schema; the provider's reasoning-family fallback stays until verified
+    ),
+    "gpt-5.6-terra": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=922000,  # 1.05M window, 922K max input
+        max_output_tokens=128000,
+        supports_temperature=False,  # only with reasoning_effort='none'
+        supports_structured_output=False,  # docs list JSON schema; the provider's reasoning-family fallback stays until verified
+    ),
+    "gpt-5.6-luna": ModelLimits(
+        tpm=500000,
+        rpm=500,
+        tpd=5000000,
+        context_window=922000,  # 1.05M window, 922K max input
+        max_output_tokens=128000,
+        supports_temperature=False,  # only with reasoning_effort='none'
+        supports_structured_output=False,  # docs list JSON schema; the provider's reasoning-family fallback stays until verified
+    ),
     # OpenAI GPT-5.2 series (December 2025) - adaptive reasoning models
     # Uses reasoning_effort parameter ('none', 'low', 'medium', 'high', 'xhigh')
     # Default reasoning_effort is 'none' (unlike 5.1 which defaults to higher)
@@ -389,13 +430,70 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=False,
     ),
-    # Google Gemini 3 (November/December 2025) - supports structured output
-    # Uses thinking_level parameter for reasoning depth
-    # Pro supports: "low", "high" (default)
-    # Flash supports: "minimal", "low", "medium", "high" (default)
-    # Pricing: Pro: $2/$12 per 1M tokens (<200k), $4/$18 (>200k)
-    #          Flash: $0.50/$3.00 per 1M tokens
-    "gemini-3-pro-preview": ModelLimits(
+    # Google Gemini 3.x (checked against the models and pricing pages,
+    # 2026-09-22). 3.8 Flash is the current GA Flash (2026-09-02); 3.7, 3.6
+    # and 3.5 Flash are still served; 3.1 Pro Preview is the Pro tier.
+    # gemini-3-pro-preview is no longer listed and its entry is gone.
+    # Pricing per 1M: 3.8/3.7/3.6 Flash $0.75/$3.75 (to end 2026, then
+    # $1.50/$7.50); 3.5 Flash $1.50/$9; 3.5 Flash-Lite $0.30/$2.50; 3.1 Pro
+    # $2/$12 (<=200K prompt) or $4/$18; 3.1 Flash-Lite $0.25/$1.50;
+    # 3 Flash Preview $0.50/$3. thinking_level: Pro low/high; Flash
+    # minimal/low/medium/high, except 3.8 Flash which rejects 'minimal'.
+    "gemini-3.8-flash": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.7-flash": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.6-flash": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.5-flash": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.5-flash-lite": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.1-pro-preview": ModelLimits(
+        tpm=500000,
+        rpm=1000,
+        tpd=10000000,
+        context_window=1048576,  # 1M input
+        max_output_tokens=65536,  # 64K output
+        supports_temperature=True,
+        supports_structured_output=True,
+    ),
+    "gemini-3.1-flash-lite": ModelLimits(
         tpm=500000,
         rpm=1000,
         tpd=10000000,
@@ -473,6 +571,42 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=False,
     ),
+    "gemma4:e2b": ModelLimits(  # E2B, 128K context
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=128000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
+    ),
+    "gemma4:12b": ModelLimits(  # 12B, 256K context
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=256000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
+    ),
+    "gemma4:26b": ModelLimits(  # 26B, 256K context
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=256000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
+    ),
+    "gemma4:31b": ModelLimits(  # 31B, 256K context
+        tpm=1000000,
+        rpm=10000,
+        tpd=100000000,
+        context_window=256000,
+        max_output_tokens=8192,
+        supports_temperature=True,
+        supports_structured_output=False,
+    ),
     # Ollama/Gemma 3 models - no native structured output (uses JSON mode + Pydantic fallback)
     # Using very high tpm/rpm/tpd since there are no actual limits
     "gemma3:270m": ModelLimits(
@@ -522,6 +656,9 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
     ),
     # Mistral AI models - supports structured output via chat.parse()
     # Source: https://docs.mistral.ai/capabilities/structured_output/custom
+    # The -latest aliases now resolve to Mistral Large 3 (2025-12), Medium 3.5
+    # (2026-04), Small 4 (2026-03) and Ministral 3 8B (2025-12); the limits
+    # below predate those releases and were not re-verified (2026-09-22).
     "mistral-large-latest": ModelLimits(
         tpm=500000,
         rpm=500,
@@ -604,6 +741,10 @@ _PROMPT_CACHING_MODELS = frozenset(
         "gpt-5.1-codex-max",
         "gpt-5.2",
         "gpt-5.2-pro",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-6-astra",
         "o3",
         "o4-mini",
         # Gemini — implicit context caching on 2.0+.
@@ -613,7 +754,13 @@ _PROMPT_CACHING_MODELS = frozenset(
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
         "gemini-3-flash-preview",
-        "gemini-3-pro-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
     }
 )
 
@@ -836,12 +983,15 @@ class OpenAIProvider(LLMProvider):
         "gpt-5.1-codex-max",  # GPT-5.1 series (Nov 2025)
         "gpt-5.2",
         "gpt-5.2-pro",  # GPT-5.2 series (Dec 2025)
+        "gpt-5.6",  # GPT-5.6 Sol / Terra / Luna (2026)
+        "gpt-6",  # GPT-6 Astra (2026)
     ]
 
     # Valid reasoning effort levels for GPT-5.x models
     # GPT-5.2 supports: 'none' (default), 'low', 'medium', 'high', 'xhigh'
     # GPT-5.1 supports: 'none', 'low', 'medium', 'high'
-    VALID_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh"]
+    # GPT-5.6 and GPT-6 add 'max'; GPT-6 Astra has no 'none'.
+    VALID_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"]
 
     def __init__(
         self,
@@ -948,13 +1098,18 @@ class OpenAIProvider(LLMProvider):
             # OpenAI SDK uses flat 'reasoning_effort' parameter (not nested 'reasoning: { effort: ... }')
             if self._is_gpt5x_model() and self.reasoning_effort:
                 if self.reasoning_effort in self.VALID_REASONING_EFFORTS:
-                    # Check if xhigh is valid for this model (only GPT-5.2+)
                     effort = self.reasoning_effort
-                    if effort == "xhigh" and not self.model.startswith("gpt-5.2"):
+                    if effort in ("xhigh", "max") and not self._supports_top_efforts():
                         logger.warning(
-                            f"reasoning_effort 'xhigh' is only supported for GPT-5.2 models. " f"Using 'high' instead."
+                            f"reasoning_effort '{effort}' needs GPT-5.2 or later; using 'high' for {self.model}"
                         )
                         effort = "high"
+                    elif effort == "max" and not self.model.startswith(("gpt-5.6", "gpt-6")):
+                        logger.warning(f"reasoning_effort 'max' needs GPT-5.6 or later; using 'xhigh' for {self.model}")
+                        effort = "xhigh"
+                    elif effort == "none" and self.model.startswith("gpt-6"):
+                        logger.warning(f"reasoning_effort 'none' is not offered by {self.model}; using 'low'")
+                        effort = "low"
                     params["reasoning_effort"] = effort
 
             response = self.client.chat.completions.create(**params)
@@ -1010,8 +1165,12 @@ class OpenAIProvider(LLMProvider):
         return False
 
     def _is_gpt5x_model(self) -> bool:
-        """Check if the current model is a GPT-5.x model that supports reasoning_effort"""
-        return self.model.startswith("gpt-5.1") or self.model.startswith("gpt-5.2")
+        """Whether the model takes ``reasoning_effort`` (GPT-5.1 and later, GPT-6)."""
+        return self.model.startswith(("gpt-5.1", "gpt-5.2", "gpt-5.6", "gpt-6"))
+
+    def _supports_top_efforts(self) -> bool:
+        """'xhigh' arrived with GPT-5.2; 'max' with GPT-5.6 / GPT-6."""
+        return self.model.startswith(("gpt-5.2", "gpt-5.6", "gpt-6"))
 
     def supports_temperature(self) -> bool:
         """Check if the current model supports custom temperature"""
@@ -2134,6 +2293,13 @@ class GeminiProvider(LLMProvider):
         """Check if the current model supports thinking_level (Gemini 3+, incl. 3.5/3.6)"""
         return self.GEMINI_THINKING_MODEL_RE.match(self.model) is not None
 
+    def _gemini_generation(self) -> float:
+        """3.0 for gemini-3-*, 3.8 for gemini-3.8-*; 0 when not a Gemini 3+ id."""
+        match = self.GEMINI_THINKING_MODEL_RE.match(self.model)
+        if match is None:
+            return 0.0
+        return float(self.model.split("-")[1])
+
     def _is_gemini_3_flash(self) -> bool:
         """Check if the current model is a Gemini 3+ Flash variant"""
         match = self.GEMINI_THINKING_MODEL_RE.match(self.model)
@@ -2152,6 +2318,9 @@ class GeminiProvider(LLMProvider):
         # Validate thinking level for the model type
         if self._is_gemini_3_flash():
             valid_levels = self.THINKING_LEVELS_FLASH
+            if self._gemini_generation() >= 3.8:
+                # Gemini 3.8 Flash returns an error for 'minimal'.
+                valid_levels = [level for level in valid_levels if level != "minimal"]
         else:
             valid_levels = self.THINKING_LEVELS_PRO
 

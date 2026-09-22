@@ -69,7 +69,7 @@ The `thestill clean-transcript` stage uses the main LLM configuration:
 LLM_PROVIDER=gemini
 
 # Model comes from the provider-specific setting, e.g.
-GEMINI_MODEL=gemini-3-pro-preview
+GEMINI_MODEL=gemini-3.1-pro-preview
 OLLAMA_MODEL=gemma3:4b
 ```
 

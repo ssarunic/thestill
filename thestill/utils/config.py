@@ -408,7 +408,7 @@ class Config(BaseModel):
     ollama_model: str = "gemma3:4b"
 
     # Gemini Configuration
-    gemini_model: str = "gemini-3-pro-preview"
+    gemini_model: str = "gemini-3.1-pro-preview"  # gemini-3-pro-preview is no longer served
     gemini_thinking_level: Optional[str] = (
         None  # Thinking level for Gemini 3 models (low/high for Pro, minimal/low/medium/high for Flash)
     )
@@ -812,7 +812,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         or None,  # none/low/medium/high/xhigh for GPT-5.x
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
-        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview"),
         "gemini_thinking_level": os.getenv("GEMINI_THINKING_LEVEL")
         or None,  # low/high for Pro, minimal/low/medium/high for Flash
         "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),

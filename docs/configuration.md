@@ -108,7 +108,7 @@ not depend on Spotify's page layout and also returns the publisher.
 | `ANTHROPIC_API_KEY` | Anthropic API key | - |
 | `ANTHROPIC_MODEL` | Anthropic model | `claude-sonnet-4-5-20250929` |
 | `GEMINI_API_KEY` | Google Gemini API key | - |
-| `GEMINI_MODEL` | Gemini model | `gemini-3-pro-preview` |
+| `GEMINI_MODEL` | Gemini model | `gemini-3.1-pro-preview` |
 | `GEMINI_THINKING_LEVEL` | Thinking level: `low`/`high` for Pro, `minimal`/`low`/`medium`/`high` for Flash | - (unset) |
 | `MISTRAL_API_KEY` | Mistral AI API key | - |
 | `MISTRAL_MODEL` | Mistral model | `mistral-large-latest` |
