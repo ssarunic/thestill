@@ -107,6 +107,7 @@ thestill server
 | [Narration](docs/narration.md) | Text-to-speech briefing narration |
 | [Imports](docs/imports.md) | Importing episodes from URLs and audio files |
 | [Evals](docs/evals.md) | LLM-as-judge quality evaluation runs |
+| [System Features and Capabilities](docs/system-features-and-capabilities.md) | Descriptive report of what the system does today and what is in flight |
 
 ## CLI Reference
 
