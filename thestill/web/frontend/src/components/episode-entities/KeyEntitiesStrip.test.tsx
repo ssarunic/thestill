@@ -24,16 +24,10 @@ function renderStrip(
   entities: EpisodeEntity[],
   hidden: Set<EntityType> = new Set(),
   onToggle = vi.fn(),
-  onSeek?: (s: number) => void,
 ) {
   return render(
     <MemoryRouter>
-      <KeyEntitiesStrip
-        entities={entities}
-        hiddenTypes={hidden}
-        onToggleType={onToggle}
-        onSeek={onSeek}
-      />
+      <KeyEntitiesStrip entities={entities} hiddenTypes={hidden} onToggleType={onToggle} />
     </MemoryRouter>,
   )
 }
@@ -74,12 +68,11 @@ describe('KeyEntitiesStrip', () => {
     expect(onToggle).toHaveBeenCalledWith('person')
   })
 
-  it('fires onSeek with the first-mention seconds when the play button is clicked', () => {
+  it('renders each pill as a plain link with no play button beside it', () => {
     const items = [entity('person:p1', 'Alice', 'person', 5, 90_000)]
-    const onSeek = vi.fn()
-    renderStrip(items, new Set(), vi.fn(), onSeek)
-    fireEvent.click(screen.getByLabelText(/Play first mention of Alice at 1:30/))
-    expect(onSeek).toHaveBeenCalledWith(90)
+    renderStrip(items)
+    expect(screen.queryByLabelText(/Play first mention/)).toBeNull()
+    expect(screen.getByRole('link', { name: /Alice/ })).toBeInTheDocument()
   })
 
   it('navigates to the entity page when the pill name is clicked', () => {
