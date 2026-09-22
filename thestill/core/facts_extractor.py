@@ -32,7 +32,7 @@ from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
 from thestill.core.transcript_formatter import TranscriptFormatter
-from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
 from thestill.utils.prompt_safety import UNTRUSTED_CONTENT_PREAMBLE, wrap_untrusted
 
 logger = get_logger(__name__)
@@ -44,6 +44,72 @@ class SpeakerMappingEntry(BaseModel):
 
     speaker_id: str = Field(description="The speaker ID from the transcript (e.g., 'SPEAKER_00', 'SPEAKER_01')")
     name: str = Field(description="The identified name and role (e.g., 'John Smith (Host)')")
+    generic_label: bool = Field(
+        default=False,
+        description=(
+            "True when 'name' is a role word (e.g. 'Host 1', 'Voditelj 2', 'Unknown Speaker') "
+            "rather than a person's name supported by spoken evidence"
+        ),
+    )
+
+
+# Role words the prompt offers as a fallback label. Used to recognise a generic
+# label when the model did not set ``generic_label`` (legacy dict-shaped output).
+_GENERIC_LABELS = frozenset(
+    {
+        "host",
+        "co-host",
+        "cohost",
+        "guest",
+        "speaker",
+        "unknown",
+        "unknown speaker",
+        "voditelj",
+        "voditeljica",
+        "gost",
+        "gošća",
+    }
+)
+
+
+def _disambiguate_generic_labels(mapping: Dict[str, str], generic_ids: Optional[set] = None) -> Dict[str, str]:
+    """Number generic labels shared by several speakers so they stay distinct.
+
+    Downstream rendering replaces speaker ids with the mapped label and merges
+    consecutive turns that carry the same label, so two unnamed hosts both
+    labelled ``"Host"`` would collapse into one speaker. Colliding generic
+    labels become ``"Host 1"``, ``"Host 2"`` (ordered by speaker id), keeping
+    any trailing role annotation: ``"Host (Netokracija)"`` →
+    ``"Host 1 (Netokracija)"``.
+
+    A person's name shared by several ids is left alone — that is diarization
+    splitting one voice, and merging those turns is correct.
+    """
+    generic_ids = generic_ids or set()
+    groups: Dict[str, List[str]] = {}
+    for speaker_id, name in mapping.items():
+        if not isinstance(name, str):
+            continue
+        base = strip_role_annotation(name).strip()
+        if not base:
+            continue
+        if speaker_id in generic_ids or base.casefold() in _GENERIC_LABELS:
+            groups.setdefault(base.casefold(), []).append(speaker_id)
+
+    result = dict(mapping)
+    for speaker_ids in groups.values():
+        if len(speaker_ids) < 2:
+            continue
+        for index, speaker_id in enumerate(sorted(speaker_ids), start=1):
+            name = mapping[speaker_id].strip()
+            base = strip_role_annotation(name).strip()
+            result[speaker_id] = f"{base} {index}{name[len(base):]}"
+        logger.info(
+            "Numbered generic speaker labels shared by several speakers",
+            speaker_ids=sorted(speaker_ids),
+            labels=[result[speaker_id] for speaker_id in sorted(speaker_ids)],
+        )
+    return result
 
 
 class EpisodeFactsResponse(BaseModel):
@@ -215,7 +281,10 @@ class FactsExtractor:
 
             # Convert response model to EpisodeFacts
             # Convert List[SpeakerMappingEntry] back to Dict[str, str] for EpisodeFacts
-            speaker_mapping_dict = {entry.speaker_id: entry.name for entry in result.speaker_mapping}
+            speaker_mapping_dict = _disambiguate_generic_labels(
+                {entry.speaker_id: entry.name for entry in result.speaker_mapping},
+                generic_ids={entry.speaker_id for entry in result.speaker_mapping if entry.generic_label},
+            )
             return EpisodeFacts(
                 episode_title=episode_title,
                 speaker_mapping=speaker_mapping_dict,
@@ -264,7 +333,13 @@ class FactsExtractor:
         # {speaker_id, name} entries, as the prompt example shows) or the
         # legacy dict shape — normalise both to the dict EpisodeFacts wants.
         raw_mapping = result.get("speaker_mapping", {})
+        generic_ids = set()
         if isinstance(raw_mapping, list):
+            generic_ids = {
+                entry["speaker_id"]
+                for entry in raw_mapping
+                if isinstance(entry, dict) and entry.get("speaker_id") and entry.get("generic_label") is True
+            }
             raw_mapping = {
                 entry["speaker_id"]: entry.get("name", "")
                 for entry in raw_mapping
@@ -274,7 +349,7 @@ class FactsExtractor:
             raw_mapping = {}
         return EpisodeFacts(
             episode_title=episode_title,
-            speaker_mapping=raw_mapping,
+            speaker_mapping=_disambiguate_generic_labels(raw_mapping, generic_ids),
             guests=result.get("guests", []),
             topics_keywords=result.get("topics_keywords", []),
             ad_sponsors=result.get("ad_sponsors", []),
@@ -491,6 +566,11 @@ Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPI
      language (e.g. "Host" in English, "Voditelj" in Croatian) — optionally
      with the podcast name, e.g. "Host (Netokracija)". A visibly unnamed host
      is correct; a confidently wrong name is not.
+   - Every distinct voice keeps a distinct label. When several speakers get the
+     same generic label, number them: "Host 1", "Host 2" ("Voditelj 1",
+     "Voditelj 2"). Never give two different voices the identical generic label.
+   - Set "generic_label": true on every entry whose name is a role word rather
+     than a person's name.
 
 2. GUESTS: Identify any guests appearing in THIS episode
    - Include their role/company if mentioned
@@ -511,7 +591,8 @@ IMPORTANT GUIDELINES:
 - For speaker mapping, use format "Name (Role)" e.g., "Scott Galloway (Host)"
 - If you cannot identify a speaker AT ALL, use "Unknown Speaker" or keep as SPEAKER_XX
 - If you know the ROLE but not the NAME (see the CONFIDENCE RULE above), label
-  by role rather than guessing a name, e.g. "Host (Netokracija)", "Voditelj"
+  by role rather than guessing a name, e.g. "Host (Netokracija)", "Voditelj";
+  number them when there are several ("Host 1", "Host 2")
 - For ad narrators, use "Ad Narrator" as the name
 - Look for patterns: hosts usually introduce guests, guests are introduced by title/company
 - Keep topics_keywords focused (20-50 items max) - prioritize proper nouns that might be misspelled
@@ -519,8 +600,8 @@ IMPORTANT GUIDELINES:
 Return your analysis as JSON with this structure:
 {{
   "speaker_mapping": [
-    {{"speaker_id": "SPEAKER_00", "name": "Name (Role)"}},
-    {{"speaker_id": "SPEAKER_01", "name": "Name (Role)"}}
+    {{"speaker_id": "SPEAKER_00", "name": "Name (Role)", "generic_label": false}},
+    {{"speaker_id": "SPEAKER_01", "name": "Host 1", "generic_label": true}}
   ],
   "guests": ["Name - Role/Company"],
   "topics_keywords": ["keyword1", "keyword2"],
