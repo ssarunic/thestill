@@ -495,15 +495,21 @@ class LinkingEvalRunner(EvalRunner):
         out stays without one and counts towards no metric."""
         for start in range(0, len(disputed), JUDGE_BATCH_SIZE):
             by_id = {f"n{i + 1}": c for i, c in enumerate(disputed[start : start + JUDGE_BATCH_SIZE])}
-            report = self._judge_once(
-                rubric,
-                judge,
-                [
-                    {"role": "system", "content": rubric.system_prompt},
-                    {"role": "user", "content": render_judge_message(by_id, context)},
-                ],
-            )
-            for verdict in LinkingJudgeReport.model_validate(report).verdicts:
+            messages = [
+                {"role": "system", "content": rubric.system_prompt},
+                {"role": "user", "content": render_judge_message(by_id, context)},
+            ]
+            # Native structured output where the provider has it: in JSON
+            # mode Gemini once answered with two JSON objects and the whole
+            # episode failed. The FM-7 chat path stays for providers without.
+            if judge.provider.supports_structured_output():
+                temperature = judge.info.temperature if judge.provider.supports_temperature() else None
+                report = judge.provider.generate_structured(
+                    messages=messages, response_model=LinkingJudgeReport, temperature=temperature
+                )
+            else:
+                report = LinkingJudgeReport.model_validate(self._judge_once(rubric, judge, messages))
+            for verdict in report.verdicts:
                 comparison = by_id.get(verdict.id)
                 if comparison is not None and comparison.verdict is None:
                     comparison.verdict = verdict_for(comparison, verdict.correct)
