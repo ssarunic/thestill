@@ -156,10 +156,23 @@ ReFinED's removal.
 
 ### Stage 1 — Candidates
 
-`WikidataClient` ([wikidata_client.py](../thestill/core/wikidata_client.py))
-gains `search_entities(name, *, language, limit)` on the existing
-`WIKIDATA_API_URL`, using `wbsearchentities`. It returns, per hit: QID,
-label and description. The description ("1998 film", "33rd president of the
+Two sources, merged without duplicates (decided 2026-09-22 after the first
+real run — see Evaluation):
+
+- **Wikipedia search**, first. `WikipediaClient.search_entities` runs the
+  search generator with each page's Wikidata item and short description in
+  one request. Wikipedia ranks by relevance over titles, redirects and text,
+  and its redirects are a curated alias table: "Obama" finds Barack Obama,
+  "Mike Moritz" finds Michael Moritz, "Truman Show" finds *The Truman Show*.
+  Language-scoped (`hr.wikipedia.org` for a Croatian podcast), English
+  fallback.
+- **Wikidata label search** (`wbsearchentities`), second. Exact on labels
+  and aliases, so it catches items with no Wikipedia article. On its own it
+  is a label-*prefix* match — "Obama" never surfaces "Barack Obama" — which
+  is why it is not enough: in the first run 34 of 36 regressions were the
+  linker saying "no link" for want of a candidate.
+
+Each hit is a QID, label and description. The description ("1998 film", "33rd president of the
 United States") is what the chooser disambiguates on. P31 is **not** fetched
 per candidate — at 8 candidates × 92 names that would be ~700 extra requests
 an episode — only for the QID finally accepted, where it drives the same type
@@ -222,9 +235,16 @@ row — it is the review queue's source. It is never logged and never shown to
 users. ([#75](75-llm-call-tracing.md) tracing is not built yet, so there is
 no trace to send it to.)
 
-The prompt instructs: choose only from the listed candidates; answer `none`
-when no candidate fits, when the name is a generic noun, or when the context
-does not settle it. **Names with the same spelling are judged per name, not
+The prompt instructs: prefer a listed candidate, and answer `none` when the
+context does not settle it. **Named entities only** (decided 2026-09-22):
+a person, organisation, product, work, place, event or named concept.
+Common nouns, roles and abstract ideas are `none` even when Wikidata has a
+page for the word — "research", "control", "billionaire", "clothing" — and
+so is a bare first name that addresses a listener or a character. In the
+first run 50 of the 67 wrong new links were lowercase concept words linked
+to their concept page (ReFinED does the same for 5.9% of its links; the
+live linker did it more). Proper-noun topics such as "effective altruism"
+still link. Prompt version `p2`. **Names with the same spelling are judged per name, not
 per mention** — the first version assumes one referent per name per episode.
 ReFinED resolves per mention, but in practice an episode that uses "Apple"
 for both the company and the fruit is rare, and the `ambiguous` status
@@ -242,9 +262,17 @@ so [#75](75-llm-call-tracing.md) tracing will capture it once it exists.
 
 Applied to every returned item before anything is written:
 
-1. **The QID must be in the candidate list offered for that name.** Anything
-   else is discarded and the name treated as unanswered — not as `none`.
-   This makes invented identifiers structurally impossible.
+1. **The QID must be in the candidate list offered for that name, or be
+   verified.** Candidate lists are the bottleneck ("Truman" surfaces Harry
+   Truman and Truman Capote, never *The Truman Show*, which only the
+   context identifies) and the model often knows the right entity: in the
+   first run it answered with an unoffered QID 40 times, mostly correctly.
+   So an unoffered QID is looked up on Wikidata (`lookup_entity`) and kept
+   only if the entity exists and its label or one of its aliases resembles
+   the spoken name (`_is_plausible_alias`). Anything else is discarded and
+   the name treated as unanswered — not as `none`. An invented identifier
+   is still impossible: it must exist, and it must match the name. Counted
+   as `verified_recall`; a lookup outage counts as not offered.
 2. **Blacklist.** `is_blacklisted(surface_form, qid)` is consulted three
    times: candidates are filtered before the chooser, the chooser's answer
    is checked, and a *remembered* decision is checked again when it is
