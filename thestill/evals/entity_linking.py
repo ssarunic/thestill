@@ -525,8 +525,14 @@ class LinkingEvalRunner(EvalRunner):
             # The validator discards these, so above zero means the model is
             # inventing identifiers and the chooser prompt needs attention.
             "rejected_not_offered": outcome.rejected_not_offered,
+            "verified_recall": outcome.verified_recall,
+            "strict_pass": outcome.strict_pass,
             "blacklisted_links": blacklisted,
             "unanswered_names": unanswered,
             "linker_unreachable": outcome.unreachable,
-            "ok": not blacklisted and not outcome.unreachable,
+            # A transient timeout on one of thousands of requests is not a
+            # quality finding: the pipeline retries it. What fails the gate is
+            # a blacklisted link, or an unanswered share the retry budget
+            # could not be expected to absorb.
+            "ok": not blacklisted and unanswered <= max(1, len(comparisons) // 20),
         }

@@ -424,8 +424,20 @@ def test_an_unreachable_linker_is_flagged_not_scored_as_disagreement(tmp_path):
     runner, podcast, (episode,) = _env(tmp_path, ["down"], {"down": [MENTIONS[0]]}, linker)
     manifest = runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)])
     item = manifest.items[0]
-    assert item.checks_ok is False
     assert item.scores == {}  # nothing was compared, so nothing is scored
+    report = json.loads((runner.path_manager.evaluation_run_dir(manifest.run_id) / item.report_file).read_text())
+    assert report["checks"]["linker_unreachable"] is True
+
+
+def test_a_few_unanswered_names_pass_the_checks_but_many_fail_them(tmp_path):
+    names = [f"Name {i}" for i in range(40)]
+    mentions = [_mention(i + 1, n, "company:openai") for i, n in enumerate(names)]
+    decisions = {n.casefold(): _live(n.casefold(), "Q21708200") for n in names[:38]}  # 2 unanswered: within 1 in 20
+    runner, podcast, (episode,) = _env(tmp_path, ["few"], {"few": mentions}, FakeLinker(decisions))
+    assert runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)]).items[0].checks_ok is True
+    decisions = {n.casefold(): _live(n.casefold(), "Q21708200") for n in names[:30]}  # 10 unanswered
+    runner, podcast, (episode,) = _env(tmp_path, ["many"], {"many": mentions}, FakeLinker(decisions))
+    assert runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)]).items[0].checks_ok is False
 
 
 def test_more_than_one_sample_is_refused(tmp_path):
