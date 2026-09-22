@@ -354,7 +354,7 @@ the same three places as every table since #44.
 | LLM call fails or returns unparseable output | same |
 | Still failing on the last retry | **defer, do not fail** — see below |
 | Part of an episode decided before an outage | those decisions are recorded and remembered; only the unanswered names stay `pending`, so the retry is cheap |
-| LLM omits some names from its answer | those names are re-asked once in a smaller batch; still missing → stay `pending`, task succeeds for the rest |
+| LLM omits some names from its answer, or answers with a QID it was not offered | those names are re-asked once in a smaller batch, then once more strictly (listed candidates or `none`); still nothing usable → the decided names are recorded, the rest stay `pending`, and the task fails the attempt like an outage so it retries and, on the last attempt, defers loudly. A short result list is never returned as success |
 | More than half of an episode's names unanswered | raise `EntityLinkerBrokenError` — the successor of `EntityResolverBrokenError` ([entity_resolver.py:534](../thestill/core/entity_resolver.py#L534)); nothing is recorded |
 | No candidates / chooser says `none` | `unresolvable`, final (until the `none` TTL) |
 

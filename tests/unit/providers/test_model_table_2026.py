@@ -52,6 +52,18 @@ def test_retired_gemini_3_pro_preview_is_gone():
     assert "gemini-3-pro-preview" not in _PROMPT_CACHING_MODELS
 
 
+def test_the_gemini_defaults_name_a_model_that_is_in_the_table():
+    """The retired entry is gone from the table, so nothing may still default to it."""
+    import inspect
+
+    from thestill.core.llm_provider import create_llm_provider
+
+    factory_default = inspect.signature(create_llm_provider).parameters["gemini_model"].default
+    provider_default = inspect.signature(GeminiProvider.__init__).parameters["model"].default
+    assert factory_default == provider_default
+    assert factory_default in MODEL_CONFIGS
+
+
 def test_gemini_3_flash_preview_is_still_served():
     assert "gemini-3-flash-preview" in MODEL_CONFIGS
 

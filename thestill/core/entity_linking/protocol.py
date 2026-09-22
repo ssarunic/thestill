@@ -30,8 +30,12 @@ class EntityLinker(Protocol):
 
     One ResolutionResult per mention, in any order. unresolvable
     is a decision; a failure raises. context is optional so a linker
-    that works from the excerpt alone can ignore it.
+    that works from the excerpt alone can ignore it; such a linker sets
+    ``uses_context = False`` and callers skip building it (it costs one
+    repository read per anchor).
     """
+
+    uses_context: bool
 
     def resolve(
         self,

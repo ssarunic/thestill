@@ -199,7 +199,7 @@ def test_an_llm_outage_raises_unavailable_and_records_no_unresolvables(decisions
     assert decisions.get("dario amodei", POD) is None
 
 
-def test_a_few_names_the_model_skipped_stay_pending_and_the_rest_succeed(decisions):
+def test_a_few_names_the_model_skipped_are_reported_and_the_rest_succeed(decisions):
     names = ["A One", "B Two", "C Three", "D Four"]
     wikidata = FakeWikidata({n: [WikidataSearchHit(f"Q{i + 1}", n, "person")] for i, n in enumerate(names)})
     skip_first = lambda msg: {
@@ -207,8 +207,13 @@ def test_a_few_names_the_model_skipped_stay_pending_and_the_rest_succeed(decisio
     }  # noqa: E731
     # first pass skips n1, its re-ask says nothing; the strict pass and its re-ask say nothing either
     linker, provider = make_linker(decisions, wikidata, [skip_first, {"choices": []}, {"choices": []}, {"choices": []}])
-    results = linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
-    assert sorted(r.mention_id for r in results) == [2, 3, 4]
+    # The three decided names are returned for recording; the skipped one is
+    # not written off, and the caller is told rather than handed a short list.
+    with pytest.raises(LinkerUnavailableError) as err:
+        linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
+    assert sorted(r.mention_id for r in err.value.results) == [2, 3, 4]
+    assert err.value.unanswered_names == 1 and "unreachable" not in str(err.value)
+    assert decisions.get("a one", POD) is None and decisions.get("b two", POD).qid == "Q2"
     assert len(provider.user_messages) == 4
 
 
@@ -294,13 +299,15 @@ def test_an_unoffered_qid_is_never_taken_and_the_strict_pass_decides(decisions):
     assert result.entity.wikidata_qid == "Q11613"
 
 
-def test_a_name_still_unusable_after_the_strict_pass_stays_pending(decisions):
+def test_a_name_still_unusable_after_the_strict_pass_is_reported_not_dropped(decisions):
     linker, _ = make_linker(
         decisions,
         FakeWikidata({"Truman": [PRESIDENT]}),
         [_answer(("n1", "Q214801", "high")), _answer(("n1", "Q214801", "high"))],
     )
-    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
+    with pytest.raises(LinkerUnavailableError) as err:
+        linker.resolve([mention(1, "Truman")], context=CTX)
+    assert err.value.results == [] and err.value.unanswered_names == 1
     assert decisions.get("truman", POD) is None
 
 

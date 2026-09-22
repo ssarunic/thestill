@@ -190,3 +190,18 @@ def test_build_link_context_normalises_the_language():
     repo.get_episode_anchors.return_value = []
     podcast = Podcast(id="p", rss_url="https://x/f.xml", title="Emisija", slug="e", description="", language="hr-HR")
     assert build_link_context(repo, podcast, _episode()).language == "hr"
+
+
+def test_a_linker_that_ignores_the_context_is_not_charged_the_anchor_lookups():
+    """ReFinED discards the context, and each anchor is a repository read."""
+
+    class ExcerptOnlyLinker:
+        uses_context = False
+
+        def resolve(self, mentions, *, is_blacklisted=None, context=None):
+            return [unresolvable_result(m) for m in mentions]
+
+    state = _state(ExcerptOnlyLinker(), [_mention(1, "Nobody")])
+    handle_resolve_entities(_task(), state)
+    state.entity_repository.get_episode_anchors.assert_not_called()
+    state.entity_repository.get_entity.assert_not_called()

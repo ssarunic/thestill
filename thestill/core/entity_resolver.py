@@ -108,6 +108,10 @@ class EntityResolver:
     of RAM, so callers should hold the resolver at process scope.
     """
 
+    # ReFinED works from the excerpt alone, so callers need not build the
+    # anchor context (spec #81) for it.
+    uses_context = False
+
     def __init__(
         self,
         *,

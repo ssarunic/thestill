@@ -1281,10 +1281,17 @@ def _with_stable_identity(repo, entity):
     return entity.model_copy(update={"id": distinct_id})
 
 
-def build_link_context(repo, podcast, episode):
-    """What the live linker's chooser knows beyond the excerpts (spec #81)."""
+def build_link_context(repo, podcast, episode, *, linker=None):
+    """What the live linker's chooser knows beyond the excerpts (spec #81).
+
+    ``None`` for a linker that declares ``uses_context = False``: the anchor
+    lookup is one repository read per anchor (a connection each on
+    Postgres), and ReFinED would discard the result.
+    """
     from .entity_linking.types import LinkContext
 
+    if linker is not None and not getattr(linker, "uses_context", True):
+        return None
     anchors = [repo.get_entity(entity_id) for entity_id in repo.get_episode_anchors(episode.id)]
     return LinkContext(
         episode_id=episode.id,
@@ -1343,12 +1350,13 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
     with _handler_error_context(f"resolving entities for {episode.title}"):
         run = ResolutionRun()
         if pending:
+            linker = _get_or_create_entity_resolver(state)
             run = resolve_pending_mentions(
                 repo,
-                _get_or_create_entity_resolver(state),
+                linker,
                 pending,
                 episode_id=episode.id,
-                context=build_link_context(repo, podcast, episode),
+                context=build_link_context(repo, podcast, episode, linker=linker),
             )
 
         # Spec §1.7 — cooccurrences are rebuilt by the dedicated

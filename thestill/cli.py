@@ -3006,7 +3006,7 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
             resolver,
             pending,
             episode_id=eid,
-            context=build_link_context(repo, podcast, episode),
+            context=build_link_context(repo, podcast, episode, linker=resolver),
         )
         total_resolved += sum(1 for r in run.results if r.status == "resolved")
         total_unresolvable += sum(1 for r in run.results if r.status == "unresolvable")

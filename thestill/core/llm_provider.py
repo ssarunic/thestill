@@ -2271,7 +2271,7 @@ class GeminiProvider(LLMProvider):
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-3-pro-preview",
+        model: str = "gemini-3.1-pro-preview",
         thinking_level: Optional[str] = None,
     ):
         """
@@ -2279,7 +2279,7 @@ class GeminiProvider(LLMProvider):
 
         Args:
             api_key: Google Gemini API key
-            model: Model name (e.g., "gemini-3-pro-preview", "gemini-3-flash-preview")
+            model: Model name (e.g., "gemini-3.1-pro-preview", "gemini-3-flash-preview")
             thinking_level: Reasoning depth for Gemini 3 models.
                            Pro: "low", "high" (default)
                            Flash: "minimal", "low", "medium", "high" (default)
@@ -3173,7 +3173,7 @@ def create_llm_provider(
     ollama_base_url: str = "http://localhost:11434",
     ollama_model: str = "gemma3:4b",
     gemini_api_key: str = "",
-    gemini_model: str = "gemini-3-pro-preview",
+    gemini_model: str = "gemini-3.1-pro-preview",
     gemini_thinking_level: Optional[str] = None,
     anthropic_api_key: str = "",
     anthropic_model: str = "claude-sonnet-4-5-20250929",

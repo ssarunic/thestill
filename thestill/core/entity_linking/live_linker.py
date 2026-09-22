@@ -61,7 +61,8 @@ _BROKEN_MIN_FAILURES = 3
 
 
 class LinkerUnavailableError(Exception):
-    """Wikidata or the LLM could not be reached for some names.
+    """Some names got no decision: Wikidata or the LLM could not be reached,
+    or the chooser gave nothing usable for them even on the strict pass.
 
     ``results`` holds what *was* decided. Those are real decisions and safe
     to record; the names left out stay pending for the retry.
@@ -135,6 +136,8 @@ def _spread_excerpts(members: List[EntityMention]) -> List[str]:
 
 
 class LiveWikidataLinker:
+    uses_context = True
+
     def __init__(
         self,
         *,
@@ -364,9 +367,20 @@ class LiveWikidataLinker:
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 
-        if outcome.unanswered and outcome.unreachable:
+        if outcome.unanswered:
+            # Whatever the cause, a name without a decision is owed work: the
+            # caller retries and, on the last attempt, marks the episode
+            # deferred where ``thestill status`` can see it. Returning the
+            # partial list as success would leave those mentions pending with
+            # nothing pointing at them (failure-mode catalogue: silent
+            # degradation).
+            cause = (
+                "Wikidata or the LLM was unreachable"
+                if outcome.unreachable
+                else "the chooser gave no usable answer for them, even when asked again strictly"
+            )
             raise LinkerUnavailableError(
-                f"no answer for {len(outcome.unanswered)} of {outcome.names} names: Wikidata or the LLM was unreachable",
+                f"no answer for {len(outcome.unanswered)} of {outcome.names} names: {cause}",
                 results=results,
                 unanswered_names=len(outcome.unanswered),
             )
