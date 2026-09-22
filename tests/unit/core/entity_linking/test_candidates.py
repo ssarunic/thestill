@@ -122,7 +122,7 @@ def test_retry_after_holds_back_every_later_request():
     limiter = MagicMock()
     search = ScriptedSearch({("Bad", "en"): WikidataUnavailable("429", retry_after_seconds=30)})
     WikidataCandidateSource(search, limiter).fetch([_group("Bad")])
-    limiter.hold_off.assert_called_once_with(30)
+    limiter.hold_off.assert_called_with(30)  # before the retry, and again when it gives up
 
 
 def test_every_search_waits_for_a_rate_limit_slot():
