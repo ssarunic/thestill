@@ -213,7 +213,8 @@ outvote a ninety-name one:
 | `regression_rate` | of the names the baseline linked, those where the judge found the baseline right and the live linker wrong | under 2% |
 | `recall_gain` | of the names the baseline left unlinked, those the live linker linked correctly | at least 25% |
 | `new_link_precision` | of the live linker's links on names the baseline left unlinked, those judged right ("unclear" left out) | at least 90% |
-| deterministic checks | no blacklisted link accepted; at most one name in twenty left unanswered (a transient timeout is the pipeline's retry to absorb, not a quality finding) | all ok |
+| no blacklisted links | no link a reviewer has ruled out was accepted | zero |
+| unanswered | names the linker could not answer, over the whole run (a transient timeout is the pipeline's retry to absorb, not a quality finding) | at most 5% |
 
 Each item report lists every name with both answers, the outcome, the
 verdict and the judge's reason, plus `baseline_split`: how often ReFinED gave

@@ -242,18 +242,24 @@ def test_a_dimension_with_nothing_to_measure_is_left_out_not_scored():
 
 
 def test_the_gate_is_decided_on_corpus_counts():
-    verdict = gate(_counts(), checks_ok=True)
+    verdict = gate(_counts(), no_blacklisted_links=True)
     assert verdict["criteria"] == {
         "regression_rate_under_2pct": False,  # 1/48 = 2.08%
         "recall_gain_at_least_25pct": True,
         "new_link_precision_at_least_90pct": False,  # 16/18 = 88.9%
-        "deterministic_checks_ok": True,
+        "no_blacklisted_links": True,
+        "unanswered_under_5pct": True,  # 2 of 100
     }
     assert verdict["passed"] is False
 
 
 def test_an_empty_run_does_not_pass_by_default():
-    assert gate(EpisodeCounts(), checks_ok=True)["passed"] is False
+    assert gate(EpisodeCounts(), no_blacklisted_links=True)["passed"] is False
+
+
+def test_too_many_unanswered_names_fail_the_gate_at_corpus_level():
+    counts = EpisodeCounts(names=100, outcomes={SAME_LINK: 90, UNANSWERED: 10})
+    assert gate(counts, no_blacklisted_links=True)["criteria"]["unanswered_under_5pct"] is False
 
 
 def test_counts_add_up_across_episodes():
@@ -416,7 +422,7 @@ def test_a_blacklisted_live_link_fails_the_checks_and_the_gate(tmp_path):
     manifest = runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)])
     assert manifest.items[0].checks_ok is False
     totals = json.loads((runner.path_manager.evaluation_run_dir(manifest.run_id) / "totals.json").read_text())
-    assert totals["criteria"]["deterministic_checks_ok"] is False and totals["passed"] is False
+    assert totals["criteria"]["no_blacklisted_links"] is False and totals["passed"] is False
 
 
 def test_an_unreachable_linker_is_flagged_not_scored_as_disagreement(tmp_path):
@@ -507,7 +513,9 @@ def test_the_cli_builds_a_live_linker_that_remembers_nothing(monkeypatch):
 def test_the_gate_verdict_is_printed(tmp_path, capsys):
     from thestill import cli
 
-    (tmp_path / "totals.json").write_text(json.dumps({"counts": {"names": 100}, **gate(_counts(), checks_ok=True)}))
+    (tmp_path / "totals.json").write_text(
+        json.dumps({"counts": {"names": 100}, **gate(_counts(), no_blacklisted_links=True)})
+    )
     cli._echo_linking_gate(tmp_path)
     out = capsys.readouterr().out
     assert "over 100 names" in out and "new_link_precision   88.9%" in out and "FAIL" in out
