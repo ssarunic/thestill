@@ -35,6 +35,15 @@ function parseServerTimestamp(dateStr: string): Date {
   return new Date(hasTimezone ? dateStr : `${dateStr}Z`)
 }
 
+function formatCompletedAt(dateStr: string): string {
+  return parseServerTimestamp(dateStr).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function formatRelativeTime(dateStr: string | null): { text: string; isOverdue: boolean } {
   if (!dateStr) return { text: 'unknown', isOverdue: false }
   const date = parseServerTimestamp(dateStr)
@@ -145,6 +154,14 @@ function TaskCard({
             })()}
             {task.status === 'completed' && (
               <span className="flex flex-wrap gap-2">
+                {task.completed_at && (
+                  <span
+                    className="text-gray-500"
+                    title={parseServerTimestamp(task.completed_at).toLocaleString()}
+                  >
+                    Completed {formatCompletedAt(task.completed_at)}
+                  </span>
+                )}
                 {task.wait_time_seconds !== null && (
                   <span>Waited {formatDuration(task.wait_time_seconds)}</span>
                 )}
@@ -449,8 +466,8 @@ export default function QueueViewer() {
     }
   }
   const collapsedCompletedTasks = Array.from(latestCompletedByEpisode.values()).sort((a, b) => {
-    const aTime = a.completed_at ? new Date(a.completed_at).getTime() : 0
-    const bTime = b.completed_at ? new Date(b.completed_at).getTime() : 0
+    const aTime = a.completed_at ? parseServerTimestamp(a.completed_at).getTime() : 0
+    const bTime = b.completed_at ? parseServerTimestamp(b.completed_at).getTime() : 0
     return bTime - aTime
   })
 
