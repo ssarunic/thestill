@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 # Bump when the prompt changes meaning: cached decisions made under another
 # version are re-decided as their names come up.
-PROMPT_VERSION = "p1"
+PROMPT_VERSION = "p2"
 
 BATCH_SIZE = 40
 REASK_BATCH_SIZE = 10
@@ -56,10 +56,20 @@ spoken, and a list of candidate Wikidata entities (QID, label, description).
 For each name, decide which candidate the speakers mean.
 
 Rules:
-- Answer with the QID of one listed candidate for that name, or null. Never \
-answer with a QID that is not in that name's candidate list.
-- Answer null when no candidate fits, when the name is a generic word and not \
-a specific entity, or when the excerpts do not settle which candidate is meant.
+- Answer with the QID of one listed candidate for that name, or null. Prefer \
+a listed candidate. If you are certain the speakers mean a Wikidata entity \
+that is not listed, you may answer its QID; it will be checked against \
+Wikidata and discarded if it does not exist or does not match the name.
+- Link only names that refer to a specific person, organisation, product, \
+work, place, event or named concept. Answer null for common nouns, roles, \
+abstract ideas and general categories even when Wikidata has a page for the \
+word: "research", "control", "billionaire", "clothing", "mentor", "problem" \
+are null. A name spoken in lowercase that is an ordinary dictionary word is \
+almost always null. "effective altruism" or "reinforcement learning" spoken \
+as the name of a movement or a field is a named concept and may link.
+- Answer null for a first name with no surname when it names a listener, a \
+caller or a character in a story rather than a public figure.
+- Answer null when the excerpts do not settle which candidate is meant.
 - Use the podcast, the episode title and the known participants as context. A \
 film discussed by name is the film, not the person it is named after.
 - A label that matches exactly is not enough: the description must fit how \

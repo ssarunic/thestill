@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Optional
 from ...repositories.link_decision_repository import LinkDecisionRepository
 from ..llm_provider import LLMProvider, create_llm_provider, provider_kwargs_from_config
 from ..wikidata_client import WikidataClient
+from ..wikipedia_client import WikipediaClient
 from .cache import LinkDecisionCache
 from .candidates import WikidataCandidateSource
 from .chooser import LLMCandidateChooser
@@ -75,8 +76,9 @@ def build_linker(
 
         return EntityResolver(wikidata_client=wikidata_client)
     chooser = LLMCandidateChooser(provider or create_linking_provider(config))
+    limiter = get_shared_rate_limiter(config.wikidata_max_rps)
     return LiveWikidataLinker(
-        candidate_source=WikidataCandidateSource(wikidata_client, get_shared_rate_limiter(config.wikidata_max_rps)),
+        candidate_source=WikidataCandidateSource(wikidata_client, limiter, wikipedia=WikipediaClient()),
         chooser=chooser,
         cache=LinkDecisionCache(
             link_decisions,
@@ -85,4 +87,7 @@ def build_linker(
         ),
         wikidata_client=wikidata_client,
         min_confidence=config.entity_linking_min_confidence,
+        entity_lookup=lambda qid, language: (limiter.acquire(), wikidata_client.lookup_entity(qid, language=language))[
+            1
+        ],
     )

@@ -189,3 +189,109 @@ def test_search_carries_retry_after_seconds():
     with pytest.raises(WikidataUnavailable) as err:
         _search(_response(status=429, headers={"Retry-After": "12"}))
     assert 11 <= err.value.retry_after_seconds <= 12
+
+
+# --- Wikipedia as the second source ---------------------------------------------
+
+
+def test_wikipedia_hits_come_first_and_duplicates_collapse():
+    wikidata = ScriptedSearch({("Obama", "en"): [WikidataSearchHit("Q76", "Barack Obama", "president")]})
+    wikipedia = ScriptedSearch(
+        {
+            ("Obama", "en"): [
+                WikidataSearchHit("Q76", "Barack Obama", "44th president"),
+                WikidataSearchHit("Q13133", "Michelle Obama", ""),
+            ]
+        }
+    )
+    limiter = MagicMock()
+    fetched = WikidataCandidateSource(wikidata, limiter, wikipedia=wikipedia).fetch([_group("Obama")])
+    assert [c.qid for c in fetched.candidates["obama"]] == ["Q76", "Q13133"]
+    assert fetched.candidates["obama"][0].description == "44th president"  # Wikipedia's copy wins the tie
+    assert limiter.acquire.call_count == 2  # both requests are paced
+
+
+def test_a_failing_wikipedia_search_fails_the_name_like_a_failing_wikidata_search():
+    wikipedia = ScriptedSearch({("Obama", "en"): WikidataUnavailable("503")})
+    fetched = WikidataCandidateSource(ScriptedSearch({}), _limiter(), wikipedia=wikipedia).fetch([_group("Obama")])
+    assert fetched.failed == {"obama"}
+
+
+def _wikipedia_search(payload=None, status=200, side_effect=None):
+    from thestill.core.wikipedia_client import WikipediaClient
+
+    with patch(
+        "thestill.core.wikipedia_client.requests.get", return_value=_response(status, payload), side_effect=side_effect
+    ) as get:
+        return WikipediaClient().search_entities("Obama", language="en"), get
+
+
+def test_wikipedia_search_returns_items_in_rank_order_and_skips_pages_without_one():
+    payload = {
+        "query": {
+            "pages": {
+                "2": {
+                    "index": 2,
+                    "title": "Michelle Obama",
+                    "pageprops": {"wikibase_item": "Q13133"},
+                    "description": "First Lady",
+                },
+                "1": {
+                    "index": 1,
+                    "title": "Barack Obama",
+                    "pageprops": {"wikibase_item": "Q76"},
+                    "description": "44th president",
+                },
+                "3": {"index": 3, "title": "List of things", "pageprops": {}},
+            }
+        }
+    }
+    hits, get = _wikipedia_search(payload)
+    assert [(h.qid, h.label, h.description) for h in hits] == [
+        ("Q76", "Barack Obama", "44th president"),
+        ("Q13133", "Michelle Obama", "First Lady"),
+    ]
+    assert "en.wikipedia.org" in get.call_args.args[0]
+    assert get.call_args.kwargs["params"]["gsrsearch"] == "Obama"
+
+
+def test_wikipedia_search_with_no_pages_is_empty_and_a_failure_raises():
+    hits, _ = _wikipedia_search({"query": {}})
+    assert hits == []
+    with pytest.raises(WikidataUnavailable):
+        _wikipedia_search(status=503)
+    with pytest.raises(WikidataUnavailable):
+        _wikipedia_search(side_effect=requests.ConnectionError("down"))
+
+
+# --- one-QID lookup ------------------------------------------------------------
+
+
+def _lookup(payload=None, status=200):
+    with patch("thestill.core.wikidata_client.requests.get", return_value=_response(status, payload)):
+        return WikidataClient().lookup_entity("Q214801", language="en")
+
+
+def test_lookup_returns_label_description_and_aliases():
+    payload = {
+        "entities": {
+            "Q214801": {
+                "labels": {"en": {"value": "The Truman Show"}},
+                "descriptions": {"en": {"value": "1998 film"}},
+                "aliases": {"en": [{"value": "Truman Show"}, {"value": "The Truman Show (film)"}]},
+            }
+        }
+    }
+    hit = _lookup(payload)
+    assert (hit.qid, hit.label, hit.description) == ("Q214801", "The Truman Show", "1998 film")
+    assert hit.aliases == ("Truman Show", "The Truman Show (film)")
+
+
+def test_lookup_of_a_missing_or_malformed_qid_is_none():
+    assert _lookup({"entities": {"Q214801": {"missing": ""}}}) is None
+    assert WikidataClient().lookup_entity("not-a-qid") is None
+
+
+def test_lookup_failure_raises():
+    with pytest.raises(WikidataUnavailable):
+        _lookup(status=500)

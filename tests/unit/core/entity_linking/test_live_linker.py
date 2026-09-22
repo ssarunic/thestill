@@ -241,3 +241,54 @@ def test_link_writes_nothing(decisions):
 def test_no_mentions_is_no_work(decisions):
     linker, provider = make_linker(decisions, FakeWikidata({}), [])
     assert linker.resolve([]) == []
+
+
+# --- verified recall -----------------------------------------------------------
+
+
+def _lookup_for(entities, unavailable=False):
+    def lookup(qid, language):
+        if unavailable:
+            raise WikidataUnavailable("down")
+        return entities.get(qid)
+
+    return lookup
+
+
+def test_an_unoffered_qid_that_wikidata_confirms_is_accepted(decisions):
+    """'Truman' never surfaces The Truman Show, but the model knows it."""
+    wikidata = FakeWikidata({"Truman": [PRESIDENT]})
+    linker, _ = make_linker(decisions, wikidata, [_answer(("n1", "Q214801", "high"))])
+    linker._entity_lookup = _lookup_for(
+        {"Q214801": WikidataSearchHit("Q214801", "The Truman Show", "1998 film", aliases=("Truman Show",))}
+    )
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
+    assert (result.entity.wikidata_qid, result.entity.canonical_name) == ("Q214801", "The Truman Show")
+    assert decisions.get("truman", POD).qid == "Q214801"
+
+
+def test_an_unoffered_qid_whose_name_does_not_match_is_still_discarded(decisions):
+    wikidata = FakeWikidata({"Truman": [PRESIDENT]})
+    linker, _ = make_linker(decisions, wikidata, [_answer(("n1", "Q9999", "high"))])
+    linker._entity_lookup = _lookup_for({"Q9999": WikidataSearchHit("Q9999", "Banana", "fruit")})
+    assert linker.resolve([mention(1, "Truman")], context=CTX) == []  # unanswered, stays pending
+    assert decisions.get("truman", POD) is None
+
+
+def test_an_unoffered_qid_that_does_not_exist_is_discarded(decisions):
+    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q9999", "high"))])
+    linker._entity_lookup = _lookup_for({})
+    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
+
+
+def test_a_lookup_outage_counts_as_not_offered_not_as_a_link(decisions):
+    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q214801", "high"))])
+    linker._entity_lookup = _lookup_for({}, unavailable=True)
+    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
+
+
+def test_verified_recall_still_respects_the_blacklist(decisions):
+    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q214801", "high"))])
+    linker._entity_lookup = _lookup_for({"Q214801": WikidataSearchHit("Q214801", "The Truman Show", "1998 film")})
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q214801")
+    assert result.status == "unresolvable"

@@ -66,6 +66,7 @@ class WikidataSearchHit:
     qid: str
     label: str
     description: str
+    aliases: tuple = ()
 
 
 def _retry_after_seconds(raw: Optional[str]) -> Optional[float]:
@@ -199,6 +200,53 @@ class WikidataClient:
                 )
             )
         return hits
+
+    def lookup_entity(self, qid: str, *, language: str = "en") -> Optional["WikidataSearchHit"]:
+        """Label, description and aliases of one QID, or ``None`` when no
+        such entity exists. Raises :class:`WikidataUnavailable` otherwise.
+
+        Spec #81 verified recall: the chooser sometimes answers with a QID
+        it was not offered. This is how that answer is checked against
+        Wikidata before it can count.
+        """
+        if not _QID_RE.match(qid or ""):
+            return None
+        params = {
+            "action": "wbgetentities",
+            "ids": qid,
+            "props": "labels|descriptions|aliases",
+            "languages": f"{language}|en",
+            "format": "json",
+        }
+        try:
+            resp = requests.get(
+                WIKIDATA_API_URL,
+                params=params,
+                timeout=self.timeout_sec,
+                headers={"User-Agent": self.user_agent, "Accept": "application/json"},
+            )
+        except requests.RequestException as exc:
+            raise WikidataUnavailable(f"wikidata lookup failed: {type(exc).__name__}") from exc
+        if resp.status_code != 200:
+            raise WikidataUnavailable(
+                f"wikidata lookup returned {resp.status_code}",
+                retry_after_seconds=_retry_after_seconds(resp.headers.get("Retry-After")),
+            )
+        try:
+            entity = (resp.json().get("entities") or {}).get(qid)
+        except ValueError as exc:
+            raise WikidataUnavailable("wikidata lookup unparseable") from exc
+        if not isinstance(entity, dict) or "missing" in entity:
+            return None
+        aliases = []
+        for lang in (language, "en"):
+            aliases += [a.get("value", "") for a in (entity.get("aliases") or {}).get(lang, []) if a.get("value")]
+        return WikidataSearchHit(
+            qid=qid,
+            label=_localized(entity.get("labels"), language) or "",
+            description=_localized(entity.get("descriptions"), language) or "",
+            aliases=tuple(dict.fromkeys(aliases)),
+        )
 
     # ------------------------------------------------------------------
     # Spec #45 — enrichment surface (facts + label resolution)

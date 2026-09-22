@@ -137,4 +137,4 @@ def test_control_characters_in_the_answer_are_stripped():
 
 
 def test_the_version_names_the_prompt_and_the_model():
-    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p1:flash-9"
+    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p2:flash-9"

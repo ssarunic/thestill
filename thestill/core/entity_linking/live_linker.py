@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from structlog import get_logger
 
 from ...models.entities import EntityMention, ResolutionMethod
+from ..wikidata_client import WikidataSearchHit, WikidataUnavailable
 from .cache import LinkDecisionCache
 from .candidates import WikidataCandidateSource
 from .chooser import LLMCandidateChooser
@@ -40,12 +41,13 @@ from .protocol import IsBlacklisted
 from .shared import (
     EntityLinkerBrokenError,
     ResolutionResult,
+    _is_plausible_alias,
     _P31Lookup,
     infer_entity_type_from_label,
     linked_result,
     unresolvable_result,
 )
-from .types import LinkContext, LinkDecision, NameGroup, surface_key
+from .types import Candidate, LinkContext, LinkDecision, NameGroup, surface_key
 from .validator import BLACKLISTED, NOT_OFFERED, DecisionValidator, meets_confidence
 
 logger = get_logger(__name__)
@@ -81,6 +83,7 @@ class LinkOutcome:
     omitted: int = 0  # asked, reachable, and still no answer after the re-ask
     rejected_not_offered: int = 0
     rejected_blacklisted: int = 0
+    verified_recall: int = 0  # answered with a QID it was not offered, and Wikidata agreed
     skipped_generic: int = 0
     llm_calls: int = 0
     unreachable: bool = False  # a search or an LLM call failed outright
@@ -139,12 +142,14 @@ class LiveWikidataLinker:
         cache: LinkDecisionCache,
         wikidata_client: Optional[_P31Lookup] = None,
         min_confidence: str = "medium",
+        entity_lookup: Optional[Callable[[str, str], Optional[WikidataSearchHit]]] = None,
     ):
         self._candidates = candidate_source
         self._chooser = chooser
         self._cache = cache
         self._wikidata_client = wikidata_client
         self._min_confidence = min_confidence
+        self._entity_lookup = entity_lookup
 
     # ------------------------------------------------------------------
     # Pure core
@@ -221,9 +226,13 @@ class LiveWikidataLinker:
                     continue
                 checked = validator.validate(choice, fetched.candidates[group.surface_key], group)
                 if checked.rejection == NOT_OFFERED:
-                    outcome.rejected_not_offered += 1
-                    outcome.unanswered.add(group.surface_key)
-                    continue
+                    verified = self._verify_recall(choice.qid, group, context.language)
+                    if verified is None:
+                        outcome.rejected_not_offered += 1
+                        outcome.unanswered.add(group.surface_key)
+                        continue
+                    outcome.verified_recall += 1
+                    checked = validator.validate(choice, [verified], group)
                 if checked.rejection == BLACKLISTED:
                     outcome.rejected_blacklisted += 1
                 outcome.decisions[group.surface_key] = checked.decision  # type: ignore[assignment]
@@ -240,8 +249,31 @@ class LiveWikidataLinker:
                 # above zero means the model is inventing QIDs: look at the prompt
                 rejected_not_offered=outcome.rejected_not_offered,
                 rejected_blacklisted=outcome.rejected_blacklisted,
+                verified_recall=outcome.verified_recall,
             )
         return outcome
+
+    def _verify_recall(self, qid: Optional[str], group: NameGroup, language: str) -> Optional[Candidate]:
+        """The model answered with a QID it was not offered. Candidate lists
+        are the bottleneck ("Truman" never surfaces "The Truman Show"), and
+        the model often knows the right entity. It still never invents one:
+        the QID must exist on Wikidata and its label or an alias must
+        resemble the spoken name, or the answer is discarded."""
+        if not qid or self._entity_lookup is None:
+            return None
+        try:
+            hit = self._entity_lookup(qid, language)
+        except WikidataUnavailable:
+            return None  # treated as not offered; the retry may do better
+        if hit is None:
+            return None
+        names = (hit.label, *hit.aliases)
+        if not any(
+            n and (_is_plausible_alias(group.surface_form, n) or surface_key(n) == group.surface_key) for n in names
+        ):
+            logger.info("entity_linking_recall_rejected", qid=qid)
+            return None
+        return Candidate(qid=hit.qid, label=hit.label, description=hit.description)
 
     # ------------------------------------------------------------------
     # Pipeline entry point
@@ -302,6 +334,7 @@ class LiveWikidataLinker:
             unanswered_names=len(outcome.unanswered),
             rejected_not_offered=outcome.rejected_not_offered,
             rejected_blacklisted=outcome.rejected_blacklisted,
+            verified_recall=outcome.verified_recall,
             duration_ms=int((time.monotonic() - started) * 1000),
         )
 

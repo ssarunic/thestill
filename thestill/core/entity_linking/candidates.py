@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Protocol, Set
+from typing import Dict, List, Optional, Protocol, Set
 
 from structlog import get_logger
 
@@ -29,6 +29,7 @@ from .types import Candidate, NameGroup
 logger = get_logger(__name__)
 
 DEFAULT_CANDIDATE_LIMIT = 8
+WIKIPEDIA_LIMIT = 5
 
 
 class _EntitySearch(Protocol):
@@ -68,8 +69,22 @@ def is_generic_noun(group: NameGroup) -> bool:
 
 
 class WikidataCandidateSource:
-    def __init__(self, client: _EntitySearch, limiter: WikidataRateLimiter, *, limit: int = DEFAULT_CANDIDATE_LIMIT):
+    """Candidates from Wikidata's label search plus, when given, Wikipedia's
+    relevance search. The first is exact on labels and aliases; the second
+    finds "Barack Obama" for "Obama" and "Michael Moritz" for "Mike Moritz"
+    through redirects and text. Both answers merge, Wikipedia's first,
+    without duplicates."""
+
+    def __init__(
+        self,
+        client: _EntitySearch,
+        limiter: WikidataRateLimiter,
+        *,
+        wikipedia: Optional[_EntitySearch] = None,
+        limit: int = DEFAULT_CANDIDATE_LIMIT,
+    ):
         self._client = client
+        self._wikipedia = wikipedia
         self._limiter = limiter
         self._limit = limit
 
@@ -103,8 +118,15 @@ class WikidataCandidateSource:
         return out
 
     def _search(self, name: str, language: str) -> List[WikidataSearchHit]:
+        merged: List[WikidataSearchHit] = []
+        if self._wikipedia is not None:
+            self._limiter.acquire()
+            merged += self._wikipedia.search_entities(name, language=language, limit=WIKIPEDIA_LIMIT)
         self._limiter.acquire()
-        return self._client.search_entities(name, language=language, limit=self._limit)
+        merged += self._client.search_entities(name, language=language, limit=self._limit)
+        seen: set = set()
+        unique = [h for h in merged if not (h.qid in seen or seen.add(h.qid))]
+        return unique[: self._limit + WIKIPEDIA_LIMIT]
 
 
 def _clean(text: str) -> str:
