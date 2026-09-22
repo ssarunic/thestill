@@ -242,6 +242,29 @@ MODEL_CONFIGS: Dict[str, ModelLimits] = {
         supports_temperature=True,
         supports_structured_output=True,
     ),
+    # Anthropic Claude Opus 5 and Sonnet 5 (current generation, ids without a
+    # date suffix) - same request surface as Opus 4.8: adaptive thinking,
+    # effort, structured output; temperature/top_p/top_k return 400.
+    "claude-opus-5": ModelLimits(
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=False,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
+    ),
+    "claude-sonnet-5": ModelLimits(
+        tpm=400000,
+        rpm=1000,
+        tpd=5000000,
+        context_window=200000,
+        max_output_tokens=64000,
+        supports_temperature=False,
+        supports_structured_output=True,
+        structured_output_beta="structured-outputs-2025-11-13",
+    ),
     # Anthropic Claude Opus 4.8 (current flagship) - supports structured output
     # Uses adaptive thinking + effort parameter; temperature/top_p/top_k are
     # removed (sending them returns 400), so supports_temperature is False.
@@ -558,6 +581,8 @@ _PROMPT_CACHING_MODELS = frozenset(
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
         "claude-opus-4-20250514",
+        "claude-opus-5",
+        "claude-sonnet-5",
         "claude-opus-4-8",
         "claude-sonnet-4-6",
         "claude-sonnet-4-5-20250929",
