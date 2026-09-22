@@ -427,6 +427,15 @@ class SqliteEntityRepository(EntityRepository):
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_mention(r) for r in rows]
 
+    def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
+        sql = (
+            "SELECT * FROM entity_mentions WHERE episode_id = ? "
+            "AND resolution_method IN ('direct', 'llm_linked', 'unresolvable') ORDER BY id"
+        )
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (episode_id,)).fetchall()
+        return [_row_to_mention(r) for r in rows]
+
     def resolve_mention(
         self,
         *,

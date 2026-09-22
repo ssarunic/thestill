@@ -240,6 +240,16 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
+        """An episode's mentions that a linker decided, ordered by id.
+
+        ``direct``, ``llm_linked`` and ``unresolvable`` only: what the model
+        was asked about. Anchors, coreference, overrides and drops reached
+        their status some other way. The linking eval (spec #81) compares
+        linkers on exactly this set.
+        """
+
+    @abstractmethod
     def list_episode_ids_with_pending_mentions(
         self, *, podcast_id: Optional[str] = None, limit: Optional[int] = None
     ) -> List[str]:

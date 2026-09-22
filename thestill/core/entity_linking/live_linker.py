@@ -157,6 +157,11 @@ class LiveWikidataLinker:
         self._wikidata_client = wikidata_client
         self._min_confidence = min_confidence
 
+    @property
+    def version(self) -> str:
+        """Prompt and model: what a decision was made by."""
+        return self._chooser.version
+
     # ------------------------------------------------------------------
     # Pure core
     # ------------------------------------------------------------------
