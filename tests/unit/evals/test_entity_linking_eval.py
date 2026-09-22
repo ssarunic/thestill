@@ -437,7 +437,8 @@ def test_a_few_unanswered_names_pass_the_checks_but_many_fail_them(tmp_path):
     assert runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)]).items[0].checks_ok is True
     decisions = {n.casefold(): _live(n.casefold(), "Q21708200") for n in names[:30]}  # 10 unanswered
     runner, podcast, (episode,) = _env(tmp_path, ["many"], {"many": mentions}, FakeLinker(decisions))
-    assert runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)]).items[0].checks_ok is False
+    manifest = runner.run(get_rubric("entity-linking"), make_judge([]), [(podcast, episode)], label="many")
+    assert manifest.items[0].checks_ok is False
 
 
 def test_more_than_one_sample_is_refused(tmp_path):
