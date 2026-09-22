@@ -287,15 +287,16 @@ class LiveWikidataLinker:
             found = self._candidates.lookup_name(proposed, language=language)
         except WikidataUnavailable:
             return None
+        wanted = surface_key(proposed)
         for candidate in found:
-            if surface_key(candidate.label) != surface_key(proposed) and not _is_plausible_alias(
-                proposed, candidate.label
-            ):
+            # The found label must BE the proposed title, or the title with a
+            # disambiguator ("Claude (AI)" for "Claude"). Sharing a word is not
+            # enough: "Sierra" the startup has no entry, and a loose match
+            # made it the Sierra Leone Company.
+            label = surface_key(candidate.label)
+            if label != wanted and not label.startswith(wanted + " ("):
                 continue
-            if (
-                _is_plausible_alias(group.surface_form, candidate.label)
-                or surface_key(candidate.label) == group.surface_key
-            ):
+            if _is_plausible_alias(group.surface_form, candidate.label) or label == group.surface_key:
                 return candidate
         logger.info("entity_linking_recall_rejected", found=len(found))
         return None

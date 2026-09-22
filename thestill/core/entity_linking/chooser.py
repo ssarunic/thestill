@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 # Bump when the prompt changes meaning: cached decisions made under another
 # version are re-decided as their names come up.
-PROMPT_VERSION = "p3"
+PROMPT_VERSION = "p4"
 
 BATCH_SIZE = 40
 REASK_BATCH_SIZE = 10
@@ -72,6 +72,10 @@ almost always null. "effective altruism" or "reinforcement learning" spoken \
 as the name of a movement or a field is a named concept and may link.
 - Answer null for a first name with no surname when it names a listener, a \
 caller or a character in a story rather than a public figure.
+- Link the exact thing named, never its parent or its category: a product \
+version, a feature, a sub-product or a team ("Azure Storage", "Opus", \
+"Devin Review") with no entry of its own is null, not the parent entity. A \
+company or model with no entry is null, not a namesake.
 - Answer null when the excerpts do not settle which candidate is meant.
 - Use the podcast, the episode title and the known participants as context. A \
 film discussed by name is the film, not the person it is named after.

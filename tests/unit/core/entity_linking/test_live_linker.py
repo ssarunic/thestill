@@ -309,3 +309,28 @@ def test_recall_by_name_respects_the_blacklist(decisions):
     linker, _ = make_linker(decisions, wikidata, [_proposal("n1", "The Truman Show")])
     (result,) = linker.resolve([mention(1, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q214801")
     assert result.status == "unresolvable"
+
+
+def test_a_proposed_title_must_be_the_found_label_not_merely_share_a_word(decisions):
+    """'Sierra' the AI startup has no entry; the search for the proposal returns the
+    Sierra Leone Company, which shares a word and nothing else."""
+    wikidata = FakeWikidata(
+        {"Sierra": [], "Sierra Leone Company": [WikidataSearchHit("Q7", "Sierra Leone Company", "chartered company")]}
+    )
+    linker, _ = make_linker(
+        decisions, wikidata, [_proposal("n1", "Sierra Leone Company"), _answer(("n1", None, "high"))]
+    )
+    (result,) = linker.resolve([mention(1, "Sierra", label="company")], context=CTX)
+    assert result.status == "unresolvable"
+
+
+def test_a_proposed_title_with_a_disambiguator_is_accepted(decisions):
+    wikidata = FakeWikidata(
+        {
+            "Claude": [],
+            "Claude (language model)": [WikidataSearchHit("Q8", "Claude (language model)", "LLM by Anthropic")],
+        }
+    )
+    linker, _ = make_linker(decisions, wikidata, [_proposal("n1", "Claude (language model)")])
+    (result,) = linker.resolve([mention(1, "Claude", label="product")], context=CTX)
+    assert result.entity.wikidata_qid == "Q8"

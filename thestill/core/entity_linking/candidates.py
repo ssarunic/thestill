@@ -133,21 +133,31 @@ class WikidataCandidateSource:
             )
         merged += self._paced(lambda: self._client.search_entities(name, language=language, limit=self._limit))
         seen: set = set()
-        unique = [h for h in merged if not (h.qid in seen or seen.add(h.qid))]
+        unique = [h for h in merged if not (h.qid in seen or seen.add(h.qid)) and not _is_disambiguation(h)]
         return unique[: self._limit + WIKIPEDIA_LIMIT]
 
     def _paced(self, request):
-        """One slot per attempt. A read timeout is retried once: in a run of
-        4,000 requests a handful time out, and each one would otherwise
-        leave a name pending and the episode retrying."""
+        """One slot per attempt, and one retry. In a run of 4,000 requests a
+        handful time out, and Wikidata answers ``maxlag`` in bursts of a few
+        minutes while it catches up on replication; each failure would
+        otherwise leave a name pending and the episode retrying. A
+        ``Retry-After`` holds every caller back before the second try."""
         for attempt in (1, 2):
             self._limiter.acquire()
             try:
                 return request()
             except WikidataUnavailable as exc:
-                if attempt == 2 or "Timeout" not in str(exc):
+                if attempt == 2:
                     raise
+                if exc.retry_after_seconds:
+                    self._limiter.hold_off(exc.retry_after_seconds)
         raise AssertionError("unreachable")
+
+
+def _is_disambiguation(hit: WikidataSearchHit) -> bool:
+    """A disambiguation page is a list of things a word can mean, never the
+    thing itself; linking "chips" to it is a wrong link that looks right."""
+    return "disambiguation" in (hit.description or "").lower()
 
 
 def _clean(text: str) -> str:

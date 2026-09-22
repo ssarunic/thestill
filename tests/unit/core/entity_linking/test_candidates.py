@@ -147,11 +147,14 @@ def test_a_timed_out_search_is_retried_once_on_a_new_slot():
     assert len(fetched.candidates["dario amodei"]) == 1 and limiter.acquire.call_count == 2
 
 
-def test_a_second_timeout_or_a_non_timeout_failure_is_not_retried():
-    search = ScriptedSearch({("Bad", "en"): WikidataUnavailable("503")})
+def test_a_second_failure_is_not_retried_again():
+    search = ScriptedSearch(
+        {("Bad", "en"): WikidataUnavailable("wikidata search error: maxlag", retry_after_seconds=5)}
+    )
     limiter = MagicMock()
     assert WikidataCandidateSource(search, limiter).fetch([_group("Bad")]).failed == {"bad"}
-    assert limiter.acquire.call_count == 1
+    assert limiter.acquire.call_count == 2
+    limiter.hold_off.assert_any_call(5)  # honoured before the second try
 
 
 def test_lookup_name_returns_candidates_for_a_proposed_title():
@@ -326,3 +329,14 @@ def test_lookup_of_a_missing_or_malformed_qid_is_none():
 def test_lookup_failure_raises():
     with pytest.raises(WikidataUnavailable):
         _lookup(status=500)
+
+
+def test_disambiguation_pages_are_never_candidates():
+    hits = [
+        WikidataSearchHit("Q1", "Chip", "Wikimedia disambiguation page"),
+        WikidataSearchHit("Q2", "Integrated circuit", "electronic circuit"),
+    ]
+    fetched = WikidataCandidateSource(ScriptedSearch({("chips", "en"): hits}), _limiter()).fetch(
+        [_group("chips", "product")]
+    )
+    assert [c.qid for c in fetched.candidates["chips"]] == ["Q2"]
