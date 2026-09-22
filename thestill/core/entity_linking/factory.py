@@ -87,7 +87,4 @@ def build_linker(
         ),
         wikidata_client=wikidata_client,
         min_confidence=config.entity_linking_min_confidence,
-        entity_lookup=lambda qid, language: (limiter.acquire(), wikidata_client.lookup_entity(qid, language=language))[
-            1
-        ],
     )

@@ -137,4 +137,21 @@ def test_control_characters_in_the_answer_are_stripped():
 
 
 def test_the_version_names_the_prompt_and_the_model():
-    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p2:flash-9"
+    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p3:flash-9"
+
+
+def test_a_proposed_name_is_carried_and_dropped_on_the_strict_pass():
+    answer = {
+        "choices": [
+            {"id": "n1", "qid": None, "confidence": "high", "reason": "the film", "proposed_name": "The Truman Show"}
+        ]
+    }
+    provider = ScriptedProvider([answer, answer])
+    chooser = LLMCandidateChooser(provider)
+    assert (
+        chooser.choose([group("Truman")], {"truman": TRUMAN}, CTX).decisions["truman"].proposed_name
+        == "The Truman Show"
+    )
+    strict = chooser.choose([group("Truman")], {"truman": TRUMAN}, CTX, strict=True)
+    assert strict.decisions["truman"].proposed_name == ""
+    assert "second pass" in provider.system_messages[1] and "second pass" not in provider.system_messages[0]

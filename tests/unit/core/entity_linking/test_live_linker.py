@@ -205,16 +205,18 @@ def test_a_few_names_the_model_skipped_stay_pending_and_the_rest_succeed(decisio
     skip_first = lambda msg: {
         "choices": [c for c in pick_first_candidate(msg)["choices"] if c["id"] != "n1"]
     }  # noqa: E731
-    linker, _ = make_linker(decisions, wikidata, [skip_first, {"choices": []}])
+    # first pass skips n1, its re-ask says nothing; the strict pass and its re-ask say nothing either
+    linker, provider = make_linker(decisions, wikidata, [skip_first, {"choices": []}, {"choices": []}, {"choices": []}])
     results = linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
     assert sorted(r.mention_id for r in results) == [2, 3, 4]
+    assert len(provider.user_messages) == 4
 
 
 def test_a_model_that_answers_nothing_useful_is_broken_and_nothing_is_kept(decisions):
     names = ["A One", "B Two", "C Three", "D Four"]
     wikidata = FakeWikidata({n: [WikidataSearchHit(f"Q{i + 1}", n, "person")] for i, n in enumerate(names)})
     invented = _answer(*[(f"n{i + 1}", "Q999999", "high") for i in range(4)])
-    linker, _ = make_linker(decisions, wikidata, [invented])
+    linker, _ = make_linker(decisions, wikidata, [invented, invented])  # the strict pass invents again
     with pytest.raises(EntityLinkerBrokenError):
         linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
     assert all(decisions.get(n.casefold(), POD) is None for n in names)
@@ -224,10 +226,11 @@ def test_one_invented_qid_among_good_answers_is_not_broken(decisions):
     names = ["A One", "B Two", "C Three", "D Four"]
     wikidata = FakeWikidata({n: [WikidataSearchHit(f"Q{i + 1}", n, "person")] for i, n in enumerate(names)})
     answer = _answer(("n1", "Q999999", "high"), ("n2", "Q2", "high"), ("n3", "Q3", "high"), ("n4", "Q4", "high"))
-    linker, _ = make_linker(decisions, wikidata, [answer])
-    results = linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
-    assert sorted(r.mention_id for r in results) == [2, 3, 4]
-    assert decisions.get("a one", POD) is None
+    linker, _ = make_linker(decisions, wikidata, [answer, _answer(("n1", None, "high"))])  # strict pass: none
+    results = {r.mention_id: r for r in linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)}
+    assert sorted(results) == [1, 2, 3, 4]
+    assert results[1].status == "unresolvable"
+    assert decisions.get("a one", POD).qid is None
 
 
 def test_link_writes_nothing(decisions):
@@ -243,52 +246,66 @@ def test_no_mentions_is_no_work(decisions):
     assert linker.resolve([]) == []
 
 
-# --- verified recall -----------------------------------------------------------
+# --- recall by proposed name ------------------------------------------------------
 
 
-def _lookup_for(entities, unavailable=False):
-    def lookup(qid, language):
-        if unavailable:
-            raise WikidataUnavailable("down")
-        return entities.get(qid)
-
-    return lookup
+def _proposal(name_id, proposed, confidence="high"):
+    return {
+        "choices": [{"id": name_id, "qid": None, "confidence": confidence, "reason": "r", "proposed_name": proposed}]
+    }
 
 
-def test_an_unoffered_qid_that_wikidata_confirms_is_accepted(decisions):
-    """'Truman' never surfaces The Truman Show, but the model knows it."""
-    wikidata = FakeWikidata({"Truman": [PRESIDENT]})
-    linker, _ = make_linker(decisions, wikidata, [_answer(("n1", "Q214801", "high"))])
-    linker._entity_lookup = _lookup_for(
-        {"Q214801": WikidataSearchHit("Q214801", "The Truman Show", "1998 film", aliases=("Truman Show",))}
-    )
+def test_a_proposed_name_that_a_search_confirms_is_accepted(decisions):
+    """'Truman' never surfaces The Truman Show, but the model can name it."""
+    wikidata = FakeWikidata({"Truman": [PRESIDENT], "The Truman Show": [FILM]})
+    linker, _ = make_linker(decisions, wikidata, [_proposal("n1", "The Truman Show")])
     (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
     assert (result.entity.wikidata_qid, result.entity.canonical_name) == ("Q214801", "The Truman Show")
     assert decisions.get("truman", POD).qid == "Q214801"
+    assert wikidata.searched == ["Truman", "The Truman Show"]
 
 
-def test_an_unoffered_qid_whose_name_does_not_match_is_still_discarded(decisions):
-    wikidata = FakeWikidata({"Truman": [PRESIDENT]})
-    linker, _ = make_linker(decisions, wikidata, [_answer(("n1", "Q9999", "high"))])
-    linker._entity_lookup = _lookup_for({"Q9999": WikidataSearchHit("Q9999", "Banana", "fruit")})
-    assert linker.resolve([mention(1, "Truman")], context=CTX) == []  # unanswered, stays pending
+def test_a_proposed_name_the_spoken_name_does_not_resemble_is_asked_again_strictly(decisions):
+    """The model proposes an entity whose name has nothing to do with what was said:
+    the search finds it, but the link is not taken, and the name gets a strict pass."""
+    wikidata = FakeWikidata({"Truman": [PRESIDENT], "Banana": [WikidataSearchHit("Q9999", "Banana", "fruit")]})
+    linker, provider = make_linker(decisions, wikidata, [_proposal("n1", "Banana"), _answer(("n1", None, "high"))])
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
+    assert result.status == "unresolvable"
+    assert "second pass" in provider.system_messages[1]
+
+
+def test_a_proposed_name_nobody_can_find_falls_back_to_the_listed_candidates(decisions):
+    wikidata = FakeWikidata({"Truman": [PRESIDENT, FILM]})
+    linker, provider = make_linker(
+        decisions, wikidata, [_proposal("n1", "Truman Burbank"), _answer(("n1", "Q214801", "high"))]
+    )
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
+    assert result.entity.wikidata_qid == "Q214801" and len(provider.user_messages) == 2
+
+
+def test_an_unoffered_qid_is_never_taken_and_the_strict_pass_decides(decisions):
+    linker, _ = make_linker(
+        decisions,
+        FakeWikidata({"Truman": [PRESIDENT]}),
+        [_answer(("n1", "Q214801", "high")), _answer(("n1", "Q11613", "medium"))],
+    )
+    (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
+    assert result.entity.wikidata_qid == "Q11613"
+
+
+def test_a_name_still_unusable_after_the_strict_pass_stays_pending(decisions):
+    linker, _ = make_linker(
+        decisions,
+        FakeWikidata({"Truman": [PRESIDENT]}),
+        [_answer(("n1", "Q214801", "high")), _answer(("n1", "Q214801", "high"))],
+    )
+    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
     assert decisions.get("truman", POD) is None
 
 
-def test_an_unoffered_qid_that_does_not_exist_is_discarded(decisions):
-    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q9999", "high"))])
-    linker._entity_lookup = _lookup_for({})
-    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
-
-
-def test_a_lookup_outage_counts_as_not_offered_not_as_a_link(decisions):
-    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q214801", "high"))])
-    linker._entity_lookup = _lookup_for({}, unavailable=True)
-    assert linker.resolve([mention(1, "Truman")], context=CTX) == []
-
-
-def test_verified_recall_still_respects_the_blacklist(decisions):
-    linker, _ = make_linker(decisions, FakeWikidata({"Truman": [PRESIDENT]}), [_answer(("n1", "Q214801", "high"))])
-    linker._entity_lookup = _lookup_for({"Q214801": WikidataSearchHit("Q214801", "The Truman Show", "1998 film")})
+def test_recall_by_name_respects_the_blacklist(decisions):
+    wikidata = FakeWikidata({"Truman": [PRESIDENT], "The Truman Show": [FILM]})
+    linker, _ = make_linker(decisions, wikidata, [_proposal("n1", "The Truman Show")])
     (result,) = linker.resolve([mention(1, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q214801")
     assert result.status == "unresolvable"

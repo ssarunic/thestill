@@ -117,16 +117,37 @@ class WikidataCandidateSource:
             ]
         return out
 
+    def lookup_name(self, name: str, *, language: str = "en") -> List[Candidate]:
+        """Candidates for a name the chooser proposed ("The Truman Show" for
+        a spoken "Truman"). Same sources; an outage raises."""
+        hits = self._search(name, language)
+        if not hits and language != "en":
+            hits = self._search(name, "en")
+        return [Candidate(qid=h.qid, label=_clean(h.label), description=_clean(h.description)) for h in hits]
+
     def _search(self, name: str, language: str) -> List[WikidataSearchHit]:
         merged: List[WikidataSearchHit] = []
         if self._wikipedia is not None:
-            self._limiter.acquire()
-            merged += self._wikipedia.search_entities(name, language=language, limit=WIKIPEDIA_LIMIT)
-        self._limiter.acquire()
-        merged += self._client.search_entities(name, language=language, limit=self._limit)
+            merged += self._paced(
+                lambda: self._wikipedia.search_entities(name, language=language, limit=WIKIPEDIA_LIMIT)
+            )
+        merged += self._paced(lambda: self._client.search_entities(name, language=language, limit=self._limit))
         seen: set = set()
         unique = [h for h in merged if not (h.qid in seen or seen.add(h.qid))]
         return unique[: self._limit + WIKIPEDIA_LIMIT]
+
+    def _paced(self, request):
+        """One slot per attempt. A read timeout is retried once: in a run of
+        4,000 requests a handful time out, and each one would otherwise
+        leave a name pending and the episode retrying."""
+        for attempt in (1, 2):
+            self._limiter.acquire()
+            try:
+                return request()
+            except WikidataUnavailable as exc:
+                if attempt == 2 or "Timeout" not in str(exc):
+                    raise
+        raise AssertionError("unreachable")
 
 
 def _clean(text: str) -> str:

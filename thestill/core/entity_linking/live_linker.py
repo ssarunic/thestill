@@ -28,12 +28,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from structlog import get_logger
 
 from ...models.entities import EntityMention, ResolutionMethod
-from ..wikidata_client import WikidataSearchHit, WikidataUnavailable
+from ..wikidata_client import WikidataUnavailable
 from .cache import LinkDecisionCache
 from .candidates import WikidataCandidateSource
 from .chooser import LLMCandidateChooser
@@ -47,7 +47,7 @@ from .shared import (
     linked_result,
     unresolvable_result,
 )
-from .types import Candidate, LinkContext, LinkDecision, NameGroup, surface_key
+from .types import Candidate, ChoiceDecision, LinkContext, LinkDecision, NameGroup, surface_key
 from .validator import BLACKLISTED, NOT_OFFERED, DecisionValidator, meets_confidence
 
 logger = get_logger(__name__)
@@ -83,7 +83,8 @@ class LinkOutcome:
     omitted: int = 0  # asked, reachable, and still no answer after the re-ask
     rejected_not_offered: int = 0
     rejected_blacklisted: int = 0
-    verified_recall: int = 0  # answered with a QID it was not offered, and Wikidata agreed
+    verified_recall: int = 0  # the model proposed an unlisted entity by name, and a search confirmed it
+    strict_pass: int = 0  # names asked again with listed candidates only
     skipped_generic: int = 0
     llm_calls: int = 0
     unreachable: bool = False  # a search or an LLM call failed outright
@@ -142,14 +143,12 @@ class LiveWikidataLinker:
         cache: LinkDecisionCache,
         wikidata_client: Optional[_P31Lookup] = None,
         min_confidence: str = "medium",
-        entity_lookup: Optional[Callable[[str, str], Optional[WikidataSearchHit]]] = None,
     ):
         self._candidates = candidate_source
         self._chooser = chooser
         self._cache = cache
         self._wikidata_client = wikidata_client
         self._min_confidence = min_confidence
-        self._entity_lookup = entity_lookup
 
     # ------------------------------------------------------------------
     # Pure core
@@ -218,24 +217,18 @@ class LiveWikidataLinker:
             outcome.asked = len(to_ask)
             outcome.llm_calls = chosen.llm_calls
             outcome.unreachable = outcome.unreachable or chosen.call_errors > 0
-            outcome.unanswered |= chosen.unanswered
             outcome.omitted = len(chosen.unanswered) if chosen.call_errors == 0 else 0
-            for group in to_ask:
-                choice = chosen.decisions.get(group.surface_key)
-                if choice is None:
-                    continue
-                checked = validator.validate(choice, fetched.candidates[group.surface_key], group)
-                if checked.rejection == NOT_OFFERED:
-                    verified = self._verify_recall(choice.qid, group, context.language)
-                    if verified is None:
-                        outcome.rejected_not_offered += 1
-                        outcome.unanswered.add(group.surface_key)
-                        continue
-                    outcome.verified_recall += 1
-                    checked = validator.validate(choice, [verified], group)
-                if checked.rejection == BLACKLISTED:
-                    outcome.rejected_blacklisted += 1
-                outcome.decisions[group.surface_key] = checked.decision  # type: ignore[assignment]
+            unusable = self._apply_choices(to_ask, chosen.decisions, fetched, context, validator, outcome)
+            unusable += [g for g in to_ask if g.surface_key in chosen.unanswered]
+            if unusable:
+                # Second pass, listed candidates or null only: an answer that
+                # could not be used must not leave the name pending for good.
+                outcome.strict_pass = len(unusable)
+                again = self._chooser.choose(unusable, fetched.candidates, context, strict=True)
+                outcome.llm_calls += again.llm_calls
+                outcome.unreachable = outcome.unreachable or again.call_errors > 0
+                still = self._apply_choices(unusable, again.decisions, fetched, context, validator, outcome)
+                outcome.unanswered |= {g.surface_key for g in still} | again.unanswered
             fresh = [outcome.decisions[g.surface_key] for g in to_ask if g.surface_key in outcome.decisions]
             logger.info(
                 "entity_linking_chosen",
@@ -250,30 +243,62 @@ class LiveWikidataLinker:
                 rejected_not_offered=outcome.rejected_not_offered,
                 rejected_blacklisted=outcome.rejected_blacklisted,
                 verified_recall=outcome.verified_recall,
+                strict_pass=outcome.strict_pass,
             )
         return outcome
 
-    def _verify_recall(self, qid: Optional[str], group: NameGroup, language: str) -> Optional[Candidate]:
-        """The model answered with a QID it was not offered. Candidate lists
-        are the bottleneck ("Truman" never surfaces "The Truman Show"), and
-        the model often knows the right entity. It still never invents one:
-        the QID must exist on Wikidata and its label or an alias must
-        resemble the spoken name, or the answer is discarded."""
-        if not qid or self._entity_lookup is None:
-            return None
+    def _apply_choices(self, groups, choices, fetched, context, validator, outcome) -> List[NameGroup]:
+        """Validate each answer into a decision. Returns the groups whose
+        answer could not be used: a QID that was not offered, or a proposed
+        name that no search confirmed."""
+        unusable: List[NameGroup] = []
+        for group in groups:
+            choice = choices.get(group.surface_key)
+            if choice is None:
+                continue
+            offered = fetched.candidates[group.surface_key]
+            if choice.qid is None and choice.proposed_name:
+                found = self._recall_by_name(choice.proposed_name, group, context.language)
+                if found is None:
+                    unusable.append(group)
+                    continue
+                outcome.verified_recall += 1
+                fetched.candidates[group.surface_key] = offered = [found, *offered]
+                choice = ChoiceDecision(group.surface_key, found.qid, choice.confidence, choice.reason)
+            checked = validator.validate(choice, offered, group)
+            if checked.rejection == NOT_OFFERED:
+                outcome.rejected_not_offered += 1
+                unusable.append(group)
+                continue
+            if checked.rejection == BLACKLISTED:
+                outcome.rejected_blacklisted += 1
+            outcome.decisions[group.surface_key] = checked.decision  # type: ignore[assignment]
+        return unusable
+
+    def _recall_by_name(self, proposed: str, group: NameGroup, language: str) -> Optional[Candidate]:
+        """The model says the name refers to an entity that was not listed and
+        gives its title. Candidate lists are the bottleneck ("Truman" never
+        surfaces "The Truman Show"), and models know names far better than
+        QID numbers (the first run: 288 QIDs from memory, 28 real). The title
+        is searched; the first hit whose label matches the title is kept,
+        provided the spoken name resembles that label too. Nothing is
+        invented: the entity must be found, by name."""
         try:
-            hit = self._entity_lookup(qid, language)
+            found = self._candidates.lookup_name(proposed, language=language)
         except WikidataUnavailable:
-            return None  # treated as not offered; the retry may do better
-        if hit is None:
             return None
-        names = (hit.label, *hit.aliases)
-        if not any(
-            n and (_is_plausible_alias(group.surface_form, n) or surface_key(n) == group.surface_key) for n in names
-        ):
-            logger.info("entity_linking_recall_rejected", qid=qid)
-            return None
-        return Candidate(qid=hit.qid, label=hit.label, description=hit.description)
+        for candidate in found:
+            if surface_key(candidate.label) != surface_key(proposed) and not _is_plausible_alias(
+                proposed, candidate.label
+            ):
+                continue
+            if (
+                _is_plausible_alias(group.surface_form, candidate.label)
+                or surface_key(candidate.label) == group.surface_key
+            ):
+                return candidate
+        logger.info("entity_linking_recall_rejected", found=len(found))
+        return None
 
     # ------------------------------------------------------------------
     # Pipeline entry point

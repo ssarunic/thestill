@@ -262,17 +262,21 @@ so [#75](75-llm-call-tracing.md) tracing will capture it once it exists.
 
 Applied to every returned item before anything is written:
 
-1. **The QID must be in the candidate list offered for that name, or be
-   verified.** Candidate lists are the bottleneck ("Truman" surfaces Harry
-   Truman and Truman Capote, never *The Truman Show*, which only the
-   context identifies) and the model often knows the right entity: in the
-   first run it answered with an unoffered QID 40 times, mostly correctly.
-   So an unoffered QID is looked up on Wikidata (`lookup_entity`) and kept
-   only if the entity exists and its label or one of its aliases resembles
-   the spoken name (`_is_plausible_alias`). Anything else is discarded and
-   the name treated as unanswered — not as `none`. An invented identifier
-   is still impossible: it must exist, and it must match the name. Counted
-   as `verified_recall`; a lookup outage counts as not offered.
+1. **The QID must be in the candidate list offered for that name.** Anything
+   else is discarded — an invented identifier is impossible. But candidate
+   lists are the bottleneck ("Truman" surfaces Harry Truman and Truman
+   Capote, never *The Truman Show*, which only the context identifies), and
+   the model usually knows the entity. So when it is certain the name means
+   an entity that is not listed, it answers null and gives the entity's
+   Wikipedia title in `proposed_name`. The title is searched, and the first
+   hit whose label matches the title is offered, provided the spoken name
+   resembles that label too (`_is_plausible_alias`). Names, not numbers:
+   when run 2 let the model answer with a QID from memory it did so 288
+   times and 28 existed. Counted as `verified_recall`.
+   A name whose answer could not be used — a QID not offered, a proposal
+   nothing found — gets one **strict second pass** (listed candidates or
+   null only), so an unusable answer does not leave the name pending for
+   good. Counted as `strict_pass`.
 2. **Blacklist.** `is_blacklisted(surface_form, qid)` is consulted three
    times: candidates are filtered before the chooser, the chooser's answer
    is checked, and a *remembered* decision is checked again when it is

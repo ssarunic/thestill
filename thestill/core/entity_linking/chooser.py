@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 # Bump when the prompt changes meaning: cached decisions made under another
 # version are re-decided as their names come up.
-PROMPT_VERSION = "p2"
+PROMPT_VERSION = "p3"
 
 BATCH_SIZE = 40
 REASK_BATCH_SIZE = 10
@@ -56,10 +56,13 @@ spoken, and a list of candidate Wikidata entities (QID, label, description).
 For each name, decide which candidate the speakers mean.
 
 Rules:
-- Answer with the QID of one listed candidate for that name, or null. Prefer \
-a listed candidate. If you are certain the speakers mean a Wikidata entity \
-that is not listed, you may answer its QID; it will be checked against \
-Wikidata and discarded if it does not exist or does not match the name.
+- Answer with the QID of one listed candidate for that name, or null. Never \
+answer with a QID that is not in that name's candidate list.
+- If you are certain the speakers mean a specific entity that is not listed, \
+answer null and put the title of its English Wikipedia article in \
+proposed_name (for example "The Truman Show" when the excerpts discuss the \
+film but only the president is listed). It will be looked up; leave \
+proposed_name empty otherwise.
 - Link only names that refer to a specific person, organisation, product, \
 work, place, event or named concept. Answer null for common nouns, roles, \
 abstract ideas and general categories even when Wikidata has a page for the \
@@ -80,14 +83,22 @@ it is the most plausible reading, "low" when it is a guess.
 
 Return one entry per name id. Do not add, drop or rename ids."""
 
+STRICT_SUFFIX = """
+
+This is a second pass for these names. Choose only from the listed \
+candidates or answer null; do not propose names."""
+
 
 class Choice(BaseModel):
     id: str = Field(description="The name id from the request, e.g. 'n3'.")
     qid: Optional[str] = Field(default=None, description="QID of one listed candidate, or null.")
     confidence: Literal["high", "medium", "low"] = "low"
     reason: str = Field(default="", description="One short sentence.")
+    proposed_name: str = Field(
+        default="", description="Wikipedia title of an unlisted entity the name refers to, else empty."
+    )
 
-    @field_validator("qid", "reason", mode="after")
+    @field_validator("qid", "reason", "proposed_name", mode="after")
     @classmethod
     def _strip_control_chars(cls, value: Optional[str]) -> Optional[str]:
         """Scrub control characters at the schema boundary, and say so: silent
@@ -129,13 +140,16 @@ class LLMCandidateChooser:
         groups: List[NameGroup],
         candidates: Dict[str, List[Candidate]],
         context: LinkContext,
+        *,
+        strict: bool = False,
     ) -> ChoiceOutcome:
         """Ask about every name, then once more, in smaller batches, about
-        any the model left out."""
+        any the model left out. ``strict`` is the second pass for names whose
+        first answer could not be used: listed candidates or null only."""
         outcome = ChoiceOutcome()
-        remaining = self._ask(groups, candidates, context, BATCH_SIZE, outcome)
+        remaining = self._ask(groups, candidates, context, BATCH_SIZE, outcome, strict)
         if remaining:
-            remaining = self._ask(remaining, candidates, context, REASK_BATCH_SIZE, outcome)
+            remaining = self._ask(remaining, candidates, context, REASK_BATCH_SIZE, outcome, strict)
         outcome.unanswered = {g.surface_key for g in remaining}
         return outcome
 
@@ -146,8 +160,10 @@ class LLMCandidateChooser:
         context: LinkContext,
         batch_size: int,
         outcome: ChoiceOutcome,
+        strict: bool = False,
     ) -> List[NameGroup]:
         """Returns the groups still without an answer."""
+        system = SYSTEM_PROMPT + (STRICT_SUFFIX if strict else "") + UNTRUSTED_CONTENT_PREAMBLE
         missing: List[NameGroup] = []
         for start in range(0, len(groups), batch_size):
             batch = groups[start : start + batch_size]
@@ -156,7 +172,7 @@ class LLMCandidateChooser:
             try:
                 response = self._provider.generate_structured(
                     messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT + UNTRUSTED_CONTENT_PREAMBLE},
+                        {"role": "system", "content": system},
                         {"role": "user", "content": build_user_message(by_id, candidates, context)},
                     ],
                     response_model=ChooserResponse,
@@ -187,6 +203,7 @@ class LLMCandidateChooser:
                     qid=choice.qid or None,
                     confidence=choice.confidence,
                     reason=choice.reason,
+                    proposed_name="" if strict else choice.proposed_name,
                 )
             missing.extend(group for name_id, group in by_id.items() if name_id not in answered)
         return missing

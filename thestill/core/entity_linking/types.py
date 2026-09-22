@@ -74,6 +74,7 @@ class ChoiceDecision:
     qid: Optional[str]
     confidence: str
     reason: str = ""
+    proposed_name: str = ""  # an unlisted entity the model says the name refers to
 
 
 @dataclass(frozen=True)
