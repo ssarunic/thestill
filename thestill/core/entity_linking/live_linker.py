@@ -81,8 +81,9 @@ class LinkOutcome:
     names: int = 0
     cache_hits: int = 0
     asked: int = 0
-    omitted: int = 0  # asked, reachable, and still no answer after the re-ask
-    rejected_not_offered: int = 0
+    omitted: int = 0  # asked, reachable, and still no answer after the re-ask (first pass)
+    rejected_not_offered: int = 0  # answers with a QID that was not offered, over both passes
+    unusable_names: int = 0  # names with nothing usable after the strict pass, the chooser reachable
     rejected_blacklisted: int = 0
     verified_recall: int = 0  # the model proposed an unlisted entity by name, and a search confirmed it
     strict_pass: int = 0  # names asked again with listed candidates only
@@ -92,9 +93,12 @@ class LinkOutcome:
 
     @property
     def unusable_answers(self) -> int:
-        """Names the chooser was reachable for and still gave nothing usable:
-        left out twice, or answered with a QID it was not offered."""
-        return self.omitted + self.rejected_not_offered
+        """Names the chooser was reachable for and still gave nothing usable
+        once the strict pass had its turn: left out again, or answered again
+        with a QID it was not offered. First-pass rejections that the strict
+        pass then repaired are metrics (``omitted``, ``rejected_not_offered``),
+        not failures."""
+        return self.unusable_names
 
     @property
     def broken(self) -> bool:
@@ -231,7 +235,10 @@ class LiveWikidataLinker:
                 outcome.llm_calls += again.llm_calls
                 outcome.unreachable = outcome.unreachable or again.call_errors > 0
                 still = self._apply_choices(unusable, again.decisions, fetched, context, validator, outcome)
-                outcome.unanswered |= {g.surface_key for g in still} | again.unanswered
+                final = {g.surface_key for g in still} | again.unanswered
+                outcome.unanswered |= final
+                if again.call_errors == 0:
+                    outcome.unusable_names = len(final)
             fresh = [outcome.decisions[g.surface_key] for g in to_ask if g.surface_key in outcome.decisions]
             logger.info(
                 "entity_linking_chosen",
@@ -261,7 +268,17 @@ class LiveWikidataLinker:
                 continue
             offered = fetched.candidates[group.surface_key]
             if choice.qid is None and choice.proposed_name:
-                found = self._recall_by_name(choice.proposed_name, group, context.language)
+                try:
+                    found = self._recall_by_name(choice.proposed_name, group, context.language)
+                except WikidataUnavailable:
+                    # A search that failed is not a search that found nothing:
+                    # deciding this name from the listed candidates now would
+                    # record (and remember) a null the model never gave. The
+                    # name stays pending and the attempt is reported as an
+                    # outage, like a failed candidate search.
+                    outcome.unreachable = True
+                    outcome.unanswered.add(group.surface_key)
+                    continue
                 if found is None:
                     unusable.append(group)
                     continue
@@ -285,11 +302,9 @@ class LiveWikidataLinker:
         QID numbers (the first run: 288 QIDs from memory, 28 real). The title
         is searched; the first hit whose label matches the title is kept,
         provided the spoken name resembles that label too. Nothing is
-        invented: the entity must be found, by name."""
-        try:
-            found = self._candidates.lookup_name(proposed, language=language)
-        except WikidataUnavailable:
-            return None
+        invented: the entity must be found, by name. Raises
+        ``WikidataUnavailable`` when the search itself fails."""
+        found = self._candidates.lookup_name(proposed, language=language)
         wanted = surface_key(proposed)
         for candidate in found:
             # The found label must BE the proposed title, or the title with a

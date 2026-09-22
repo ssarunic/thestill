@@ -227,6 +227,19 @@ def test_a_model_that_answers_nothing_useful_is_broken_and_nothing_is_kept(decis
     assert all(decisions.get(n.casefold(), POD) is None for n in names)
 
 
+def test_first_pass_rejections_the_strict_pass_repairs_are_not_broken(decisions):
+    """Four invented QIDs, then four listed ones on the strict pass: every
+    name was decided, so nothing is broken and everything is kept."""
+    names = ["A One", "B Two", "C Three", "D Four"]
+    wikidata = FakeWikidata({n: [WikidataSearchHit(f"Q{i + 1}", n, "person")] for i, n in enumerate(names)})
+    invented = _answer(*[(f"n{i + 1}", "Q999999", "high") for i in range(4)])
+    repaired = _answer(*[(f"n{i + 1}", f"Q{i + 1}", "high") for i in range(4)])
+    linker, _ = make_linker(decisions, wikidata, [invented, repaired])
+    results = linker.resolve([mention(i + 1, n) for i, n in enumerate(names)], context=CTX)
+    assert sorted(r.entity.wikidata_qid for r in results) == ["Q1", "Q2", "Q3", "Q4"]
+    assert decisions.get("a one", POD).qid == "Q1"
+
+
 def test_one_invented_qid_among_good_answers_is_not_broken(decisions):
     names = ["A One", "B Two", "C Three", "D Four"]
     wikidata = FakeWikidata({n: [WikidataSearchHit(f"Q{i + 1}", n, "person")] for i, n in enumerate(names)})
@@ -278,6 +291,18 @@ def test_a_proposed_name_the_spoken_name_does_not_resemble_is_asked_again_strict
     (result,) = linker.resolve([mention(1, "Truman")], context=CTX)
     assert result.status == "unresolvable"
     assert "second pass" in provider.system_messages[1]
+
+
+def test_an_outage_during_the_proposed_name_lookup_keeps_the_name_pending(decisions):
+    """A search that failed is not a search that found nothing: no strict
+    pass against the listed candidates, no null remembered for 30 days."""
+    wikidata = FakeWikidata({"Truman": [PRESIDENT], "The Truman Show": WikidataUnavailable("503")})
+    linker, provider = make_linker(decisions, wikidata, [_proposal("n1", "The Truman Show")])
+    with pytest.raises(LinkerUnavailableError) as err:
+        linker.resolve([mention(1, "Truman")], context=CTX)
+    assert err.value.results == [] and "unreachable" in str(err.value)
+    assert decisions.get("truman", POD) is None
+    assert len(provider.user_messages) == 1  # no strict pass for an undecided name
 
 
 def test_a_proposed_name_nobody_can_find_falls_back_to_the_listed_candidates(decisions):
