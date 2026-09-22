@@ -484,6 +484,28 @@ objects); the judge now uses native structured output. Also learned:
 `baseline_split` was 93 names — ReFinED gave one name two answers within an
 episode about 5% of the time.
 
+**Runs 2–4, 2026-09-22** (all 20 episodes, 1,998 names, Gemini Flash as
+linker *and* judge, 35–45 minutes and under a dollar each):
+
+| Run | Change | Regression | New-link precision | Recall gain | Unanswered |
+|---|---|---|---|---|---|
+| 1 | `p1`, Wikidata search only (19 eps) | 5.8% | 87.8% | 37.2% | 1.0% |
+| 2 | + Wikipedia search, QID-from-memory verification, `p2` named entities only | 1.0% | 91.3% | 54.4% | 7.5% |
+| 3 | `p3`: propose a *title* not a QID; strict second pass; timeout retry | 1.7% | 89.2% | 51.9% | 1.3% |
+| 4 | `p4`: exact-title match, no disambiguation pages, no parent links, `maxlag` retry | **2.0%** | **93.2%** | **49.9%** | 0.6% |
+
+Run 2's 7.5% unanswered was the model answering QIDs from memory (288
+times, 28 real); run 3's precision dip was a loose title match ("Sierra"
+the startup → Sierra Leone Company). Run 4 passes every criterion but
+regression, at 2.05% against a line of 2% — 13 names of 634 the baseline
+linked, where one name is 0.16%. On inspection the 13 are three kinds:
+surname-only or titled mentions the recall still misses ("Hatton",
+"Doughty", "Sir Geoffrey Hinton", "Neo"); Croatian inflections ("Googleu",
+"Steamu"); and judge errors — it held ReFinED right for linking "American
+company" to *United States* and "weighing machine" to *weighing scale*.
+The judge was Gemini grading Gemini throughout, so the verdicts carry a
+self-preference caveat either way. Decision on the threshold pending.
+
 **Pass criteria** (a starting position; the first real run revises them):
 
 - `regression_rate` — of the names the baseline linked, those where the
