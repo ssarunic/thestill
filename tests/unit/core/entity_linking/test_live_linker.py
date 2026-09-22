@@ -325,9 +325,11 @@ def test_a_proposed_title_must_be_the_found_label_not_merely_share_a_word(decisi
 
 
 def test_a_proposed_title_with_a_disambiguator_is_accepted(decisions):
+    """A name with no candidates at all is decided without the model, so the
+    proposal path needs at least one (wrong) candidate to be reachable."""
     wikidata = FakeWikidata(
         {
-            "Claude": [],
+            "Claude": [WikidataSearchHit("Q296", "Claude Monet", "French painter")],
             "Claude (language model)": [WikidataSearchHit("Q8", "Claude (language model)", "LLM by Anthropic")],
         }
     )
