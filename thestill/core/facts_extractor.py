@@ -84,6 +84,11 @@ def _disambiguate_generic_labels(mapping: Dict[str, str], generic_ids: Optional[
 
     A person's name shared by several ids is left alone — that is diarization
     splitting one voice, and merging those turns is correct.
+
+    A label the model already numbered ("Host 1") belongs to the same group
+    as its unnumbered siblings, and a number is skipped when the label it
+    would produce is already carried by a speaker outside the group — so
+    numbering never creates the collision it is there to remove.
     """
     generic_ids = generic_ids or set()
     groups: Dict[str, List[str]] = {}
@@ -93,23 +98,46 @@ def _disambiguate_generic_labels(mapping: Dict[str, str], generic_ids: Optional[
         base = strip_role_annotation(name).strip()
         if not base:
             continue
-        if speaker_id in generic_ids or base.casefold() in _GENERIC_LABELS:
-            groups.setdefault(base.casefold(), []).append(speaker_id)
+        stem = _without_trailing_number(base)
+        if speaker_id in generic_ids or stem.casefold() in _GENERIC_LABELS:
+            groups.setdefault(stem.casefold(), []).append(speaker_id)
 
     result = dict(mapping)
     for speaker_ids in groups.values():
         if len(speaker_ids) < 2:
             continue
-        for index, speaker_id in enumerate(sorted(speaker_ids), start=1):
+        members = set(speaker_ids)
+        taken = set()
+        for speaker_id, name in mapping.items():
+            if speaker_id not in members and isinstance(name, str):
+                taken.add(name.strip().casefold())
+                taken.add(strip_role_annotation(name).strip().casefold())
+        index = 0
+        for speaker_id in sorted(speaker_ids):
             name = mapping[speaker_id].strip()
             base = strip_role_annotation(name).strip()
-            result[speaker_id] = f"{base} {index}{name[len(base):]}"
+            stem = _without_trailing_number(base)
+            while True:
+                index += 1
+                numbered = f"{stem} {index}"
+                candidate = f"{numbered}{name[len(base):]}"
+                if numbered.casefold() not in taken and candidate.casefold() not in taken:
+                    break
+            result[speaker_id] = candidate
+            taken.add(numbered.casefold())
+            taken.add(candidate.casefold())
         logger.info(
             "Numbered generic speaker labels shared by several speakers",
             speaker_ids=sorted(speaker_ids),
             labels=[result[speaker_id] for speaker_id in sorted(speaker_ids)],
         )
     return result
+
+
+def _without_trailing_number(label: str) -> str:
+    """``"Host 2"`` → ``"Host"``; a label with no trailing number is unchanged."""
+    stem, _, tail = label.rpartition(" ")
+    return stem if stem and tail.isdigit() else label
 
 
 class EpisodeFactsResponse(BaseModel):

@@ -88,6 +88,41 @@ def test_colliding_generic_labels_are_numbered() -> None:
     }
 
 
+def test_a_label_the_model_already_numbered_joins_its_unnumbered_siblings() -> None:
+    """Numbering "Host", "Host" as 1 and 2 beside an existing "Host 1" would
+    hand two speakers the same label; the whole family is numbered together."""
+    mapping = {"SPEAKER_00": "Host", "SPEAKER_01": "Host", "SPEAKER_02": "Host 1", "SPEAKER_03": "Ana Anić (Guest)"}
+
+    assert _disambiguate_generic_labels(mapping) == {
+        "SPEAKER_00": "Host 1",
+        "SPEAKER_01": "Host 2",
+        "SPEAKER_02": "Host 3",
+        "SPEAKER_03": "Ana Anić (Guest)",
+    }
+
+
+def test_a_numbered_label_with_an_annotation_is_renumbered_with_its_siblings() -> None:
+    mapping = {"SPEAKER_00": "Voditelj", "SPEAKER_01": "Voditelj", "SPEAKER_02": "Voditelj 2 (Netokracija)"}
+
+    assert _disambiguate_generic_labels(mapping) == {
+        "SPEAKER_00": "Voditelj 1",
+        "SPEAKER_01": "Voditelj 2",
+        "SPEAKER_02": "Voditelj 3 (Netokracija)",
+    }
+
+
+def test_a_number_carried_by_a_speaker_outside_the_group_is_skipped() -> None:
+    """The model flagged two "Panelist"s generic but not the third; the third
+    stays as it is, and the numbering steps over the label it already holds."""
+    mapping = {"SPEAKER_00": "Panelist", "SPEAKER_01": "Panelist", "SPEAKER_02": "Panelist 1"}
+
+    assert _disambiguate_generic_labels(mapping, generic_ids={"SPEAKER_00", "SPEAKER_01"}) == {
+        "SPEAKER_00": "Panelist 2",
+        "SPEAKER_01": "Panelist 3",
+        "SPEAKER_02": "Panelist 1",
+    }
+
+
 def test_single_generic_label_is_left_alone() -> None:
     mapping = {"SPEAKER_00": "Voditelj", "SPEAKER_01": "Ana Anić (Guest)"}
 
