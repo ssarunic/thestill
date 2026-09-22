@@ -108,7 +108,7 @@ not depend on Spotify's page layout and also returns the publisher.
 | `ANTHROPIC_API_KEY` | Anthropic API key | - |
 | `ANTHROPIC_MODEL` | Anthropic model | `claude-sonnet-4-5-20250929` |
 | `GEMINI_API_KEY` | Google Gemini API key | - |
-| `GEMINI_MODEL` | Gemini model | `gemini-3-pro-preview` |
+| `GEMINI_MODEL` | Gemini model | `gemini-3.1-pro-preview` |
 | `GEMINI_THINKING_LEVEL` | Thinking level: `low`/`high` for Pro, `minimal`/`low`/`medium`/`high` for Flash | - (unset) |
 | `MISTRAL_API_KEY` | Mistral AI API key | - |
 | `MISTRAL_MODEL` | Mistral model | `mistral-large-latest` |
@@ -432,6 +432,24 @@ make corpus-backfill         # or: thestill chunks backfill
 
 `thestill status` reports current chunk count and the embedding model
 in use.
+
+## Entity Linking (spec #81)
+
+Which linker `resolve-entities` uses to turn a spoken name into a Wikidata
+QID.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ENTITY_LINKER` | `refined` (ReFinED, knowledge frozen in 2022) or `live` (live Wikidata search, then an LLM chooses among the candidates) | `refined` |
+| `ENTITY_LINKING_PROVIDER` | LLM provider for the `live` linker's choice | `` (uses `CLEANING_PROVIDER`) |
+| `ENTITY_LINKING_MODEL` | Model for that provider | `` (uses `CLEANING_MODEL` when the provider is the cleaning provider, else the provider's configured model) |
+| `ENTITY_LINKING_MIN_CONFIDENCE` | Lowest chooser confidence that links a name: `low`, `medium` or `high` | `medium` |
+| `ENTITY_LINKING_NONE_TTL_DAYS` | A name that did not link is looked up again after this many days | `30` |
+| `WIKIDATA_MAX_RPS` | Process-wide ceiling on Wikidata search requests per second | `5` |
+
+The `live` linker needs no extra install: its dependencies are Wikidata and
+the LLM. Decisions are remembered in `entity_link_decisions`, so a recurring
+host or company is looked up once.
 
 ## Entity Model Cache
 

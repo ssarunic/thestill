@@ -46,6 +46,12 @@ def test_backlog_and_breakdown_come_from_the_repository(service):
     assert stats.entity_extraction_by_status == {"complete": 2000, "skipped_unavailable": 480, "none": 3}
 
 
+def test_deferred_linking_is_reported_as_its_own_backlog(service):
+    stats = service(Repo({"complete": 10, "linking_deferred": 4})).get_stats()
+    assert stats.episodes_entities_linking_deferred == 4
+    assert stats.episodes_entities_skipped_unavailable == 0
+
+
 def test_no_backlog_is_zero_not_missing(service):
     stats = service(Repo({"complete": 5})).get_stats()
     assert stats.episodes_entities_skipped_unavailable == 0

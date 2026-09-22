@@ -89,6 +89,7 @@ def get_dashboard_stats(state: AppState = Depends(get_app_state)) -> dict:
             "entity_extraction": {
                 "available": stats.entity_extraction_available,
                 "skipped_unavailable": stats.episodes_entities_skipped_unavailable,
+                "linking_deferred": stats.episodes_entities_linking_deferred,
             },
             "pipeline": {
                 "discovered": stats.episodes_discovered,

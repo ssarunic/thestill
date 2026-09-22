@@ -408,7 +408,7 @@ class Config(BaseModel):
     ollama_model: str = "gemma3:4b"
 
     # Gemini Configuration
-    gemini_model: str = "gemini-3-pro-preview"
+    gemini_model: str = "gemini-3.1-pro-preview"  # gemini-3-pro-preview is no longer served
     gemini_thinking_level: Optional[str] = (
         None  # Thinking level for Gemini 3 models (low/high for Pro, minimal/low/medium/high for Flash)
     )
@@ -538,6 +538,16 @@ class Config(BaseModel):
     mcp_token_ttl_days: int = 90
     # Per-token HTTP request limit on the /mcp endpoint (429 above it).
     mcp_token_requests_per_minute: int = 120
+
+    # Entity linking (spec #81). ``refined`` is the 2022 ReFinED model;
+    # ``live`` looks names up in live Wikidata and lets an LLM choose among
+    # the candidates. Provider/model empty = the cleaning provider and model.
+    entity_linker: str = "refined"  # refined | live
+    entity_linking_provider: str = ""
+    entity_linking_model: str = ""
+    entity_linking_min_confidence: str = "medium"  # lowest chooser confidence that links: low | medium | high
+    entity_linking_none_ttl_days: int = 30  # re-check a name that did not link after this long
+    wikidata_max_rps: float = 5.0  # process-wide ceiling on Wikidata search requests
 
     # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
     enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
@@ -802,7 +812,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         or None,  # none/low/medium/high/xhigh for GPT-5.x
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "gemma3:4b"),
-        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),
+        "gemini_model": os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview"),
         "gemini_thinking_level": os.getenv("GEMINI_THINKING_LEVEL")
         or None,  # low/high for Pro, minimal/low/medium/high for Flash
         "anthropic_model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5-20250929"),
@@ -861,6 +871,12 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
         "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
         # Entity enrichment (spec #45 Tier 0)
+        "entity_linker": os.getenv("ENTITY_LINKER", "refined").lower(),
+        "entity_linking_provider": os.getenv("ENTITY_LINKING_PROVIDER", "").lower(),
+        "entity_linking_model": os.getenv("ENTITY_LINKING_MODEL", ""),
+        "entity_linking_min_confidence": os.getenv("ENTITY_LINKING_MIN_CONFIDENCE", "medium").lower(),
+        "entity_linking_none_ttl_days": int(os.getenv("ENTITY_LINKING_NONE_TTL_DAYS", "30")),
+        "wikidata_max_rps": float(os.getenv("WIKIDATA_MAX_RPS", "5")),
         "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
         "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
         "enrichment_max_age_days": int(os.getenv("ENRICHMENT_MAX_AGE_DAYS", "30")),
@@ -894,6 +910,21 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(f"NARRATION_MATERIAL_MAX_WORDS must be > 0; got {config_data['narration_material_max_words']}")
     if not config_data["narration_anchor_prompt"]:
         raise ValueError("NARRATION_ANCHOR_PROMPT must name a voice file, e.g. conversational_anchor")
+    # Spec #81 — a typo here would otherwise pick a linker, or a threshold,
+    # nobody asked for.
+    if config_data["entity_linker"] not in ("refined", "live"):
+        raise ValueError(f"ENTITY_LINKER must be 'refined' or 'live'; got {config_data['entity_linker']!r}")
+    if config_data["entity_linking_min_confidence"] not in ("low", "medium", "high"):
+        raise ValueError(
+            "ENTITY_LINKING_MIN_CONFIDENCE must be low, medium or high; "
+            f"got {config_data['entity_linking_min_confidence']!r}"
+        )
+    if config_data["entity_linking_none_ttl_days"] < 1:
+        raise ValueError(
+            f"ENTITY_LINKING_NONE_TTL_DAYS must be >= 1; got {config_data['entity_linking_none_ttl_days']}"
+        )
+    if config_data["wikidata_max_rps"] <= 0:
+        raise ValueError(f"WIKIDATA_MAX_RPS must be > 0; got {config_data['wikidata_max_rps']}")
     # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
     # for exactly 0; a negative TTL would silently mean the same thing,
     # and a non-positive request limit would refuse every request.

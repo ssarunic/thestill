@@ -482,6 +482,28 @@ CREATE TABLE IF NOT EXISTS resolution_blacklist (
 -- cannot serve.
 CREATE INDEX IF NOT EXISTS idx_blacklist_surface_lower ON resolution_blacklist(LOWER(surface_form));
 
+-- Spec #81 — live-linker decision cache. One row per name per scope: a
+-- podcast, or corpus-wide when podcast_id is NULL. NULLs never collide in a
+-- UNIQUE, so each scope gets its own partial unique index, which is also the
+-- upsert's conflict target. surface_key is case-folded in Python.
+CREATE TABLE IF NOT EXISTS entity_link_decisions (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    surface_key text NOT NULL,
+    podcast_id uuid NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    qid text NULL,
+    label text NULL,
+    description text NULL,
+    confidence text NOT NULL CHECK (confidence IN ('high','medium','low')),
+    reason text NULL,
+    decided_at timestamptz NOT NULL DEFAULT now(),
+    linker_version text NOT NULL,
+    hits integer NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_podcast
+    ON entity_link_decisions(surface_key, podcast_id) WHERE podcast_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_corpus
+    ON entity_link_decisions(surface_key) WHERE podcast_id IS NULL;
+
 -- ===== search: chunks + vectors (pgvector replaces sqlite-vec/FTS5) ======
 CREATE TABLE IF NOT EXISTS chunks (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

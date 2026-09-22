@@ -132,6 +132,8 @@ class TestEnumStrCompat:
         # and leaves the episode unsearchable). The column is plain ``text``
         # with no CHECK constraint, so no migration is needed — but the value
         # IS a backlog marker other code queries, hence pinning it here.
+        # ``linking_deferred`` (spec #81) is the same kind of marker: the
+        # linker was unreachable on the last retry, mentions stay pending.
         values = {s.value for s in EntityExtractionStatus}
         assert values == {
             "pending",
@@ -139,4 +141,5 @@ class TestEnumStrCompat:
             "failed",
             "skipped_legacy",
             "skipped_unavailable",
+            "linking_deferred",
         }

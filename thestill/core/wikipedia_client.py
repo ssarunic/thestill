@@ -32,17 +32,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 import requests
 from structlog import get_logger
 
 from ..models.enrichment import EnrichmentUnavailable
+from .wikidata_client import WikidataSearchHit, WikidataUnavailable
 
 logger = get_logger(__name__)
 
 WIKIPEDIA_SUMMARY_URL = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
+WIKIPEDIA_API_URL = "https://{lang}.wikipedia.org/w/api.php"
 DEFAULT_TIMEOUT_SEC = 5.0
 DEFAULT_USER_AGENT = "thestill-podcast-pipeline/0.1 (https://github.com/sasasarunic/thestill)"
 
@@ -75,6 +77,56 @@ class WikipediaClient:
         self.timeout_sec = timeout_sec
         self.user_agent = user_agent
         self._cached = lru_cache(maxsize=cache_size)(self._fetch_summary_uncached)
+
+    def search_entities(self, name: str, *, language: str = "en", limit: int = 5) -> List[WikidataSearchHit]:
+        """Wikidata items of the articles Wikipedia's search finds for ``name``.
+
+        Spec #81 - the second candidate source. Wikidata's own search is a
+        label-prefix match, so "Obama" never surfaces "Barack Obama" and
+        "Mike Moritz" finds nobody. Wikipedia's search ranks by relevance
+        over titles, redirects and text, and its redirects are a curated
+        alias table, so those come back first. One request: the search
+        generator with the item id and the short description of each page.
+        An empty list means Wikipedia answered and found nothing; anything
+        else raises :class:`WikidataUnavailable` (errors-as-empty-results).
+        """
+        params = {
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": name,
+            "gsrlimit": str(limit),
+            "gsrnamespace": "0",
+            "prop": "pageprops|description",
+            "ppprop": "wikibase_item",
+            "format": "json",
+        }
+        try:
+            resp = requests.get(
+                WIKIPEDIA_API_URL.format(lang=language),
+                params=params,
+                timeout=self.timeout_sec,
+                headers={"User-Agent": self.user_agent, "Accept": "application/json"},
+            )
+        except requests.RequestException as exc:
+            raise WikidataUnavailable(f"wikipedia search failed: {type(exc).__name__}") from exc
+        if resp.status_code != 200:
+            raise WikidataUnavailable(f"wikipedia search returned {resp.status_code}")
+        try:
+            payload = resp.json()
+        except ValueError as exc:
+            raise WikidataUnavailable("wikipedia search unparseable") from exc
+        if not isinstance(payload, dict) or "error" in payload:
+            raise WikidataUnavailable("wikipedia search error")
+        pages = (payload.get("query") or {}).get("pages") or {}
+        hits: List[WikidataSearchHit] = []
+        for page in sorted(pages.values(), key=lambda p: p.get("index", 0)):
+            qid = (page.get("pageprops") or {}).get("wikibase_item")
+            if not isinstance(qid, str) or not qid.startswith("Q"):
+                continue  # a page with no item, or a list/disambiguation without one
+            hits.append(
+                WikidataSearchHit(qid=qid, label=page.get("title", ""), description=page.get("description") or "")
+            )
+        return hits
 
     def fetch_summary(self, title: str, *, language: str = "en") -> Optional[WikipediaSummary]:
         """Return the page summary for ``title`` in ``language``.

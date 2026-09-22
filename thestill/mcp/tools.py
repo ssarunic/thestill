@@ -675,6 +675,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
                     "entity_extraction": {
                         "available_on_this_host": stats.entity_extraction_available,
                         "episodes_skipped_unavailable": stats.episodes_entities_skipped_unavailable,
+                        "episodes_linking_deferred": stats.episodes_entities_linking_deferred,
                         "by_status": stats.entity_extraction_by_status,
                     },
                     "last_updated": stats.last_updated.isoformat(),

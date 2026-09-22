@@ -75,6 +75,9 @@ class SystemStats(BaseModel):
     # ``entity_extraction_available`` False it grows with every new episode.
     entity_extraction_by_status: dict = {}
     episodes_entities_skipped_unavailable: int = 0
+    # Spec #81 — linking was still unreachable on the last retry. Searchable,
+    # but their mentions are pending: owed a ``thestill resolve-entities`` run.
+    episodes_entities_linking_deferred: int = 0
     entity_extraction_available: bool = True
     # Spec #60 — feed refresh health. ``refresh_parked_by_reason`` buckets
     # quarantined feeds by refresh_disabled_reason; legacy generic parks
@@ -177,6 +180,7 @@ class StatsService:
             episodes_skipped_legacy=episodes_skipped_legacy,
             entity_extraction_by_status=entity_statuses,
             episodes_entities_skipped_unavailable=entity_statuses.get("skipped_unavailable", 0),
+            episodes_entities_linking_deferred=entity_statuses.get("linking_deferred", 0),
             entity_extraction_available=self._entity_extraction_available(),
             refresh_active=refresh_health.get("active", 0),
             refresh_due_now=refresh_health.get("due_now", 0),

@@ -58,6 +58,10 @@ class EntityExtractionStatus(str, Enum):
     COMPLETE = "complete"
     FAILED = "failed"
     SKIPPED_LEGACY = "skipped_legacy"
+    # Spec #81 — Wikidata or the LLM was still unreachable on the last retry.
+    # The mentions stay pending and the chain went on to ``reindex``, so the
+    # episode is searchable; this marks it as owed a re-link.
+    LINKING_DEFERRED = "linking_deferred"
     # Spec #66 — the extractor is absent on this host (an image built
     # without the ``entities`` extra: GLiNER + ReFinED need 4-6 GB; the AWS
     # image was one until 2026-09-21). Distinct from
@@ -90,6 +94,7 @@ class ResolutionMethod(str, Enum):
     """
 
     DIRECT = "direct"  # ReFinED grounded the surface to a QID
+    LLM_LINKED = "llm_linked"  # spec #81: chosen by the LLM among live Wikidata candidates
     ANCHOR = "anchor"  # matched a host/guest/recurring anchor variant
     COREF = "coref"  # within-episode coreference (post-resolve pass)
     OVERRIDE = "override"  # forced by a human via mention_overrides

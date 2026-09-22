@@ -120,6 +120,10 @@ def _build_state(pending: List[EntityMention]):
     # so the happy-path test isn't perturbed by a stubbed coref result.
     state.entity_repository.list_resolved_persons_for_episode.return_value = []
     state.entity_repository.list_unresolved_person_mentions.return_value = []
+    # Spec #81 — the resolve core looks a QID up before storing under a slug.
+    # An empty corpus knows none; MagicMock would hand back a truthy stub.
+    state.entity_repository.find_entity_by_qid.return_value = None
+    state.entity_repository.get_entity.return_value = None
     state.entity_resolver = EntityResolver(preloaded_model=StubReFinED())
     return state
 
