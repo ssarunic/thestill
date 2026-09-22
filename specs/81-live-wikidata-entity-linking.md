@@ -471,6 +471,19 @@ four derived dimensions (`agreement`, `no_regression`, `new_link_precision`,
 made on `totals.json`**, the counts summed across episodes: a mean of
 per-episode ratios would let a three-name episode outvote a ninety-name one.
 
+**Run 1, 2026-09-22** (`p1`, Wikidata search only; judge Gemini Flash,
+because no Anthropic key was set — a self-preference caveat): 19 of 20
+episodes, 1,937 names, 19 minutes, under a dollar. Recall gain **37.2%**,
+agreement 63.6%, regression **5.8%**, new-link precision **87.8%** —
+**FAIL** on the last two. Where the two linkers disagreed on a *link*, the
+judge sided with the live linker 63 times and ReFinED 2 (both "Facebook" vs
+"Meta Platforms"). The failures had one cause each — candidate recall and
+concept nouns — and led to the Stage 1 and Stage 3 revisions above. The
+20th episode was lost to a judge JSON-mode parse error (Gemini returned two
+objects); the judge now uses native structured output. Also learned:
+`baseline_split` was 93 names — ReFinED gave one name two answers within an
+episode about 5% of the time.
+
 **Pass criteria** (a starting position; the first real run revises them):
 
 - `regression_rate` — of the names the baseline linked, those where the
