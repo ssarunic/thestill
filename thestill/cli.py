@@ -1162,7 +1162,10 @@ def facts_extract(ctx, podcast_id, episode_id, force):
                 episode = ep
                 break
     elif episode_id:
-        episode = repository.get_episode(episode_id)
+        # get_episode returns (podcast, episode); the podcast is the one
+        # resolved above, so only the episode is kept.
+        found = repository.get_episode(episode_id)
+        episode = found[1] if found else None
     else:
         # Find first episode with transcript
         for ep in podcast.episodes:
