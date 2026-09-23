@@ -440,7 +440,7 @@ QID.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `ENTITY_LINKER` | `refined` (ReFinED, knowledge frozen in 2022) or `live` (live Wikidata search, then an LLM chooses among the candidates) | `refined` |
+| `ENTITY_LINKER` | `live` (live Wikidata search, then an LLM chooses among the candidates) or `refined` (ReFinED, knowledge frozen in 2022; needs the `entities` extra) | `live` |
 | `ENTITY_LINKING_PROVIDER` | LLM provider for the `live` linker's choice | `` (uses `CLEANING_PROVIDER`) |
 | `ENTITY_LINKING_MODEL` | Model for that provider | `` (uses `CLEANING_MODEL` when the provider is the cleaning provider, else the provider's configured model) |
 | `ENTITY_LINKING_MIN_CONFIDENCE` | Lowest chooser confidence that links a name: `low`, `medium` or `high` | `medium` |
