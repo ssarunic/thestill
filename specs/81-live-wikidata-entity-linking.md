@@ -527,14 +527,21 @@ questions).
 
 | Phase | Scope | Gate |
 |---|---|---|
-| **1 — Linker + eval** | `entity_linking/` package, `search_entities`, cache table, `ENTITY_LINKER` switch (default `refined`), `entity-linking` rubric. No behaviour change in prod. | eval pass criteria met on the fixed set |
-| **2 — Shadow** | `ENTITY_LINKER=refined` still writes; the live linker runs alongside on new episodes and writes to the scratch table. One week on prod. | cost, latency and Wikidata error rate within estimates; no `rejected_not_offered` trend |
-| **3 — Cutover** | `ENTITY_LINKER=live` on prod. Run the held 494-episode backfill through it. | first 50 backfilled episodes spot-checked |
+| **1 — Linker + eval** ✅ | `entity_linking/` package, `search_entities`, cache table, `ENTITY_LINKER` switch (default `refined`), `entity-linking` rubric. No behaviour change in prod. Merged in PRs #244 and #245, shipped in v1.8.0 (2026-09-22). | eval pass criteria met on the fixed set — run 4 passed all but regression, 2.05% against the 2% line; accepted |
+| **2 — Shadow** ⏭ | *Skipped.* The scratch-table shadow mode was never built: the eval runs the production linker on 20 pinned prod episodes and judges it blind, which is the evidence the shadow week was meant to produce. | — |
+| **3 — Cutover** 🚧 | `ENTITY_LINKER=live` on prod — set 2026-09-23 via the SSM secret and a reconcile, after a local trial linked seven ReFinED-misresolved "Anthropic" mentions to Q116758847. The code default flips to `live` in the same step so a fresh install never links against the 2022 snapshot. Still owed: the held pending-mention backfill through the live linker. | first 50 backfilled episodes spot-checked |
 | **4 — Sweep + removal** | `thestill relink-unresolvable` sweeps the 318k backlog through the linker, most-frequent names first. Remove ReFinED: the dependency, the patches, `REFINED_DATA_DIR`, the smoke test, the 8.6 GB cache on the box. | `entities` extra installs without git; image shrinks |
 
-Phase 3 is the reason the backfill is on hold: running it through ReFinED
-now would link 494 episodes with the tool being retired and leave their
-post-2022 names to be swept again.
+The backfill waited for Phase 3 on purpose: running it through ReFinED
+would have linked those episodes with the tool being retired and left
+their post-2022 names to be swept again.
+
+Known before the cutover, all inert under `refined` and open as follow-ups:
+a Wikipedia outage, or a podcast language with no Wikipedia edition, fails
+every name of the episode (`candidates.py`); one off-schema field in a
+chooser answer classifies the LLM as unreachable rather than broken; and
+`_with_stable_identity` opens a connection per mention on Postgres, which
+matters for the Phase 4 sweep, not for the daily trickle.
 
 ---
 

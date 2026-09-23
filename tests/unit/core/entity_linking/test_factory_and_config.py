@@ -45,9 +45,10 @@ def env(monkeypatch, tmp_path):
     reset_shared_rate_limiter()
 
 
-def test_defaults_keep_refined(env):
+def test_defaults_use_the_live_linker(env):
+    """A fresh install links against current Wikidata; ReFinED is opt-in."""
     config = load_config()
-    assert config.entity_linker == "refined"
+    assert config.entity_linker == "live"
     assert (config.entity_linking_provider, config.entity_linking_model) == ("", "")
     assert config.entity_linking_min_confidence == "medium"
     assert config.entity_linking_none_ttl_days == 30

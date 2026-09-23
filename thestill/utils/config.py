@@ -539,10 +539,11 @@ class Config(BaseModel):
     # Per-token HTTP request limit on the /mcp endpoint (429 above it).
     mcp_token_requests_per_minute: int = 120
 
-    # Entity linking (spec #81). ``refined`` is the 2022 ReFinED model;
-    # ``live`` looks names up in live Wikidata and lets an LLM choose among
-    # the candidates. Provider/model empty = the cleaning provider and model.
-    entity_linker: str = "refined"  # refined | live
+    # Entity linking (spec #81). ``live`` looks names up in live Wikidata and
+    # lets an LLM choose among the candidates; ``refined`` is the 2022 ReFinED
+    # model, kept for installs that still have the ``entities`` extra.
+    # Provider/model empty = the cleaning provider and model.
+    entity_linker: str = "live"  # live | refined
     entity_linking_provider: str = ""
     entity_linking_model: str = ""
     entity_linking_min_confidence: str = "medium"  # lowest chooser confidence that links: low | medium | high
@@ -871,7 +872,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
         "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
         # Entity enrichment (spec #45 Tier 0)
-        "entity_linker": os.getenv("ENTITY_LINKER", "refined").lower(),
+        "entity_linker": os.getenv("ENTITY_LINKER", "live").lower(),
         "entity_linking_provider": os.getenv("ENTITY_LINKING_PROVIDER", "").lower(),
         "entity_linking_model": os.getenv("ENTITY_LINKING_MODEL", ""),
         "entity_linking_min_confidence": os.getenv("ENTITY_LINKING_MIN_CONFIDENCE", "medium").lower(),
