@@ -275,6 +275,58 @@ describe('Briefing readiness gate', () => {
   })
 })
 
+describe('Scheduled briefing card (spec #84)', () => {
+  function briefing(overrides: Record<string, unknown> = {}) {
+    return {
+      status: 'ok',
+      timestamp: '2026-09-24T08:00:00Z',
+      id: 'b-1',
+      user_id: 'user-1',
+      cursor_from: '2026-09-23T07:00:00Z',
+      cursor_to: '2026-09-24T07:00:00Z',
+      episode_count: 4,
+      script_path: null,
+      audio_path: null,
+      created_at: '2026-09-24T07:00:00Z',
+      listened_at: null,
+      narrations: [],
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUseInbox.mockReturnValue({ data: inboxResponse([]), isLoading: false, error: null })
+  })
+
+  it('names the next edition and offers Generate now when the server schedules', async () => {
+    const mutate = vi.fn()
+    const next = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString()
+    mockUseLatestBriefing.mockReturnValue({
+      data: briefing({ next_run_at: next }),
+      isLoading: false,
+      error: null,
+    })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate, isPending: false, isError: false, error: null })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByText(/next (at|tomorrow|\w{3}) /)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Generate now' }))
+    expect(mutate).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the lazy card unchanged when no schedule owns generation', () => {
+    mockUseLatestBriefing.mockReturnValue({ data: briefing(), isLoading: false, error: null })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.queryByText(/next (at|tomorrow|\w{3}) /)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Generate now' })).toBeNull()
+  })
+})
+
 describe('Inbox unread indicator', () => {
   beforeEach(() => {
     vi.clearAllMocks()

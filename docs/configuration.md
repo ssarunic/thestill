@@ -343,6 +343,12 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 
 Ships dark; flip `BRIEFING_SCHEDULER_ENABLED=true` per deployment.
 
+With the scheduler on, the slot is the only automatic trigger (spec #84):
+opening the inbox returns the latest edition and never generates one, users
+without a schedule are seeded a daily 08:00 row in their browser timezone on
+first inbox open, and "Generate now" is the manual override. With it off,
+briefings are generated lazily on inbox open (spec #36).
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BRIEFING_SCHEDULER_ENABLED` | Run the background tick that generates briefings at each user's scheduled hour | `false` |

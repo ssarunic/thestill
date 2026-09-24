@@ -4,6 +4,7 @@
 > **Created:** 2026-07-07
 > **Author:** Product & Engineering
 > **Related:** [#36 per-user-digest-from-inbox](36-per-user-digest-from-inbox.md), [#48 refresh-feed-stage](48-refresh-feed-stage.md), [#33 narrated-digest](33-narrated-digest.md), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md)
+> **Superseded in part by:** [#84 scheduled-only-briefings](84-scheduled-only-briefings.md) (2026-09-24) — the lazy on-open trigger no longer fires for users with an enabled schedule while the scheduler runs, and every user is seeded a daily 08:00 row on first inbox open.
 
 ---
 

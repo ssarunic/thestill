@@ -1303,6 +1303,9 @@ export interface BriefingResponse extends Briefing {
   status: string
   timestamp: string
   narrations: NarrationSummary[]
+  // Spec #84: present when the scheduler owns generation — when the next
+  // edition is due. Absent on the lazy path.
+  next_run_at?: string | null
 }
 
 // Spec #55: a lazy latest request can be accepted but deferred while the

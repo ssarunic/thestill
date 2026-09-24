@@ -12,10 +12,27 @@ function formatRelative(iso: string): string {
   return `${Math.round(days)} day${days >= 1.5 ? 's' : ''} ago`
 }
 
+// Spec #84: when the server schedules editions, the card says when the
+// next one lands instead of pretending the open triggered anything.
+function formatNextRun(iso: string): string {
+  const next = new Date(iso)
+  const now = new Date()
+  const time = next.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const sameDay = next.toDateString() === now.toDateString()
+  if (sameDay) return `next at ${time}`
+  const tomorrow = new Date(now)
+  tomorrow.setDate(now.getDate() + 1)
+  if (next.toDateString() === tomorrow.toDateString()) return `next tomorrow ${time}`
+  const day = next.toLocaleDateString(undefined, { weekday: 'short' })
+  return `next ${day} ${time}`
+}
+
 // Spec #36: a "Today's briefing" card sits at the top of /inbox when a
 // recent briefing exists for the current user. Clicking it opens the
-// briefing detail page; the actual generation happens lazily on the
-// `/api/briefings/latest` GET inside `useLatestBriefing`.
+// briefing detail page. On the lazy path the generation happens on the
+// `/api/briefings/latest` GET inside `useLatestBriefing`; with the
+// scheduler running (spec #84) that GET is a read and `next_run_at` says
+// when the next edition is cut.
 export default function BriefingCard() {
   const { data, isLoading, error } = useLatestBriefing()
   const generateNow = useGenerateBriefingNow()
@@ -98,13 +115,29 @@ export default function BriefingCard() {
           {' • '}
           generated {formatRelative(data.created_at)}
           {data.listened_at ? ' • listened' : ''}
+          {data.next_run_at ? ` • ${formatNextRun(data.next_run_at)}` : ''}
         </p>
       </div>
       <span className="text-sm font-medium text-primary-700 group-hover:text-primary-800">
         Read →
       </span>
     </Link>
-      <div className="flex justify-end">
+      {generateNow.isError && (
+        <p role="alert" className="text-sm text-red-700">
+          {generateNow.error.message}
+        </p>
+      )}
+      <div className="flex justify-end gap-4">
+        {data.next_run_at && (
+          <button
+            type="button"
+            onClick={() => generateNow.mutate()}
+            disabled={generateNow.isPending}
+            className="text-xs text-gray-500 hover:text-primary-700 hover:underline disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {generateNow.isPending ? 'Generating…' : 'Generate now'}
+          </button>
+        )}
         <PastBriefingsLink />
       </div>
     </div>
