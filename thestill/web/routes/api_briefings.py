@@ -18,7 +18,15 @@ Per-user briefing API endpoints (spec #36).
 ``GET /latest`` lazy-generates: if no briefing exists or the throttle has
 elapsed and new inbox items are eligible, a fresh briefing is created and
 returned. The throttle in ``BriefingService`` keeps generation cost
-bounded; a future spec moves this to an explicit operator trigger.
+bounded.
+
+Spec #84: when the briefing scheduler is running and the user has an
+enabled schedule, opening the inbox is *not* a trigger. ``GET /latest``
+returns the latest edition as-is and the schedule slot is the only
+automatic cut; ``?force=true`` (the "Generate now" button) remains the
+explicit manual override. A user with no schedule row is seeded a daily
+08:00 one in the timezone the browser reports (``?tz=``), so scheduling is
+the default rather than an opt-in.
 """
 
 from datetime import datetime, timezone
@@ -47,8 +55,13 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 
-def _serialize(briefing: Briefing) -> dict:
-    return briefing.model_dump(mode="json")
+def _serialize(briefing: Briefing, *, next_run_at: Optional[datetime] = None) -> dict:
+    data = briefing.model_dump(mode="json")
+    if next_run_at is not None:
+        # Spec #84: tells the inbox card when the next scheduled edition
+        # lands, so "why is there nothing newer?" answers itself.
+        data["next_run_at"] = next_run_at.isoformat()
+    return data
 
 
 class NarrateBriefingRequest(BaseModel):
@@ -171,10 +184,59 @@ def list_briefings(
     )
 
 
+# Spec #84: the schedule every user gets on first inbox open when they have
+# never configured one. 08:00 local matches the Settings UI default.
+DEFAULT_SCHEDULE_HOUR_LOCAL = 8
+
+
+def _scheduler_running(app_state: AppState) -> bool:
+    return app_state.briefing_scheduler is not None and app_state.briefing_schedule_repository is not None
+
+
+def _ensure_default_schedule(app_state: AppState, user: User, tz: Optional[str]) -> Optional[BriefingSchedule]:
+    """Return the user's schedule, seeding the spec #84 default if absent.
+
+    The server never knows the user's timezone at signup (the Google
+    callback carries none), so the seed happens on the first ``GET /latest``
+    that reports one. No ``tz`` or an unknown zone means no row: FM-4, never
+    silently default to UTC and fire at the wrong hour.
+    """
+    repo = app_state.briefing_schedule_repository
+    assert repo is not None
+    existing = repo.get(user.id)
+    if existing is not None or not tz:
+        return existing
+    now = datetime.now(timezone.utc)
+    try:
+        schedule = BriefingSchedule(
+            user_id=user.id,
+            frequency=BriefingFrequency.DAILY,
+            hour_local=DEFAULT_SCHEDULE_HOUR_LOCAL,
+            timezone_name=tz,
+            enabled=True,
+            created_at=now,
+            updated_at=now,
+        )
+    except ValidationError:
+        logger.warning("briefing_schedule_default_skipped", user_id=user.id, tz=tz, reason="invalid_timezone")
+        return None
+    schedule.next_run_at = next_run_for(schedule, after=now)
+    repo.upsert(schedule)
+    logger.info(
+        "briefing_schedule_defaulted",
+        user_id=user.id,
+        hour_local=schedule.hour_local,
+        tz=schedule.timezone_name,
+        next_run_at=schedule.next_run_at.isoformat() if schedule.next_run_at else None,
+    )
+    return schedule
+
+
 @router.get("/latest")
 def get_latest_briefing(
     response: Response,
     force: bool = False,
+    tz: Optional[str] = None,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
@@ -183,7 +245,23 @@ def get_latest_briefing(
     Returns 202 while followed, pre-cutoff episodes are still processing,
     unless ``force=true`` skips the readiness gate. Returns 404 when the inbox
     has no eligible items in the open window.
+
+    Spec #84: with the scheduler running and an enabled schedule, this is a
+    read — the latest edition comes back untouched (plus ``next_run_at``)
+    and only the schedule slot or ``force=true`` cuts a new one. The one
+    exception is a user with no briefing at all, who gets a first edition
+    lazily rather than waiting for tomorrow's slot.
     """
+    next_run_at: Optional[datetime] = None
+    if _scheduler_running(app_state):
+        schedule = _ensure_default_schedule(app_state, user, tz)
+        if schedule is not None and schedule.enabled:
+            next_run_at = schedule.next_run_at
+            if not force:
+                latest = app_state.briefing_service.latest_for_user(user.id)
+                if latest is not None:
+                    return api_response(_serialize(latest, next_run_at=next_run_at))
+
     briefing = app_state.briefing_service.generate_for_user(user.id, force=force)
     if isinstance(briefing, Deferred):
         response.status_code = 202
@@ -197,7 +275,7 @@ def get_latest_briefing(
         )
     if briefing is None:
         not_found("Briefing", "latest")
-    return api_response(_serialize(briefing))
+    return api_response(_serialize(briefing, next_run_at=next_run_at))
 
 
 def _serialize_schedule(schedule: BriefingSchedule) -> dict:
