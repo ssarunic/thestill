@@ -2,7 +2,10 @@ import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import type { EntityCitationRow, EpisodeEntity, MentionLite } from '../../api/types'
 import { entityHref, entitySlug, entityStyle } from '../../utils/entityColors'
+import { formatClock } from '../../utils/formatClock'
 import { useEntitySummary } from '../../hooks/useApi'
+import { episodeTimestampPath } from '../../hooks/useDeepLinkSeek'
+import { mentionPermalinkHash } from './mentionPermalink'
 
 // Spec #28 §5.2 visual rules — "Hover card (≤200px wide): name, type,
 // 1-line Wikidata gloss, last 3 mentions of this entity on the same
@@ -15,8 +18,10 @@ import { useEntitySummary } from '../../hooks/useApi'
 // was; only "Open entity page" navigates.
 //
 // The gloss and the recent-mention list come from the entity-summary
-// endpoint, lazily fetched the first time the peek opens and cached by
-// react-query, so a hover costs at most one round-trip per entity.
+// endpoint, cached by react-query. The shell decides when the fetch is
+// worth it (`summaryEnabled`): on a click, or once a hover has settled —
+// a cursor sweeping across a dense paragraph must not fire a summary
+// query per entity it crosses.
 
 export interface EntityHoverCardProps {
   episodeEntity: EpisodeEntity
@@ -34,22 +39,39 @@ export interface EntityHoverCardProps {
   onNavigate?: () => void
   // Phone sheet: larger type and tap targets.
   sheet?: boolean
+  // Whether to fetch the entity summary (gloss + other episodes) now.
+  summaryEnabled?: boolean
 }
 
 function formatTimestamp(ms: number): string {
-  const total = Math.floor(ms / 1000)
-  const hh = Math.floor(total / 3600)
-  const mm = Math.floor((total % 3600) / 60)
-  const ss = total % 60
-  const pad = (n: number) => n.toString().padStart(2, '0')
-  return hh > 0 ? `${hh}:${pad(mm)}:${pad(ss)}` : `${mm}:${pad(ss)}`
+  return formatClock(ms / 1000)
 }
 
 const OTHER_MENTIONS_CAP = 3
 
 function otherEpisodeHref(row: EntityCitationRow): string | null {
   if (!row.podcast_slug || !row.episode_slug) return null
-  return `/podcasts/${row.podcast_slug}/episodes/${row.episode_slug}?t=${Math.floor(row.start_ms / 1000)}`
+  return episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
+}
+
+// The mentions prev/next can actually reach: one per segment (a segment's
+// mentions of the same entity share one anchor id), and only those whose
+// highlight is in the DOM — a mention below the confidence floor, one
+// whose surface form was not found in the segment text, or one inside a
+// collapsed group has no anchor to scroll to. Sorted by time.
+function navigableMentions(entityId: string, mentions: MentionLite[]): MentionLite[] {
+  const ordered = mentions.slice().sort((a, b) => a.start_ms - b.start_ms)
+  const seenSegments = new Set<number>()
+  const out: MentionLite[] = []
+  for (const m of ordered) {
+    if (seenSegments.has(m.segment_id)) continue
+    seenSegments.add(m.segment_id)
+    if (typeof document !== 'undefined' && !document.getElementById(mentionPermalinkHash(entityId, m.segment_id))) {
+      continue
+    }
+    out.push(m)
+  }
+  return out
 }
 
 export default function EntityHoverCard({
@@ -60,26 +82,23 @@ export default function EntityHoverCard({
   onJumpToMention,
   onNavigate,
   sheet = false,
+  summaryEnabled = true,
 }: EntityHoverCardProps) {
   const { entity, mention_count, speaker_kind, mentions } = episodeEntity
   const style = entityStyle(entity.type)
-  const { data: summary } = useEntitySummary(entity.type, entitySlug(entity.id))
+  const { data: summary } = useEntitySummary(
+    summaryEnabled ? entity.type : null,
+    summaryEnabled ? entitySlug(entity.id) : null,
+  )
   const wikidataUrl = entity.wikidata_qid
     ? `https://www.wikidata.org/wiki/${entity.wikidata_qid}`
     : null
 
-  // In-episode position: mentions sorted by time, current one located by
-  // id (the serializer falls back to id 0 when missing, so also match on
-  // segment + start as a tiebreak).
-  const ordered = useMemo(
-    () => mentions.slice().sort((a, b) => a.start_ms - b.start_ms),
-    [mentions],
-  )
-  const currentIdx = ordered.findIndex(
-    (m) =>
-      (m.id !== 0 && m.id === mention.id)
-      || (m.segment_id === mention.segment_id && m.start_ms === mention.start_ms),
-  )
+  // In-episode position among the reachable mentions; the current one is
+  // located by segment (its own anchor is the one this card opened from).
+  // Read once per open — the card only mounts while the peek is showing.
+  const ordered = useMemo(() => navigableMentions(entity.id, mentions), [entity.id, mentions])
+  const currentIdx = ordered.findIndex((m) => m.segment_id === mention.segment_id)
   const prev = currentIdx > 0 ? ordered[currentIdx - 1] : null
   const next = currentIdx !== -1 && currentIdx < ordered.length - 1 ? ordered[currentIdx + 1] : null
 
@@ -114,7 +133,7 @@ export default function EntityHoverCard({
       className={
         sheet
           ? 'px-5 pb-5 pt-1'
-          : 'z-30 w-56 rounded-md border border-gray-200 bg-white p-3 shadow-lg'
+          : 'w-56 rounded-md border border-gray-200 bg-white p-3 shadow-lg'
       }
       data-testid="entity-hover-card"
     >

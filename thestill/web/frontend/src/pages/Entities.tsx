@@ -3,6 +3,8 @@ import { useParams, Link } from 'react-router-dom'
 import { useEntitySummary } from '../hooks/useApi'
 import type { EntityCitationRow, EntityType, HostedPodcastRef } from '../api/types'
 import { entityHref, entityStyle } from '../utils/entityColors'
+import { formatClock } from '../utils/formatClock'
+import { episodeTimestampPath } from '../hooks/useDeepLinkSeek'
 import { usePlayer } from '../contexts/PlayerContext'
 
 // Spec #45 Tier 0 — entity page enriched with Wikidata/Wikipedia data:
@@ -15,14 +17,7 @@ import { usePlayer } from '../contexts/PlayerContext'
 const VALID_TYPES = new Set<EntityType>(['person', 'company', 'product', 'topic'])
 
 function formatTimestamp(ms: number): string {
-  const total = Math.floor(ms / 1000)
-  const hh = Math.floor(total / 3600)
-  const mm = Math.floor((total % 3600) / 60)
-  const ss = total % 60
-  if (hh > 0) {
-    return `${hh}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`
-  }
-  return `${mm}:${ss.toString().padStart(2, '0')}`
+  return formatClock(ms / 1000)
 }
 
 // Bold every case-insensitive occurrence of the mention's `surface_form`
@@ -427,7 +422,7 @@ export default function Entities() {
               <ul className="mt-3 divide-y divide-gray-100">
                 {data.recent_mentions.map((row, idx) => {
                   const seekHref = row.podcast_slug && row.episode_slug
-                    ? `/podcasts/${row.podcast_slug}/episodes/${row.episode_slug}?t=${Math.floor(row.start_ms / 1000)}`
+                    ? episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
                     : null
                   const canPlayInline =
                     Boolean(row.audio_url) && Boolean(row.podcast_slug) && Boolean(row.episode_slug)

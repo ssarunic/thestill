@@ -49,3 +49,6 @@ export function mediaLayerZIndex(slot: Element): number {
   if (slot.closest('[role="dialog"]')) return 60
   return 40
 }
+
+/** The transient rung (`z-[70]`) as a number, for inline-styled portals such as the entity peek card. */
+export const TRANSIENT_LAYER_Z = 70

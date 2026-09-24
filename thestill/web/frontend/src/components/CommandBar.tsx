@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuickSearch } from '../hooks/useApi'
+import { episodeTimestampPath } from '../hooks/useDeepLinkSeek'
 import type {
   QuickEntityItem,
   QuickEpisodeItem,
@@ -520,7 +521,7 @@ function handleActivate(
       )
       return
     }
-    navigate(`/podcasts/${item.podcast_slug}/episodes/${item.episode_slug}?t=${seconds}`)
+    navigate(episodeTimestampPath(item.podcast_slug, item.episode_slug, seconds))
     return
   }
   // Entity hits — Phase 5.1 entity page is now live. The entity id is
