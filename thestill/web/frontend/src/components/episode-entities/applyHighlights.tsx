@@ -2,6 +2,7 @@ import { Fragment, type ReactNode } from 'react'
 import type { EpisodeEntity, MentionLite } from '../../api/types'
 import EntityHighlight from './EntityHighlight'
 import { INLINE_HIGHLIGHT_CONFIDENCE_FLOOR } from '../../utils/entityColors'
+import { isSpeakingMention } from './mentionPermalink'
 
 // Spec #28 §5.2 — inline entity highlights inside transcript segments.
 //
@@ -56,6 +57,25 @@ export interface SegmentMentionSet {
   // Desktop or phone peek; resolved once by the viewer rather than once
   // per highlight.
   isSmUp?: boolean
+}
+
+export interface SpeakerMention {
+  entity: EpisodeEntity
+  mention: MentionLite
+}
+
+// The person speaking this segment, when the extractor linked the
+// speaker label to an entity (a `speaking` mention, one per segment). The
+// label is not in the segment text, so `applyEntityHighlights` never
+// reaches it; the segment renderer wraps the label itself.
+export function findSpeakerMention(segmentMentions: SegmentMentionSet | null): SpeakerMention | null {
+  if (!segmentMentions) return null
+  for (const mention of segmentMentions.mentions) {
+    if (!isSpeakingMention(mention) || mention.confidence < INLINE_HIGHLIGHT_CONFIDENCE_FLOOR) continue
+    const entity = segmentMentions.entityById.get(mention.entity_id)
+    if (entity) return { entity, mention }
+  }
+  return null
 }
 
 interface Span {

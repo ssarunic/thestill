@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
-import { applyEntityHighlights, type SegmentMentionSet } from './applyHighlights'
+import { applyEntityHighlights, findSpeakerMention, type SegmentMentionSet } from './applyHighlights'
 import type { EpisodeEntity, MentionLite } from '../../api/types'
 
 function entity(id: string, name: string): EpisodeEntity {
@@ -184,5 +184,20 @@ describe('applyEntityHighlights', () => {
     const marks = container.querySelectorAll('mark')
     expect(marks).toHaveLength(1)
     expect(marks[0].textContent).toBe('outcome')
+  })
+})
+
+describe('findSpeakerMention', () => {
+  it('returns the linked speaker of the segment, ignoring in-text mentions and unlinked speakers', () => {
+    const alice = entity('person:alice', 'Alice')
+    const named = mention(1, 'person:alice', 'Alice', 0.9)
+    const speaking = { ...mention(2, 'person:alice', 'Alice', 1), role: 'speaking' }
+    expect(findSpeakerMention(null)).toBeNull()
+    expect(findSpeakerMention(setOf([alice], [named]))).toBeNull()
+    expect(findSpeakerMention(setOf([alice], [named, speaking]))).toEqual({ entity: alice, mention: speaking })
+    // Speaker linked to an entity that is filtered out of the set.
+    expect(findSpeakerMention(setOf([], [speaking]))).toBeNull()
+    // Below the confidence floor.
+    expect(findSpeakerMention(setOf([alice], [{ ...speaking, confidence: 0.2 }]))).toBeNull()
   })
 })

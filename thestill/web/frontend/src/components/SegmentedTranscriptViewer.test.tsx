@@ -6,6 +6,9 @@ import type {
   AnnotatedTranscriptDump,
   SegmentKind,
 } from '../api/types'
+import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import type { EpisodeEntity, MentionLite } from '../api/types'
 import { PlayerProvider } from '../contexts/PlayerContext'
 import SegmentedTranscriptViewer from './SegmentedTranscriptViewer'
 import { ToastProvider } from './Toast'
@@ -352,6 +355,74 @@ describe('SegmentedTranscriptViewer', () => {
         .querySelector('span.font-semibold') as HTMLElement
       expect(speakerLabel.textContent).toContain('Alice')
       expect(speakerLabel.style.color).toBe('rgb(0, 100, 166)')
+    })
+  })
+
+  describe('speaker labels', () => {
+    const speaking: MentionLite = {
+      id: 7,
+      entity_id: 'person:alice',
+      segment_id: 1,
+      start_ms: 0,
+      end_ms: 10_000,
+      speaker: 'Alice',
+      role: 'speaking',
+      surface_form: 'Alice',
+      quote_excerpt: 'First segment',
+      confidence: 1,
+      sentiment: null,
+    }
+    const alice: EpisodeEntity = {
+      entity: { id: 'person:alice', type: 'person', canonical_name: 'Alice', wikidata_qid: null },
+      mention_count: 1,
+      first_mention_ms: 0,
+      speaker_kind: 'host',
+      salience: 1,
+      mentions: [speaking],
+    }
+
+    function renderWithSpeaker(enabled = true, onSeekRequest = vi.fn()) {
+      // The peek fetches the entity summary through react-query.
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <ToastProvider>
+              <PlayerProvider>
+                <SegmentedTranscriptViewer
+                  transcript={defaultTranscript()}
+                  entitiesById={new Map([[alice.entity.id, alice]])}
+                  mentionsBySegmentId={new Map([[1, [speaking]]])}
+                  entityHighlightsEnabled={enabled}
+                  onSeekRequest={onSeekRequest}
+                />
+              </PlayerProvider>
+            </ToastProvider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      return onSeekRequest
+    }
+
+    it('links the label to the entity, with its own anchor, and opens the peek instead of seeking', () => {
+      const onSeekRequest = renderWithSpeaker()
+      const label = screen.getByRole('link', { name: /Alice, Person, 1 mention/ })
+      expect(label).toHaveAttribute('href', '/entities/person/alice')
+      expect(label).toHaveAttribute('id', 'm=person:alice:1:speaker')
+      expect(label).toHaveAttribute('data-variant', 'speaker')
+      expect(screen.getByTestId('segment-content-1')).toContainElement(label)
+      fireEvent.click(label)
+      expect(onSeekRequest).not.toHaveBeenCalled()
+      expect(screen.getByTestId('entity-hover-card')).toHaveTextContent('host')
+      // Bob's segment has no linked speaker: plain text.
+      expect(screen.queryByRole('link', { name: /Bob/ })).not.toBeInTheDocument()
+      expect(screen.getByTestId('segment-content-2')).toHaveTextContent('Bob:')
+    })
+
+    it('stays plain text while entity highlights are off', () => {
+      renderWithSpeaker(false)
+      expect(screen.queryByRole('link', { name: /Alice, Person/ })).not.toBeInTheDocument()
+      expect(screen.getByTestId('segment-content-1')).toHaveTextContent('Alice:')
     })
   })
 })

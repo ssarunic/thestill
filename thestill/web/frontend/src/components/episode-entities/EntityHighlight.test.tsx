@@ -347,6 +347,54 @@ describe('EntityHighlight', () => {
     expect(screen.getByTestId('entity-peek-image')).toHaveAttribute('src', 'https://img/alice.jpg')
   })
 
+  describe('as a speaker label', () => {
+    const turns = [
+      { ...mention(11, 20, 60_000), role: 'speaking' },
+      { ...mention(12, 30, 120_000), role: 'speaking' },
+      { ...mention(13, 40, 180_000), role: 'speaking' },
+    ]
+    const talkative: EpisodeEntity = {
+      ...ALICE,
+      mention_count: 6,
+      mentions: [...MENTIONS, ...turns],
+    }
+
+    it('has its own anchor and steps through turns, not name-drops', () => {
+      render(
+        <MemoryRouter>
+          <EntityHighlight episodeEntity={talkative} mention={turns[1]} variant="speaker">
+            Alice
+          </EntityHighlight>
+          {/* Other turns' speaker anchors and the in-text anchors, as the transcript renders them. */}
+          <a id="m=person:alice:20:speaker" href="/x">turn 1</a>
+          <a id="m=person:alice:40:speaker" href="/x">turn 3</a>
+          <a id="m=person:alice:10" href="/x">named 1</a>
+          <a id="m=person:alice:30" href="/x">named 3</a>
+        </MemoryRouter>,
+      )
+      const label = screen.getByRole('link', { name: /Alice, Person, 6 mentions/ })
+      expect(label).toHaveAttribute('id', 'm=person:alice:30:speaker')
+      expect(label).not.toHaveClass('underline')
+      fireEvent.click(label)
+      expect(screen.getByTestId('entity-hover-card')).toHaveTextContent('6× this episode · 2 of 3 turns')
+
+      const scrollTurn3 = vi.fn()
+      const scrollNamed3 = vi.fn()
+      ;(document.getElementById('m=person:alice:40:speaker') as HTMLElement).scrollIntoView = scrollTurn3
+      ;(document.getElementById('m=person:alice:30') as HTMLElement).scrollIntoView = scrollNamed3
+      fireEvent.click(screen.getByRole('button', { name: 'Next turn at 3:00' }))
+      expect(scrollTurn3).toHaveBeenCalled()
+      expect(scrollNamed3).not.toHaveBeenCalled()
+    })
+
+    it('an in-text mention of the same person still steps through name-drops only', () => {
+      renderHighlight({ episodeEntity: talkative })
+      fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+      expect(screen.getByTestId('entity-hover-card')).toHaveTextContent('6× this episode · 2 of 3')
+      expect(screen.getByRole('button', { name: 'Next mention at 2:05' })).toBeEnabled()
+    })
+  })
+
   describe('on a phone', () => {
     function renderPhone(onSegmentActivate = vi.fn()) {
       return renderHighlight({ isSmUp: false }, onSegmentActivate)
