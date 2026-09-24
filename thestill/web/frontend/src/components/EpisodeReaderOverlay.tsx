@@ -3,11 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import EpisodeReader from './EpisodeReader'
 import CollapsedEpisodeBar, { type CollapsedHeaderState } from './CollapsedEpisodeBar'
 import { abovePlayer } from '../constants/layers'
-
-// Elements the focus trap cycles through. Mirrors what a browser considers
-// tabbable closely enough for this panel's content.
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock'
+import { trapTabKey } from '../utils/focusTrap'
 
 /**
  * Spec #52 — inbox reader overlay chrome. Rendered by App's overlay route
@@ -68,13 +65,7 @@ export default function EpisodeReaderOverlay() {
   }, [close])
 
   // Lock body scroll behind the overlay (the panel scrolls its own div).
-  useEffect(() => {
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previous
-    }
-  }, [])
+  useBodyScrollLock(true)
 
   // Move focus into the panel on open; restore it to the originating
   // element (the clicked inbox row) on close.
@@ -85,22 +76,7 @@ export default function EpisodeReaderOverlay() {
   }, [])
 
   // Keep Tab / Shift+Tab cycling inside the panel while it is open.
-  const trapFocus = useCallback((e: React.KeyboardEvent) => {
-    if (e.key !== 'Tab') return
-    const panel = panelRef.current
-    if (!panel) return
-    const focusable = panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
-    if (focusable.length === 0) return
-    const first = focusable[0]
-    const last = focusable[focusable.length - 1]
-    if (e.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault()
-      first.focus()
-    }
-  }, [])
+  const trapFocus = useCallback((e: React.KeyboardEvent) => trapTabKey(e, panelRef.current), [])
 
   return (
     <div

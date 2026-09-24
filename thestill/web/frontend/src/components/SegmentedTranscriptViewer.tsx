@@ -26,6 +26,7 @@ import {
   usePersistedBoolean,
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
+import { useIsSmUp } from '../hooks/useMediaQuery'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
 import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
@@ -818,6 +819,10 @@ export default function SegmentedTranscriptViewer({
   // Spec #28 §5.2 — per-segment mention sets, scoped down to entities
   // we have records for. Computed once per (entitiesById x mentions)
   // change rather than per segment render.
+  // The peek's desktop/phone form is decided here, once, and carried on
+  // every segment's mention set — hundreds of highlights must not each
+  // subscribe to the media query.
+  const isSmUp = useIsSmUp()
   const segmentMentionSets = useMemo<Map<number, SegmentMentionSet>>(() => {
     const out = new Map<number, SegmentMentionSet>()
     if (!entitiesById || !mentionsBySegmentId) return out
@@ -827,10 +832,12 @@ export default function SegmentedTranscriptViewer({
       out.set(segId, {
         entityById: entitiesById,
         mentions: eligible,
+        episodeId: episodeId ?? null,
+        isSmUp,
       })
     }
     return out
-  }, [entitiesById, mentionsBySegmentId])
+  }, [entitiesById, mentionsBySegmentId, episodeId, isSmUp])
 
   // Affordances #1 (`[` / `]` jump prev/next mention of focused entity)
   // and #2 (`E` toggle highlights). Bind globally on the viewer root —

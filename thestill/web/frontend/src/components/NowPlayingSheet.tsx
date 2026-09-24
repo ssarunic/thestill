@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 import { useEpisodeEntities } from '../hooks/useApi'
 import { abovePlayer, MEDIA_HOST_ATTR } from '../constants/layers'
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock'
+import { useSwipeDownToClose } from '../hooks/useSwipeDownToClose'
+import { trapTabKey } from '../utils/focusTrap'
 import { selectTopEntities } from '../utils/mentionDensity'
 import { entityStyle } from '../utils/entityColors'
 import { formatClock } from '../utils/formatClock'
@@ -18,14 +21,6 @@ interface NowPlayingSheetProps {
   isOpen: boolean
   onClose: () => void
 }
-
-// Mirrors EpisodeReaderOverlay's trap: close enough to the browser's notion
-// of tabbable for this panel's controls.
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-
-// Swipe-down on the phone sheet's drag handle closes past this travel.
-const SWIPE_CLOSE_PX = 80
 
 const VolumeIcon = ({ muted }: { muted: boolean }) => (
   <svg fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
@@ -155,14 +150,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   }, [active, isPhone, onClose])
 
   // Phone sheet: lock the page behind it.
-  useEffect(() => {
-    if (!active || !isPhone) return
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previous
-    }
-  }, [active, isPhone])
+  useBodyScrollLock(active && isPhone)
 
   // Focus moves into the panel on open and back to the opener on close.
   useEffect(() => {
@@ -172,46 +160,16 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
     return () => origin?.focus()
   }, [active])
 
+  // Phone sheet only: the desktop card is not modal.
   const trapFocus = useCallback(
     (e: React.KeyboardEvent) => {
-      if (!isPhone || e.key !== 'Tab') return
-      const panel = panelRef.current
-      if (!panel) return
-      const focusable = panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
+      if (isPhone) trapTabKey(e, panelRef.current)
     },
     [isPhone],
   )
 
   // Swipe-down on the drag handle (phone).
-  const [dragY, setDragY] = useState(0)
-  const dragRef = useRef<{ pointerId: number; startY: number } | null>(null)
-  const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    dragRef.current = { pointerId: e.pointerId, startY: e.clientY }
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-  const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    setDragY(Math.max(0, e.clientY - drag.startY))
-  }
-  const onHandlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== e.pointerId) return
-    dragRef.current = null
-    const travelled = e.clientY - drag.startY
-    setDragY(0)
-    if (travelled >= SWIPE_CLOSE_PX) onClose()
-  }
+  const { dragY, handleProps } = useSwipeDownToClose(onClose)
 
   if (!active || !track) return null
 
@@ -240,10 +198,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
       {isPhone && (
         <div
           className="flex cursor-grab touch-none justify-center py-2 active:cursor-grabbing"
-          onPointerDown={onHandlePointerDown}
-          onPointerMove={onHandlePointerMove}
-          onPointerUp={onHandlePointerUp}
-          onPointerCancel={onHandlePointerUp}
+          {...handleProps}
           data-testid="now-playing-drag-handle"
           aria-hidden="true"
         >

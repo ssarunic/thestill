@@ -36,3 +36,13 @@ export function buildTimestampDeepLink(seconds: number): string {
   url.searchParams.set('t', String(Math.floor(seconds)))
   return url.toString()
 }
+
+/**
+ * In-app path to an episode's reader at a moment: `?t=` is whole seconds,
+ * which `useDeepLinkSeek` reads back. Every link that lands a reader on a
+ * timestamp (entity page rows, ⌘K results, the peek's "Also mentioned on")
+ * goes through here so the contract lives in one place.
+ */
+export function episodeTimestampPath(podcastSlug: string, episodeSlug: string, seconds: number): string {
+  return `/podcasts/${podcastSlug}/episodes/${episodeSlug}?t=${Math.floor(seconds)}`
+}

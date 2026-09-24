@@ -50,6 +50,12 @@ export interface SegmentMentionSet {
   entityById: Map<string, EpisodeEntity>
   // The mentions that fall inside this segment.
   mentions: MentionLite[]
+  // The episode being read, so the peek card can tell this episode's
+  // mentions apart from the entity's mentions elsewhere.
+  episodeId?: string | null
+  // Desktop or phone peek; resolved once by the viewer rather than once
+  // per highlight.
+  isSmUp?: boolean
 }
 
 interface Span {
@@ -144,6 +150,8 @@ export function applyEntityHighlights({
           key={spanKey}
           episodeEntity={entity}
           mention={span.mention}
+          episodeId={segmentMentions.episodeId ?? null}
+          isSmUp={segmentMentions.isSmUp ?? true}
           onSeek={onSeek}
           onFocusEntity={onFocusEntity}
         >
