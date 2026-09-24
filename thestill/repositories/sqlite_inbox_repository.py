@@ -25,11 +25,12 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
 from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
+from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from ..utils.sqlite_ext import connect
 from .inbox_repository import InboxRepository
 from .sqlite_podcast_repository import episode_from_row
@@ -212,6 +213,7 @@ class SqliteInboxRepository(InboxRepository):
         state: Optional[str] = None,
         limit: int = 50,
         before: Optional[datetime] = None,
+        query_tokens: Sequence[str] = (),
     ) -> List[InboxItem]:
         if limit <= 0:
             return []
@@ -229,6 +231,16 @@ class SqliteInboxRepository(InboxRepository):
         if before is not None:
             clauses.append("i.delivered_at < ?")
             params.append(before.isoformat())
+        for token in query_tokens:
+            # Spec #85: tokens AND, fields OR. SQLite's LIKE only folds ASCII
+            # case and only when both sides are lower-cased by us.
+            pattern = substring_pattern(token).lower()
+            clauses.append(
+                f"(LOWER(e.title) LIKE ? {LIKE_ESCAPE_CLAUSE}"
+                f" OR LOWER(p.title) LIKE ? {LIKE_ESCAPE_CLAUSE}"
+                f" OR LOWER(COALESCE(e.description, '')) LIKE ? {LIKE_ESCAPE_CLAUSE})"
+            )
+            params.extend([pattern, pattern, pattern])
         where = " AND ".join(clauses)
         params.append(limit)
 

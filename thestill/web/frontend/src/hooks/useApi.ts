@@ -1048,7 +1048,9 @@ export interface UseInboxInfiniteOptions extends Omit<GetInboxOptions, 'before'>
  */
 export function useInboxInfinite({ refetchInterval, ...options }: UseInboxInfiniteOptions = {}) {
   return useInfiniteQuery({
-    queryKey: ['inbox', 'infinite', options.state ?? null, options.limit ?? null],
+    // ``q`` in the key so a new search starts from page one instead of
+    // appending pages from a different filter (spec #85).
+    queryKey: ['inbox', 'infinite', options.state ?? null, options.limit ?? null, options.q ?? null],
     queryFn: ({ pageParam }) => getInbox({ ...options, before: pageParam || undefined }),
     initialPageParam: '',
     getNextPageParam: (lastPage) => lastPage.next_before ?? undefined,

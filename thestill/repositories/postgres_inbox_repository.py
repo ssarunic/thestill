@@ -28,13 +28,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
 from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
 from ..models.podcast import Episode, FailureType
 from ..utils.postgres_ext import as_str, connect
+from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from .inbox_repository import InboxRepository
 
 logger = get_logger(__name__)
@@ -275,6 +276,7 @@ class PostgresInboxRepository(InboxRepository):
         state: Optional[str] = None,
         limit: int = 50,
         before: Optional[datetime] = None,
+        query_tokens: Sequence[str] = (),
     ) -> List[InboxItem]:
         if limit <= 0:
             return []
@@ -292,6 +294,15 @@ class PostgresInboxRepository(InboxRepository):
         if before is not None:
             clauses.append("i.delivered_at < %s")
             params.append(before)
+        for token in query_tokens:
+            # Spec #85: tokens AND, fields OR. ILIKE folds case natively.
+            pattern = substring_pattern(token)
+            clauses.append(
+                f"(e.title ILIKE %s {LIKE_ESCAPE_CLAUSE}"
+                f" OR p.title ILIKE %s {LIKE_ESCAPE_CLAUSE}"
+                f" OR COALESCE(e.description, '') ILIKE %s {LIKE_ESCAPE_CLAUSE})"
+            )
+            params.extend([pattern, pattern, pattern])
         where = " AND ".join(clauses)
         params.append(limit)
 

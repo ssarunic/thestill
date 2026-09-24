@@ -1,6 +1,6 @@
 # Inbox Search
 
-> **Status:** 💡 Proposal
+> **Status:** ✅ Implemented — Phases 1–2 (2026-09-24)
 > **Created:** 2026-09-24
 > **Author:** Product & Engineering
 > **Related:** [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md), [#52 inbox-reader-overlay](52-inbox-reader-overlay.md), [#84 scheduled-only-briefings](84-scheduled-only-briefings.md)
@@ -97,9 +97,13 @@ the request log.
 ### Frontend
 
 - A search input in the inbox header, left of the Import button, placeholder
-  "Search your inbox". On phones it collapses to an icon that expands the
-  field full-width above the list, matching the Import button's
-  `iconOnlyMobile` pattern.
+  "Search your inbox". On phones it renders as a full-width row under the
+  header, the same dual-render the Podcasts page uses (decided 2026-09-24
+  over the icon-that-expands idea: no new widget, one proven pattern).
+- The input and the debounce-into-URL block are shared code
+  (`components/SearchBox.tsx`, `hooks/useDebouncedSearchParam.ts`), lifted
+  from the Podcasts page. Podcasts and TopPodcasts keep their inline copies
+  and migrate in a follow-up so this change does not touch those pages.
 - Input is debounced 250 ms before it hits the query; Escape clears it.
 - The query lives in the URL as `?q=` so Back restores it and the scroll
   position, per the list-page convention (`useSearchParams`, not local
@@ -151,31 +155,41 @@ tools today and this spec does not add one.
 
 ### Phase 1 — API + repository
 
-- [ ] `list_items(query_tokens=…)` on `InboxRepository`, Postgres and SQLite
+- [x] `list_items(query_tokens=…)` on `InboxRepository`, Postgres and SQLite
       ([inbox_repository.py](../thestill/repositories/inbox_repository.py),
       [postgres_inbox_repository.py](../thestill/repositories/postgres_inbox_repository.py),
       [sqlite_inbox_repository.py](../thestill/repositories/sqlite_inbox_repository.py)).
-- [ ] `InboxService.list(q=…)` tokenises, caps, escapes
-      ([inbox_service.py](../thestill/services/inbox_service.py)).
-- [ ] `GET /api/inbox?q=` ([api_inbox.py](../thestill/web/routes/api_inbox.py)).
-- [ ] Contract tests on both repositories: title / podcast / description
+- [x] `InboxService.list(q=…)` tokenises and caps
+      ([inbox_service.py](../thestill/services/inbox_service.py)); the
+      repositories escape, via the first LIKE-escape helper in the codebase
+      ([sql_like.py](../thestill/utils/sql_like.py)). Escaping sits with the
+      SQL that needs it because the two backends fold case differently.
+- [x] `GET /api/inbox?q=` ([api_inbox.py](../thestill/web/routes/api_inbox.py)).
+- [x] Contract tests on both repositories: title / podcast / description
       hit, multi-token AND, case fold, wildcard escape, composes with `state`
-      and `before`, no match → empty. Route test for the 400 and the trim.
-- [ ] `docs/web-server.md` and `specs/02-api-reference.md` entry.
+      and `before`, no match → empty, no cross-user leak. Route tests for
+      the 400 and pass-through; service tests for the tokeniser.
+- [x] `docs/web-server.md` row. `specs/02-api-reference.md` has no inbox
+      section at all today; writing one is a separate docs task.
 
 ### Phase 2 — Inbox UI
 
-- [ ] Search input + mobile collapse in [Inbox.tsx](../thestill/web/frontend/src/pages/Inbox.tsx).
-- [ ] `getInbox({ q })` and `useInboxInfinite({ q })` with `q` in the key
+- [x] Search input (desktop inline + mobile row) in [Inbox.tsx](../thestill/web/frontend/src/pages/Inbox.tsx).
+- [x] `getInbox({ q })` and `useInboxInfinite({ q })` with `q` in the key
       ([client.ts](../thestill/web/frontend/src/api/client.ts),
       [useApi.ts](../thestill/web/frontend/src/hooks/useApi.ts)).
-- [ ] URL-bound query, debounce, Escape, polling off, count copy, empty
+- [x] URL-bound query, debounce, Escape, polling off, count copy, empty
       state with the two links, `BriefingCard` hidden while filtering.
-- [ ] `Inbox.test.tsx`: typing updates the URL and the hook args; empty
-      state renders both links; Back restores `q`.
+- [x] `Inbox.search.test.tsx` (mocks the API client so the real hook, URL
+      binding and debounce run): initial render sends no `q`; typing sends
+      the trimmed `q` and flips the count copy; `?q=` restores on mount;
+      no-match state with both actions; Escape clears.
 
 ### Phase 3 — optional follow-ups (separate specs)
 
+- Migrate Podcasts and TopPodcasts onto `SearchBox` +
+  `useDebouncedSearchParam` (small, mechanical; their tests already assert
+  behaviour rather than markup).
 - State filter tabs; podcast / date chips; shared `podcast:` token parser
   with `CommandBar`.
 
@@ -198,3 +212,6 @@ tools today and this spec does not add one.
 | 2026-09-24 | Substring `ILIKE` over three fields, no FTS index | Per-user set is small and already indexed by `user_id`; avoids a migration and a SQLite divergence |
 | 2026-09-24 | Include podcast title and description in the match | The motivating episode is unfindable by episode title alone |
 | 2026-09-24 | Hand off to corpus search from the empty state, not merge results | Keeps inbox search a filter with inbox semantics; corpus search already exists for the other question |
+| 2026-09-24 | Escape LIKE wildcards here, first in the codebase | Cheap, and a shared helper lets the older unescaped searches adopt it later |
+| 2026-09-24 | Podcasts-page dual render on phones, not an expanding icon | Reuses a proven pattern; no new widget |
+| 2026-09-24 | Extract `SearchBox` + `useDebouncedSearchParam`, consume from Inbox only | Third copy of the block would be real duplication; touching Podcasts widens the review for no user benefit |

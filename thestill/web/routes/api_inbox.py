@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.inbox_service import InboxEntryNotFoundError, InvalidInboxStateError
+from ...services.inbox_service import InboxEntryNotFoundError, InvalidInboxQueryError, InvalidInboxStateError
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found, parse_iso_datetime
 
@@ -50,18 +50,26 @@ def list_inbox(
     state: Optional[str] = None,
     limit: int = 50,
     before: Optional[str] = None,
+    q: Optional[str] = None,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """List the current user's inbox, newest delivery first."""
+    """List the current user's inbox, newest delivery first.
+
+    ``q`` (spec #85) filters to rows whose episode title, podcast title or
+    description contain every whitespace-separated token. It composes with
+    ``state`` and the ``before`` cursor; the unread badge ignores it.
+    """
     if limit <= 0 or limit > _MAX_LIMIT:
         bad_request(f"limit must be between 1 and {_MAX_LIMIT}")
 
     before_dt = parse_iso_datetime(before, field_name="before")
 
     try:
-        items = app_state.inbox_service.list(user.id, state=state, limit=limit, before=before_dt)
+        items = app_state.inbox_service.list(user.id, state=state, limit=limit, before=before_dt, q=q)
     except InvalidInboxStateError as exc:
+        bad_request(str(exc))
+    except InvalidInboxQueryError as exc:
         bad_request(str(exc))
 
     next_before = items[-1].entry.delivered_at.isoformat() if len(items) == limit else None

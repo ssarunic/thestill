@@ -105,6 +105,7 @@ class _SqliteEnv:
         *,
         published_at: Optional[datetime] = None,
         pub_date: Optional[datetime] = None,
+        description: str = "Episode description",
     ) -> str:
         episode_id = str(uuid.uuid4())
         with sqlite3.connect(self.db_path) as conn:
@@ -121,7 +122,7 @@ class _SqliteEnv:
                     f"ext-{title}",
                     title,
                     "",
-                    "Episode description",
+                    description,
                     f"https://cdn.example.com/{title}.mp3",
                     published_at.isoformat() if published_at else None,
                     pub_date.isoformat() if pub_date else None,
@@ -182,6 +183,7 @@ class _PostgresEnv:
         *,
         published_at: Optional[datetime] = None,
         pub_date: Optional[datetime] = None,
+        description: str = "Episode description",
     ) -> str:
         episode_id = str(uuid.uuid4())
         self._execute(
@@ -197,7 +199,7 @@ class _PostgresEnv:
                 f"ext-{title}",
                 title,
                 "",
-                "Episode description",
+                description,
                 f"https://cdn.example.com/{title}.mp3",
                 published_at,
                 pub_date,
@@ -862,3 +864,128 @@ def test_backfill_limit_zero_returns_zero(env):
     _seed_backfill_world(env)
     assert env.repo.backfill_existing_followers(0) == 0
     assert env.repo.backfill_existing_followers(-1, dry_run=True) == 0
+
+
+# ---------------------------------------------------------------------------
+# list_items(query_tokens=...) — spec #85 inbox search
+# ---------------------------------------------------------------------------
+def _titles(items):
+    return [item.episode.title for item in items]
+
+
+def _seed_search_inbox(env):
+    """Three delivered episodes with distinct title / podcast / description hooks."""
+    user = env.add_user("alice@example.com")
+    karpathy = env.add_podcast("andrej-karpathy")
+    other = env.add_podcast("latent-space")
+    ep_llm = env.add_episode(karpathy, "Deep Dive into LLMs like ChatGPT", description="How pretraining works")
+    ep_agents = env.add_episode(other, "Agents in production", description="Guests from Karpathy's lab")
+    ep_plain = env.add_episode(other, "Weekly news", description="Nothing to see")
+    env.repo.insert_many(
+        [
+            _entry(user, ep_llm, delivered_at=BASE),
+            _entry(user, ep_agents, delivered_at=BASE + timedelta(hours=1)),
+            _entry(user, ep_plain, delivered_at=BASE + timedelta(hours=2)),
+        ]
+    )
+    return user
+
+
+def test_list_items_query_empty_tokens_is_unfiltered(env):
+    user = _seed_search_inbox(env)
+    assert _titles(env.repo.list_items(user, query_tokens=())) == _titles(env.repo.list_items(user))
+    assert len(env.repo.list_items(user, query_tokens=[])) == 3
+
+
+def test_list_items_query_matches_episode_title_substring(env):
+    user = _seed_search_inbox(env)
+    assert _titles(env.repo.list_items(user, query_tokens=["chatgpt"])) == ["Deep Dive into LLMs like ChatGPT"]
+    # Substring, not prefix.
+    assert _titles(env.repo.list_items(user, query_tokens=["ive into"])) == ["Deep Dive into LLMs like ChatGPT"]
+
+
+def test_list_items_query_matches_podcast_title(env):
+    user = _seed_search_inbox(env)
+    # "Podcast andrej-karpathy" is the harness podcast title; the episode
+    # title never says karpathy — the motivating case for the spec. The
+    # description of ep_agents mentions Karpathy too, so both match.
+    titles = _titles(env.repo.list_items(user, query_tokens=["karpathy"]))
+    assert titles == ["Agents in production", "Deep Dive into LLMs like ChatGPT"]
+
+
+def test_list_items_query_matches_description(env):
+    user = _seed_search_inbox(env)
+    assert _titles(env.repo.list_items(user, query_tokens=["pretraining"])) == ["Deep Dive into LLMs like ChatGPT"]
+
+
+def test_list_items_query_tokens_are_anded_across_fields(env):
+    user = _seed_search_inbox(env)
+    # "karpathy" hits two rows; "llms" narrows to the one whose title has it.
+    assert _titles(env.repo.list_items(user, query_tokens=["karpathy", "llms"])) == ["Deep Dive into LLMs like ChatGPT"]
+    assert env.repo.list_items(user, query_tokens=["karpathy", "nothing"]) == []
+
+
+def test_list_items_query_is_case_insensitive(env):
+    user = _seed_search_inbox(env)
+    assert _titles(env.repo.list_items(user, query_tokens=["CHATGPT"])) == ["Deep Dive into LLMs like ChatGPT"]
+    assert _titles(env.repo.list_items(user, query_tokens=["Pretraining"])) == ["Deep Dive into LLMs like ChatGPT"]
+
+
+def test_list_items_query_no_match_returns_empty(env):
+    user = _seed_search_inbox(env)
+    assert env.repo.list_items(user, query_tokens=["zzz-not-here"]) == []
+
+
+def test_list_items_query_escapes_like_wildcards(env):
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+    ep_pct = env.add_episode(podcast, "50% of the market")
+    ep_50 = env.add_episode(podcast, "50 shades of grey")
+    ep_us = env.add_episode(podcast, "snake_case naming")
+    ep_sc = env.add_episode(podcast, "snakeXcase naming")
+    ep_bs = env.add_episode(podcast, "C:\\Windows paths")
+    env.repo.insert_many(
+        [
+            _entry(user, ep_pct, delivered_at=BASE),
+            _entry(user, ep_50, delivered_at=BASE + timedelta(hours=1)),
+            _entry(user, ep_us, delivered_at=BASE + timedelta(hours=2)),
+            _entry(user, ep_sc, delivered_at=BASE + timedelta(hours=3)),
+            _entry(user, ep_bs, delivered_at=BASE + timedelta(hours=4)),
+        ]
+    )
+    # ``%`` would otherwise match "50 shades" too.
+    assert _titles(env.repo.list_items(user, query_tokens=["50%"])) == ["50% of the market"]
+    # ``_`` would otherwise match any single char.
+    assert _titles(env.repo.list_items(user, query_tokens=["snake_case"])) == ["snake_case naming"]
+    # A literal backslash survives the escape-char doubling.
+    assert _titles(env.repo.list_items(user, query_tokens=["C:\\Win"])) == ["C:\\Windows paths"]
+
+
+def test_list_items_query_composes_with_state_filter_and_dismissed_rule(env):
+    user = _seed_search_inbox(env)
+    items = env.repo.list_items(user, query_tokens=["karpathy"])
+    dismissed_title = items[0].episode.title
+    env.repo.update_state(user, items[0].episode.id, "dismissed", datetime.now(timezone.utc))
+    env.repo.update_state(user, items[1].episode.id, "saved", datetime.now(timezone.utc))
+
+    # Default view: the dismissed match disappears, the saved one stays.
+    assert _titles(env.repo.list_items(user, query_tokens=["karpathy"])) == [items[1].episode.title]
+    # Explicit state composes with the query.
+    assert _titles(env.repo.list_items(user, state="saved", query_tokens=["karpathy"])) == [items[1].episode.title]
+    assert _titles(env.repo.list_items(user, state="dismissed", query_tokens=["karpathy"])) == [dismissed_title]
+    assert env.repo.list_items(user, state="unread", query_tokens=["karpathy"]) == []
+
+
+def test_list_items_query_composes_with_before_cursor_and_limit(env):
+    user = _seed_search_inbox(env)
+    first_page = env.repo.list_items(user, query_tokens=["karpathy"], limit=1)
+    assert _titles(first_page) == ["Agents in production"]
+    second_page = env.repo.list_items(user, query_tokens=["karpathy"], limit=1, before=first_page[0].entry.delivered_at)
+    assert _titles(second_page) == ["Deep Dive into LLMs like ChatGPT"]
+
+
+def test_list_items_query_does_not_leak_other_users_rows(env):
+    user = _seed_search_inbox(env)
+    bob = env.add_user("bob@example.com")
+    assert env.repo.list_items(bob, query_tokens=["karpathy"]) == []
+    assert len(env.repo.list_items(user, query_tokens=["karpathy"])) == 2
