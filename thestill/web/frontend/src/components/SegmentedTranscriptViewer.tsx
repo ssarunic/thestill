@@ -827,10 +827,11 @@ export default function SegmentedTranscriptViewer({
       out.set(segId, {
         entityById: entitiesById,
         mentions: eligible,
+        episodeId: episodeId ?? null,
       })
     }
     return out
-  }, [entitiesById, mentionsBySegmentId])
+  }, [entitiesById, mentionsBySegmentId, episodeId])
 
   // Affordances #1 (`[` / `]` jump prev/next mention of focused entity)
   // and #2 (`E` toggle highlights). Bind globally on the viewer root —
