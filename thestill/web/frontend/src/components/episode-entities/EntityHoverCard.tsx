@@ -5,7 +5,7 @@ import { entityHref, entitySlug, entityStyle } from '../../utils/entityColors'
 import { formatClock } from '../../utils/formatClock'
 import { useEntitySummary } from '../../hooks/useApi'
 import { episodeTimestampPath } from '../../hooks/useDeepLinkSeek'
-import { mentionPermalinkHash } from './mentionPermalink'
+import { findMentionAnchor, isSpeakingMention } from './mentionPermalink'
 
 // Spec #28 §5.2 visual rules — "Hover card (≤200px wide): name, type,
 // 1-line Wikidata gloss, last 3 mentions of this entity on the same
@@ -56,21 +56,24 @@ function otherEpisodeHref(row: EntityCitationRow): string | null {
   return episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
 }
 
-// The mentions prev/next can actually reach: one per segment (a segment's
-// mentions of the same entity share one anchor id), and only those whose
-// highlight is in the DOM — a mention below the confidence floor, one
-// whose surface form was not found in the segment text, or one inside a
-// collapsed group has no anchor to scroll to. Sorted by time.
-function navigableMentions(entityId: string, mentions: MentionLite[]): MentionLite[] {
-  const ordered = mentions.slice().sort((a, b) => a.start_ms - b.start_ms)
+// The mentions prev/next can actually reach. Two kinds never mix: from a
+// speaker label the peek steps through that person's *turns*; from a name
+// in the text it steps through the places they are *named* — otherwise a
+// host's five name-drops would drown in their hundred turns. One per
+// segment (a segment's mentions of one entity share an anchor), and only
+// those whose anchor is in the DOM — a mention below the confidence
+// floor, one whose surface form was not found in the segment text, or one
+// inside a collapsed group has nothing to scroll to. Sorted by time.
+function navigableMentions(entityId: string, mentions: MentionLite[], speaking: boolean): MentionLite[] {
+  const ordered = mentions
+    .filter((m) => isSpeakingMention(m) === speaking)
+    .sort((a, b) => a.start_ms - b.start_ms)
   const seenSegments = new Set<number>()
   const out: MentionLite[] = []
   for (const m of ordered) {
     if (seenSegments.has(m.segment_id)) continue
     seenSegments.add(m.segment_id)
-    if (typeof document !== 'undefined' && !document.getElementById(mentionPermalinkHash(entityId, m.segment_id))) {
-      continue
-    }
+    if (typeof document !== 'undefined' && !findMentionAnchor(entityId, m.segment_id, speaking)) continue
     out.push(m)
   }
   return out
@@ -98,8 +101,13 @@ export default function EntityHoverCard({
   // In-episode position among the reachable mentions; the current one is
   // located by segment (its own anchor is the one this card opened from).
   // Read once per open — the card only mounts while the peek is showing.
-  const ordered = useMemo(() => navigableMentions(entity.id, mentions), [entity.id, mentions])
+  const speaking = isSpeakingMention(mention)
+  const ordered = useMemo(
+    () => navigableMentions(entity.id, mentions, speaking),
+    [entity.id, mentions, speaking],
+  )
   const currentIdx = ordered.findIndex((m) => m.segment_id === mention.segment_id)
+  const positionNoun = speaking ? ' turns' : ''
   const prev = currentIdx > 0 ? ordered[currentIdx - 1] : null
   const next = currentIdx !== -1 && currentIdx < ordered.length - 1 ? ordered[currentIdx + 1] : null
 
@@ -184,7 +192,7 @@ export default function EntityHoverCard({
         <span className="flex-1">
           {mention_count}× this episode
           {currentIdx !== -1 && ordered.length > 1 && (
-            <span className="text-gray-400"> · {currentIdx + 1} of {ordered.length}</span>
+            <span className="text-gray-400"> · {currentIdx + 1} of {ordered.length}{positionNoun}</span>
           )}
         </span>
         {onSeek && (
@@ -205,7 +213,7 @@ export default function EntityHoverCard({
             disabled={!prev}
             onClick={() => prev && onJumpToMention(prev)}
             className={`flex-1 rounded text-left text-primary-700 hover:bg-primary-50 disabled:text-gray-300 disabled:hover:bg-transparent ${tapTarget}`}
-            aria-label={prev ? `Previous mention at ${formatTimestamp(prev.start_ms)}` : 'No previous mention'}
+            aria-label={prev ? `Previous ${speaking ? 'turn' : 'mention'} at ${formatTimestamp(prev.start_ms)}` : 'No previous mention'}
           >
             ← Prev{prev && <span className="ml-1 font-mono tabular-nums text-gray-400">{formatTimestamp(prev.start_ms)}</span>}
           </button>
@@ -214,7 +222,7 @@ export default function EntityHoverCard({
             disabled={!next}
             onClick={() => next && onJumpToMention(next)}
             className={`flex-1 rounded text-right text-primary-700 hover:bg-primary-50 disabled:text-gray-300 disabled:hover:bg-transparent ${tapTarget}`}
-            aria-label={next ? `Next mention at ${formatTimestamp(next.start_ms)}` : 'No next mention'}
+            aria-label={next ? `Next ${speaking ? 'turn' : 'mention'} at ${formatTimestamp(next.start_ms)}` : 'No next mention'}
           >
             {next && <span className="mr-1 font-mono tabular-nums text-gray-400">{formatTimestamp(next.start_ms)}</span>}Next →
           </button>

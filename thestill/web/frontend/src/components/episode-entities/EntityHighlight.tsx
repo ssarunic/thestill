@@ -14,7 +14,7 @@ import { TRANSIENT_LAYER_Z } from '../../constants/layers'
 import EntityHoverCard from './EntityHoverCard'
 import EntityPeekSheet from './EntityPeekSheet'
 
-import { mentionPermalinkHash } from './mentionPermalink'
+import { findMentionAnchor, isSpeakingMention, mentionPermalinkHash, speakerAnchorId } from './mentionPermalink'
 
 export interface EntityHighlightProps {
   episodeEntity: EpisodeEntity
@@ -31,6 +31,11 @@ export interface EntityHighlightProps {
   // hundreds of highlights, one media-query subscription each would be
   // wasteful.
   isSmUp?: boolean
+  // `inline` (default): a name inside the segment text, underlined in the
+  // entity's colour. `speaker`: the speaker label at the head of a
+  // segment — keeps the speaker colour it is given, no underline until
+  // hover, and its own anchor id (see `speakerAnchorId`).
+  variant?: 'inline' | 'speaker'
   onSeek?: (seconds: number) => void
   // Notifies the parent which entity the user last hovered, so the
   // `[`/`]` keyboard nav (affordance #1) can jump between mentions of
@@ -85,11 +90,13 @@ export default function EntityHighlight({
   children,
   episodeId = null,
   isSmUp = true,
+  variant = 'inline',
   onSeek,
   onFocusEntity,
 }: EntityHighlightProps) {
   const { entity } = episodeEntity
   const style = entityStyle(entity.type)
+  const isSpeaker = variant === 'speaker'
   const [hoverOpen, setHoverOpen] = useState(false)
   // Pinned by a click: survives mouse-out; closed by Esc, a click
   // outside, the word scrolling out of view, a jump, or navigating away.
@@ -260,7 +267,7 @@ export default function EntityHighlight({
     (target: MentionLite) => {
       closeAll()
       onFocusEntity?.(entity.id)
-      const node = document.getElementById(mentionPermalinkHash(entity.id, target.segment_id))
+      const node = findMentionAnchor(entity.id, target.segment_id, isSpeakingMention(target))
       if (!node) return
       const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
       node.scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
@@ -280,7 +287,8 @@ export default function EntityHighlight({
       <a
         ref={linkRef}
         href={entityHref(entity.type, entity.id)}
-        id={mentionPermalinkHash(entity.id, mention.segment_id)}
+        id={isSpeaker ? speakerAnchorId(entity.id, mention.segment_id) : mentionPermalinkHash(entity.id, mention.segment_id)}
+        data-variant={variant}
         aria-label={ariaLabel}
         aria-expanded={hoverOpen || pinned}
         data-entity-id={entity.id}
@@ -291,7 +299,11 @@ export default function EntityHighlight({
         onMouseLeave={scheduleClose}
         onFocus={open}
         onBlur={scheduleClose}
-        className={`underline ${style.inlineUnderline} hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-sm ${
+        className={`${
+          isSpeaker
+            ? 'text-inherit decoration-dotted underline-offset-2 hover:underline'
+            : `underline ${style.inlineUnderline} hover:bg-gray-50`
+        } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-sm ${
           pinned ? 'bg-gray-100' : ''
         }`}
       >

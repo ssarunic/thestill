@@ -27,6 +27,7 @@ import {
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
 import { useIsSmUp } from '../hooks/useMediaQuery'
+import EntityHighlight from './episode-entities/EntityHighlight'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
 import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
@@ -35,6 +36,7 @@ import KaraokeWord from './KaraokeWord'
 import { useToast } from './Toast'
 import {
   applyEntityHighlights,
+  findSpeakerMention,
   highlightMatches,
   type SegmentMentionSet,
 } from './episode-entities/applyHighlights'
@@ -412,6 +414,11 @@ const ContentSegment = memo(function ContentSegment({
       karaokeGetCurrentTime ?? KARAOKE_NOOP_TIME,
     )
   const speaker = segment.speaker ?? 'Unknown'
+  // The speaker label is an entity link when the extractor linked this
+  // segment's speaker to a person: same peek as an in-text mention, with
+  // the host/guest badge — the one place a host who is never *named* in
+  // the transcript gets one.
+  const speakerMention = entityHighlightsEnabled ? findSpeakerMention(segmentMentions) : null
   const absoluteSeconds = segment.start + offset
   const containerActive = isActive ? 'bg-primary-50/70' : 'hover:bg-gray-50/70'
   const paragraphAccent = 'border-l-2'
@@ -448,7 +455,21 @@ const ContentSegment = memo(function ContentSegment({
           className="font-sans font-semibold tracking-tight"
           style={{ color: speakerColor }}
         >
-          {speaker}
+          {speakerMention ? (
+            <EntityHighlight
+              variant="speaker"
+              episodeEntity={speakerMention.entity}
+              mention={speakerMention.mention}
+              episodeId={segmentMentions?.episodeId ?? null}
+              isSmUp={segmentMentions?.isSmUp ?? true}
+              onSeek={onSeek}
+              onFocusEntity={onFocusEntity}
+            >
+              {speaker}
+            </EntityHighlight>
+          ) : (
+            speaker
+          )}
           {isFiller && (
             <span className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wider text-gray-400">
               filler
