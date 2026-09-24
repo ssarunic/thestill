@@ -107,7 +107,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`) |
+| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`) |
 | `/api/inbox/unread-count` | GET | Lightweight unread count for badge rendering |
 | `/api/inbox/{episode_id}/state` | POST | Set row state explicitly. Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. 404 when no row exists |
 | `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available |

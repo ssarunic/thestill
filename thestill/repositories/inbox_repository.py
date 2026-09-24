@@ -22,7 +22,7 @@ episodes to pick) live in ``InboxService``.
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState
 
@@ -95,6 +95,7 @@ class InboxRepository(ABC):
         state: Optional[str] = None,
         limit: int = 50,
         before: Optional[datetime] = None,
+        query_tokens: Sequence[str] = (),
     ) -> List[InboxItem]:
         """
         List inbox items for a user, newest-delivered first.
@@ -104,6 +105,11 @@ class InboxRepository(ABC):
         - ``state`` set: return only rows in that state. Pass
           ``state='dismissed'`` to surface dismissed rows.
         - ``before``: cursor — return rows with ``delivered_at < before``.
+        - ``query_tokens`` (spec #85): plain, un-escaped search terms. A row
+          matches only when **every** token appears, case-insensitively, as
+          a substring of the episode title, the podcast title or the episode
+          description. Empty means no text filter. Implementations escape
+          LIKE wildcards before binding, so ``50%`` matches literally.
         """
 
     @abstractmethod

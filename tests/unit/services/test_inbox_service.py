@@ -17,6 +17,7 @@
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -27,7 +28,15 @@ from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
 from thestill.repositories.sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
-from thestill.services.inbox_service import InboxEntryNotFoundError, InboxService, InvalidInboxStateError
+from thestill.services.inbox_service import (
+    MAX_QUERY_CHARS,
+    MAX_QUERY_TOKENS,
+    InboxEntryNotFoundError,
+    InboxService,
+    InvalidInboxQueryError,
+    InvalidInboxStateError,
+    tokenize_query,
+)
 
 
 @pytest.fixture
@@ -536,3 +545,58 @@ def test_seed_on_follow_without_queue_plumbing_does_not_enqueue(
 
     assert service.seed_on_follow(alice.id, podcast.id) == 1
     assert queue_manager.get_tasks_for_episode(ep_id) == []
+
+
+# ---------------------------------------------------------------------------
+# list(q=...) — spec #85 inbox search
+# ---------------------------------------------------------------------------
+class TestTokenizeQuery:
+    def test_none_and_blank_are_no_filter(self):
+        assert tokenize_query(None) == []
+        assert tokenize_query("") == []
+        assert tokenize_query("   \t ") == []
+
+    def test_trims_and_splits_on_any_whitespace(self):
+        assert tokenize_query("  karpathy\tllm  chatgpt\n") == ["karpathy", "llm", "chatgpt"]
+
+    def test_caps_token_count_silently(self):
+        words = [f"w{i}" for i in range(MAX_QUERY_TOKENS + 3)]
+        assert tokenize_query(" ".join(words)) == words[:MAX_QUERY_TOKENS]
+
+    def test_length_cap_is_checked_after_trim(self):
+        at_cap = "a" * MAX_QUERY_CHARS
+        assert tokenize_query("  " + at_cap + "  ") == [at_cap]
+        with pytest.raises(InvalidInboxQueryError):
+            tokenize_query("a" * (MAX_QUERY_CHARS + 1))
+
+
+def test_list_passes_tokens_to_repository():
+    repo = MagicMock()
+    repo.list_items.return_value = []
+    service = InboxService(repo, MagicMock(), seed_on_follow_count=2)
+
+    service.list("user-1", q="  Karpathy  LLM ")
+
+    repo.list_items.assert_called_once_with(
+        "user-1", state=None, limit=50, before=None, query_tokens=["Karpathy", "LLM"]
+    )
+
+
+def test_list_without_q_passes_empty_tokens():
+    repo = MagicMock()
+    repo.list_items.return_value = []
+    service = InboxService(repo, MagicMock(), seed_on_follow_count=2)
+
+    service.list("user-1")
+
+    assert repo.list_items.call_args.kwargs["query_tokens"] == []
+
+
+def test_list_over_long_q_raises_before_touching_repository():
+    repo = MagicMock()
+    service = InboxService(repo, MagicMock(), seed_on_follow_count=2)
+
+    with pytest.raises(InvalidInboxQueryError):
+        service.list("user-1", q="x" * (MAX_QUERY_CHARS + 1))
+
+    repo.list_items.assert_not_called()

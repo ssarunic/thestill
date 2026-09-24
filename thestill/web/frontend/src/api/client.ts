@@ -658,6 +658,7 @@ export interface GetInboxOptions {
   state?: InboxState
   limit?: number
   before?: string  // ISO-8601 cursor — return rows older than this delivered_at
+  q?: string       // Spec #85: whitespace tokens ANDed over title / podcast / description
 }
 
 export async function getInbox(
@@ -667,6 +668,7 @@ export async function getInbox(
   if (options.state) params.set('state', options.state)
   if (options.limit !== undefined) params.set('limit', String(options.limit))
   if (options.before) params.set('before', options.before)
+  if (options.q) params.set('q', options.q)
   const qs = params.toString()
   return fetchApi<InboxListResponse>(`/inbox${qs ? `?${qs}` : ''}`)
 }

@@ -42,8 +42,31 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# Spec #85 search query limits. The char cap bounds the LIKE pattern count
+# and the token cap bounds the WHERE clause; a query past the cap is a
+# client error, extra tokens are silently dropped (recall over precision).
+MAX_QUERY_CHARS = 200
+MAX_QUERY_TOKENS = 8
+
+
+def tokenize_query(q: Optional[str]) -> List[str]:
+    """Trim, cap and whitespace-split a spec #85 inbox search query."""
+    if not q:
+        return []
+    trimmed = q.strip()
+    if not trimmed:
+        return []
+    if len(trimmed) > MAX_QUERY_CHARS:
+        raise InvalidInboxQueryError(f"q must be at most {MAX_QUERY_CHARS} characters")
+    return trimmed.split()[:MAX_QUERY_TOKENS]
+
+
 class InboxServiceError(Exception):
     """Base exception for inbox service errors."""
+
+
+class InvalidInboxQueryError(InboxServiceError):
+    """Raised when a search query exceeds the length cap (spec #85)."""
 
 
 class InvalidInboxStateError(InboxServiceError):
@@ -327,6 +350,7 @@ class InboxService:
         state: Optional[str] = None,
         limit: int = 50,
         before: Optional[datetime] = None,
+        q: Optional[str] = None,
     ) -> List[InboxItem]:
         """
         Return paginated inbox items, newest first.
@@ -334,10 +358,15 @@ class InboxService:
         When ``state`` is None, dismissed rows are filtered out — the inbox
         is a triage view, not an audit log. Pass ``state='dismissed'``
         explicitly to list dismissals.
+
+        ``q`` (spec #85) is free text: whitespace-split into tokens that must
+        all match. Blank means no filter; over ``MAX_QUERY_CHARS`` raises
+        ``InvalidInboxQueryError``.
         """
         if state is not None and state not in INBOX_STATES:
             raise InvalidInboxStateError(f"Invalid state filter: {state!r} (expected one of {INBOX_STATES})")
-        return self._repository.list_items(user_id, state=state, limit=limit, before=before)
+        query_tokens = tokenize_query(q)
+        return self._repository.list_items(user_id, state=state, limit=limit, before=before, query_tokens=query_tokens)
 
     def unread_count(self, user_id: str) -> int:
         """Return the number of unread rows for ``user_id``."""

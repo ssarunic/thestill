@@ -121,6 +121,32 @@ class TestListInbox:
         kwargs = mock_app_state.inbox_service.list.call_args.kwargs
         assert kwargs["state"] == "saved"
 
+    def test_passes_q_through_untouched(self, client, mock_app_state):
+        # Spec #85: the service owns trimming/tokenising; the route forwards.
+        mock_app_state.inbox_service.list.return_value = []
+
+        response = client.get("/api/inbox?q=%20karpathy%20llm%20")
+
+        assert response.status_code == 200
+        assert mock_app_state.inbox_service.list.call_args.kwargs["q"] == " karpathy llm "
+
+    def test_omitted_q_is_none(self, client, mock_app_state):
+        mock_app_state.inbox_service.list.return_value = []
+
+        client.get("/api/inbox")
+
+        assert mock_app_state.inbox_service.list.call_args.kwargs["q"] is None
+
+    def test_rejects_over_long_q_with_400(self, client, mock_app_state):
+        from thestill.services.inbox_service import InvalidInboxQueryError
+
+        mock_app_state.inbox_service.list.side_effect = InvalidInboxQueryError("q must be at most 200 characters")
+
+        response = client.get("/api/inbox?q=" + "x" * 201)
+
+        assert response.status_code == 400
+        assert "200" in response.json()["detail"]
+
     def test_rejects_invalid_state(self, client, mock_app_state):
         from thestill.services.inbox_service import InvalidInboxStateError
 
