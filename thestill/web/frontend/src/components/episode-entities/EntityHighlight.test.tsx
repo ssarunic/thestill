@@ -323,12 +323,28 @@ describe('EntityHighlight', () => {
     expect(links[1]).toHaveTextContent('Other Show · Guest spot 10:00')
   })
 
-  it('"Open entity page" is an in-app navigation', () => {
+  it('the entity name is the in-app link to the entity page', () => {
     renderHighlight()
     fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
-    fireEvent.click(screen.getByRole('link', { name: 'Open entity page →' }))
+    const card = screen.getByTestId('entity-hover-card')
+    expect(card.querySelector('a[href="/entities/person/alice"]')).toHaveTextContent('Alice')
+    expect(screen.queryByRole('link', { name: /Open entity page/ })).not.toBeInTheDocument()
+    fireEvent.click(card.querySelector('a[href="/entities/person/alice"]') as HTMLElement)
     expect(screen.getByTestId('location')).toHaveTextContent('/entities/person/alice')
     expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
+  })
+
+  it('shows the enrichment photo when there is one', () => {
+    renderHighlight()
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    expect(screen.queryByTestId('entity-peek-image')).not.toBeInTheDocument()
+
+    vi.mocked(useEntitySummary).mockReturnValue({
+      data: { description: null, recent_mentions: [], enrichment: { image_url: 'https://img/alice.jpg' } },
+    } as never)
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    expect(screen.getByTestId('entity-peek-image')).toHaveAttribute('src', 'https://img/alice.jpg')
   })
 
   describe('on a phone', () => {

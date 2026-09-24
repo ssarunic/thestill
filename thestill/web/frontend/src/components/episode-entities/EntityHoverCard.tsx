@@ -9,7 +9,9 @@ import { mentionPermalinkHash } from './mentionPermalink'
 
 // Spec #28 §5.2 visual rules — "Hover card (≤200px wide): name, type,
 // 1-line Wikidata gloss, last 3 mentions of this entity on the same
-// feed, 'Go to entity page' link. No images in v1."
+// feed". The name itself is the way to the entity page (no separate
+// link), and the spec #45 enrichment photo, when there is one, sits
+// beside it — a face or a logo is the fastest "is this who I think?".
 //
 // This is the *peek*: everything the reader needs to decide whether the
 // entity is worth leaving the transcript for. It renders in two shells
@@ -90,9 +92,8 @@ export default function EntityHoverCard({
     summaryEnabled ? entity.type : null,
     summaryEnabled ? entitySlug(entity.id) : null,
   )
-  const wikidataUrl = entity.wikidata_qid
-    ? `https://www.wikidata.org/wiki/${entity.wikidata_qid}`
-    : null
+  const imageUrl = summary?.enrichment?.image_url ?? null
+  const isCompany = entity.type === 'company'
 
   // In-episode position among the reachable mentions; the current one is
   // located by segment (its own anchor is the one this card opened from).
@@ -137,17 +138,40 @@ export default function EntityHoverCard({
       }
       data-testid="entity-hover-card"
     >
-      <div className="flex items-center gap-2">
-        <span className={`inline-block h-2 w-2 rounded-full ${style.dot}`} aria-hidden="true" />
-        <span className="text-xs uppercase tracking-wide text-gray-500">{style.label}</span>
-        {speaker_kind !== 'unknown' && (
-          <span className="ml-auto rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-600">
-            {speaker_kind}
-          </span>
+      <div className="flex items-start gap-3">
+        {imageUrl && (
+          <img
+            src={imageUrl}
+            alt=""
+            loading="lazy"
+            data-testid="entity-peek-image"
+            className={`shrink-0 border border-gray-200 ${sheet ? 'h-14 w-14' : 'h-10 w-10'} ${
+              isCompany ? 'rounded-md bg-gray-50 object-contain p-1' : 'rounded-full object-cover'
+            }`}
+          />
         )}
-      </div>
-      <div className={`mt-1 font-semibold text-gray-900 ${sheet ? 'text-lg' : 'text-sm'}`}>
-        {entity.canonical_name}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className={`inline-block h-2 w-2 rounded-full ${style.dot}`} aria-hidden="true" />
+            <span className="text-xs uppercase tracking-wide text-gray-500">{style.label}</span>
+            {speaker_kind !== 'unknown' && (
+              <span className="ml-auto rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-600">
+                {speaker_kind}
+              </span>
+            )}
+          </div>
+          {/* The name is the link to the entity page — an in-app navigation,
+              so Back returns to the reader. */}
+          <Link
+            to={entityHref(entity.type, entity.id)}
+            onClick={onNavigate}
+            className={`mt-0.5 block font-semibold text-gray-900 hover:text-primary-700 hover:underline ${
+              sheet ? 'text-lg' : 'text-sm'
+            }`}
+          >
+            {entity.canonical_name}
+          </Link>
+        </div>
       </div>
       {summary?.description && (
         <p className={`mt-1 line-clamp-2 text-gray-600 ${textBase}`} data-testid="entity-peek-gloss">
@@ -227,26 +251,6 @@ export default function EntityHoverCard({
           </ul>
         </div>
       )}
-
-      <div className={`mt-2 flex items-center justify-between gap-2 border-t border-gray-100 pt-2 ${textBase}`}>
-        <Link
-          to={entityHref(entity.type, entity.id)}
-          onClick={onNavigate}
-          className={`rounded font-medium text-primary-700 hover:text-primary-900 hover:underline ${sheet ? 'flex min-h-[44px] items-center' : ''}`}
-        >
-          Open entity page →
-        </Link>
-        {wikidataUrl && (
-          <a
-            href={wikidataUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`truncate text-gray-500 hover:text-gray-700 hover:underline ${textSmall}`}
-          >
-            Wikidata
-          </a>
-        )}
-      </div>
     </div>
   )
 }
