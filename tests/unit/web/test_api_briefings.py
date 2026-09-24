@@ -22,6 +22,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from thestill.models.briefing import Briefing
+from thestill.models.briefing_schedule import BriefingFrequency
 from thestill.models.podcast import Episode, Podcast
 from thestill.models.user import User
 from thestill.services.briefing_service import BriefingNotFoundError, Deferred
@@ -58,6 +59,12 @@ def mock_app_state():
     state = MagicMock()
     state.briefing_service = MagicMock()
     state.briefing_repository = MagicMock()
+    # Spec #84: the lazy path is the default only while no scheduler runs.
+    # A bare MagicMock reads as "scheduler running + enabled schedule", so
+    # pin the pre-#84 shape here and opt into the scheduled shape per test.
+    state.briefing_scheduler = None
+    state.briefing_schedule_repository = MagicMock()
+    state.briefing_schedule_repository.get.return_value = None
     return state
 
 
@@ -129,6 +136,112 @@ class TestGetLatest:
 
         assert response.status_code == 200
         mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=True)
+
+
+class TestGetLatestScheduledOnly:
+    """Spec #84: with the scheduler running, opening the inbox is a read."""
+
+    NEXT = datetime(2026, 9, 25, 7, 0, tzinfo=timezone.utc)
+
+    @pytest.fixture(autouse=True)
+    def scheduler_running(self, mock_app_state):
+        mock_app_state.briefing_scheduler = MagicMock()
+
+    def test_enabled_schedule_returns_latest_without_generating(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
+        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        assert response.json()["id"] == "00000000-0000-0000-0000-000000000001"
+        assert response.json()["next_run_at"] == self.NEXT.isoformat()
+        mock_app_state.briefing_service.generate_for_user.assert_not_called()
+
+    def test_first_edition_is_still_generated_lazily(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
+        mock_app_state.briefing_service.latest_for_user.return_value = None
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        assert response.json()["next_run_at"] == self.NEXT.isoformat()
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
+
+    def test_force_still_generates(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
+        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing(
+            briefing_id="00000000-0000-0000-0000-000000000002"
+        )
+
+        response = client.get("/api/briefings/latest?force=true")
+
+        assert response.status_code == 200
+        assert response.json()["id"] == "00000000-0000-0000-0000-000000000002"
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=True)
+
+    def test_disabled_schedule_falls_back_to_lazy(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(enabled=False)
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        assert "next_run_at" not in response.json()
+        mock_app_state.briefing_service.latest_for_user.assert_not_called()
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
+
+    def test_no_schedule_and_tz_seeds_daily_default(self, client, mock_app_state):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest?tz=Europe/London")
+
+        assert response.status_code == 200
+        upserted = mock_app_state.briefing_schedule_repository.upsert.call_args.args[0]
+        assert upserted.user_id == "user-1"
+        assert upserted.frequency is BriefingFrequency.DAILY
+        assert upserted.hour_local == 8
+        assert upserted.timezone_name == "Europe/London"
+        assert upserted.enabled is True
+        assert upserted.next_run_at is not None
+        assert upserted.next_run_at > datetime.now(timezone.utc)
+        assert response.json()["next_run_at"] == upserted.next_run_at.isoformat()
+        mock_app_state.briefing_service.generate_for_user.assert_not_called()
+
+    def test_no_schedule_without_tz_stays_lazy(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
+
+    def test_unknown_tz_does_not_seed_or_break(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_schedule_repository.get.return_value = None
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest?tz=Mars/Olympus")
+
+        assert response.status_code == 200
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
+
+    def test_scheduler_off_ignores_schedule(self, client, mock_app_state, mock_user):
+        mock_app_state.briefing_scheduler = None
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
+        mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
+
+        response = client.get("/api/briefings/latest?tz=Europe/London")
+
+        assert response.status_code == 200
+        assert "next_run_at" not in response.json()
+        mock_app_state.briefing_schedule_repository.upsert.assert_not_called()
+        mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
 
 
 # ============================================================================
@@ -490,7 +603,9 @@ class TestScheduleEmailDelivery:
 
     def test_put_round_trips_email_enabled(self, client, mock_app_state):
         # mock_app_state's briefing_delivery_service is a MagicMock — i.e.
-        # a provider is configured — so opting in is allowed.
+        # a provider is configured — and the scheduler that runs the
+        # delivery pass is on, so opting in is allowed.
+        mock_app_state.briefing_scheduler = MagicMock()
         mock_app_state.briefing_schedule_repository.get.return_value = None
 
         response = client.put(

@@ -719,8 +719,24 @@ export async function setInboxState(
 // fresh briefing if the throttle has elapsed and inbox items are eligible.
 // Spec #55 adds a 202 pending response and ``force=true`` escape hatch;
 // callers should still treat 404 as "no briefing for now, hide the card".
+// Spec #84: the browser timezone rides along so a user with no schedule
+// is seeded a daily one at 08:00 local; with the scheduler running and a
+// schedule enabled the non-forced call is a plain read of the latest
+// edition (plus ``next_run_at``).
+export function browserTimezone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
+  } catch {
+    return undefined
+  }
+}
+
 export async function getLatestBriefing(force = false): Promise<LatestBriefingResponse> {
-  if (!force) return fetchApi<LatestBriefingResponse>('/briefings/latest')
+  if (!force) {
+    const tz = browserTimezone()
+    const query = tz ? `?tz=${encodeURIComponent(tz)}` : ''
+    return fetchApi<LatestBriefingResponse>(`/briefings/latest${query}`)
+  }
 
   const response = await fetch(`${API_BASE}/briefings/latest?force=true`, {
     credentials: 'include',
