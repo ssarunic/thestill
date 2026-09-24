@@ -434,6 +434,52 @@ describe('EntityHighlight', () => {
     })
   })
 
+  describe('as a summary mention', () => {
+    const summaryMention: MentionLite = { ...mention(0, 20, 65_000), role: 'summary', surface_form: 'Alice' }
+
+    it('has its own anchor and offers "Show in transcript" instead of prev/next', () => {
+      const onShowInTranscript = vi.fn()
+      render(
+        <MemoryRouter>
+          <p className="prose">
+            <EntityHighlight
+              episodeEntity={ALICE}
+              mention={summaryMention}
+              variant="summary"
+              onSeek={vi.fn()}
+              onShowInTranscript={onShowInTranscript}
+            >
+              Alice
+            </EntityHighlight>
+          </p>
+          {/* The transcript's anchors are not rendered on the summary tab. */}
+        </MemoryRouter>,
+      )
+      const link = screen.getByRole('link', { name: /Alice, Person/ })
+      expect(link).toHaveAttribute('id', 'm=person:alice:20:summary')
+      expect(link).toHaveAttribute('data-variant', 'summary')
+      expect(link).toHaveClass('not-prose', 'underline')
+      fireEvent.click(link)
+      const card = screen.getByTestId('entity-hover-card')
+      expect(card).toHaveTextContent('3× this episode')
+      expect(card).not.toHaveTextContent(' of ')
+      expect(screen.queryByRole('button', { name: /Next mention/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Previous mention/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Play from 1:05' })).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /Show in transcript/ }))
+      expect(onShowInTranscript).toHaveBeenCalledWith(20)
+      expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
+    })
+
+    it('keeps prev/next for the transcript variants', () => {
+      renderHighlight()
+      fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+      expect(screen.queryByRole('button', { name: /Show in transcript/ })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Next mention at 2:05' })).toBeInTheDocument()
+    })
+  })
+
   describe('on a phone', () => {
     function renderPhone(onSegmentActivate = vi.fn()) {
       return renderHighlight({ isSmUp: false }, onSegmentActivate)

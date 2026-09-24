@@ -28,3 +28,12 @@ export function findMentionAnchor(entityId: string, segmentId: number, speaking:
     speaking ? speakerAnchorId(entityId, segmentId) : mentionPermalinkHash(entityId, segmentId),
   )
 }
+
+// A name matched in the *summary* (spec #82) is a third anchor for the
+// same (entity, segment): the segment is borrowed from the nearest
+// citation, so several summary matches can share one. The suffix keeps
+// them out of `[`/`]` navigation and `findMentionAnchor`, which read the
+// transcript's anchors only.
+export function summaryAnchorId(entityId: string, segmentId: number): string {
+  return `${mentionPermalinkHash(entityId, segmentId)}:summary`
+}

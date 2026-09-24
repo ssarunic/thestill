@@ -2,7 +2,13 @@ import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { SummaryCitation } from '../api/types'
+import type { PluggableList } from 'unified'
+import type { EpisodeEntity, SummaryCitation } from '../api/types'
+import { parseCitationId } from '../utils/citationHref'
+import { useIsSmUp } from '../hooks/useMediaQuery'
+import { buildEntityTermIndex } from './episode-entities/entityTerms'
+import { rehypeEntityMentions } from './episode-entities/rehypeEntityMentions'
+import SummaryEntityMention from './episode-entities/SummaryEntityMention'
 
 interface SummaryViewerProps {
   content: string
@@ -11,6 +17,19 @@ interface SummaryViewerProps {
   episodeState?: string
   citations?: SummaryCitation[] | null
   onCite?: (citation: SummaryCitation) => void
+  // Spec #82 — this episode's resolved entities (already filtered by the
+  // reader's type filter). Names in the summary that match one become
+  // entity peeks. Absent or empty: the markdown renders as before.
+  entities?: EpisodeEntity[]
+  episodeId?: string | null
+  // ▶ inside a summary peek: plain playback seek, no tab change.
+  onSeek?: (seconds: number) => void
+  // "Show in transcript" inside a summary peek: tab switch + scroll, no seek.
+  onShowInTranscript?: (segmentId: number) => void
+}
+
+function stringProperty(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 // Get status message based on episode state
@@ -55,11 +74,6 @@ function getSummaryStatus(state?: string): { title: string; description: string;
   }
 }
 
-function getCitationId(href: string | undefined): string | null {
-  if (!href?.startsWith('?')) return null
-  return new URLSearchParams(href.slice(1)).get('cite')
-}
-
 export default function SummaryViewer({
   content,
   isLoading,
@@ -67,6 +81,10 @@ export default function SummaryViewer({
   episodeState,
   citations,
   onCite,
+  entities,
+  episodeId = null,
+  onSeek,
+  onShowInTranscript,
 }: SummaryViewerProps) {
   const citationById = useMemo(() => {
     const out = new Map<string, SummaryCitation>()
@@ -76,9 +94,44 @@ export default function SummaryViewer({
     return out
   }, [citations])
 
+  // Spec #82 — one term index per entity list; the plugin is registered
+  // only when there is something to match, so an episode without
+  // entities renders exactly as before.
+  const entityById = useMemo(() => {
+    const out = new Map<string, EpisodeEntity>()
+    for (const e of entities ?? []) out.set(e.entity.id, e)
+    return out
+  }, [entities])
+  const rehypePlugins = useMemo<PluggableList>(() => {
+    if (!entities?.length) return []
+    const index = buildEntityTermIndex(entities)
+    return index.terms.length ? [[rehypeEntityMentions, index]] : []
+  }, [entities])
+  // Desktop hover card vs phone sheet — resolved once here, not per name.
+  const isSmUp = useIsSmUp()
+
   const markdownComponents = useMemo<Components>(() => ({
+    span({ node, children }) {
+      const entityId = stringProperty(node?.properties['data-entity-id'])
+      if (!entityId) return <span>{children}</span>
+      return (
+        <SummaryEntityMention
+          entityId={entityId}
+          term={stringProperty(node?.properties['data-term']) ?? ''}
+          citeId={stringProperty(node?.properties['data-cite-id'])}
+          entityById={entityById}
+          citationById={citationById}
+          episodeId={episodeId}
+          isSmUp={isSmUp}
+          onSeek={onSeek}
+          onShowInTranscript={onShowInTranscript}
+        >
+          {children}
+        </SummaryEntityMention>
+      )
+    },
     a({ href, children }) {
-      const citationId = getCitationId(href)
+      const citationId = parseCitationId(href)
       if (citationId) {
         const citation = citationById.get(citationId)
         if (!citation || !onCite) return <>{children}</>
@@ -108,7 +161,7 @@ export default function SummaryViewer({
         </a>
       )
     },
-  }), [citationById, onCite])
+  }), [citationById, onCite, entityById, episodeId, isSmUp, onSeek, onShowInTranscript])
 
   if (isLoading) {
     return (
@@ -148,7 +201,7 @@ export default function SummaryViewer({
 
   return (
     <div className="prose prose-gray max-w-none prose-headings:text-primary-900 prose-h1:text-xl prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-base prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={rehypePlugins} components={markdownComponents}>
         {content}
       </ReactMarkdown>
     </div>

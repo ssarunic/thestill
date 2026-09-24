@@ -463,7 +463,8 @@ export default function EpisodeReader({
   // jump, not a playback action: same tab-switch + segment-scroll path as a
   // citation, without the seek. The chip carries its first segment's id.
   // "Show in transcript" from a rail / strip entity peek takes the same
-  // path with the entity's first mention.
+  // path with the entity's first mention; from a summary entity peek
+  // (spec #82), with the segment borrowed from the nearest citation.
   const jumpToTranscriptSegment = useCallback(
     (segmentId: number) => {
       clearEntityFilter()
@@ -675,6 +676,10 @@ export default function EpisodeReader({
                   episodeState={episode?.state}
                   citations={summaryData?.citations ?? null}
                   onCite={handleSummaryCitation}
+                  entities={visibleEntities}
+                  episodeId={episode?.id ?? null}
+                  onSeek={handleSegmentSeek}
+                  onShowInTranscript={jumpToTranscriptSegment}
                 />
               ) : (
                 <TranscriptPanel

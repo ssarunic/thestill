@@ -14,7 +14,13 @@ import { TRANSIENT_LAYER_Z } from '../../constants/layers'
 import EntityHoverCard from './EntityHoverCard'
 import EntityPeekSheet from './EntityPeekSheet'
 
-import { findMentionAnchor, isSpeakingMention, mentionPermalinkHash, speakerAnchorId } from './mentionPermalink'
+import {
+  findMentionAnchor,
+  isSpeakingMention,
+  mentionPermalinkHash,
+  speakerAnchorId,
+  summaryAnchorId,
+} from './mentionPermalink'
 
 export interface EntityHighlightProps {
   episodeEntity: EpisodeEntity
@@ -39,12 +45,15 @@ export interface EntityHighlightProps {
   // entities strip) — the caller supplies the look via `className`, there
   // is no anchor id (the transcript's anchors must stay unique for
   // `[`/`]` and permalinks), and the peek offers "Show in transcript"
-  // instead of prev/next.
-  variant?: 'inline' | 'speaker' | 'index'
+  // instead of prev/next. `summary`: a name matched in the summary
+  // markdown (spec #82) — inline styling with `not-prose` so the entity
+  // colour survives the typography plugin, its own anchor id (see
+  // `summaryAnchorId`), and the same "Show in transcript" peek.
+  variant?: 'inline' | 'speaker' | 'index' | 'summary'
   // Index variant only: the entry's own classes (a rail row, a pill).
   className?: string
   onSeek?: (seconds: number) => void
-  // Index variant: switch to the transcript and scroll to the segment
+  // Index and summary variants: switch to the transcript and scroll to the segment
   // the mention was borrowed from. No seek — the ▶ button is the seek path.
   onShowInTranscript?: (segmentId: number) => void
   // Notifies the parent which entity the user last hovered, so the
@@ -110,6 +119,7 @@ export default function EntityHighlight({
   const style = entityStyle(entity.type)
   const isSpeaker = variant === 'speaker'
   const isIndex = variant === 'index'
+  const isSummary = variant === 'summary'
   const [hoverOpen, setHoverOpen] = useState(false)
   // Pinned by a click: survives mouse-out; closed by Esc, a click
   // outside, the word scrolling out of view, a jump, or navigating away.
@@ -288,8 +298,8 @@ export default function EntityHighlight({
     [closeAll, entity.id, onFocusEntity],
   )
 
-  // Index peek: leave for the transcript. Close first — the tab switch
-  // may unmount the transcript the target anchor lives in.
+  // Index and summary peeks: leave for the transcript. Close first — the
+  // tab switch may unmount the transcript anchor or this highlight itself.
   const showInTranscript = useCallback(
     (segmentId: number) => {
       closeAll()
@@ -302,13 +312,15 @@ export default function EntityHighlight({
     ? undefined
     : isSpeaker
       ? speakerAnchorId(entity.id, mention.segment_id)
-      : mentionPermalinkHash(entity.id, mention.segment_id)
+      : isSummary
+        ? summaryAnchorId(entity.id, mention.segment_id)
+        : mentionPermalinkHash(entity.id, mention.segment_id)
 
   const look = isIndex
     ? (className ?? '')
     : isSpeaker
       ? 'text-inherit decoration-dotted underline-offset-2 hover:underline'
-      : `underline ${style.inlineUnderline} hover:bg-gray-50`
+      : `${isSummary ? 'not-prose ' : ''}underline ${style.inlineUnderline} hover:bg-gray-50`
 
   const ariaLabel = `${entity.canonical_name}, ${style.label}, ${
     episodeEntity.mention_count
