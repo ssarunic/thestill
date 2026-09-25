@@ -36,6 +36,11 @@ export interface EntityHoverCardProps {
   // Scroll the transcript to another mention of the same entity
   // (without touching playback) — the shell closes the peek afterwards.
   onJumpToMention?: (mention: MentionLite) => void
+  // Peek opened away from the transcript (an index entry, a summary
+  // match): the mention was borrowed from a transcript segment; this
+  // switches to the transcript and scrolls there (no seek). When set, it
+  // replaces prev/next — there are no sibling anchors to step through.
+  onShowInTranscript?: (segmentId: number) => void
   // Fired when the user leaves for the entity page, so the shell can
   // close before the route changes.
   onNavigate?: () => void
@@ -85,6 +90,7 @@ export default function EntityHoverCard({
   episodeId = null,
   onSeek,
   onJumpToMention,
+  onShowInTranscript,
   onNavigate,
   sheet = false,
   summaryEnabled = true,
@@ -101,10 +107,12 @@ export default function EntityHoverCard({
   // In-episode position among the reachable mentions; the current one is
   // located by segment (its own anchor is the one this card opened from).
   // Read once per open — the card only mounts while the peek is showing.
+  // Away from the transcript there is nothing to step through: an empty
+  // list hides the position and the prev/next row below.
   const speaking = isSpeakingMention(mention)
   const ordered = useMemo(
-    () => navigableMentions(entity.id, mentions, speaking),
-    [entity.id, mentions, speaking],
+    () => (onShowInTranscript ? [] : navigableMentions(entity.id, mentions, speaking)),
+    [entity.id, mentions, speaking, onShowInTranscript],
   )
   const currentIdx = ordered.findIndex((m) => m.segment_id === mention.segment_id)
   const positionNoun = speaking ? ' turns' : ''
@@ -225,6 +233,18 @@ export default function EntityHoverCard({
             aria-label={next ? `Next ${speaking ? 'turn' : 'mention'} at ${formatTimestamp(next.start_ms)}` : 'No next mention'}
           >
             {next && <span className="mr-1 font-mono tabular-nums text-gray-400">{formatTimestamp(next.start_ms)}</span>}Next →
+          </button>
+        </div>
+      )}
+      {onShowInTranscript && (
+        <div className={`mt-1 ${textBase}`}>
+          <button
+            type="button"
+            onClick={() => onShowInTranscript(mention.segment_id)}
+            className={`w-full rounded text-left text-primary-700 hover:bg-primary-50 ${tapTarget}`}
+          >
+            Show in transcript{' '}
+            <span className="font-mono tabular-nums text-gray-400">{formatTimestamp(mention.start_ms)}</span> →
           </button>
         </div>
       )}

@@ -461,7 +461,9 @@ export default function EpisodeReader({
   // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
   // jump, not a playback action: same tab-switch + segment-scroll path as a
   // citation, without the seek. The chip carries its first segment's id.
-  const handleSpeakerSelect = useCallback(
+  // "Show in transcript" from a rail / strip entity peek takes the same
+  // path with the entity's first mention.
+  const jumpToTranscriptSegment = useCallback(
     (segmentId: number) => {
       clearEntityFilter()
       if (activeTab !== 'transcript') setTab('transcript', { push: true })
@@ -574,6 +576,10 @@ export default function EpisodeReader({
           entities={entities}
           hiddenTypes={hiddenEntityTypes}
           onToggleType={toggleEntityType}
+          episodeId={episode?.id ?? null}
+          onSeek={handleSegmentSeek}
+          onShowInTranscript={jumpToTranscriptSegment}
+          onFocusEntity={setFocusedEntityId}
         />
       )}
 
@@ -713,7 +719,9 @@ export default function EpisodeReader({
           <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
             <EntityRail
               entities={entities}
+              episodeId={episode?.id ?? null}
               onSeek={handleSegmentSeek}
+              onShowInTranscript={jumpToTranscriptSegment}
               onFocusEntity={setFocusedEntityId}
               relatedEpisodes={relatedEpisodes}
               relatedLoading={relatedLoading}
@@ -727,7 +735,7 @@ export default function EpisodeReader({
           in one labelled place. Both sit below the tabs so late-arriving
           transcript data cannot move the fold. */}
       {episode && (
-        <People entities={entities} segments={transcriptSegments} onSpeakerSelect={handleSpeakerSelect} />
+        <People entities={entities} segments={transcriptSegments} onSpeakerSelect={jumpToTranscriptSegment} />
       )}
       {episode && (
         <Panel className="px-4 py-3 sm:px-6 sm:py-4">

@@ -395,6 +395,45 @@ describe('EntityHighlight', () => {
     })
   })
 
+  describe('as an index entry (rail row / strip pill)', () => {
+    const indexMention: MentionLite = { ...mention(0, 10, 5_000), role: 'index' }
+
+    it('wears the caller\'s classes, has no transcript anchor, and offers Show in transcript instead of prev/next', () => {
+      const onShowInTranscript = vi.fn()
+      const onSeek = vi.fn()
+      renderHighlight({
+        variant: 'index',
+        mention: indexMention,
+        className: 'rail-row',
+        onShowInTranscript,
+        onSeek,
+      })
+      const link = screen.getByRole('link', { name: /Alice, Person, 3 mentions/ })
+      expect(link).toHaveAttribute('href', '/entities/person/alice')
+      expect(link).not.toHaveAttribute('id')
+      expect(link).toHaveClass('rail-row')
+      expect(link).not.toHaveClass('underline')
+      // The transcript's own anchor for the same (entity, segment) is untouched.
+      expect(document.getElementById('m=person:alice:10')).toHaveTextContent('first')
+
+      fireEvent.click(link)
+      const card = screen.getByTestId('entity-hover-card')
+      expect(screen.getByTestId('location')).toHaveTextContent('/podcasts/show/episodes/ep-1')
+      expect(card).toHaveTextContent('3× this episode')
+      expect(card).not.toHaveTextContent(' of ')
+      expect(screen.queryByRole('button', { name: /Next mention/ })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Previous mention/ })).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Play from 0:05' }))
+      expect(onSeek).toHaveBeenCalledWith(5)
+
+      fireEvent.click(screen.getByRole('button', { name: /Show in transcript/ }))
+      expect(onShowInTranscript).toHaveBeenCalledWith(10)
+      // Leaving for the transcript closes the peek.
+      expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
+    })
+  })
+
   describe('on a phone', () => {
     function renderPhone(onSegmentActivate = vi.fn()) {
       return renderHighlight({ isSmUp: false }, onSegmentActivate)
