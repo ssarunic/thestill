@@ -33,21 +33,27 @@ merge.
     proxy-injected and works for repo, PR, issue and Actions endpoints.
   - If none of the three works, STOP and report exactly which call failed.
     Do not guess at merges without API access.
-- **Dependabot alerts endpoint.** Before touching `/dependabot/alerts`, run
-  `test -n "$DEPENDABOT_TOKEN" && echo set || echo unset` and record the
-  answer in the report. Then:
-  - `DEPENDABOT_TOKEN` **set**: call the alerts endpoints with
-    `-H "Authorization: Bearer $DEPENDABOT_TOKEN"`. It is a fine-grained PAT
-    with only "Dependabot alerts: read and write" on this repo; use it for
-    `/dependabot/alerts*` and nothing else. Never print its value.
-  - `DEPENDABOT_TOKEN` **unset**: do not try `GH_TOKEN` on these endpoints.
-    It is a GitHub App installation token and returns
-    `403 Resource not accessible by integration` (confirmed 2026-09-25; the
-    Claude GitHub App does not request that permission, so it cannot be
-    granted). Skip section 3's alert listing and dismissals, say so in the
-    report, and rely on Dependabot security updates opening a fix PR for
-    every fixable alert, which section 2 handles. The fix is a human adding
-    `DEPENDABOT_TOKEN` to the cloud environment's variables.
+- **Dependabot alerts endpoint.** Call
+  `GET /repos/ssarunic/thestill/dependabot/alerts?state=open` once with the
+  default credentials (`Authorization: Bearer $GH_TOKEN`).
+  - `200`: proceed with section 3 in full.
+  - `403 Resource not accessible by integration`: the request reached GitHub
+    as the Claude GitHub App's installation token, which does not have the
+    Dependabot-alerts permission and cannot be granted it. Do not retry with
+    another header, variable or token: the cloud egress proxy rewrites the
+    Authorization header on every `api.github.com` request, so a token under
+    any other name (a `DEPENDABOT_TOKEN`, for instance) is replaced before it
+    leaves the sandbox (confirmed 2026-09-25, run cse_01VyKKMTiSsVRYYbx1BRaBod).
+    Skip section 3's alert listing and dismissals, say so in the report, and
+    rely on Dependabot security updates opening a fix PR for every fixable
+    alert, which section 2 handles.
+  - The only documented override is a human setting `GH_TOKEN` itself in the
+    cloud environment to a fine-grained PAT; the proxy then passes that token
+    through unchanged for all GitHub calls, so it must carry every permission
+    the sweep uses (Contents, Pull requests, Issues: read and write; Actions,
+    Metadata: read; Dependabot alerts: read and write). If a run finds the
+    alerts endpoint answering `200`, that is what happened; note it in the
+    report.
 - GitHub search endpoints have a low secondary rate limit; on a 403 rate
   limit, wait with a background `until` loop, not a foreground `sleep`.
 - Confirm `uv --version`. If `uv` is missing, install it
