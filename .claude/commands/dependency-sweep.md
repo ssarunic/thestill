@@ -130,12 +130,19 @@ For each open alert:
 3. **Applicable, patched version exists within the current constraint:** fix it
    on a branch and open a PR.
    - Python: `git checkout -b deps/<pkg>-<version>`; then
-     `uv lock --upgrade-package <pkg>`; commit only `uv.lock`; push; open a PR
-     titled `fix(deps): bump <pkg> <old> -> <new> (GHSA-...)` whose body lists
-     the alert numbers and the extra the package belongs to. Then treat it like
-     a Dependabot PR in section 2 (wait for CI, merge when green).
-   - If `uv lock --upgrade-package` cannot reach the patched version because
-     of a transitive conflict, do not force it. Report the conflict verbatim.
+     `uv lock --upgrade-package '<pkg>==<first patched version>'`. Pin the
+     patched version explicitly: a bare `uv lock --upgrade-package <pkg>`
+     jumps to the newest release, which can be a major (nemo-toolkit
+     `>=2.0.0` resolves to 3.0.0 when the patch is 2.6.2). Check the diff of
+     `uv.lock` shows only that package and its transitive changes. Commit
+     only `uv.lock`; push; open a PR titled
+     `fix(deps): bump <pkg> <old> -> <new> (GHSA-...)` whose body lists the
+     alert numbers and the extra the package belongs to. Then treat it like a
+     Dependabot PR in section 2 (wait for CI, merge when green).
+   - If the pinned patched version cannot resolve because of a transitive
+     conflict, try the newest release in the same major
+     (`'<pkg>>=<patched>,<<next major>'`). If that fails too, do not force it
+     and do not cross a major. Report the conflict verbatim.
    - npm: never regenerate `package-lock.json` yourself; it must be built on
      Linux or CI's `npm ci` breaks. Dependabot security updates are enabled
      and open the fix PR itself. If no PR exists for the alert, report it for
