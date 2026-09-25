@@ -32,6 +32,12 @@ client are passed in) so they unit-test without a network or an
     coref/disambiguation, capitalised continuation).
   - ``p31_says_other_type`` — :func:`classify_entity_type` actively
     disagrees with the stored type.
+  - ``name_shared_with_other_qid`` — two same-type entities under different
+    QIDs share a name (one's canonical name is the other's canonical name
+    or alias). That is a split entity — the professor and the footballer
+    both called "Scott Galloway", each with a row, the hosts' speaker
+    labels anchored to whichever was created first — and only a human can
+    say which side the mentions belong to.
 
   Ranked by mentions poisoned (blast radius). The separate "P31 unsupported
   by the stored type but classify can't retype it" class is deliberately
@@ -215,8 +221,50 @@ def scan_entities_for_review(
             )
         )
 
+    _flag_name_collisions(repo, flags)
     flags.sort(key=lambda f: f.score, reverse=True)
     return flags[:limit]
+
+
+def _flag_name_collisions(repo: "SqliteEntityRepository", flags: List[ReviewFlag]) -> None:
+    """Signal 3 — add a flag per split pair (see the module docstring), on
+    the side with more mentions. Blast radius is both sides: whichever is
+    wrong, every mention of the shared name is in doubt. An entity already
+    flagged by another signal gains the kind and keeps the higher score."""
+    by_entity = {f.entity_id: f for f in flags}
+    pairs: Dict[Tuple[str, str], dict] = {}
+    for row in repo.find_name_collisions():
+        key = (row["entity_id"], row["other_entity_id"])
+        pair = pairs.setdefault(key, {**row, "names": []})
+        pair["names"].append(row["name"])
+    for (eid, other_id), pair in pairs.items():
+        score = float(pair["mention_count"] + pair["other_mention_count"])
+        evidence = {
+            "shared_names": pair["names"],
+            "mentions": pair["mention_count"],
+            "other_entity_id": other_id,
+            "other_canonical_name": pair["other_canonical_name"],
+            "other_qid": pair["other_qid"],
+            "other_mentions": pair["other_mention_count"],
+        }
+        flag = by_entity.get(eid)
+        if flag is not None:
+            flag.kinds.append("name_shared_with_other_qid")
+            flag.evidence["name_collision"] = evidence
+            flag.score = round(max(flag.score, score), 2)
+            continue
+        flag = ReviewFlag(
+            entity_id=eid,
+            type=pair["type"],
+            canonical_name=pair["canonical_name"],
+            qid=pair["wikidata_qid"],
+            score=round(score, 2),
+            kinds=["name_shared_with_other_qid"],
+            evidence={"name_collision": evidence},
+            suggested_action="review",
+        )
+        by_entity[eid] = flag
+        flags.append(flag)
 
 
 # ----------------------------------------------------------------------

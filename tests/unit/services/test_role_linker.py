@@ -10,9 +10,17 @@ import sqlite3
 import uuid
 from pathlib import Path
 
+from thestill.models.entities import EntityRecord, EntityType
 from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
-from thestill.services.role_linker import backfill_all_roles, link_episode_roles, link_podcast_roles, parse_facts_file
+from thestill.services.role_linker import (
+    backfill_all_roles,
+    collect_host_evidence,
+    link_episode_roles,
+    link_podcast_roles,
+    parse_facts_file,
+    role_context,
+)
 from thestill.utils.path_manager import PathManager
 
 # ---------------------------------------------------------------------------
@@ -178,6 +186,135 @@ def test_link_creates_entities_and_writes_role_columns(tmp_path):
     # Created entities should be retrievable by name.
     assert er.find_entity_by_name("Sarah Guest") is not None
     assert er.find_entity_by_name("Alex Host") is not None
+
+
+# ---------------------------------------------------------------------------
+# Namesakes: a name several entities share is settled by context or refused
+# ---------------------------------------------------------------------------
+
+
+def _seed_galloways(er: SqliteEntityRepository, *, footballer_description=None) -> None:
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway",
+            wikidata_qid="Q7436378",
+            description=footballer_description,
+        )
+    )
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway-professor",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway (professor)",
+            wikidata_qid="Q29017701",
+            aliases=["Scott Galloway"],
+            description="American advertising theorist (born 1964)",
+        )
+    )
+
+
+def _write_prof_g_facts(storage: Path, podcast_slug: str, bio: str) -> None:
+    pm = PathManager(str(storage))
+    pm.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
+    pm.podcast_facts_file(podcast_slug).write_text(f"## Hosts\n- Scott Galloway - {bio}\n- Ed Elson - co-host\n")
+
+
+def test_a_host_name_two_entities_share_is_settled_by_the_bio_and_description(tmp_path):
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _write_prof_g_facts(tmp_path, podcast_slug, "Bestselling author, professor, and entrepreneur")
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er, footballer_description="Australian soccer player")
+
+    result = link_podcast_roles(
+        podcast_id=podcast_id,
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=PathManager(str(tmp_path)),
+        context_text="Professor Scott Galloway combines business insight with career advice.",
+    )
+    # "(professor)" in the canonical name is what the bio and the show
+    # description share; the footballer's description shares nothing.
+    assert result.hosts == ["person:scott-galloway-professor", "person:ed-elson"]
+    assert result.ambiguous_names == []
+    assert "person:scott-galloway" not in result.created_entities
+
+
+def test_a_host_name_two_entities_share_is_refused_when_nothing_tells_them_apart(tmp_path):
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _write_prof_g_facts(tmp_path, podcast_slug, "the host")
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er)
+
+    result = link_podcast_roles(
+        podcast_id=podcast_id,
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=PathManager(str(tmp_path)),
+    )
+    # Neither the first-created row nor a fresh duplicate: the name is left
+    # out and reported, the other host still links.
+    assert result.hosts == ["person:ed-elson"]
+    assert result.ambiguous_names == ["Scott Galloway"]
+    assert result.created_entities == ["person:ed-elson"]
+    with sqlite3.connect(str(db_path)) as conn:
+        assert conn.execute("SELECT host_entity_ids FROM podcasts").fetchone()[0] == '["person:ed-elson"]'
+    assert len(er.find_entities_by_name("Scott Galloway")) == 2
+
+
+def test_a_tie_between_namesakes_is_ambiguous_too(tmp_path):
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _write_prof_g_facts(tmp_path, podcast_slug, "American professor")
+    er = SqliteEntityRepository(db_path=str(db_path))
+    # Both descriptions now share exactly one word with the bio.
+    _seed_galloways(er, footballer_description="American soccer professor")
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+    assert result.ambiguous_names == ["Scott Galloway"]
+
+
+def test_a_single_existing_namesake_is_still_adopted_without_context(tmp_path):
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    _write_prof_g_facts(tmp_path, podcast_slug, "the host")
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway-professor",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway (professor)",
+            wikidata_qid="Q29017701",
+            aliases=["Scott Galloway"],
+        )
+    )
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+    assert result.hosts == ["person:scott-galloway-professor", "person:ed-elson"]
+
+
+def test_host_evidence_ignores_a_name_several_entities_share(tmp_path):
+    db_path, _, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er)
+    pm = PathManager(str(tmp_path))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    (pm.episode_facts_dir() / podcast_slug / "ep1.facts.md").write_text("- SPEAKER_00: Scott Galloway (Host)\n")
+    files, counts = collect_host_evidence(podcast_slug=podcast_slug, entity_repo=er, path_manager=pm)
+    assert (files, counts) == (0, {})
+    files, counts = collect_host_evidence(
+        podcast_slug=podcast_slug, entity_repo=er, path_manager=pm, context_text="a professor of marketing"
+    )
+    assert (files, counts) == (1, {"person:scott-galloway-professor": 1})
+
+
+def test_role_context_is_the_episode_description_then_the_podcasts():
+    podcast = type("P", (), {"description": "About the show"})()
+    episode = type("E", (), {"description": "About the episode"})()
+    assert role_context(podcast) == "About the show"
+    assert role_context(podcast, episode) == "About the episode About the show"
+    assert role_context(type("P", (), {"description": None})(), type("E", (), {})()) == ""
 
 
 def test_link_is_idempotent(tmp_path):

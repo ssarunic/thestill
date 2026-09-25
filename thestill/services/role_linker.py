@@ -104,6 +104,9 @@ class LinkResult:
     recurring: List[str] = field(default_factory=list)
     created_entities: List[str] = field(default_factory=list)
     skipped_names: List[str] = field(default_factory=list)
+    # Real names that several existing entities share and the bio /
+    # description could not tell apart; left unlinked rather than guessed.
+    ambiguous_names: List[str] = field(default_factory=list)
     demoted_hosts: List[str] = field(default_factory=list)
 
 
@@ -199,20 +202,96 @@ def _is_real_person_name(name: str) -> bool:
     return True
 
 
+# Words too common to tell two namesakes apart.
+_ROLE_STOPWORDS = frozenset(
+    "a an and are as at be by for from has he her his in is it its of on or she that the their they this to was were who with".split()
+)
+
+
+def _tokens(text: Optional[str]) -> set:
+    return set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _context_fit(entity: EntityRecord, name: str, hint: str) -> int:
+    """How many distinctive words ``hint`` (the facts-file bio plus the
+    podcast or episode description) shares with what is stored about the
+    entity: its description and the disambiguator in its canonical name
+    ("Scott Galloway (professor)"). The name's own words never count.
+    """
+    name_tokens = _tokens(name)
+    hint_tokens = _tokens(hint) - name_tokens - _ROLE_STOPWORDS
+    if not hint_tokens:
+        return 0
+    known = _tokens(entity.description)
+    for parenthetical in re.findall(r"\(([^)]*)\)", entity.canonical_name or ""):
+        known |= _tokens(parenthetical)
+    return len(hint_tokens & (known - name_tokens))
+
+
+def _pick_namesake(candidates: List[EntityRecord], name: str, hint: str) -> Optional[EntityRecord]:
+    """The one candidate the context fits better than every other, or
+    ``None`` when nothing distinguishes them."""
+    scored = sorted(((_context_fit(c, name, hint), c.id, c) for c in candidates), key=lambda t: (-t[0], t[1]))
+    best, runner_up = scored[0][0], scored[1][0]
+    if best == 0 or best == runner_up:
+        return None
+    return scored[0][2]
+
+
+def _resolve_existing_person(
+    entity_repo: SqliteEntityRepository,
+    name: str,
+    hint: str,
+) -> Tuple[Optional[EntityRecord], bool]:
+    """``(entity, ambiguous)`` for a name already in the entity table.
+
+    Names are not unique: Wikidata has a footballer and a professor called
+    Scott Galloway, and a corpus can hold a row for each. Picking the first
+    match would make whichever row was created first the host of every
+    show with that name, and the anchor index would then pre-resolve every
+    speaker label to it with no linker in the loop. So when several rows
+    share the name, the context has to single one out; otherwise the name
+    is reported ambiguous and left unlinked — a missing host costs a few
+    unresolved speaker mentions, a wrong one poisons thousands.
+    """
+    matches = entity_repo.find_entities_by_name(name)
+    if not matches:
+        return None, False
+    if len(matches) == 1:
+        return matches[0], False
+    chosen = _pick_namesake(matches, name, hint)
+    if chosen is None:
+        logger.warning(
+            "role_name_ambiguous",
+            name=name,
+            candidates=[{"entity_id": m.id, "qid": m.wikidata_qid} for m in matches],
+        )
+        return None, True
+    logger.info("role_name_disambiguated", name=name, entity_id=chosen.id, candidates=len(matches))
+    return chosen, False
+
+
 def _resolve_or_create_person(
     entity_repo: SqliteEntityRepository,
     name: str,
     bio: Optional[str],
-) -> Tuple[str, bool]:
-    """Return ``(entity_id, created)``.
+    *,
+    context_text: str = "",
+) -> Tuple[Optional[str], bool]:
+    """Return ``(entity_id, created)``; ``(None, False)`` when the name is
+    ambiguous (see ``_resolve_existing_person``).
 
-    Tries existing entity by exact canonical_name / alias / id (any
-    type). If found we adopt that entity even if its type is not
-    ``person`` — the existing data is authoritative; we don't want to
-    fork a duplicate. If nothing matches we mint a new ``person:`` entity
-    seeded with the LLM-supplied bio as ``description``.
+    A single existing entity by canonical name / alias / id (any type) is
+    adopted even if its type is not ``person`` — the existing data is
+    authoritative; we don't want to fork a duplicate. Several existing
+    entities are told apart by the bio and the description, or refused.
+    If nothing matches we mint a new ``person:`` entity seeded with the
+    LLM-supplied bio as ``description``.
     """
-    existing = entity_repo.find_entity_by_name(name)
+    hint = " ".join(part for part in (bio, context_text) if part)
+    existing, ambiguous = _resolve_existing_person(entity_repo, name, hint)
+    if ambiguous:
+        return None, False
     if existing is not None:
         return existing.id, False
     new_id = f"person:{generate_slug(name)}"
@@ -237,14 +316,16 @@ def collect_host_evidence(
     podcast_slug: str,
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
+    context_text: str = "",
 ) -> Tuple[int, dict]:
     """Aggregate ``Name (Host)`` speaker-mapping annotations across a
     podcast's episode facts files.
 
     Returns ``(files_with_host_annotations, {entity_id: n_files})`` where
     each file counts an entity at most once. Names are resolved read-only
-    via ``find_entity_by_name`` — unresolved name variants simply
-    contribute no evidence; nothing is created here.
+    via ``_resolve_existing_person`` — unresolved name variants and names
+    shared by several entities simply contribute no evidence; nothing is
+    created here.
     """
     episode_dir = path_manager.episode_facts_dir() / podcast_slug
     if not episode_dir.is_dir():
@@ -266,7 +347,7 @@ def collect_host_evidence(
             if not _is_real_person_name(name):
                 continue
             if name not in name_cache:
-                existing = entity_repo.find_entity_by_name(name)
+                existing, _ambiguous = _resolve_existing_person(entity_repo, name, context_text)
                 name_cache[name] = existing.id if existing is not None else None
             if name_cache[name] is not None:
                 file_entity_ids.add(name_cache[name])
@@ -305,25 +386,32 @@ def link_podcast_roles(
     podcast_slug: str,
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
+    context_text: str = "",
 ) -> LinkResult:
-    """Parse the podcast facts file and write hosts + recurring."""
+    """Parse the podcast facts file and write hosts + recurring.
+
+    ``context_text`` is the podcast description: with the facts-file bio it
+    tells namesakes apart (see ``_resolve_existing_person``).
+    """
     facts_path = path_manager.podcast_facts_file(podcast_slug)
     roles = parse_facts_file(facts_path)
     result = LinkResult(target_id=podcast_id)
-    result.hosts, result.created_entities, result.skipped_names = _resolve_role_list(
-        entity_repo, roles.hosts, accumulator_for_created=result.created_entities
+    result.hosts, result.created_entities, result.skipped_names, result.ambiguous_names = _resolve_role_list(
+        entity_repo, roles.hosts, accumulator_for_created=result.created_entities, context_text=context_text
     )
-    recurring_ids, created_recurring, skipped_recurring = _resolve_role_list(
-        entity_repo, roles.recurring, accumulator_for_created=result.created_entities
+    recurring_ids, created_recurring, skipped_recurring, ambiguous_recurring = _resolve_role_list(
+        entity_repo, roles.recurring, accumulator_for_created=result.created_entities, context_text=context_text
     )
     result.recurring = recurring_ids
     result.created_entities.extend(created_recurring)
     result.skipped_names.extend(skipped_recurring)
+    result.ambiguous_names.extend(ambiguous_recurring)
     if result.hosts:
         evidence_files, host_counts = collect_host_evidence(
             podcast_slug=podcast_slug,
             entity_repo=entity_repo,
             path_manager=path_manager,
+            context_text=context_text,
         )
         result.hosts, result.demoted_hosts = _filter_hosts_by_evidence(result.hosts, evidence_files, host_counts)
         if result.demoted_hosts:
@@ -346,6 +434,7 @@ def link_podcast_roles(
         recurring=len(result.recurring),
         created_entities=len(set(result.created_entities)),
         skipped=len(result.skipped_names),
+        ambiguous=result.ambiguous_names,
     )
     return result
 
@@ -357,13 +446,18 @@ def link_episode_roles(
     episode_slug: str,
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
+    context_text: str = "",
 ) -> LinkResult:
-    """Parse the episode facts file and write guests."""
+    """Parse the episode facts file and write guests.
+
+    ``context_text`` is the episode description (plus the podcast's): with
+    the facts-file bio it tells namesakes apart.
+    """
     facts_path = path_manager.episode_facts_file(podcast_slug, episode_slug)
     roles = parse_facts_file(facts_path)
     result = LinkResult(target_id=episode_id)
-    result.guests, result.created_entities, result.skipped_names = _resolve_role_list(
-        entity_repo, roles.guests, accumulator_for_created=result.created_entities
+    result.guests, result.created_entities, result.skipped_names, result.ambiguous_names = _resolve_role_list(
+        entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
     )
     if result.guests:
         entity_repo.set_episode_guests(episode_id, result.guests)
@@ -374,6 +468,7 @@ def link_episode_roles(
         guests=len(result.guests),
         created_entities=len(set(result.created_entities)),
         skipped=len(result.skipped_names),
+        ambiguous=result.ambiguous_names,
     )
     return result
 
@@ -383,29 +478,46 @@ def _resolve_role_list(
     items: Iterable[Tuple[str, Optional[str]]],
     *,
     accumulator_for_created: List[str],
-) -> Tuple[List[str], List[str], List[str]]:
+    context_text: str = "",
+) -> Tuple[List[str], List[str], List[str], List[str]]:
     """Resolve a list of ``(name, bio)`` pairs to entity ids.
 
-    Returns ``(entity_ids, created_ids, skipped_names)``. ``entity_ids``
-    is deduplicated while preserving first-occurrence order so the
-    resulting JSON column reads in the LLM's preferred order.
+    Returns ``(entity_ids, created_ids, skipped_names, ambiguous_names)``.
+    ``entity_ids`` is deduplicated while preserving first-occurrence order
+    so the resulting JSON column reads in the LLM's preferred order.
+    ``ambiguous_names`` are real names that several existing entities
+    share and the context could not settle; they are left unlinked.
     """
     entity_ids: List[str] = []
     created_ids: List[str] = []
     skipped: List[str] = []
+    ambiguous: List[str] = []
     seen_ids: set = set()
     for name, bio in items:
         if not _is_real_person_name(name):
             skipped.append(name)
             continue
-        entity_id, created = _resolve_or_create_person(entity_repo, name, bio)
+        entity_id, created = _resolve_or_create_person(entity_repo, name, bio, context_text=context_text)
+        if entity_id is None:
+            ambiguous.append(name)
+            continue
         if entity_id in seen_ids:
             continue
         seen_ids.add(entity_id)
         entity_ids.append(entity_id)
         if created:
             created_ids.append(entity_id)
-    return entity_ids, created_ids, skipped
+    return entity_ids, created_ids, skipped, ambiguous
+
+
+def role_context(podcast, episode=None) -> str:
+    """The description text that tells namesakes apart: the episode's, then
+    the podcast's. Both are plain text by construction (see ``Episode``)."""
+    parts = []
+    if episode is not None:
+        parts.append(getattr(episode, "description", "") or "")
+    parts.append(getattr(podcast, "description", "") or "")
+    return " ".join(part for part in parts if part)
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +533,7 @@ class BackfillSummary:
     episodes_with_guests: int = 0
     entities_created: int = 0
     skipped_names: List[str] = field(default_factory=list)
+    ambiguous_names: List[str] = field(default_factory=list)
 
 
 def backfill_all_roles(
@@ -447,11 +560,13 @@ def backfill_all_roles(
             podcast_slug=podcast.slug,
             entity_repo=entity_repo,
             path_manager=path_manager,
+            context_text=podcast.description or "",
         )
         if result.hosts:
             summary.podcasts_with_hosts += 1
         summary.entities_created += len(set(result.created_entities))
         summary.skipped_names.extend(result.skipped_names)
+        summary.ambiguous_names.extend(result.ambiguous_names)
         for episode in podcast.episodes:
             if not episode.slug:
                 continue
@@ -462,9 +577,11 @@ def backfill_all_roles(
                 episode_slug=episode.slug,
                 entity_repo=entity_repo,
                 path_manager=path_manager,
+                context_text=role_context(podcast, episode),
             )
             if ep_result.guests:
                 summary.episodes_with_guests += 1
             summary.entities_created += len(set(ep_result.created_entities))
             summary.skipped_names.extend(ep_result.skipped_names)
+            summary.ambiguous_names.extend(ep_result.ambiguous_names)
     return summary

@@ -625,13 +625,14 @@ def handle_clean(task: Task, state: "AppState") -> None:
         # cleaning pass above, so they're guaranteed fresh.
         if state.entity_repository is not None and podcast.slug and episode.slug:
             try:
-                from ..services.role_linker import link_episode_roles, link_podcast_roles
+                from ..services.role_linker import link_episode_roles, link_podcast_roles, role_context
 
                 link_podcast_roles(
                     podcast_id=podcast.id,
                     podcast_slug=podcast.slug,
                     entity_repo=state.entity_repository,
                     path_manager=state.path_manager,
+                    context_text=role_context(podcast),
                 )
                 link_episode_roles(
                     episode_id=episode.id,
@@ -639,6 +640,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
                     episode_slug=episode.slug,
                     entity_repo=state.entity_repository,
                     path_manager=state.path_manager,
+                    context_text=role_context(podcast, episode),
                 )
             except Exception as exc:
                 logger.warning(
@@ -1299,6 +1301,8 @@ def build_link_context(repo, podcast, episode, *, linker=None):
         language=(getattr(podcast, "language", None) or "en")[:2].lower(),
         podcast_title=podcast.title or "",
         episode_title=episode.title or "",
+        podcast_description=getattr(podcast, "description", "") or "",
+        episode_description=getattr(episode, "description", "") or "",
         anchor_names=[a.canonical_name for a in anchors if a is not None],
     )
 

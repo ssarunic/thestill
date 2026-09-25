@@ -1086,6 +1086,70 @@ def test_fetch_resolution_review_rows_contract(repo):
     assert json.loads(musk["wikidata_instance_of"]) == ["Q5"]
 
 
+def test_find_entities_by_name_returns_every_namesake_canonical_first(repo):
+    repo.upsert_entity(_entity(id="person:scott-galloway", name="Scott Galloway", qid="Q7436378", aliases=[]))
+    repo.upsert_entity(
+        _entity(
+            id="person:scott-galloway-professor",
+            name="Scott Galloway (professor)",
+            qid="Q29017701",
+            aliases=["Scott Galloway", "Prof G"],
+        )
+    )
+    repo.upsert_entity(_entity(id="company:spacex", type=EntityType.COMPANY, name="SpaceX", qid="Q193701", aliases=[]))
+    # Canonical match first, then the alias match; case-insensitive; no duplicates.
+    assert [e.id for e in repo.find_entities_by_name("scott galloway")] == [
+        "person:scott-galloway",
+        "person:scott-galloway-professor",
+    ]
+    assert [e.id for e in repo.find_entities_by_name("prof g")] == ["person:scott-galloway-professor"]
+    # An id resolves to itself alone, and the type filter applies.
+    assert [e.id for e in repo.find_entities_by_name("person:scott-galloway-professor")] == [
+        "person:scott-galloway-professor"
+    ]
+    assert repo.find_entities_by_name("Scott Galloway", entity_type="company") == []
+    assert repo.find_entities_by_name("nobody") == []
+    # The single-result lookup is the first of these.
+    assert repo.find_entity_by_name("scott galloway").id == "person:scott-galloway"
+
+
+def test_find_name_collisions_pairs_namesakes_under_different_qids(repo):
+    repo.upsert_entity(_entity(id="person:scott-galloway", name="Scott Galloway", qid="Q7436378", aliases=[]))
+    repo.upsert_entity(
+        _entity(
+            id="person:scott-galloway-professor",
+            name="Scott Galloway (professor)",
+            qid="Q29017701",
+            aliases=["Scott Galloway"],
+        )
+    )
+    # Same QID twice is a duplicate, not a collision; a row with no QID is
+    # an ungrounded local entity, not a namesake; a different type is not a
+    # collision either.
+    repo.upsert_entity(_entity(id="person:musk", name="Elon Musk", qid="Q317521", aliases=[]))
+    repo.upsert_entity(_entity(id="person:elon-musk", name="Elon Musk", qid="Q317521", aliases=[]))
+    repo.upsert_entity(_entity(id="person:sam", name="Sam Altman", qid="Q7407093", aliases=[]))
+    repo.upsert_entity(_entity(id="person:sam-local", name="Sam Altman", qid=None, aliases=[]))
+    repo.upsert_entity(_entity(id="company:apple", type=EntityType.COMPANY, name="Apple", qid="Q312", aliases=[]))
+    repo.upsert_entity(_entity(id="product:apple", type=EntityType.PRODUCT, name="Apple", qid="Q89", aliases=[]))
+    repo.insert_mentions(
+        [
+            _resolved_mention("person:scott-galloway-professor", segment_id=1),
+            _resolved_mention("person:scott-galloway-professor", segment_id=2),
+            _resolved_mention("person:scott-galloway", segment_id=3),
+        ]
+    )
+    rows = repo.find_name_collisions()
+    assert len(rows) == 1
+    row = rows[0]
+    # Oriented from the side with more mentions.
+    assert row["entity_id"] == "person:scott-galloway-professor"
+    assert row["other_entity_id"] == "person:scott-galloway"
+    assert (row["name"], row["wikidata_qid"], row["other_qid"]) == ("scott galloway", "Q29017701", "Q7436378")
+    assert (row["mention_count"], row["other_mention_count"]) == (2, 1)
+    assert row["type"] == "person" and row["other_canonical_name"] == "Scott Galloway"
+
+
 def test_find_duplicate_qid_pairs_keeper_ranking(repo):
     # Two entities share Q317521; the person one has more mentions → keeper.
     repo.upsert_entity(_entity(id="person:elon-musk"))

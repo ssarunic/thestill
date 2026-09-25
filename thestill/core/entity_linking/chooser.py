@@ -37,13 +37,16 @@ logger = get_logger(__name__)
 
 # Bump when the prompt changes meaning: cached decisions made under another
 # version are re-decided as their names come up.
-PROMPT_VERSION = "p4"
+PROMPT_VERSION = "p5"
 
 BATCH_SIZE = 40
 REASK_BATCH_SIZE = 10
 MAX_EXCERPTS = 3
 EXCERPT_MAX_CHARS = 400
 DESCRIPTION_MAX_CHARS = 160
+# The podcast / episode description in the header: enough for the
+# show's subject and its regulars, not the whole show notes.
+CONTEXT_DESCRIPTION_MAX_CHARS = 600
 MAX_ANCHORS = 12
 MAX_OUTPUT_TOKENS = 8192
 
@@ -77,8 +80,11 @@ version, a feature, a sub-product or a team ("Azure Storage", "Opus", \
 "Devin Review") with no entry of its own is null, not the parent entity. A \
 company or model with no entry is null, not a namesake.
 - Answer null when the excerpts do not settle which candidate is meant.
-- Use the podcast, the episode title and the known participants as context. A \
-film discussed by name is the film, not the person it is named after.
+- Use the podcast, the episode title, their descriptions and the known \
+participants as context. What the show is about tells namesakes apart: on a \
+business show, a host called Scott Galloway is the professor, not the \
+footballer. A film discussed by name is the film, not the person it is named \
+after.
 - A label that matches exactly is not enough: the description must fit how \
 the name is used in the excerpts.
 - confidence is "high" when the excerpts make the choice clear, "medium" when \
@@ -222,6 +228,10 @@ def build_user_message(
         f"Podcast: {_one_line(context.podcast_title)}",
         f"Episode: {_one_line(context.episode_title)}",
     ]
+    if context.podcast_description:
+        header.append("About the podcast: " + _one_line(context.podcast_description)[:CONTEXT_DESCRIPTION_MAX_CHARS])
+    if context.episode_description:
+        header.append("About the episode: " + _one_line(context.episode_description)[:CONTEXT_DESCRIPTION_MAX_CHARS])
     if context.anchor_names:
         header.append("Known participants: " + "; ".join(_one_line(n) for n in context.anchor_names[:MAX_ANCHORS]))
     blocks = [wrap_untrusted("\n".join(header), label="EPISODE")]

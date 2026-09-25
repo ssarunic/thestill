@@ -615,6 +615,21 @@ matters for the Phase 4 sweep, not for the daily trickle.
 
 ## Open questions / follow-ups
 
+- **Namesakes and the anchor path (shipped 2026-09-25).** The Prof G host
+  linked to the Australian footballer Q7436378 for months: a row created
+  under that QID in May held the canonical name "Scott Galloway", the
+  role linker resolved the host by exact canonical name, and the anchor
+  index then pre-resolved every speaker label to it with no linker in the
+  loop — 5,295 mentions, while correct chooser decisions accumulated in a
+  separate "(professor)" row. Three changes: the role linker asks for
+  *every* entity a name could mean (`find_entities_by_name`) and, when
+  there are several, picks the one the facts-file bio plus the podcast /
+  episode description fits better or leaves the name unlinked
+  (`role_name_ambiguous`); the chooser's header carries the podcast and
+  episode descriptions (`p5`); and the review queue flags same-type
+  entities that share a name under different QIDs
+  (`name_shared_with_other_qid`, from `find_name_collisions`).
+
 - **Per-name vs per-mention.** Version 1 assumes one referent per name per
   episode. If the eval shows real same-name collisions, the chooser can be
   asked to flag a name as `split` and fall back to per-mention for that

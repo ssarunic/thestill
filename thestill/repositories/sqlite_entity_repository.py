@@ -1143,6 +1143,39 @@ class SqliteEntityRepository(EntityRepository):
                 row = conn.execute(sql, params).fetchone()
         return _row_to_entity(row) if row else None
 
+    def find_entities_by_name(self, name: str, *, entity_type: Optional[str] = None) -> List[EntityRecord]:
+        type_clause = " AND type = ?" if entity_type is not None else ""
+        type_params: list = [entity_type] if entity_type is not None else []
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *, 0 AS match_rank FROM entities WHERE id = ?{type_clause}
+                UNION
+                SELECT *, 1 AS match_rank FROM entities
+                WHERE LOWER(canonical_name) = LOWER(?){type_clause}
+                UNION
+                SELECT *, 2 AS match_rank FROM entities
+                WHERE EXISTS (
+                    SELECT 1 FROM json_each(entities.aliases) WHERE LOWER(value) = LOWER(?)
+                ){type_clause}
+                ORDER BY match_rank, id
+                """,
+                [name, *type_params, name, *type_params, name, *type_params],
+            ).fetchall()
+        seen: set = set()
+        out: List[EntityRecord] = []
+        for row in rows:
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            out.append(_row_to_entity(row))
+        return out
+
+    def find_name_collisions(self) -> List[dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute(_NAME_COLLISIONS_SQL_SQLITE).fetchall()
+        return [dict(r) for r in rows]
+
     def search_entities_by_prefix(
         self,
         prefix: str,
@@ -1812,6 +1845,49 @@ class SqliteEntityRepository(EntityRepository):
             out.append((entity_id, info["current"], top_label, top_count, total))
         out.sort(key=lambda r: (-r[3], r[0]))
         return out
+
+
+# Same-type, QID-bearing entities that share a name under different QIDs
+# (``find_name_collisions``); one direction per pair, more mentions first.
+_NAME_COLLISIONS_SQL_SQLITE = """
+WITH names AS (
+    SELECT id, LOWER(canonical_name) AS name, 1 AS is_canonical
+    FROM entities WHERE wikidata_qid IS NOT NULL
+    UNION ALL
+    SELECT e.id, LOWER(a.value) AS name, 0 AS is_canonical
+    FROM entities e, json_each(e.aliases) AS a
+    WHERE e.wikidata_qid IS NOT NULL
+),
+counts AS (
+    SELECT entity_id, COUNT(*) AS n FROM entity_mentions GROUP BY entity_id
+)
+SELECT * FROM (
+SELECT DISTINCT
+       n1.name                AS name,
+       e1.id                  AS entity_id,
+       e1.type                AS type,
+       e1.canonical_name      AS canonical_name,
+       e1.wikidata_qid        AS wikidata_qid,
+       COALESCE(c1.n, 0)      AS mention_count,
+       e2.id                  AS other_entity_id,
+       e2.canonical_name      AS other_canonical_name,
+       e2.wikidata_qid        AS other_qid,
+       COALESCE(c2.n, 0)      AS other_mention_count
+FROM names n1
+JOIN names n2
+  ON n2.name = n1.name AND n2.id <> n1.id
+ AND (n1.is_canonical = 1 OR n2.is_canonical = 1)
+JOIN entities e1 ON e1.id = n1.id
+JOIN entities e2 ON e2.id = n2.id
+LEFT JOIN counts c1 ON c1.entity_id = e1.id
+LEFT JOIN counts c2 ON c2.entity_id = e2.id
+WHERE e1.type = e2.type
+  AND e1.wikidata_qid <> e2.wikidata_qid
+  AND (COALESCE(c1.n, 0) > COALESCE(c2.n, 0)
+       OR (COALESCE(c1.n, 0) = COALESCE(c2.n, 0) AND e1.id < e2.id))
+) AS pairs
+ORDER BY mention_count + other_mention_count DESC, name, entity_id
+"""
 
 
 def _row_to_entity(row: sqlite3.Row) -> EntityRecord:

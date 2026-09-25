@@ -4255,7 +4255,7 @@ def backfill_roles(ctx, podcast_slug):
     No LLM calls — this is a pure parse-and-link pass over data the
     summarize step already produced. Idempotent.
     """
-    from .services.role_linker import backfill_all_roles, link_episode_roles, link_podcast_roles
+    from .services.role_linker import backfill_all_roles, link_episode_roles, link_podcast_roles, role_context
 
     state = ctx.obj
     if podcast_slug:
@@ -4268,8 +4268,11 @@ def backfill_roles(ctx, podcast_slug):
             podcast_slug=podcast.slug,
             entity_repo=state.entity_repository,
             path_manager=state.path_manager,
+            context_text=role_context(podcast),
         )
         click.echo(f"✓ {podcast.slug}: hosts={len(result.hosts)} recurring={len(result.recurring)}")
+        if result.ambiguous_names:
+            click.echo(f"⚠ left unlinked, several entities share the name: {', '.join(result.ambiguous_names)}")
         eps_with_guests = 0
         eps_total = 0
         new_entities = len(set(result.created_entities))
@@ -4283,6 +4286,7 @@ def backfill_roles(ctx, podcast_slug):
                 episode_slug=episode.slug,
                 entity_repo=state.entity_repository,
                 path_manager=state.path_manager,
+                context_text=role_context(podcast, episode),
             )
             if ep_result.guests:
                 eps_with_guests += 1
@@ -4298,6 +4302,9 @@ def backfill_roles(ctx, podcast_slug):
     )
     click.echo(f"✓ podcasts: {summary.podcasts_with_hosts}/{summary.podcasts_processed} now have hosts")
     click.echo(f"✓ episodes: {summary.episodes_with_guests}/{summary.episodes_processed} now have guests")
+    if summary.ambiguous_names:
+        names = sorted(set(summary.ambiguous_names))
+        click.echo(f"⚠ {len(names)} names left unlinked because several entities share them: {', '.join(names[:20])}")
     click.echo(f"✓ new entities created: {summary.entities_created}")
     if summary.skipped_names:
         unique = sorted(set(summary.skipped_names))

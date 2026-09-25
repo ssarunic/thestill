@@ -436,6 +436,29 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def find_entities_by_name(self, name: str, *, entity_type: Optional[str] = None) -> List[EntityRecord]:
+        """Every entity a free-form name could mean: the exact id match,
+        every case-insensitive canonical-name match and every alias match,
+        de-duplicated, canonical matches first. ``find_entity_by_name``
+        returns the first of these; a caller that must not guess between
+        namesakes (the role linker) asks for all of them.
+        """
+
+    @abstractmethod
+    def find_name_collisions(self) -> List[dict]:
+        """Pairs of same-type, QID-bearing entities that share a name — one's
+        canonical name is the other's canonical name or alias — under
+        *different* QIDs: the signature of a split entity (two rows for one
+        person) or of a namesake that swallowed the other's mentions.
+
+        One row per pair, oriented so ``entity_id`` is the side with more
+        mentions (ties: lower id): ``name, entity_id, type, canonical_name,
+        wikidata_qid, mention_count, other_entity_id, other_canonical_name,
+        other_qid, other_mention_count``. A pair sharing several names
+        appears once per name.
+        """
+
+    @abstractmethod
     def search_entities_by_prefix(
         self,
         prefix: str,
