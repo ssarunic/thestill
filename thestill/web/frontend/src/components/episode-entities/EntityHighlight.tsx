@@ -34,9 +34,19 @@ export interface EntityHighlightProps {
   // `inline` (default): a name inside the segment text, underlined in the
   // entity's colour. `speaker`: the speaker label at the head of a
   // segment — keeps the speaker colour it is given, no underline until
-  // hover, and its own anchor id (see `speakerAnchorId`).
-  variant?: 'inline' | 'speaker'
+  // hover, and its own anchor id (see `speakerAnchorId`). `index`: an
+  // entry in one of the page's entity indexes (the right rail, the key
+  // entities strip) — the caller supplies the look via `className`, there
+  // is no anchor id (the transcript's anchors must stay unique for
+  // `[`/`]` and permalinks), and the peek offers "Show in transcript"
+  // instead of prev/next.
+  variant?: 'inline' | 'speaker' | 'index'
+  // Index variant only: the entry's own classes (a rail row, a pill).
+  className?: string
   onSeek?: (seconds: number) => void
+  // Index variant: switch to the transcript and scroll to the segment
+  // the mention was borrowed from. No seek — the ▶ button is the seek path.
+  onShowInTranscript?: (segmentId: number) => void
   // Notifies the parent which entity the user last hovered, so the
   // `[`/`]` keyboard nav (affordance #1) can jump between mentions of
   // the focused entity.
@@ -91,12 +101,15 @@ export default function EntityHighlight({
   episodeId = null,
   isSmUp = true,
   variant = 'inline',
+  className,
   onSeek,
+  onShowInTranscript,
   onFocusEntity,
 }: EntityHighlightProps) {
   const { entity } = episodeEntity
   const style = entityStyle(entity.type)
   const isSpeaker = variant === 'speaker'
+  const isIndex = variant === 'index'
   const [hoverOpen, setHoverOpen] = useState(false)
   // Pinned by a click: survives mouse-out; closed by Esc, a click
   // outside, the word scrolling out of view, a jump, or navigating away.
@@ -275,6 +288,28 @@ export default function EntityHighlight({
     [closeAll, entity.id, onFocusEntity],
   )
 
+  // Index peek: leave for the transcript. Close first — the tab switch
+  // may unmount the transcript the target anchor lives in.
+  const showInTranscript = useCallback(
+    (segmentId: number) => {
+      closeAll()
+      onShowInTranscript?.(segmentId)
+    },
+    [closeAll, onShowInTranscript],
+  )
+
+  const anchorId = isIndex
+    ? undefined
+    : isSpeaker
+      ? speakerAnchorId(entity.id, mention.segment_id)
+      : mentionPermalinkHash(entity.id, mention.segment_id)
+
+  const look = isIndex
+    ? (className ?? '')
+    : isSpeaker
+      ? 'text-inherit decoration-dotted underline-offset-2 hover:underline'
+      : `underline ${style.inlineUnderline} hover:bg-gray-50`
+
   const ariaLabel = `${entity.canonical_name}, ${style.label}, ${
     episodeEntity.mention_count
   } mention${episodeEntity.mention_count === 1 ? '' : 's'}`
@@ -287,7 +322,7 @@ export default function EntityHighlight({
       <a
         ref={linkRef}
         href={entityHref(entity.type, entity.id)}
-        id={isSpeaker ? speakerAnchorId(entity.id, mention.segment_id) : mentionPermalinkHash(entity.id, mention.segment_id)}
+        id={anchorId}
         data-variant={variant}
         aria-label={ariaLabel}
         aria-expanded={hoverOpen || pinned}
@@ -299,11 +334,7 @@ export default function EntityHighlight({
         onMouseLeave={scheduleClose}
         onFocus={open}
         onBlur={scheduleClose}
-        className={`${
-          isSpeaker
-            ? 'text-inherit decoration-dotted underline-offset-2 hover:underline'
-            : `underline ${style.inlineUnderline} hover:bg-gray-50`
-        } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-sm ${
+        className={`${look} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 rounded-sm ${
           pinned ? 'bg-gray-100' : ''
         }`}
       >
@@ -336,6 +367,7 @@ export default function EntityHighlight({
                 summaryEnabled={pinned || hoverSettled}
                 onSeek={onSeek}
                 onJumpToMention={jumpToMention}
+                onShowInTranscript={onShowInTranscript ? showInTranscript : undefined}
                 onNavigate={closeAll}
               />
             </span>,
@@ -350,6 +382,7 @@ export default function EntityHighlight({
             episodeId={episodeId}
             onSeek={onSeek}
             onJumpToMention={jumpToMention}
+            onShowInTranscript={onShowInTranscript ? showInTranscript : undefined}
             onNavigate={closeAll}
             sheet
           />

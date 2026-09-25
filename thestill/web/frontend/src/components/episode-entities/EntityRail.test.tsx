@@ -2,7 +2,11 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import EntityRail from './EntityRail'
-import type { EntityType, EpisodeEntity, RelatedEpisode, SpeakerKind } from '../../api/types'
+import type { EntityType, EpisodeEntity, MentionLite, RelatedEpisode, SpeakerKind } from '../../api/types'
+
+vi.mock('../../hooks/useApi', () => ({
+  useEntitySummary: vi.fn(() => ({ data: undefined })),
+}))
 
 function entity(
   id: string,
@@ -11,6 +15,7 @@ function entity(
   count = 1,
   speakerKind: SpeakerKind = 'unknown',
   firstMentionMs = 0,
+  mentions: MentionLite[] = [],
 ): EpisodeEntity {
   return {
     entity: { id, type, canonical_name: name, wikidata_qid: null },
@@ -18,7 +23,23 @@ function entity(
     first_mention_ms: firstMentionMs,
     speaker_kind: speakerKind,
     salience: count,
-    mentions: [],
+    mentions,
+  }
+}
+
+function mention(entityId: string, segmentId: number, startMs: number): MentionLite {
+  return {
+    id: segmentId,
+    entity_id: entityId,
+    segment_id: segmentId,
+    start_ms: startMs,
+    end_ms: startMs + 1000,
+    speaker: null,
+    role: null,
+    surface_form: 'x',
+    quote_excerpt: 'x',
+    confidence: 0.9,
+    sentiment: null,
   }
 }
 
@@ -40,13 +61,19 @@ function relatedEpisode(overrides: Partial<RelatedEpisode> = {}): RelatedEpisode
 function renderRail(
   entities: EpisodeEntity[],
   onSeek?: (s: number) => void,
-  opts: { relatedEpisodes?: RelatedEpisode[]; relatedLoading?: boolean; extractionPending?: boolean } = {},
+  opts: {
+    relatedEpisodes?: RelatedEpisode[]
+    relatedLoading?: boolean
+    extractionPending?: boolean
+    onShowInTranscript?: (segmentId: number) => void
+  } = {},
 ) {
   return render(
     <MemoryRouter>
       <EntityRail
         entities={entities}
         onSeek={onSeek}
+        onShowInTranscript={opts.onShowInTranscript}
         relatedEpisodes={opts.relatedEpisodes}
         relatedLoading={opts.relatedLoading}
         extractionPending={opts.extractionPending}
@@ -95,6 +122,37 @@ describe('EntityRail', () => {
     renderRail([entity('person:elon-musk', 'Elon Musk', 'person', 5)])
     const link = screen.getByRole('link', { name: /Elon Musk/ })
     expect(link.getAttribute('href')).toBe('/entities/person/elon-musk')
+  })
+
+  it('a click on the name opens a peek in place instead of navigating', () => {
+    const onShowInTranscript = vi.fn()
+    renderRail(
+      [
+        entity('person:alice', 'Alice', 'person', 2, 'guest', 65_000, [
+          mention('person:alice', 20, 65_000),
+          mention('person:alice', 30, 125_000),
+        ]),
+      ],
+      undefined,
+      { onShowInTranscript },
+    )
+    const link = screen.getByRole('link', { name: /Alice, Person, 2 mentions/ })
+    // fireEvent returns false when the handler called preventDefault — no navigation.
+    expect(fireEvent.click(link)).toBe(false)
+    const card = screen.getByTestId('entity-hover-card')
+    expect(card).toHaveTextContent('2× this episode')
+    expect(card.querySelector('a[href="/entities/person/alice"]')).toHaveTextContent('Alice')
+
+    fireEvent.click(screen.getByRole('button', { name: /Show in transcript/ }))
+    expect(onShowInTranscript).toHaveBeenCalledWith(20)
+    expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
+  })
+
+  it('does not offer Show in transcript when the payload carries no mentions', () => {
+    renderRail([entity('person:alice', 'Alice', 'person', 2)], undefined, { onShowInTranscript: vi.fn() })
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    expect(screen.getByTestId('entity-hover-card')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Show in transcript/ })).not.toBeInTheDocument()
   })
 
   it('fires onSeek with the first-mention seconds when the play button is clicked', () => {

@@ -1,7 +1,9 @@
-import { Link } from 'react-router-dom'
 import { selectTopEntities } from '../../utils/mentionDensity'
 import type { EpisodeEntity, EntityType } from '../../api/types'
-import { ENTITY_STYLES, entityHref, entityStyle } from '../../utils/entityColors'
+import { ENTITY_STYLES, entityStyle } from '../../utils/entityColors'
+import { useIsSmUp } from '../../hooks/useMediaQuery'
+import EntityHighlight from './EntityHighlight'
+import { NO_SEGMENT, synthesizeIndexMention } from './indexMention'
 
 // Spec #28 §5.2 — "Episode header 'key entities' strip (above the
 // fold, mobile-first): horizontal strip rendered between the episode
@@ -11,6 +13,12 @@ import { ENTITY_STYLES, entityHref, entityStyle } from '../../utils/entityColors
 //
 // Plus affordance #3 — type filter toggles (P / C / Pr / T) let the
 // reader hide whole categories without losing per-entity state.
+//
+// A pill opens the same *peek* as a transcript mention (hover card on
+// desktop, bottom sheet on a phone) instead of leaving for the entity
+// page; the peek's name link is the way there, and "Show in transcript"
+// jumps to the first mention. The `href` stays on the anchor for
+// modifier / middle clicks.
 
 const TYPES: EntityType[] = ['person', 'company', 'product', 'topic']
 
@@ -19,6 +27,13 @@ export interface KeyEntitiesStripProps {
   hiddenTypes: Set<EntityType>
   onToggleType: (type: EntityType) => void
   topN?: number
+  // The episode being read; the peek skips it when listing where else
+  // the entity comes up.
+  episodeId?: string | null
+  onSeek?: (seconds: number) => void
+  // Peek action: switch to the transcript and scroll to a segment.
+  onShowInTranscript?: (segmentId: number) => void
+  onFocusEntity?: (entityId: string) => void
 }
 
 export default function KeyEntitiesStrip({
@@ -26,7 +41,12 @@ export default function KeyEntitiesStrip({
   hiddenTypes,
   onToggleType,
   topN = 5,
+  episodeId = null,
+  onSeek,
+  onShowInTranscript,
+  onFocusEntity,
 }: KeyEntitiesStripProps) {
+  const isSmUp = useIsSmUp()
   const visible = selectTopEntities(
     entities.filter((e) => !hiddenTypes.has(e.entity.type)),
     topN,
@@ -48,16 +68,24 @@ export default function KeyEntitiesStrip({
       <span className="text-[10px] uppercase tracking-wide text-gray-500">Key entities</span>
       {visible.map((item) => {
         const style = entityStyle(item.entity.type)
+        const mention = synthesizeIndexMention(item)
         return (
-          <Link
+          <EntityHighlight
             key={item.entity.id}
-            to={entityHref(item.entity.type, item.entity.id)}
+            variant="index"
+            episodeEntity={item}
+            mention={mention}
+            episodeId={episodeId}
+            isSmUp={isSmUp}
+            onSeek={onSeek}
+            onShowInTranscript={mention.segment_id === NO_SEGMENT ? undefined : onShowInTranscript}
+            onFocusEntity={onFocusEntity}
             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors hover:brightness-95 ${style.pillBg} ${style.pillText} ${style.pillBorder}`}
           >
             <span className={`inline-block h-1.5 w-1.5 rounded-full ${style.dot}`} aria-hidden="true" />
             {item.entity.canonical_name}
             <span className="opacity-70">{item.mention_count}×</span>
-          </Link>
+          </EntityHighlight>
         )
       })}
       {visible.length === 0 && (

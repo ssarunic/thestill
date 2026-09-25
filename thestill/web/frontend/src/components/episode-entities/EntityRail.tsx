@@ -1,14 +1,21 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { EpisodeEntity, EntityType, RelatedEpisode } from '../../api/types'
-import { entityHref, entityStyle } from '../../utils/entityColors'
+import { entityStyle } from '../../utils/entityColors'
 import { useBackgroundLocation } from '../../hooks/useBackgroundLocation'
+import { useIsSmUp } from '../../hooks/useMediaQuery'
+import EntityHighlight from './EntityHighlight'
+import { NO_SEGMENT, synthesizeIndexMention } from './indexMention'
 
 // Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
 // "Companies mentioned", "Related episodes". Hosts/guests/recurring
 // surfaced first within the People bucket; salience desc within
-// each bucket. Affordance #4: the entity name itself deeplinks to the
-// first mention timestamp; play-▷ on hover seeks to it.
+// each bucket. Affordance #4: play-▷ on hover seeks to the first
+// mention. The name itself opens the same *peek* as a transcript
+// mention (hover card, pinned by a click) so the reader can check who or
+// what an entry is without leaving the page; the peek's name link is the
+// way to the entity page, and "Show in transcript" jumps to the first
+// mention. The `href` stays on the anchor for modifier / middle clicks.
 //
 // Related episodes pulls from vector similarity (qmd was the original
 // backend; spec §2.10 swapped to sqlite-vec). The backend averages this
@@ -25,7 +32,12 @@ const DEFAULT_VISIBLE_COUNT = 8
 
 export interface EntityRailProps {
   entities: EpisodeEntity[]
+  // The episode being read; the peek skips it when listing where else
+  // the entity comes up.
+  episodeId?: string | null
   onSeek?: (seconds: number) => void
+  // Peek action: switch to the transcript and scroll to a segment.
+  onShowInTranscript?: (segmentId: number) => void
   onFocusEntity?: (entityId: string) => void
   relatedEpisodes?: RelatedEpisode[]
   relatedLoading?: boolean
@@ -55,15 +67,19 @@ function formatTimestamp(ms: number): string {
 
 interface RailRowProps {
   entity: EpisodeEntity
+  episodeId: string | null
+  isSmUp: boolean
   onSeek?: (seconds: number) => void
+  onShowInTranscript?: (segmentId: number) => void
   onFocusEntity?: (entityId: string) => void
 }
 
-function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps) {
+function RailRow({ entity: episodeEntity, episodeId, isSmUp, onSeek, onShowInTranscript, onFocusEntity }: RailRowProps) {
   const { entity, mention_count, first_mention_ms, speaker_kind } = episodeEntity
   const style = entityStyle(entity.type)
   const seekSeconds = first_mention_ms / 1000
   const isParticipant = speaker_kind !== 'unknown'
+  const mention = useMemo(() => synthesizeIndexMention(episodeEntity), [episodeEntity])
 
   return (
     <li
@@ -71,13 +87,15 @@ function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps)
       onMouseEnter={() => onFocusEntity?.(entity.id)}
     >
       <span className={`inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full ${style.dot}`} aria-hidden="true" />
-      <Link
-        to={entityHref(entity.type, entity.id)}
-        // Affordance #4 — first-mention deeplink: name links to entity
-        // page on click, but option-click (or the explicit play-▷
-        // button) seeks. We can't easily distinguish modifier clicks
-        // here without overriding default browser behavior; the
-        // play-▷ button is the dedicated seek path.
+      <EntityHighlight
+        variant="index"
+        episodeEntity={episodeEntity}
+        mention={mention}
+        episodeId={episodeId}
+        isSmUp={isSmUp}
+        onSeek={onSeek}
+        onShowInTranscript={mention.segment_id === NO_SEGMENT ? undefined : onShowInTranscript}
+        onFocusEntity={onFocusEntity}
         className="min-w-0 flex-1 truncate font-medium text-gray-800 hover:text-primary-700"
       >
         {entity.canonical_name}
@@ -86,7 +104,7 @@ function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps)
             {speaker_kind}
           </span>
         )}
-      </Link>
+      </EntityHighlight>
       <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">{mention_count}×</span>
       {onSeek && (
         <button
@@ -107,12 +125,18 @@ function RailRow({ entity: episodeEntity, onSeek, onFocusEntity }: RailRowProps)
 
 export default function EntityRail({
   entities,
+  episodeId = null,
   onSeek,
+  onShowInTranscript,
   onFocusEntity,
   relatedEpisodes = [],
   relatedLoading = false,
   extractionPending = false,
 }: EntityRailProps) {
+  // Resolved once for the whole rail: one media-query subscription, not
+  // one per row.
+  const isSmUp = useIsSmUp()
+  const rowProps = { episodeId, isSmUp, onSeek, onShowInTranscript, onFocusEntity }
   // Group by type for the section labels. The payload is already
   // sorted host/guest/recurring/unknown then count desc within each
   // bucket, so we just need to bucket by type while preserving order.
@@ -135,16 +159,16 @@ export default function EntityRail({
       data-testid="entity-rail"
     >
       {hasAny && buckets.person.length > 0 && (
-        <RailSection title="People in this episode" entities={buckets.person} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+        <RailSection title="People in this episode" entities={buckets.person} {...rowProps} />
       )}
       {hasAny && buckets.company.length > 0 && (
-        <RailSection title="Companies mentioned" entities={buckets.company} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+        <RailSection title="Companies mentioned" entities={buckets.company} {...rowProps} />
       )}
       {hasAny && buckets.product.length > 0 && (
-        <RailSection title="Products" entities={buckets.product} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+        <RailSection title="Products" entities={buckets.product} {...rowProps} />
       )}
       {hasAny && buckets.topic.length > 0 && (
-        <RailSection title="Topics" entities={buckets.topic} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+        <RailSection title="Topics" entities={buckets.topic} {...rowProps} />
       )}
 
       {/* Spec §5.2 right rail — "Related episodes pulls from vector
@@ -223,14 +247,12 @@ function RelatedEpisodesSection({ episodes, loading, extractionPending }: Relate
   )
 }
 
-interface RailSectionProps {
+interface RailSectionProps extends Omit<RailRowProps, 'entity'> {
   title: string
   entities: EpisodeEntity[]
-  onSeek?: (seconds: number) => void
-  onFocusEntity?: (entityId: string) => void
 }
 
-function RailSection({ title, entities, onSeek, onFocusEntity }: RailSectionProps) {
+function RailSection({ title, entities, ...rowProps }: RailSectionProps) {
   const [expanded, setExpanded] = useState(false)
   const overflow = entities.length - DEFAULT_VISIBLE_COUNT
   const visible = expanded || overflow <= 0 ? entities : entities.slice(0, DEFAULT_VISIBLE_COUNT)
@@ -239,7 +261,7 @@ function RailSection({ title, entities, onSeek, onFocusEntity }: RailSectionProp
       <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</h2>
       <ul className="space-y-0.5">
         {visible.map((e) => (
-          <RailRow key={e.entity.id} entity={e} onSeek={onSeek} onFocusEntity={onFocusEntity} />
+          <RailRow key={e.entity.id} entity={e} {...rowProps} />
         ))}
       </ul>
       {overflow > 0 && (
