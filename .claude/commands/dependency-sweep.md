@@ -33,16 +33,21 @@ merge.
     proxy-injected and works for repo, PR, issue and Actions endpoints.
   - If none of the three works, STOP and report exactly which call failed.
     Do not guess at merges without API access.
-- **Dependabot alerts endpoint.** The cloud routine's token is a GitHub App
-  installation token and gets `403 Resource not accessible by integration`
-  on `/dependabot/alerts` (confirmed 2026-09-25). When that happens, skip
-  section 3's alert listing and dismissals, say so in the report, and rely
-  on the fact that Dependabot security updates open a fix PR for every
-  fixable alert, which section 2 handles. Do not try other tokens or
-  work-arounds. (To enable alert access, a human adds a fine-grained PAT
-  with "Dependabot alerts: read and write" as `DEPENDABOT_TOKEN` in the
-  routine's environment; if `DEPENDABOT_TOKEN` is set, use it for the
-  alerts endpoints only.)
+- **Dependabot alerts endpoint.** Before touching `/dependabot/alerts`, run
+  `test -n "$DEPENDABOT_TOKEN" && echo set || echo unset` and record the
+  answer in the report. Then:
+  - `DEPENDABOT_TOKEN` **set**: call the alerts endpoints with
+    `-H "Authorization: Bearer $DEPENDABOT_TOKEN"`. It is a fine-grained PAT
+    with only "Dependabot alerts: read and write" on this repo; use it for
+    `/dependabot/alerts*` and nothing else. Never print its value.
+  - `DEPENDABOT_TOKEN` **unset**: do not try `GH_TOKEN` on these endpoints.
+    It is a GitHub App installation token and returns
+    `403 Resource not accessible by integration` (confirmed 2026-09-25; the
+    Claude GitHub App does not request that permission, so it cannot be
+    granted). Skip section 3's alert listing and dismissals, say so in the
+    report, and rely on Dependabot security updates opening a fix PR for
+    every fixable alert, which section 2 handles. The fix is a human adding
+    `DEPENDABOT_TOKEN` to the cloud environment's variables.
 - GitHub search endpoints have a low secondary rate limit; on a 403 rate
   limit, wait with a background `until` loop, not a foreground `sleep`.
 - Confirm `uv --version`. If `uv` is missing, install it
