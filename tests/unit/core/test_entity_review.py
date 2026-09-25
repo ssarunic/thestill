@@ -25,13 +25,17 @@ from thestill.models.entities import EntityRecord, EntityType
 
 
 class _ScanRepo:
-    """Repo stub exposing only ``fetch_resolution_review_rows``."""
+    """Repo stub exposing the two read-only scans the queue consumes."""
 
-    def __init__(self, rows: List[dict]):
+    def __init__(self, rows: List[dict], collisions: Optional[List[dict]] = None):
         self._rows = rows
+        self._collisions = collisions or []
 
     def fetch_resolution_review_rows(self) -> List[dict]:
         return self._rows
+
+    def find_name_collisions(self) -> List[dict]:
+        return self._collisions
 
 
 def _row(entity_id, type_, canonical, qid, surface, count, p31=()):
@@ -47,6 +51,49 @@ def _row(entity_id, type_, canonical, qid, surface, count, p31=()):
 
 
 class TestScan:
+    def test_a_name_shared_by_two_qids_is_flagged_on_the_bigger_side(self):
+        collision = {
+            "name": "scott galloway",
+            "entity_id": "person:scott-galloway",
+            "type": "person",
+            "canonical_name": "Scott Galloway",
+            "wikidata_qid": "Q7436378",
+            "mention_count": 5295,
+            "other_entity_id": "person:scott-galloway-professor",
+            "other_canonical_name": "Scott Galloway (professor)",
+            "other_qid": "Q29017701",
+            "other_mention_count": 48,
+        }
+        rows = [_row("product:vlc-media-player", "product", "VLC media player", "Q171477", "VLC", 94)]
+        flags = scan_entities_for_review(_ScanRepo(rows, [collision]))
+        assert [f.entity_id for f in flags] == ["person:scott-galloway", "product:vlc-media-player"]
+        top = flags[0]
+        assert top.kinds == ["name_shared_with_other_qid"]
+        assert top.suggested_action == "review" and top.suggested_qid is None
+        assert top.score == 5343.0  # both sides are in doubt
+        assert top.evidence["name_collision"]["other_qid"] == "Q29017701"
+        assert top.evidence["name_collision"]["shared_names"] == ["scott galloway"]
+
+    def test_a_pair_sharing_two_names_is_one_flag_and_joins_an_existing_one(self):
+        base = {
+            "entity_id": "company:anthropic-principle",
+            "type": "company",
+            "canonical_name": "Anthropic principle",
+            "wikidata_qid": "Q240581",
+            "mention_count": 1546,
+            "other_entity_id": "company:anthropic",
+            "other_canonical_name": "Anthropic",
+            "other_qid": "Q1",
+            "other_mention_count": 10,
+        }
+        collisions = [{**base, "name": "anthropic"}, {**base, "name": "anthropic principle"}]
+        rows = [_row("company:anthropic-principle", "company", "Anthropic principle", "Q240581", "Anthropic", 1546)]
+        flags = scan_entities_for_review(_ScanRepo(rows, collisions))
+        assert len(flags) == 1
+        assert flags[0].kinds == ["surface_extends_canonical", "name_shared_with_other_qid"]
+        assert flags[0].suggested_action == "blacklist"  # the one-click fix survives
+        assert flags[0].evidence["name_collision"]["shared_names"] == ["anthropic", "anthropic principle"]
+
     def test_anthropic_shape_is_flagged_for_blacklist_and_ranked_top(self):
         rows = [
             # The bug: short name swallowed by a lowercase-noun extension.

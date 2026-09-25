@@ -45,6 +45,11 @@ class LinkContext:
     language: str = "en"
     podcast_title: str = ""
     episode_title: str = ""
+    # Feed descriptions: what the show and this episode are about. The
+    # cheapest way to tell namesakes apart — a business show's host is not
+    # the footballer with the same name.
+    podcast_description: str = ""
+    episode_description: str = ""
     anchor_names: List[str] = field(default_factory=list)
 
 

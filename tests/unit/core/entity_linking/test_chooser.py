@@ -137,7 +137,28 @@ def test_control_characters_in_the_answer_are_stripped():
 
 
 def test_the_version_names_the_prompt_and_the_model():
-    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p4:flash-9"
+    assert LLMCandidateChooser(ScriptedProvider([], model_name="flash-9")).version == "p5:flash-9"
+
+
+def test_the_descriptions_of_the_podcast_and_the_episode_are_in_the_header():
+    ctx = LinkContext(
+        episode_id="ep-1",
+        podcast_title="The Prof G Pod",
+        episode_title="The Week",
+        podcast_description="Bestselling author, professor and entrepreneur Scott Galloway\ncombines business insight with career advice. "
+        + "x" * 700,
+        episode_description="Scott and Jess on the press pool.",
+    )
+    message = build_user_message({"n1": group("Scott Galloway")}, {"scott galloway": []}, ctx)
+    header = message[: message.index("[n1]")]
+    assert "About the podcast: Bestselling author, professor and entrepreneur Scott Galloway combines" in header
+    assert "About the episode: Scott and Jess on the press pool." in header
+    # Long show notes are cut, and the header stays inside the episode fence.
+    assert "x" * 600 not in header
+    assert header.index("About the podcast") < header.index("<<<UNTRUSTED_EPISODE_END>>>")
+    # Without descriptions the lines are absent rather than empty.
+    bare = build_user_message({"n1": group("Scott Galloway")}, {"scott galloway": []}, CTX)
+    assert "About the podcast" not in bare and "About the episode" not in bare
 
 
 def test_a_proposed_name_is_carried_and_dropped_on_the_strict_pass():
