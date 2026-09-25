@@ -17,11 +17,34 @@ merge.
 
 ## 0. Tooling and access
 
-- Confirm `gh auth status` works and `gh api repos/ssarunic/thestill` returns
-  the repo. If `gh` is missing or unauthenticated, fall back to `curl` against
-  `https://api.github.com` with `GITHUB_TOKEN` (or `GH_TOKEN`) if one is set.
-  If neither route works, STOP and report exactly which call failed. Do not
-  guess at merges without API access.
+- GitHub access comes in three interchangeable forms; use whichever is
+  present. The examples below are written as `gh` commands, but every one has
+  an equivalent in the other two forms.
+  - `gh` CLI, when installed and `gh auth status` passes.
+  - The GitHub MCP tools (`mcp__github__*`: `search_pull_requests`,
+    `pull_request_read`, `merge_pull_request`, `issue_write`,
+    `actions_list`, `actions_get`, ...). This is what the cloud routine has;
+    `gh` is not installed there. Load them with
+    `ToolSearch select:mcp__github__<name>`. Pass `expectedHeadSha` to
+    `merge_pull_request` so a rebase between check and merge fails safely.
+    Search results can be huge; request `fields` to keep them small.
+  - `curl` against `https://api.github.com` with `GH_TOKEN` (or
+    `GITHUB_TOKEN`) as a bearer token. In the cloud routine the token is
+    proxy-injected and works for repo, PR, issue and Actions endpoints.
+  - If none of the three works, STOP and report exactly which call failed.
+    Do not guess at merges without API access.
+- **Dependabot alerts endpoint.** The cloud routine's token is a GitHub App
+  installation token and gets `403 Resource not accessible by integration`
+  on `/dependabot/alerts` (confirmed 2026-09-25). When that happens, skip
+  section 3's alert listing and dismissals, say so in the report, and rely
+  on the fact that Dependabot security updates open a fix PR for every
+  fixable alert, which section 2 handles. Do not try other tokens or
+  work-arounds. (To enable alert access, a human adds a fine-grained PAT
+  with "Dependabot alerts: read and write" as `DEPENDABOT_TOKEN` in the
+  routine's environment; if `DEPENDABOT_TOKEN` is set, use it for the
+  alerts endpoints only.)
+- GitHub search endpoints have a low secondary rate limit; on a 403 rate
+  limit, wait with a background `until` loop, not a foreground `sleep`.
 - Confirm `uv --version`. If `uv` is missing, install it
   (`curl -LsSf https://astral.sh/uv/install.sh | sh`) before doing any Python
   lockfile work.
