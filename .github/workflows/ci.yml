@@ -40,7 +40,7 @@ jobs:
       # the exact version set we tested with. ``pip install`` against
       # ``>=`` floors would silently pull whatever PyPI has each run,
       # which is the supply-chain ambush vector this lockfile closes.
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: "latest"
           enable-cache: true
@@ -81,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           version: "latest"
           enable-cache: true
