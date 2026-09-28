@@ -5615,6 +5615,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
         return len(links)
 
+    def get_podcast_platform_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        empty = {"apple_url": None, "youtube_url": None, "spotify_url": None}
+        if not podcast_id:
+            return empty
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT apple_url, youtube_url, spotify_url FROM podcasts WHERE id = ?", (podcast_id,)
+            ).fetchone()
+        if row is None:
+            return empty
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
+
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
         column = _PLATFORM_URL_COLUMNS[platform]  # KeyError on an unknown platform is the right failure
         with self._get_connection() as conn:

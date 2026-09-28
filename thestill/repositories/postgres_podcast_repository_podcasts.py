@@ -616,6 +616,19 @@ class PodcastsMixin(CategoryCacheMixin):
             return empty
         return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
+    def get_podcast_platform_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        """Read-only show links (spec #87); never backfills from the chart."""
+        empty = {"apple_url": None, "youtube_url": None, "spotify_url": None}
+        if not podcast_id:
+            return empty
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT apple_url, youtube_url, spotify_url FROM podcasts WHERE id = %s", (podcast_id,)
+            ).fetchone()
+        if row is None:
+            return empty
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
+
     _PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
 
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:

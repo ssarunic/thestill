@@ -131,14 +131,31 @@ def match_candidates(
         if entry.title:
             by_title.setdefault(normalize_title(entry.title), []).append(entry)
 
+    # Exact identifiers for every candidate first, fuzzy titles only for
+    # what is left: candidates arrive newest first, and a same-title
+    # neighbour whose own entry Apple has not indexed yet must not take
+    # the entry that belongs, by GUID, to the episode after it.
     used: set[str] = set()
+    found_by_id: Dict[str, Tuple[AppleEpisodeEntry, str]] = {}
+    for candidate in candidates:
+        exact = _match_exact(candidate, by_guid, by_audio, by_loose_audio, used)
+        if exact is not None:
+            used.add(exact[0].track_id)
+            found_by_id[candidate.episode_id] = exact
+    for candidate in candidates:
+        if candidate.episode_id in found_by_id:
+            continue
+        fuzzy = _match_fuzzy(candidate, by_title, used)
+        if fuzzy is not None:
+            used.add(fuzzy[0].track_id)
+            found_by_id[candidate.episode_id] = fuzzy
+
     matches: List[AppleEpisodeMatch] = []
     for candidate in candidates:
-        found = _match_one(candidate, by_guid, by_audio, by_loose_audio, by_title, used)
+        found = found_by_id.get(candidate.episode_id)
         if found is None:
             continue
         entry, method = found
-        used.add(entry.track_id)
         matches.append(
             AppleEpisodeMatch(
                 episode_id=candidate.episode_id,
@@ -150,12 +167,11 @@ def match_candidates(
     return matches
 
 
-def _match_one(
+def _match_exact(
     candidate: PlatformLinkCandidate,
     by_guid: Dict[str, AppleEpisodeEntry],
     by_audio: Dict[str, AppleEpisodeEntry],
     by_loose_audio: Dict[str, AppleEpisodeEntry],
-    by_title: Dict[str, List[AppleEpisodeEntry]],
     used: set[str],
 ) -> Optional[Tuple[AppleEpisodeEntry, str]]:
     guid = (candidate.external_id or "").strip()
@@ -168,7 +184,14 @@ def _match_one(
         entry = by_audio.get(audio) or by_loose_audio.get(_loose_url(audio))
         if entry is not None and entry.track_id not in used:
             return entry, "audio_url"
+    return None
 
+
+def _match_fuzzy(
+    candidate: PlatformLinkCandidate,
+    by_title: Dict[str, List[AppleEpisodeEntry]],
+    used: set[str],
+) -> Optional[Tuple[AppleEpisodeEntry, str]]:
     title_key = normalize_title(candidate.title or "")
     if title_key and candidate.pub_date is not None:
         same_title = [e for e in by_title.get(title_key, []) if e.track_id not in used]

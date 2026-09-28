@@ -387,6 +387,15 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def get_podcast_platform_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        """
+        Read-only ``{"apple_url", "youtube_url", "spotify_url"}`` for one
+        podcast (spec #87). Unlike :meth:`sync_podcast_chart_urls` this
+        never writes, so dry runs can use it.
+        """
+        pass
+
+    @abstractmethod
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
         """
         Store a resolver-discovered show link on the podcast row (spec #87):

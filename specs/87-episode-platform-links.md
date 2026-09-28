@@ -97,7 +97,10 @@ show per day for shows that have unindexed episodes inside the window.
 2. **Window.** `itunes.apple.com/lookup?id=<collectionId>&entity=podcastEpisode&limit=200`.
    Same endpoint, user agent and retry policy as the import resolvers
    ([spotify_resolver.py](../thestill/core/spotify_resolver.py) `itunes_lookup`).
-3. **Match**, first method that hits, per candidate:
+3. **Match.** Exact identifiers for every candidate first, titles only for
+   what is left: candidates arrive newest first, and a same-title
+   neighbour Apple has not indexed yet must not take, by title, the entry
+   that belongs by GUID to the episode after it. Per candidate:
    - `guid`: `episodeGuid` equals `external_id`.
    - `audio_url`: `episodeUrl` equals `audio_url`, exact or with query
      string dropped and scheme normalised.
@@ -109,14 +112,23 @@ show per day for shows that have unindexed episodes inside the window.
 
 ### Publisher-provided links (`publisher`)
 
-No network. Per episode, in order of trust: the import that created it
-(`canonical_id` `spotify:<id>` / `youtube:<video id>`), a `video/youtube`
-alternate enclosure ([#62](62-youtube-video-rendition.md)), the item
-`<link>` when it is a Spotify episode or YouTube video, then links in the
-description — accepted only when the description names exactly **one**
-episode / video on that platform. Show notes routinely link last week's
-episode or a guest's video; a unique link is the episode's own, two links
-are a guess we refuse to make.
+Per episode, in order of trust: the import that created it (`canonical_id`
+`spotify:<id>` / `youtube:<video id>`), a `video/youtube` alternate
+enclosure ([#62](62-youtube-video-rendition.md)) and the item `<link>` when
+it is a Spotify episode or YouTube video are taken as-is: each identifies
+this episode by construction. A link in the description is only a
+**claim**, and only when the description names exactly one episode / video
+on that platform: show notes routinely link last week's episode or a
+guest's video, so uniqueness narrows the field but does not establish
+identity. The claim is checked against the linked item's own title, date
+and duration (the channel listing entry when the video is on the show's
+channel, else one fetch of the video; for Spotify one fetch of the episode
+page, the [#79](79-spotify-link-import.md) scraper): the YouTube title
+rules below, or, because the publisher vouched for the pairing, date
+within tolerance plus agreeing durations alone — that accepts an upload
+retitled for YouTube and still rejects a bite-size cut or a trailer. A
+claim that fails, or cannot be fetched, becomes a not-found marker and is
+retried after the recheck interval.
 
 Per show: a Spotify show link or YouTube channel link in the podcast's own
 description / website is taken when unique; the same link in at least
@@ -171,11 +183,15 @@ still reads alternate enclosures only; feeding it from `publisher` /
   because Apple indexes with a delay and the throttle above makes the
   no-candidate case free.
 - **Inline refresh** ([refresh_service.py](../thestill/services/refresh_service.py)):
-  same call for each refreshed podcast when a `PlatformLinkService` is wired
-  in. Test doubles that build a bare state or service skip it.
+  same call for every podcast the refresh covered (the one asked for, else
+  every followed feed), whether or not it had new episodes and before the
+  no-new-episodes early return, so a 304 still lets an expired not-found
+  marker retry. Test doubles that build a bare state or service skip it.
 - **CLI** `thestill link-platforms [--podcast-id] [--dry-run] [--force]`:
   the backfill and the debugging surface. `--force` ignores the recheck
-  interval; `--dry-run` fetches and matches but writes nothing.
+  interval; `--dry-run` fetches and matches but writes nothing — it reads
+  the show links with the read-only lookup, since the chart sync used on a
+  real pass backfills `apple_url` / `youtube_url` from the chart row.
 
 `PLATFORM_LINKS_ENABLED=false` disables the hooks and the CLI in one place.
 

@@ -131,6 +131,22 @@ def list_channel_videos(channel_url: str, *, limit: int = DEFAULT_LISTING_LIMIT)
     return parse_listing((info or {}).get("entries") or [])
 
 
+def fetch_video(video_id: str) -> Optional[YouTubeVideoEntry]:
+    """
+    One video's title, exact upload date and duration (yt-dlp, no download).
+    Used to verify a description link when the video is not in the channel
+    listing. Raises on network / bot-check failures; returns None when the
+    response is unusable.
+    """
+    import yt_dlp
+
+    options = {"quiet": True, "no_warnings": True, "skip_download": True}
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+    parsed = parse_listing([info] if isinstance(info, dict) else [])
+    return parsed[0] if parsed else None
+
+
 def parse_listing(entries: Iterable[Any]) -> List[YouTubeVideoEntry]:
     """Keep well-formed uploads; the listing is untrusted input."""
     parsed: List[YouTubeVideoEntry] = []
@@ -165,14 +181,26 @@ def match_candidates(
     """``now`` anchors the age-dependent date tolerance (defaults to the wall clock)."""
     at = now or datetime.now(timezone.utc)
     normalized: List[_Entry] = [_Entry(e, normalize_title(e.title), episode_number(e.title)) for e in entries]
+    # Equal titles for every candidate first, contained titles / shared
+    # numbers only for what is left, so a looser neighbour cannot consume
+    # the upload that is another episode's exact match.
     used: set[str] = set()
+    found_by_id: Dict[str, Tuple[YouTubeVideoEntry, str]] = {}
+    for allowed in (("title_date",), ("title_duration",)):
+        for candidate in candidates:
+            if candidate.episode_id in found_by_id:
+                continue
+            found = _match_one(candidate, normalized, used, at, allowed)
+            if found is None:
+                continue
+            used.add(found[0].video_id)
+            found_by_id[candidate.episode_id] = found
     matches: List[YouTubeEpisodeMatch] = []
     for candidate in candidates:
-        found = _match_one(candidate, normalized, used, at)
+        found = found_by_id.get(candidate.episode_id)
         if found is None:
             continue
         entry, method = found
-        used.add(entry.video_id)
         matches.append(
             YouTubeEpisodeMatch(
                 episode_id=candidate.episode_id,
@@ -184,6 +212,31 @@ def match_candidates(
     return matches
 
 
+def match_rule(
+    candidate: PlatformLinkCandidate,
+    *,
+    title: str,
+    released: Optional[datetime],
+    duration: Optional[int],
+    now: Optional[datetime] = None,
+) -> Optional[str]:
+    """
+    Which rule (``title_date`` / ``title_duration``), if any, says the item
+    described by ``title`` / ``released`` / ``duration`` IS ``candidate``.
+
+    The single-item form of the matcher, shared with the verification of a
+    publisher's description link (spec #87 "publisher"): a link in the show
+    notes may point at last week's episode, so the linked item's own
+    metadata has to pass the same test an upload from the channel would.
+    """
+    if candidate.pub_date is None or released is None:
+        return None
+    at = now or datetime.now(timezone.utc)
+    item = _Entry(YouTubeVideoEntry("", title, released, duration), normalize_title(title), episode_number(title))
+    found = _match_one(candidate, [item], set(), at, ("title_date", "title_duration"))
+    return found[1] if found else None
+
+
 @dataclass(frozen=True)
 class _Entry:
     entry: YouTubeVideoEntry
@@ -191,11 +244,36 @@ class _Entry:
     number: Optional[str]
 
 
+def claim_corroborated(
+    candidate: PlatformLinkCandidate,
+    *,
+    released: Optional[datetime],
+    duration: Optional[int],
+    now: Optional[datetime] = None,
+) -> bool:
+    """
+    Weaker test for an item the PUBLISHER linked (spec #87 "publisher"):
+    the date within tolerance AND the durations known and agreeing. The
+    publisher's own link plus a matching length and day is enough to
+    accept a video retitled for YouTube ("Nick Lane – Life as we know it"
+    became "I find it almost disturbing that the universe favors life");
+    a bite-size cut or a trailer still fails on length. Never used for
+    channel uploads, where nobody vouched for the pairing.
+    """
+    if candidate.pub_date is None or released is None:
+        return False
+    at = now or datetime.now(timezone.utc)
+    if not _dates_close(released, candidate.pub_date, date_tolerance(candidate.pub_date, at)):
+        return False
+    return _durations_agree(duration, candidate.duration) is True
+
+
 def _match_one(
     candidate: PlatformLinkCandidate,
     entries: Sequence[_Entry],
     used: set[str],
     now: datetime,
+    allowed: Tuple[str, ...],
 ) -> Optional[Tuple[YouTubeVideoEntry, str]]:
     title = normalize_title(candidate.title or "")
     if not title or candidate.pub_date is None:
@@ -213,9 +291,12 @@ def _match_one(
         if item.title == title:
             if durations_agree is False:
                 continue  # same title, clearly different length: a clip or a re-cut
-            qualifying.append((entry, "title_date"))
-        elif durations_agree is True and (
-            _contains(item.title, title) or (number is not None and item.number == number)
+            if "title_date" in allowed:
+                qualifying.append((entry, "title_date"))
+        elif (
+            "title_duration" in allowed
+            and durations_agree is True
+            and (_contains(item.title, title) or (number is not None and item.number == number))
         ):
             qualifying.append((entry, "title_duration"))
     if len(qualifying) != 1:

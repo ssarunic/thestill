@@ -16,9 +16,15 @@
 
 from datetime import datetime, timedelta, timezone
 
-from thestill.core.youtube_episode_linker import YouTubeVideoEntry, channel_videos_url, date_tolerance, episode_number
+from thestill.core.youtube_episode_linker import (
+    YouTubeVideoEntry,
+    channel_videos_url,
+    claim_corroborated,
+    date_tolerance,
+    episode_number,
+)
 from thestill.core.youtube_episode_linker import match_candidates as _match
-from thestill.core.youtube_episode_linker import parse_listing
+from thestill.core.youtube_episode_linker import match_rule, parse_listing
 from thestill.models.podcast import PlatformLinkCandidate
 
 T0 = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
@@ -143,3 +149,28 @@ class TestMatch:
     def test_no_pub_date_or_upload_date_no_match(self):
         assert match_candidates([_cand(pub_date=None)], [_video()]) == []
         assert match_candidates([_cand()], [_video(uploaded=None)]) == []
+
+    def test_equal_titles_are_reserved_before_contained_ones(self):
+        full = _video("aaaaaaaaaaa", "The Big Episode with a Guest", duration=3600)
+        exact = _cand("exact", title="The Big Episode with a Guest", duration=3600)
+        prefixed = _cand("prefixed", title="Ep 12: The Big Episode with a Guest", duration=3600)
+        # Newest-first order puts the prefixed candidate first; it must not take the exact one's upload.
+        m = match_candidates([prefixed, exact], [full])
+        assert [(x.episode_id, x.match_method) for x in m] == [("exact", "title_date")]
+
+
+class TestMatchRule:
+    def test_single_item_form_shares_the_rules(self):
+        c = _cand(title="#502 – Guest: Topic", duration=13000)
+        assert match_rule(c, title="Topic | Show #502", released=T0, duration=13016, now=NOW) == "title_duration"
+        assert match_rule(c, title="#502 – Guest: Topic", released=T0, duration=13000, now=NOW) == "title_date"
+        assert match_rule(c, title="Last week's episode", released=T0, duration=13000, now=NOW) is None
+        assert match_rule(c, title="#502 – Guest: Topic", released=None, duration=13000, now=NOW) is None
+
+    def test_claim_corroboration_needs_date_and_duration(self):
+        c = _cand(title="Nick Lane – Life as we know it", duration=4808)
+        assert claim_corroborated(c, released=T0, duration=4853, now=NOW)  # retitled upload, same day, same length
+        assert not claim_corroborated(c, released=T0, duration=822, now=NOW)  # a bite-size cut
+        assert not claim_corroborated(c, released=T0, duration=None, now=NOW)  # unknown length is no proof
+        assert not claim_corroborated(c, released=T0 - timedelta(days=10), duration=4808, now=NOW)
+        assert not claim_corroborated(_cand(duration=None), released=T0, duration=4808, now=NOW)

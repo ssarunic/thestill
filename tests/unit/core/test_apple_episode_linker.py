@@ -124,3 +124,13 @@ class TestMatchCandidates:
 
     def test_unmatched_candidates_are_absent(self):
         assert match_candidates([_cand(external_id="nope", title="nope")], [_entry("1", guid="g")]) == []
+
+    def test_exact_matches_are_reserved_before_fuzzy_ones(self):
+        """Two daily episodes titled alike; Apple has indexed only yesterday's.
+        Newest-first, today's candidate must not take yesterday's entry by
+        title while yesterday's own GUID match is still pending."""
+        yesterday_entry = _entry("1", guid="g-yesterday", title="Daily Update", released=T0 - timedelta(days=1))
+        today = _cand("today", external_id="g-today", title="Daily Update", pub_date=T0)
+        yesterday = _cand("yesterday", external_id="g-yesterday", title="Daily Update", pub_date=T0 - timedelta(days=1))
+        matches = match_candidates([today, yesterday], [yesterday_entry])
+        assert [(m.episode_id, m.match_method) for m in matches] == [("yesterday", "guid")]

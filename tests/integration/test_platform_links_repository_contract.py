@@ -290,3 +290,5 @@ class TestShowUrl:
         assert urls["youtube_url"] is None
         with pytest.raises(KeyError):
             h.repo.set_podcast_platform_url(pid, "mixcloud", "https://example.com")
+        assert h.repo.get_podcast_platform_urls(pid) == urls
+        assert h.repo.get_podcast_platform_urls("") == {"apple_url": None, "youtube_url": None, "spotify_url": None}

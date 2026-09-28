@@ -90,6 +90,15 @@ class RefreshService:
         self.config: Any = config
         self.platform_link_service: Optional["PlatformLinkService"] = platform_link_service
 
+    def _refreshed_podcasts(self, podcast_id: Optional[Union[str, int]]) -> List[Podcast]:
+        """The podcasts a refresh targeted: the one asked for, else every
+        followed feed (the same lightweight loader the batch uses)."""
+        if podcast_id:
+            podcast = self.podcast_service.get_podcast(podcast_id)
+            return [podcast] if podcast else []
+        podcasts, _known = self.feed_manager.repository.get_podcasts_for_refresh()
+        return list(podcasts)
+
     def refresh(
         self,
         podcast_id: Optional[Union[str, int]] = None,
@@ -135,6 +144,17 @@ class RefreshService:
             if podcast:
                 podcast_filter_name = podcast.title
 
+        # Spec #87 — best-effort platform links for every podcast this refresh
+        # covered, whether or not it had new episodes: a 304 still lets an
+        # expired not-found marker retry, and the pass costs nothing when a
+        # show has no candidates. Before the early return below on purpose.
+        if not dry_run and self.platform_link_service is not None:
+            for podcast in self._refreshed_podcasts(podcast_id):
+                try:
+                    self.platform_link_service.link_podcast(podcast)
+                except Exception:
+                    logger.warning("platform_link_resolution_failed", podcast_id=podcast.id, exc_info=True)
+
         if not new_episodes:
             logger.info("No new episodes found")
             return RefreshResult(
@@ -174,13 +194,6 @@ class RefreshService:
                         config=self.config,
                         initiated_by="refresh",
                     )
-            # Spec #87 — best-effort platform links for each refreshed podcast.
-            if self.platform_link_service is not None:
-                for podcast, _episodes in episodes_to_add:
-                    try:
-                        self.platform_link_service.link_podcast(podcast)
-                    except Exception:
-                        logger.warning("platform_link_resolution_failed", podcast_id=podcast.id, exc_info=True)
             logger.info("Refresh complete", total_episodes=total_episodes, tasks_enqueued=enqueued_total)
 
         return RefreshResult(

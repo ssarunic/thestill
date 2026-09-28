@@ -47,6 +47,18 @@ def _seed(tmp_path) -> str:
             ],
         )
     )
+    # Spec #63 — the refresh loader skips feeds nobody follows; seed one.
+    import sqlite3
+    import uuid
+
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA foreign_keys = OFF")
+    con.execute(
+        "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+        (str(uuid.uuid4()), str(uuid.uuid4()), PODCAST_ID, datetime.now(timezone.utc).isoformat()),
+    )
+    con.commit()
+    con.close()
     return db
 
 
@@ -102,6 +114,28 @@ class TestInlineRefresh:
     def test_runs_once_per_refreshed_podcast(self, tmp_path):
         service = MagicMock()
         self._service(_seed(tmp_path), service).refresh()
+        assert [c.args[0].id for c in service.link_podcast.call_args_list] == [PODCAST_ID]
+
+    def test_runs_even_when_the_feed_had_nothing_new(self, tmp_path):
+        """A 304 still lets an expired not-found marker retry (review of #270)."""
+        db = _seed(tmp_path)
+        service = MagicMock()
+        fm = MagicMock()
+        fm.repository = SqlitePodcastRepository(db)
+        fm.refresh_feeds.return_value = SimpleNamespace(episodes_by_podcast=[], podcasts_with_errors=0)
+        result = RefreshService(fm, MagicMock(), platform_link_service=service).refresh()
+        assert result.total_episodes == 0
+        assert [c.args[0].id for c in service.link_podcast.call_args_list] == [PODCAST_ID]
+
+    def test_a_single_podcast_refresh_links_only_that_podcast(self, tmp_path):
+        db = _seed(tmp_path)
+        service = MagicMock()
+        fm = MagicMock()
+        fm.repository = SqlitePodcastRepository(db)
+        fm.refresh_feeds.return_value = SimpleNamespace(episodes_by_podcast=[], podcasts_with_errors=0)
+        podcast_service = MagicMock()
+        podcast_service.get_podcast.return_value = fm.repository.get_all()[0]
+        RefreshService(fm, podcast_service, platform_link_service=service).refresh(podcast_id=PODCAST_ID)
         assert [c.args[0].id for c in service.link_podcast.call_args_list] == [PODCAST_ID]
 
     def test_skipped_on_dry_run(self, tmp_path):

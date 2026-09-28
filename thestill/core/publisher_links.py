@@ -21,10 +21,12 @@ No network. For an episode, in order of trust:
    ``youtube:<video id>``),
 2. a ``video/youtube`` alternate enclosure (Podcasting 2.0, spec #62),
 3. the item's ``<link>`` when it is a Spotify episode or YouTube video,
-4. links in the description — accepted only when the description names
-   exactly ONE episode / video on that platform. Show notes routinely link
-   "last week's episode" or a guest's video; a unique link is the episode's
-   own, two links are a guess we refuse to make.
+4. links in the description — only when the description names exactly
+   ONE episode / video on that platform, and then only as a claim
+   (``verified=False``): show notes routinely link "last week's episode"
+   or a guest's video, so uniqueness narrows the field but does not
+   establish identity. The service checks the linked item's own title,
+   date and duration against the episode before it becomes a link.
 
 For a show: a Spotify show link or a YouTube channel link in the podcast's
 own description / website is taken as-is when unique; the same link
@@ -58,6 +60,9 @@ class PublisherLink:
     url: str
     external_ref: str
     source: str  # 'import' | 'alternate_enclosure' | 'item_link' | 'description' — for log lines
+    # False for a description link: it names an item on the platform but
+    # not necessarily THIS episode, so it must be verified before storing.
+    verified: bool = True
 
 
 @dataclass(frozen=True)
@@ -103,7 +108,7 @@ def _spotify_for(candidate: PlatformLinkCandidate) -> Optional[PublisherLink]:
             return PublisherLink("spotify", spotify_episode_url(entity[1]), entity[1], "item_link")
     episodes = [sid for kind, sid in find_spotify_entities(candidate.description_html) if kind == "episode"]
     if len(episodes) == 1:
-        return PublisherLink("spotify", spotify_episode_url(episodes[0]), episodes[0], "description")
+        return PublisherLink("spotify", spotify_episode_url(episodes[0]), episodes[0], "description", verified=False)
     return None
 
 
@@ -125,7 +130,7 @@ def _youtube_for(
             return PublisherLink("youtube", youtube_watch_url(video_id), video_id, "item_link")
     ids = find_youtube_video_ids(candidate.description_html)
     if len(ids) == 1:
-        return PublisherLink("youtube", youtube_watch_url(ids[0]), ids[0], "description")
+        return PublisherLink("youtube", youtube_watch_url(ids[0]), ids[0], "description", verified=False)
     return None
 
 

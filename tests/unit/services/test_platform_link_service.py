@@ -35,6 +35,7 @@ class FakeRepo:
         self.upserts: List[List[PlatformLink]] = []
         self.set_apple_urls: List[str] = []
         self.set_platform_urls: List = []
+        self.chart_syncs = 0
         self.alternates: Dict[str, list] = {}
         self.other_candidates: Dict[str, List[PlatformLinkCandidate]] = {}
 
@@ -45,6 +46,10 @@ class FakeRepo:
         return list(self.other_candidates.get(platform, []))
 
     def sync_podcast_chart_urls(self, podcast_id):
+        self.chart_syncs += 1
+        return self.get_podcast_platform_urls(podcast_id)
+
+    def get_podcast_platform_urls(self, podcast_id):
         return {"apple_url": self.apple_url, "youtube_url": self.youtube_url, "spotify_url": None}
 
     def set_podcast_platform_url(self, podcast_id, platform, url):
@@ -84,8 +89,8 @@ def _episode_entry(track_id: int, guid: str) -> dict:
     }
 
 
-def _service(repo, lookup=None, search=None, videos=None, recheck_hours=24):
-    calls = {"lookup": [], "search": [], "videos": []}
+def _service(repo, lookup=None, search=None, videos=None, video_info=None, spotify_info=None, recheck_hours=24):
+    calls = {"lookup": [], "search": [], "videos": [], "video_info": [], "spotify_info": []}
 
     def _lookup(params):
         calls["lookup"].append(params)
@@ -105,8 +110,30 @@ def _service(repo, lookup=None, search=None, videos=None, recheck_hours=24):
             raise videos
         return videos or []
 
+    def _video_info(video_id):
+        calls["video_info"].append(video_id)
+        if isinstance(video_info, Exception):
+            raise video_info
+        return (video_info or {}).get(video_id)
+
+    def _spotify_info(episode_id):
+        calls["spotify_info"].append(episode_id)
+        if isinstance(spotify_info, Exception):
+            raise spotify_info
+        meta = (spotify_info or {}).get(episode_id)
+        if meta is None:
+            raise RuntimeError(f"no fake Spotify page for {episode_id}")
+        return meta
+
     svc = PlatformLinkService(
-        repo, recheck_hours=recheck_hours, lookup=_lookup, search=_search, list_videos=_videos, clock=lambda: NOW
+        repo,
+        recheck_hours=recheck_hours,
+        lookup=_lookup,
+        search=_search,
+        list_videos=_videos,
+        fetch_video=_video_info,
+        fetch_spotify_episode=_spotify_info,
+        clock=lambda: NOW,
     )
     return svc, calls
 
@@ -307,6 +334,14 @@ def _ocand(
     )
 
 
+def _spotify_meta(episode_id, title, released=NOW, duration=None):
+    from thestill.core.spotify_resolver import SpotifyEpisodeMetadata
+
+    return SpotifyEpisodeMetadata(
+        episode_id=episode_id, title=title, show_name="Show", release_date=released, duration_seconds=duration
+    )
+
+
 def _rows(repo, platform):
     return {r.episode_id: r for batch in repo.upserts for r in batch if r.platform == platform}
 
@@ -326,9 +361,12 @@ class TestSpotifyPublisherLinks:
             ),
             _ocand("none"),
         ]
-        svc, _ = _service(repo)
+        svc, calls = _service(
+            repo, spotify_info={"0tkEdaVIsQNGKUGUKTPqeH": _spotify_meta("0tkEdaVIsQNGKUGUKTPqeH", "Ep")}
+        )
         spotify = svc.link_podcast(_podcast()).outcomes[1]
 
+        assert calls["spotify_info"] == ["0tkEdaVIsQNGKUGUKTPqeH"]  # only the description claim is checked
         assert (spotify.platform, spotify.linked, spotify.not_found, spotify.matched_by) == (
             "spotify",
             2,
@@ -428,3 +466,106 @@ class TestYouTube:
         svc.link_podcast(_podcast())
         assert repo.set_platform_urls == [("youtube", "https://www.youtube.com/@profgmarkets")]
         assert calls["videos"] == [("https://www.youtube.com/@profgmarkets", 300)]
+
+
+class TestDescriptionClaims:
+    """A unique description link names an item, not necessarily this episode."""
+
+    def test_spotify_claim_for_another_episode_is_refused(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [
+            _ocand(
+                "this",
+                title="Today's Show",
+                description_html="Watch our previous episode: open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH",
+            )
+        ]
+        meta = _spotify_meta("0tkEdaVIsQNGKUGUKTPqeH", "Last Week's Show", released=NOW - timedelta(days=7))
+        svc, calls = _service(repo, spotify_info={"0tkEdaVIsQNGKUGUKTPqeH": meta})
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+        assert (spotify.linked, spotify.not_found) == (0, 1)
+        assert _rows(repo, "spotify")["this"].url is None
+        assert calls["spotify_info"] == ["0tkEdaVIsQNGKUGUKTPqeH"]
+
+    def test_retitled_claim_is_accepted_on_date_and_duration(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [
+            _ocand(
+                "nl",
+                title="Nick Lane – Life as we know it",
+                duration=4808,
+                description_html="open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH",
+            )
+        ]
+        meta = _spotify_meta(
+            "0tkEdaVIsQNGKUGUKTPqeH", "I find it almost disturbing that the universe favors life", duration=4853
+        )
+        svc, _ = _service(repo, spotify_info={"0tkEdaVIsQNGKUGUKTPqeH": meta})
+        assert svc.link_podcast(_podcast()).outcomes[1].linked == 1
+        assert _rows(repo, "spotify")["nl"].match_method == "publisher"
+
+    def test_spotify_page_fetch_failure_marks_not_found_for_a_daily_retry(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [
+            _ocand("x", description_html="open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH")
+        ]
+        svc, _ = _service(repo, spotify_info=RuntimeError("HTTP 503"))
+        assert svc.link_podcast(_podcast()).outcomes[1].not_found == 1
+        assert _rows(repo, "spotify")["x"].url is None
+
+    def test_youtube_claim_verified_against_the_channel_listing_without_a_fetch(self):
+        repo = FakeRepo([], youtube_url="https://www.youtube.com/@x")
+        repo.other_candidates["youtube"] = [
+            _ocand("a", title="Alpha Episode", duration=3600, description_html="youtu.be/aaaaaaaaaaa"),
+            _ocand("b", title="Beta Episode", duration=3600, description_html="youtu.be/bbbbbbbbbbb"),
+        ]
+        videos = [
+            # Two same-titled uploads (a re-upload): the channel scan refuses to
+            # choose, but the publisher's link names one of them.
+            _video("aaaaaaaaaaa", "Alpha Episode | Show", duration=3650),
+            _video("ccccccccccc", "Alpha Episode | Show", duration=3650),
+            _video("bbbbbbbbbbb", "Something Else Entirely", duration=900),  # a clip the notes linked
+        ]
+        svc, calls = _service(repo, videos=videos, video_info=RuntimeError("must not fetch"))
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert calls["video_info"] == []
+        assert (yt.linked, yt.not_found, yt.matched_by) == (1, 1, {"publisher": 1})
+        rows = _rows(repo, "youtube")
+        assert rows["a"].external_ref == "aaaaaaaaaaa" and rows["a"].match_method == "publisher"
+        assert rows["b"].url is None
+
+    def test_youtube_claim_off_channel_is_verified_by_fetching_the_video(self):
+        repo = FakeRepo([])  # no channel at all
+        repo.other_candidates["youtube"] = [
+            _ocand("ok", title="Alpha Episode", duration=3600, description_html="youtu.be/aaaaaaaaaaa"),
+            _ocand("no", title="Beta Episode", duration=3600, description_html="youtu.be/bbbbbbbbbbb"),
+        ]
+        info = {
+            "aaaaaaaaaaa": _video("aaaaaaaaaaa", "Alpha Episode", duration=3600),
+            "bbbbbbbbbbb": _video("bbbbbbbbbbb", "Guest's own talk", duration=1200),  # a different length
+        }
+        svc, calls = _service(repo, video_info=info)
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert sorted(calls["video_info"]) == ["aaaaaaaaaaa", "bbbbbbbbbbb"]
+        assert (yt.skipped, yt.linked, yt.not_found) == ("no_channel", 1, 1)
+        assert _rows(repo, "youtube")["ok"].url == "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+        assert _rows(repo, "youtube")["no"].url is None
+
+    def test_trusted_sources_are_not_re_verified(self):
+        repo = FakeRepo([])
+        repo.other_candidates["youtube"] = [
+            _ocand("i", canonical_id="youtube:aaaaaaaaaaa", website_url="https://youtu.be/ccccccccccc")
+        ]
+        svc, calls = _service(repo, video_info=RuntimeError("must not fetch"))
+        assert svc.link_podcast(_podcast()).outcomes[2].linked == 1
+        assert calls["video_info"] == []
+
+
+class TestDryRunReadsOnly:
+    def test_dry_run_never_syncs_chart_urls(self):
+        repo = FakeRepo([])
+        svc, _ = _service(repo)
+        svc.link_podcast(_podcast(), dry_run=True)
+        assert repo.chart_syncs == 0
+        svc.link_podcast(_podcast())
+        assert repo.chart_syncs == 1

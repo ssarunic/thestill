@@ -32,6 +32,7 @@ class TestEpisodeLinks:
         s = publisher_links_for_candidate(_cand(canonical_id=f"spotify:{SPOT}"))["spotify"]
         y = publisher_links_for_candidate(_cand(canonical_id="youtube:aaaaaaaaaaa"))["youtube"]
         assert (s.url, s.external_ref, s.source) == (f"https://open.spotify.com/episode/{SPOT}", SPOT, "import")
+        assert s.verified and y.verified
         assert (y.url, y.source) == ("https://www.youtube.com/watch?v=aaaaaaaaaaa", "import")
 
     def test_alternate_enclosure_beats_description(self):
@@ -56,6 +57,7 @@ class TestEpisodeLinks:
             _cand(description_html=f'<a href="https://open.spotify.com/episode/{SPOT}">x</a>')
         )
         assert one["spotify"].external_ref == SPOT and one["spotify"].source == "description"
+        assert one["spotify"].verified is False  # a claim to verify, not a link yet
         two = publisher_links_for_candidate(
             _cand(description_html=f"open.spotify.com/episode/{SPOT} open.spotify.com/episode/{SPOT2}")
         )
