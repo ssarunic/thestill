@@ -56,8 +56,16 @@ from ..services.inbox_service import InboxService
 from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
+from ..services.platform_link_service import PlatformLinkService
 from ..services.refresh_on_open import RefreshOnOpenService
-from ..utils.config import Config, get_refresh_min_interval_seconds, is_refresh_on_open_enabled, load_config
+from ..utils.config import (
+    Config,
+    get_platform_links_recheck_hours,
+    get_refresh_min_interval_seconds,
+    is_platform_links_enabled,
+    is_refresh_on_open_enabled,
+    load_config,
+)
 from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
 from .dependencies import AppState, require_admin, require_auth
@@ -213,7 +221,20 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # RefreshService takes the queue so an inline refresh (web "Refresh" button,
     # add-podcast) auto-enqueues newly discovered episodes for the full pipeline.
-    refresh_service = RefreshService(feed_manager, podcast_service, queue_manager=queue_manager, config=config)
+    # Spec #87 — per-episode platform links (Apple). One service instance is
+    # shared by the inline refresh and the queued REFRESH_FEED handler.
+    platform_link_service = (
+        PlatformLinkService(repository, recheck_hours=get_platform_links_recheck_hours())
+        if is_platform_links_enabled()
+        else None
+    )
+    refresh_service = RefreshService(
+        feed_manager,
+        podcast_service,
+        queue_manager=queue_manager,
+        config=config,
+        platform_link_service=platform_link_service,
+    )
 
     # Initialize progress store for real-time progress updates
     progress_store = ProgressStore()
@@ -349,6 +370,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_delivery_repository=briefing_delivery_repository,
         briefing_delivery_service=briefing_delivery_service,
         pending_ops_repository=pending_ops_repository,
+        platform_link_service=platform_link_service,
         entity_repository=entity_repository,
         link_decision_repository=repos.link_decision,
         search_backend=search_backend,

@@ -148,6 +148,16 @@ _PROMOTIONS: list[tuple[str, str]] = [
         """,
     ),
     (
+        "episode_platform_links",
+        """
+        INSERT INTO episode_platform_links (id, episode_id, platform, url, external_ref,
+            match_method, checked_at, created_at) OVERRIDING SYSTEM VALUE
+        SELECT id::bigint, episode_id::uuid, platform, url, external_ref, match_method,
+               checked_at::timestamptz, NULLIF(created_at,'')::timestamptz
+        FROM {m}.episode_platform_links
+        """,
+    ),
+    (
         "episode_transcript_links",
         """
         INSERT INTO episode_transcript_links (id, episode_id, url, mime_type, language, rel,
@@ -335,6 +345,7 @@ _PROMOTIONS: list[tuple[str, str]] = [
 _IDENTITY_TABLES = [
     "categories",
     "episode_alternate_enclosures",
+    "episode_platform_links",
     "episode_transcript_links",
     "entity_mentions",
     "mention_overrides",

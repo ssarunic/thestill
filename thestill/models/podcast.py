@@ -137,6 +137,48 @@ class AlternateEnclosure(BaseModel):
     created_at: Optional[datetime] = None  # When the entry was first observed
 
 
+PLATFORM_LINK_PLATFORMS = ("apple", "spotify", "youtube")
+PLATFORM_LINK_MATCH_METHODS = ("guid", "audio_url", "title_date")
+
+
+class PlatformLink(BaseModel):
+    """
+    One episode's page on a listening platform (spec #87).
+
+    A row with ``url is None`` records "checked, not found" so the resolver
+    can throttle re-lookups per episode; readers only surface rows with a
+    URL. ``match_method`` / ``external_ref`` keep every link explainable:
+    a wrong fuzzy link can be found by method and cleared.
+    """
+
+    id: Optional[int] = None
+    episode_id: str
+    platform: str  # one of PLATFORM_LINK_PLATFORMS
+    url: Optional[str] = None  # None = checked, not found
+    external_ref: Optional[str] = None  # Apple trackId, Spotify episode id, YouTube video id
+    match_method: Optional[str] = None  # one of PLATFORM_LINK_MATCH_METHODS, None when not found
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "PlatformLink":
+        if self.platform not in PLATFORM_LINK_PLATFORMS:
+            raise ValueError(f"unknown platform: {self.platform!r}")
+        if self.match_method is not None and self.match_method not in PLATFORM_LINK_MATCH_METHODS:
+            raise ValueError(f"unknown match_method: {self.match_method!r}")
+        return self
+
+
+class PlatformLinkCandidate(BaseModel):
+    """The episode facts a platform resolver matches on (spec #87)."""
+
+    episode_id: str
+    external_id: str
+    audio_url: str
+    title: str
+    pub_date: Optional[datetime] = None
+
+
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID

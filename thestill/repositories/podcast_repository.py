@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
-from ..models.podcast import AlternateEnclosure, Episode, Podcast, TranscriptLink
+from ..models.podcast import AlternateEnclosure, Episode, PlatformLink, PlatformLinkCandidate, Podcast, TranscriptLink
 
 if TYPE_CHECKING:
     # Pure dataclasses from the core layer, imported type-only to keep the
@@ -338,6 +338,57 @@ class PodcastRepository(ABC):
         Args:
             episode_ids: Episode UUIDs.
         """
+        pass
+
+    # ------------------------------------------------------------------
+    # Spec #87 — per-episode platform links (Apple / Spotify / YouTube)
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def get_platform_links(self, episode_id: str) -> List[PlatformLink]:
+        """
+        Found links for one episode (rows with a URL), ordered by platform.
+
+        Not-found markers (``url IS NULL``) are never returned here; they
+        only steer :meth:`get_platform_link_candidates`.
+        """
+        pass
+
+    @abstractmethod
+    def get_platform_link_candidates(
+        self,
+        podcast_id: str,
+        platform: str,
+        *,
+        window: int,
+        recheck_before: Optional[datetime],
+    ) -> List[PlatformLinkCandidate]:
+        """
+        Episodes a platform resolver should try to link (spec #87).
+
+        The pool is the podcast's newest ``window`` episodes by ``pub_date``
+        (taken BEFORE filtering, so an episode the platform never indexed
+        cannot keep the show in the candidate set once it ages out). From
+        that pool: episodes with no found link for ``platform`` whose
+        not-found marker is absent or has ``checked_at < recheck_before``.
+        ``recheck_before=None`` ignores markers (a forced pass). Newest first.
+        """
+        pass
+
+    @abstractmethod
+    def upsert_platform_links(self, links: List[PlatformLink]) -> int:
+        """
+        Insert or refresh rows keyed on ``(episode_id, platform)``.
+
+        An incoming row without a URL only bumps ``checked_at``: it never
+        blanks a stored URL, so a not-found pass cannot undo a link.
+        Returns the number of rows written.
+        """
+        pass
+
+    @abstractmethod
+    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
+        """Store a resolver-discovered Apple show URL on the podcast row (spec #87)."""
         pass
 
     # ------------------------------------------------------------------

@@ -43,7 +43,16 @@ from ..core.refresh_failure import (
     decide_refresh_action,
     resolve_streak_state,
 )
-from ..models.podcast import AlternateEnclosure, Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..models.podcast import (
+    AlternateEnclosure,
+    Episode,
+    EpisodeState,
+    FailureType,
+    PlatformLink,
+    PlatformLinkCandidate,
+    Podcast,
+    TranscriptLink,
+)
 from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import APPLE_GENRE_IDS, APPLE_PODCAST_TAXONOMY, normalize_category_name
 from ..utils.slug import generate_slug
@@ -2404,6 +2413,26 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ON episode_alternate_enclosures(episode_id);
             CREATE INDEX IF NOT EXISTS idx_alt_enclosures_mime_type
                 ON episode_alternate_enclosures(mime_type);
+
+            -- ========================================================================
+            -- EPISODE PLATFORM LINKS (spec #87)
+            -- ========================================================================
+            -- One row per (episode, platform). url NULL = checked, not found;
+            -- checked_at throttles re-lookups. Mirrors postgres_schema.py.
+            CREATE TABLE IF NOT EXISTS episode_platform_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                episode_id TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                url TEXT NULL,
+                external_ref TEXT NULL,
+                match_method TEXT NULL,
+                checked_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+                UNIQUE(episode_id, platform),
+                CHECK (platform IN ('apple', 'spotify', 'youtube')),
+                CHECK (match_method IS NULL OR match_method IN ('guid', 'audio_url', 'title_date'))
+            );
 
             -- ========================================================================
             -- USERS TABLE (Authentication)
@@ -5474,6 +5503,117 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             language=row["language"],
             is_default=bool(row["is_default"]),
             created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        )
+
+    # ============================================================================
+    # Platform link methods (spec #87)
+    # ============================================================================
+
+    _PLATFORM_LINK_COLUMNS = "id, episode_id, platform, url, external_ref, match_method, checked_at, created_at"
+
+    def get_platform_links(self, episode_id: str) -> List[PlatformLink]:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                SELECT {self._PLATFORM_LINK_COLUMNS}
+                FROM episode_platform_links
+                WHERE episode_id = ? AND url IS NOT NULL
+                ORDER BY platform ASC
+                """,
+                (episode_id,),
+            )
+            return [self._row_to_platform_link(row) for row in cursor.fetchall()]
+
+    def get_platform_link_candidates(
+        self,
+        podcast_id: str,
+        platform: str,
+        *,
+        window: int,
+        recheck_before: Optional[datetime],
+    ) -> List[PlatformLinkCandidate]:
+        # The window is the show's newest ``window`` episodes BEFORE the link
+        # filter (see the interface docstring). ``NULLS LAST`` keeps undated
+        # episodes at the tail on both engines.
+        marker_filter = "l.url IS NULL"
+        params: Tuple[Any, ...] = (podcast_id, int(window), platform)
+        if recheck_before is not None:
+            marker_filter = "(l.url IS NULL AND l.checked_at < ?)"
+            params = params + (ensure_utc(recheck_before).isoformat(),)
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                WITH pool AS (
+                    SELECT id, external_id, audio_url, title, pub_date, created_at
+                    FROM episodes
+                    WHERE podcast_id = ?
+                    ORDER BY pub_date DESC NULLS LAST, created_at DESC
+                    LIMIT ?
+                )
+                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date
+                FROM pool p
+                LEFT JOIN episode_platform_links l ON l.episode_id = p.id AND l.platform = ?
+                WHERE l.id IS NULL OR {marker_filter}
+                ORDER BY p.pub_date DESC NULLS LAST, p.created_at DESC
+                """,
+                params,
+            )
+            return [
+                PlatformLinkCandidate(
+                    episode_id=row["id"],
+                    external_id=row["external_id"] or "",
+                    audio_url=row["audio_url"] or "",
+                    title=row["title"] or "",
+                    pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])) if row["pub_date"] else None,
+                )
+                for row in cursor.fetchall()
+            ]
+
+    def upsert_platform_links(self, links: List[PlatformLink]) -> int:
+        if not links:
+            return 0
+        created = now_utc().isoformat()
+        with self._get_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO episode_platform_links
+                    (episode_id, platform, url, external_ref, match_method, checked_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(episode_id, platform) DO UPDATE SET
+                    url = COALESCE(excluded.url, url),
+                    external_ref = COALESCE(excluded.external_ref, external_ref),
+                    match_method = COALESCE(excluded.match_method, match_method),
+                    checked_at = excluded.checked_at
+                """,
+                [
+                    (
+                        link.episode_id,
+                        link.platform,
+                        link.url,
+                        link.external_ref,
+                        link.match_method,
+                        ensure_utc(link.checked_at).isoformat(),
+                        created,
+                    )
+                    for link in links
+                ],
+            )
+        return len(links)
+
+    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
+        with self._get_connection() as conn:
+            conn.execute("UPDATE podcasts SET apple_url = ? WHERE id = ?", (apple_url, podcast_id))
+
+    def _row_to_platform_link(self, row: sqlite3.Row) -> PlatformLink:
+        return PlatformLink(
+            id=row["id"],
+            episode_id=row["episode_id"],
+            platform=row["platform"],
+            url=row["url"],
+            external_ref=row["external_ref"],
+            match_method=row["match_method"],
+            checked_at=ensure_utc(datetime.fromisoformat(row["checked_at"])),
+            created_at=ensure_utc(datetime.fromisoformat(row["created_at"])) if row["created_at"] else None,
         )
 
     def get_podcast_for_episode(self, episode_id: str) -> Optional[Podcast]:

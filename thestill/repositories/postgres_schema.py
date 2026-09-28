@@ -236,6 +236,20 @@ CREATE TABLE IF NOT EXISTS episode_alternate_enclosures (
 CREATE INDEX IF NOT EXISTS idx_alt_enclosures_episode ON episode_alternate_enclosures(episode_id);
 CREATE INDEX IF NOT EXISTS idx_alt_enclosures_mime_type ON episode_alternate_enclosures(mime_type);
 
+-- Spec #87 — per-episode links to the same episode on a listening platform.
+-- url NULL = checked, not found; checked_at throttles re-lookups.
+CREATE TABLE IF NOT EXISTS episode_platform_links (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    platform text NOT NULL CHECK (platform IN ('apple', 'spotify', 'youtube')),
+    url text NULL,
+    external_ref text NULL,
+    match_method text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date')),
+    checked_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(episode_id, platform)
+);
+
 CREATE TABLE IF NOT EXISTS episode_transcript_links (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,

@@ -615,6 +615,11 @@ class PodcastsMixin(CategoryCacheMixin):
             return {"apple_url": None, "youtube_url": None}
         return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"]}
 
+    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
+        """Store a resolver-discovered Apple show URL (spec #87)."""
+        with self._get_connection() as conn:
+            conn.execute("UPDATE podcasts SET apple_url = %s WHERE id = %s", (apple_url, podcast_id))
+
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
 

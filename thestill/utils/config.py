@@ -53,6 +53,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def is_platform_links_enabled() -> bool:
+    """Spec #87 — resolve per-episode platform links after refresh + via the CLI."""
+    return _env_bool("PLATFORM_LINKS_ENABLED", True)
+
+
+def get_platform_links_recheck_hours() -> int:
+    """Spec #87 — hours a not-found row suppresses another lookup for that episode."""
+    return max(1, _env_int("PLATFORM_LINKS_RECHECK_HOURS", 24))
+
+
 def get_default_refresh_interval_seconds() -> int:
     """Seeded/initial per-feed refresh interval (default 1h)."""
     return _env_int("REFRESH_DEFAULT_INTERVAL_SECONDS", 3600)

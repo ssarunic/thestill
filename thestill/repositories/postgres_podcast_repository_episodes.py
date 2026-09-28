@@ -54,7 +54,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import psycopg
 from structlog import get_logger
 
-from ..models.podcast import AlternateEnclosure, Episode, EpisodeState, FailureType, Podcast, TranscriptLink
+from ..models.podcast import (
+    AlternateEnclosure,
+    Episode,
+    EpisodeState,
+    FailureType,
+    PlatformLink,
+    PlatformLinkCandidate,
+    Podcast,
+    TranscriptLink,
+)
 from ..utils.datetime_utils import now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
@@ -1668,6 +1677,109 @@ class EpisodesMixin(CategoryCacheMixin):
             rel=row["rel"],
             language=row["language"],
             is_default=row["is_default"],
+            created_at=row["created_at"],
+        )
+
+    # ------------------------------------------------------------------
+    # Platform links (spec #87)
+    # ------------------------------------------------------------------
+
+    _PLATFORM_LINK_COLUMNS = "id, episode_id, platform, url, external_ref, match_method, checked_at, created_at"
+
+    def get_platform_links(self, episode_id: str) -> List[PlatformLink]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {self._PLATFORM_LINK_COLUMNS}
+                FROM episode_platform_links
+                WHERE episode_id = %s AND url IS NOT NULL
+                ORDER BY platform ASC
+                """,
+                (episode_id,),
+            ).fetchall()
+            return [self._row_to_platform_link(row) for row in rows]
+
+    def get_platform_link_candidates(
+        self,
+        podcast_id: str,
+        platform: str,
+        *,
+        window: int,
+        recheck_before: Optional[datetime],
+    ) -> List[PlatformLinkCandidate]:
+        marker_filter = "l.url IS NULL"
+        params: Tuple[Any, ...] = (podcast_id, int(window), platform)
+        if recheck_before is not None:
+            marker_filter = "(l.url IS NULL AND l.checked_at < %s)"
+            params = params + (recheck_before,)
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"""
+                WITH pool AS (
+                    SELECT id, external_id, audio_url, title, pub_date, created_at
+                    FROM episodes
+                    WHERE podcast_id = %s
+                    ORDER BY pub_date DESC NULLS LAST, created_at DESC
+                    LIMIT %s
+                )
+                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date
+                FROM pool p
+                LEFT JOIN episode_platform_links l ON l.episode_id = p.id AND l.platform = %s
+                WHERE l.id IS NULL OR {marker_filter}
+                ORDER BY p.pub_date DESC NULLS LAST, p.created_at DESC
+                """,
+                params,
+            ).fetchall()
+            return [
+                PlatformLinkCandidate(
+                    episode_id=as_str(row["id"]),
+                    external_id=row["external_id"] or "",
+                    audio_url=row["audio_url"] or "",
+                    title=row["title"] or "",
+                    pub_date=row["pub_date"],
+                )
+                for row in rows
+            ]
+
+    def upsert_platform_links(self, links: List[PlatformLink]) -> int:
+        if not links:
+            return 0
+        with connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO episode_platform_links
+                        (episode_id, platform, url, external_ref, match_method, checked_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (episode_id, platform) DO UPDATE SET
+                        url = COALESCE(EXCLUDED.url, episode_platform_links.url),
+                        external_ref = COALESCE(EXCLUDED.external_ref, episode_platform_links.external_ref),
+                        match_method = COALESCE(EXCLUDED.match_method, episode_platform_links.match_method),
+                        checked_at = EXCLUDED.checked_at
+                    """,
+                    [
+                        (
+                            link.episode_id,
+                            link.platform,
+                            link.url,
+                            link.external_ref,
+                            link.match_method,
+                            link.checked_at,
+                        )
+                        for link in links
+                    ],
+                )
+        return len(links)
+
+    def _row_to_platform_link(self, row: Dict[str, Any]) -> PlatformLink:
+        return PlatformLink(
+            id=row["id"],
+            episode_id=as_str(row["episode_id"]),
+            platform=row["platform"],
+            url=row["url"],
+            external_ref=row["external_ref"],
+            match_method=row["match_method"],
+            checked_at=row["checked_at"],
             created_at=row["created_at"],
         )
 

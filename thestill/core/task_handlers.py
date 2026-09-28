@@ -1696,6 +1696,16 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
         except Exception:
             logger.warning("transcript_link_extraction_failed", podcast_id=podcast_id, exc_info=True)
 
+    # 5b. Spec #87 — best-effort per-episode platform links (Apple). One
+    #     iTunes lookup at most, and only while the show has unlinked recent
+    #     episodes; a bare test state (no service wired) skips it.
+    platform_links = getattr(state, "platform_link_service", None)
+    if platform_links is not None:
+        try:
+            platform_links.link_podcast(podcast)
+        except Exception:
+            logger.warning("platform_link_resolution_failed", podcast_id=podcast_id, exc_info=True)
+
     # 6. Record success + recompute adaptive (AIMD) cadence.
     repo.record_refresh_success(
         podcast_id,
