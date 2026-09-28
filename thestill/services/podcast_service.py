@@ -228,6 +228,7 @@ class PodcastWithIndex(BaseModel):
     # Chart-sourced store links (spec #73 follow-up); None when off-chart.
     apple_url: Optional[str] = None
     youtube_url: Optional[str] = None
+    spotify_url: Optional[str] = None  # spec #87, publisher-provided
 
     @computed_field  # type: ignore[misc]
     @property
@@ -422,6 +423,7 @@ class PodcastService:
                     copyright=podcast.copyright,
                     apple_url=podcast.apple_url,
                     youtube_url=podcast.youtube_url,
+                    spotify_url=podcast.spotify_url,
                 )
             )
 

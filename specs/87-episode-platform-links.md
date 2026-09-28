@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phase 1 (Apple Podcasts) implemented 2026-09-28; Spotify and YouTube phases open
+> **Status:** 🚧 Phases 1–2 implemented 2026-09-28 (Apple; publisher-provided Spotify + YouTube; YouTube channel scan); PR pending
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -18,11 +18,16 @@ enclosure ([#62](62-youtube-video-rendition.md)). Nothing resolves a feed
 episode to its Apple, Spotify or YouTube counterpart.
 
 This spec adds a per-episode `episode_platform_links` table and one resolver
-per platform, run once per show after a refresh. Phase 1 ships Apple: the
-iTunes lookup already used by the import path ([#65](65-apple-deep-history-import.md))
-returns a show's newest 200 episodes with the feed GUID and the Apple
-episode page, so one request per show links every recent episode by exact
-GUID. The Information list on the episode page gains a "Listen on" row.
+per platform, run once per show after a refresh. Apple comes from the
+iTunes lookup already used by the import path ([#65](65-apple-deep-history-import.md)):
+a show's newest 200 episodes with the feed GUID and the Apple episode page,
+so one request per show links every recent episode by exact GUID. Spotify
+is **publisher-provided only** (the developer program closed to small apps
+in 2026 and the pages no longer expose episode lists). YouTube takes the
+publisher's links first, then one flat `yt-dlp` listing of the show's
+channel matched on title, date and duration. The Information list on the
+episode page gains a "Listen on" row; the podcast page gains a Spotify
+row when the publisher states one.
 
 Local numbers on 2026-09-28 (98 podcasts, 6807 episodes): 3374 episodes have
 a "Show notes" link, 34 have a YouTube alternate enclosure, 68 podcasts have
@@ -42,7 +47,7 @@ CREATE TABLE episode_platform_links (
     platform      text NOT NULL CHECK (platform IN ('apple', 'spotify', 'youtube')),
     url           text NULL,          -- NULL = checked, not found
     external_ref  text NULL,          -- Apple trackId, Spotify episode id, YouTube video id
-    match_method  text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date')),
+    match_method  text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date', 'title_duration', 'publisher')),
     checked_at    timestamptz NOT NULL,
     created_at    timestamptz NOT NULL DEFAULT now(),
     UNIQUE (episode_id, platform)
@@ -52,7 +57,9 @@ CREATE TABLE episode_platform_links (
 `match_method` and `external_ref` make every link explainable and
 revertible: a wrong fuzzy link can be found by method and cleared. The
 upsert keeps an existing `url` when the incoming row has none, so a
-not-found pass can never blank a link.
+not-found pass can never blank a link. `podcasts.spotify_url` (same
+migration) holds the publisher-stated Spotify show link; unlike
+`apple_url` / `youtube_url` it is never chart-sourced.
 
 ### Candidates and throttle
 
@@ -100,6 +107,62 @@ show per day for shows that have unindexed episodes inside the window.
    Each Apple entry links at most one episode. The stored `url` is Apple's
    `trackViewUrl`; `external_ref` is `trackId`.
 
+### Publisher-provided links (`publisher`)
+
+No network. Per episode, in order of trust: the import that created it
+(`canonical_id` `spotify:<id>` / `youtube:<video id>`), a `video/youtube`
+alternate enclosure ([#62](62-youtube-video-rendition.md)), the item
+`<link>` when it is a Spotify episode or YouTube video, then links in the
+description — accepted only when the description names exactly **one**
+episode / video on that platform. Show notes routinely link last week's
+episode or a guest's video; a unique link is the episode's own, two links
+are a guess we refuse to make.
+
+Per show: a Spotify show link or YouTube channel link in the podcast's own
+description / website is taken when unique; the same link in at least
+three episode descriptions is taken when no other competes. A discovered
+YouTube channel fills `youtube_url`, so the podcast page and the channel
+scan below share it.
+
+### Spotify
+
+Publisher-provided only. Verified 2026-09-28: Spotify's Web API is not
+retired but Development Mode now needs Premium, is capped at 5 users and
+extended quota requires a registered business with 250k monthly actives;
+the show page serves only Open Graph tags, the embed page's data carries
+just the latest episode, and Spotify for Podcasters links redirect to a
+client-rendered page with no episode id. There is no public path from a
+feed episode to a Spotify id, so coverage is whatever feeds carry (25 of
+6807 local episodes link their own Spotify page) and the row simply does
+not show otherwise.
+
+### YouTube resolver (Phase 2)
+
+1. **Channel.** `podcasts.youtube_url` (chart-sourced or publisher-stated,
+   above). No search fallback: a title search would link namesake
+   channels, and no window can prove a channel the way a GUID proves an
+   Apple show.
+2. **Listing.** One flat `yt-dlp` pass over `<channel>/videos` (newest 300,
+   no shorts, no downloads, ~0.5 s). Entries carry id, title, duration and
+   an **approximate** upload date ("3 weeks ago"), so the date tolerance
+   widens with age: 3 days inside three weeks, 14 days inside eight weeks,
+   45 days beyond. The exact duration carries the precision the date loses.
+3. **Match**, unique-or-nothing per candidate, each upload links once:
+   - `title_date`: normalised titles equal, date within tolerance; when both
+     durations are known they must agree (20 %, floor 180 s) — the same
+     title at a clearly different length is a clip.
+   - `title_duration`: date within tolerance, durations known and agreeing,
+     and either one title contains the other (shorter side ≥ 12 chars:
+     "#2519 - Scott Eastwood" inside "Joe Rogan Experience #2519 - Scott
+     Eastwood") or both carry the same single `#NNN` episode number
+     ("#502 – Guest: Topic" vs "Topic | Show #502").
+   A listing failure (bot check, private channel) writes nothing for the
+   unresolved candidates; the publisher rows are kept.
+
+The playback manifest's YouTube rendition ([#62](62-youtube-video-rendition.md))
+still reads alternate enclosures only; feeding it from `publisher` /
+`title_date` links is a follow-up once the links have been eyeballed.
+
 ### Hooks
 
 - **Queued refresh** ([task_handlers.py](../thestill/core/task_handlers.py)
@@ -123,15 +186,17 @@ show per day for shows that have unindexed episodes inside the window.
 Spotify, YouTube. The Information list ([#76 §3.6](76-episode-detail-page-hierarchy.md))
 adds a "Listen on" row after "Show notes" with one external link per
 platform. No fallback to the show-level link: a show link on an episode row
-would read as the episode.
+would read as the episode. `GET /api/podcasts/{slug}` gains `spotify_url`
+and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 
 ## Phases
 
 | Phase | Scope | Status |
 |-------|-------|--------|
 | 1 | Table, Apple resolver, refresh hooks, CLI, API field, "Listen on" row | ✅ 2026-09-28 |
-| 2 | Spotify: show id via search, `GET /shows/{id}/episodes` paged, title/date/duration scorer from [#79](79-spotify-link-import.md); needs `SPOTIFY_CLIENT_ID`/`SECRET` | Open |
-| 3 | YouTube: alternate enclosures ([#62](62-youtube-video-rendition.md)) first, opt-in channel scan by title; clips make title matching noisy | Open |
+| 2 | Publisher-provided Spotify + YouTube links, `podcasts.spotify_url`, YouTube channel scan (`title_date` / `title_duration`) | ✅ 2026-09-28 |
+| — | Spotify Web API resolver | Dropped: developer program closed to small apps (see "Spotify") |
+| 3 | YouTube channel discovery for the 39 shows without one (manual field or a verified search); feed the #62 playback rendition from links | Open |
 
 ## Configuration
 
@@ -156,21 +221,37 @@ would read as the episode.
 
 ## Dry run, 2026-09-28
 
-Against a scratch copy of the local SQLite database (71 podcasts), the
-first pass would link 2737 of 2859 candidates (95.7%), almost all by exact
-GUID; `audio_url` carried the Goalhanger shows (their GUIDs differ from
-Apple's) and `title_date` carried No Such Thing As A Fish. Three shows
-(Uncapped, Deep Learning with PolyAI, Latent Space) only resolve through
-the window-proven title rule, since Apple lists them under another feed
-host; together they contribute 120 of those links. The remaining misses
-are episodes Apple does not list at all (the Ezra Klein Show window holds
-4 entries; Football Daily's 5 Live reaction episodes are absent), which the
-recheck interval retries at one request per show per day.
+Against the local Postgres database (98 podcasts, 14 235 candidates across
+the three platforms):
+
+| Platform | Linked | By method |
+|----------|--------|-----------|
+| Apple | 4562 of ~4750 | almost all `guid`; `audio_url` for the Goalhanger shows (their GUIDs differ from Apple's), `title_date` for No Such Thing As A Fish and Shameless |
+| Spotify | 24 | `publisher` |
+| YouTube | 881 | 246 `publisher`, 344 `title_date`, 291 `title_duration` |
+
+Apple's misses are episodes Apple does not list (the Ezra Klein Show
+window holds 4 entries; Football Daily's 5 Live reaction episodes are
+absent). Three shows (Uncapped, Deep Learning with PolyAI, Latent Space)
+resolve only through the window-proven title rule because Apple lists them
+under another feed host. YouTube: 39 shows have no channel on record;
+of the shows with one, video-first feeds land well (Joe Rogan 33 of 47,
+Prof G Markets 119 of 189, Moonshots 50 of 86, Huberman 17 of 32) and the
+misses are retitled uploads ("How Meta Could Quietly Win The AI Race" vs
+"Meta Just Turned Your Data Into An AI Advantage") that no safe rule
+covers. Spot checks of the paired titles and durations found no wrong
+link.
 
 ## Open questions
 
 - Episodes older than the newest 200 stay unlinked on Apple. The import
   path's page-scrape fallback (#65 Tier 3) works per episode and is not
   worth one request per old episode here.
+- 39 shows have no YouTube channel on record. A manual `youtube_url` field
+  on the podcast page, or a search accepted only when the channel's
+  uploads match several episodes by exact title and duration, would cover
+  most of them.
+- YouTube's approximate dates make the 45-day band the weak point; exact
+  per-video dates cost one request per video and are not worth it.
 - Whether the list endpoint should carry the links too (a per-row "Listen
   on" is not planned, so not yet).

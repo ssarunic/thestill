@@ -17,6 +17,8 @@
 ``episode_platform_links`` holds one row per (episode, platform): the
 episode's page on Apple Podcasts / Spotify / YouTube, or a ``url IS NULL``
 "checked, not found" marker whose ``checked_at`` throttles re-lookups.
+``podcasts.spotify_url`` is the publisher-provided Spotify show link (never
+chart-sourced, unlike ``apple_url`` / ``youtube_url``).
 
 Same convergence contract as earlier migrations: the DDL also lives in
 ``postgres_schema.SCHEMA_SQL`` (idempotent), so ensure_schema-bootstrapped
@@ -41,11 +43,12 @@ CREATE TABLE IF NOT EXISTS episode_platform_links (
     platform text NOT NULL CHECK (platform IN ('apple', 'spotify', 'youtube')),
     url text NULL,
     external_ref text NULL,
-    match_method text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date')),
+    match_method text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date', 'title_duration', 'publisher')),
     checked_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(episode_id, platform)
 );
+ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS spotify_url text NULL;
 """
 
 
@@ -55,3 +58,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute('DROP TABLE IF EXISTS "episode_platform_links" CASCADE')
+    op.execute("ALTER TABLE podcasts DROP COLUMN IF EXISTS spotify_url")

@@ -1716,13 +1716,15 @@ class EpisodesMixin(CategoryCacheMixin):
             rows = conn.execute(
                 f"""
                 WITH pool AS (
-                    SELECT id, external_id, audio_url, title, pub_date, created_at
+                    SELECT id, external_id, audio_url, title, pub_date, created_at,
+                           duration, description_html, website_url, canonical_id
                     FROM episodes
                     WHERE podcast_id = %s
                     ORDER BY pub_date DESC NULLS LAST, created_at DESC
                     LIMIT %s
                 )
-                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date
+                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date,
+                       p.duration, p.description_html, p.website_url, p.canonical_id
                 FROM pool p
                 LEFT JOIN episode_platform_links l ON l.episode_id = p.id AND l.platform = %s
                 WHERE l.id IS NULL OR {marker_filter}
@@ -1737,6 +1739,10 @@ class EpisodesMixin(CategoryCacheMixin):
                     audio_url=row["audio_url"] or "",
                     title=row["title"] or "",
                     pub_date=row["pub_date"],
+                    duration=row["duration"],
+                    description_html=row["description_html"] or "",
+                    website_url=row["website_url"],
+                    canonical_id=as_str(row["canonical_id"]) if row["canonical_id"] else None,
                 )
                 for row in rows
             ]

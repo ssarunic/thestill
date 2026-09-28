@@ -352,11 +352,13 @@ def _make_platform_link_service(repository):
 @require_config
 @log_command
 def link_platforms(ctx, podcast_id, dry_run, force):
-    """Resolve per-episode Apple Podcasts links (spec #87).
+    """Resolve per-episode Apple / Spotify / YouTube links (spec #87).
 
-    One iTunes lookup per show, only while the show has unlinked episodes
-    among its newest 200. Runs automatically after every refresh; this
-    command is the backfill and the debugging surface.
+    Per show: one iTunes lookup for Apple, the feed's own links for Spotify
+    and YouTube, then one flat channel listing for what YouTube is missing.
+    Only shows with unlinked episodes among their newest 200 cost a request.
+    Runs automatically after every refresh; this command is the backfill
+    and the debugging surface.
     """
     service = _make_platform_link_service(ctx.obj.repository)
     if service is None:
@@ -374,24 +376,30 @@ def link_platforms(ctx, podcast_id, dry_run, force):
 
     if dry_run:
         click.echo("🔍 Dry run — fetching and matching, writing nothing.")
-    click.echo(f"🔗 Resolving Apple episode links for {len(targets)} podcast(s)...")
+    click.echo(f"🔗 Resolving platform links for {len(targets)} podcast(s)...")
 
     totals = {"candidates": 0, "linked": 0, "not_found": 0}
+    per_platform: dict = {}
     for podcast in targets:
-        outcome = service.link_podcast(podcast, dry_run=dry_run, force=force)
-        totals["candidates"] += outcome.candidates
-        totals["linked"] += outcome.linked
-        totals["not_found"] += outcome.not_found
-        if outcome.skipped == "no_candidates":
-            continue
-        methods = ", ".join(f"{k}={v}" for k, v in sorted(outcome.matched_by.items())) or "-"
-        note = f" ({outcome.skipped})" if outcome.skipped else ""
-        click.echo(
-            f"   {podcast.title}: {outcome.linked}/{outcome.candidates} linked, "
-            f"{outcome.not_found} not found [{methods}]{note}"
-        )
+        report = service.link_podcast(podcast, dry_run=dry_run, force=force)
+        totals["candidates"] += report.candidates
+        totals["linked"] += report.linked
+        totals["not_found"] += report.not_found
+        lines = []
+        for outcome in report.outcomes:
+            if outcome.skipped == "no_candidates":
+                continue
+            bucket = per_platform.setdefault(outcome.platform, {"linked": 0, "not_found": 0})
+            bucket["linked"] += outcome.linked
+            bucket["not_found"] += outcome.not_found
+            methods = ", ".join(f"{k}={v}" for k, v in sorted(outcome.matched_by.items())) or "-"
+            note = f" ({outcome.skipped})" if outcome.skipped else ""
+            lines.append(f"{outcome.platform} {outcome.linked}/{outcome.candidates} [{methods}]{note}")
+        if lines:
+            click.echo(f"   {podcast.title}: " + "; ".join(lines))
+    summary = ", ".join(f"{p}={b['linked']}" for p, b in sorted(per_platform.items())) or "-"
     click.echo(
-        f"✓ Done: {totals['linked']} linked, {totals['not_found']} not found, "
+        f"✓ Done: {totals['linked']} linked ({summary}), {totals['not_found']} not found, "
         f"{totals['candidates']} candidate(s) checked."
     )
 

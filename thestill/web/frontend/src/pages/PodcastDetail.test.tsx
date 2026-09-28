@@ -135,6 +135,16 @@ describe('PodcastDetail header (spec #76 phase 3)', () => {
     expect(screen.queryByRole('link', { name: /youtube/i })).toBeNull()
   })
 
+  it('renders the publisher-provided Spotify show link (spec #87)', () => {
+    mockUsePodcast.mockReturnValue({
+      data: podcast({ spotify_url: 'https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL' }),
+      isLoading: false,
+      error: null,
+    })
+    renderPage()
+    expect(screen.getByRole('link', { name: /spotify/i })).toHaveAttribute('href', 'https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL')
+  })
+
   it('offers Unfollow when following and omits the website action without a URL', () => {
     mockUsePodcast.mockReturnValue({ data: podcast({ is_following: true, website_url: null }), isLoading: false, error: null })
     renderPage()

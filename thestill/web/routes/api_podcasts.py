@@ -261,6 +261,8 @@ def get_podcast(
                 # the podcast is not on any Top Podcasts chart.
                 "apple_url": info.apple_url,
                 "youtube_url": info.youtube_url,
+                # Spec #87 — publisher-provided Spotify show link.
+                "spotify_url": info.spotify_url,
             },
         }
     )

@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS podcasts (
     -- (migration 0010); never parsed from the feed.
     apple_url text NULL,
     youtube_url text NULL,
+    spotify_url text NULL,
     primary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     secondary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     host_entity_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -244,7 +245,7 @@ CREATE TABLE IF NOT EXISTS episode_platform_links (
     platform text NOT NULL CHECK (platform IN ('apple', 'spotify', 'youtube')),
     url text NULL,
     external_ref text NULL,
-    match_method text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date')),
+    match_method text NULL CHECK (match_method IN ('guid', 'audio_url', 'title_date', 'title_duration', 'publisher')),
     checked_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(episode_id, platform)

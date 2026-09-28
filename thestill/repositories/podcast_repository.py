@@ -387,8 +387,12 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
-        """Store a resolver-discovered Apple show URL on the podcast row (spec #87)."""
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
+        """
+        Store a resolver-discovered show link on the podcast row (spec #87):
+        ``apple`` → ``apple_url``, ``youtube`` → ``youtube_url``,
+        ``spotify`` → ``spotify_url``. Unknown platforms raise.
+        """
         pass
 
     # ------------------------------------------------------------------
@@ -660,6 +664,7 @@ class PodcastRepository(ABC):
             "copyright": podcast.copyright,
             "apple_url": podcast.apple_url,
             "youtube_url": podcast.youtube_url,
+            "spotify_url": podcast.spotify_url,
         }
 
 

@@ -142,6 +142,8 @@ export interface PodcastDetail {
   // was imported from / matched against a Top Podcasts chart entry.
   apple_url?: string | null
   youtube_url?: string | null
+  // Spec #87 — Spotify show link the publisher put in the feed; never chart-sourced.
+  spotify_url?: string | null
 }
 
 export interface PodcastDetailResponse {

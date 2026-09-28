@@ -27,23 +27,35 @@ SHOW_URL = "https://podcasts.apple.com/us/podcast/prof-g/id1498802610"
 
 
 class FakeRepo:
-    def __init__(self, candidates: List[PlatformLinkCandidate], apple_url: Optional[str] = SHOW_URL):
+    def __init__(self, candidates: List[PlatformLinkCandidate], apple_url: Optional[str] = SHOW_URL, youtube_url=None):
         self.candidates = candidates
         self.apple_url = apple_url
+        self.youtube_url = youtube_url
         self.candidate_calls: List[Dict] = []
         self.upserts: List[List[PlatformLink]] = []
         self.set_apple_urls: List[str] = []
+        self.set_platform_urls: List = []
+        self.alternates: Dict[str, list] = {}
+        self.other_candidates: Dict[str, List[PlatformLinkCandidate]] = {}
 
     def get_platform_link_candidates(self, podcast_id, platform, *, window, recheck_before):
         self.candidate_calls.append({"platform": platform, "window": window, "recheck_before": recheck_before})
-        return list(self.candidates)
+        if platform == "apple":
+            return list(self.candidates)
+        return list(self.other_candidates.get(platform, []))
 
     def sync_podcast_chart_urls(self, podcast_id):
-        return {"apple_url": self.apple_url, "youtube_url": None}
+        return {"apple_url": self.apple_url, "youtube_url": self.youtube_url, "spotify_url": None}
 
-    def set_podcast_apple_url(self, podcast_id, apple_url):
-        self.set_apple_urls.append(apple_url)
-        self.apple_url = apple_url
+    def set_podcast_platform_url(self, podcast_id, platform, url):
+        if platform == "apple":
+            self.set_apple_urls.append(url)
+            self.apple_url = url
+        else:
+            self.set_platform_urls.append((platform, url))
+
+    def get_alternate_enclosures_for_episodes(self, episode_ids):
+        return {eid: self.alternates.get(eid, []) for eid in episode_ids}
 
     def upsert_platform_links(self, links):
         self.upserts.append(list(links))
@@ -72,8 +84,8 @@ def _episode_entry(track_id: int, guid: str) -> dict:
     }
 
 
-def _service(repo, lookup=None, search=None, recheck_hours=24):
-    calls = {"lookup": [], "search": []}
+def _service(repo, lookup=None, search=None, videos=None, recheck_hours=24):
+    calls = {"lookup": [], "search": [], "videos": []}
 
     def _lookup(params):
         calls["lookup"].append(params)
@@ -87,7 +99,15 @@ def _service(repo, lookup=None, search=None, recheck_hours=24):
             raise search
         return search or []
 
-    svc = PlatformLinkService(repo, recheck_hours=recheck_hours, lookup=_lookup, search=_search, clock=lambda: NOW)
+    def _videos(channel_url, *, limit):
+        calls["videos"].append((channel_url, limit))
+        if isinstance(videos, Exception):
+            raise videos
+        return videos or []
+
+    svc = PlatformLinkService(
+        repo, recheck_hours=recheck_hours, lookup=_lookup, search=_search, list_videos=_videos, clock=lambda: NOW
+    )
     return svc, calls
 
 
@@ -95,9 +115,9 @@ class TestThrottle:
     def test_no_candidates_makes_no_request_and_writes_nothing(self):
         repo = FakeRepo([])
         svc, calls = _service(repo, lookup=[_episode_entry(1, "g1")])
-        outcome = svc.link_podcast(_podcast())
-        assert outcome.skipped == "no_candidates"
-        assert calls["lookup"] == [] and calls["search"] == []
+        report = svc.link_podcast(_podcast())
+        assert [o.skipped for o in report.outcomes] == ["no_candidates"] * 3
+        assert calls["lookup"] == [] and calls["search"] == [] and calls["videos"] == []
         assert repo.upserts == []
 
     def test_recheck_window_is_passed_unless_forced(self):
@@ -105,9 +125,10 @@ class TestThrottle:
         svc, _ = _service(repo, recheck_hours=6)
         svc.link_podcast(_podcast())
         svc.link_podcast(_podcast(), force=True)
-        assert repo.candidate_calls[0]["recheck_before"] == NOW - timedelta(hours=6)
-        assert repo.candidate_calls[0]["window"] == 200
-        assert repo.candidate_calls[1]["recheck_before"] is None
+        first_pass, forced_pass = repo.candidate_calls[:3], repo.candidate_calls[3:]
+        assert [c["platform"] for c in first_pass] == ["apple", "spotify", "youtube"]
+        assert all(c["recheck_before"] == NOW - timedelta(hours=6) and c["window"] == 200 for c in first_pass)
+        assert all(c["recheck_before"] is None for c in forced_pass)
 
 
 class TestResolution:
@@ -116,7 +137,7 @@ class TestResolution:
         svc, calls = _service(
             repo, lookup=[{"wrapperType": "track"}, _episode_entry(1, "g-a"), _episode_entry(2, "g-c")]
         )
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
 
         assert calls["lookup"] == ["id=1498802610&entity=podcastEpisode&limit=200"]
         assert calls["search"] == []
@@ -131,14 +152,14 @@ class TestResolution:
     def test_lookup_failure_writes_nothing(self):
         repo = FakeRepo([_cand("ep-a", "g-a")])
         svc, _ = _service(repo, lookup=RuntimeError("iTunes lookup returned HTTP 503"))
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
         assert outcome.skipped == "lookup_failed"
         assert repo.upserts == []
 
     def test_dry_run_fetches_but_writes_nothing(self):
         repo = FakeRepo([_cand("ep-a", "g-a")])
         svc, calls = _service(repo, lookup=[_episode_entry(1, "g-a")])
-        outcome = svc.link_podcast(_podcast(), dry_run=True)
+        outcome = svc.link_podcast(_podcast(), dry_run=True).outcomes[0]
         assert outcome.linked == 1 and calls["lookup"]
         assert repo.upserts == []
 
@@ -146,7 +167,8 @@ class TestResolution:
         repo = FakeRepo([])
         svc, _ = _service(repo)
         outcomes = svc.link_all()
-        assert [o.podcast_id for o in outcomes] == ["pod-1"]
+        assert [r.podcast_id for r in outcomes] == ["pod-1"]
+        assert [o.platform for o in outcomes[0].outcomes] == ["apple", "spotify", "youtube"]
 
 
 class TestShowDiscovery:
@@ -164,7 +186,7 @@ class TestShowDiscovery:
             },
         ]
         svc, calls = _service(repo, lookup=[_episode_entry(1, "g-a")], search=search)
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
 
         assert calls["search"] == ["term=Prof+G+Markets&media=podcast&entity=podcast&limit=25"]
         assert repo.set_apple_urls == [SHOW_URL]
@@ -176,7 +198,7 @@ class TestShowDiscovery:
         svc, calls = _service(
             repo, search=[{"feedUrl": "https://elsewhere.example.com/rss", "collectionViewUrl": SHOW_URL}]
         )
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
 
         assert outcome.skipped == "no_apple_id" and outcome.not_found == 2
         assert calls["lookup"] == []
@@ -189,7 +211,7 @@ class TestShowDiscovery:
     def test_search_failure_marks_not_found_so_it_is_retried_after_recheck(self):
         repo = FakeRepo([_cand("ep-a", "g-a")], apple_url=None)
         svc, _ = _service(repo, search=RuntimeError("boom"))
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
         assert outcome.skipped == "no_apple_id"
         assert len(repo.upserts) == 1
 
@@ -209,7 +231,7 @@ class TestShowDiscovery:
         ]
         repo = FakeRepo([_cand("ep-a", "g-a"), _cand("ep-b", "g-b")], apple_url=None)
         svc, calls = _service(repo, lookup=[_episode_entry(1, "g-a")], search=search)
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
 
         assert calls["lookup"] == ["id=1498802610&entity=podcastEpisode&limit=200"]
         assert repo.set_apple_urls == [SHOW_URL]  # tracking query stripped, stored after proof
@@ -223,7 +245,7 @@ class TestShowDiscovery:
         # The window only offers a same-title entry — a namesake show would too.
         window = [{**_episode_entry(1, "other-guid"), "trackName": "ep-a", "releaseDate": "2026-09-28T12:00:00Z"}]
         svc, calls = _service(repo, lookup=window, search=search)
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
 
         assert calls["lookup"]  # the window was fetched to test the hit
         assert repo.set_apple_urls == []
@@ -241,7 +263,7 @@ class TestShowDiscovery:
         ]
         repo = FakeRepo([_cand("ep-a", "g-a")], apple_url=None)
         svc, calls = _service(repo, lookup=[_episode_entry(1, "g-a")], search=search)
-        outcome = svc.link_podcast(_podcast())
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
         assert calls["lookup"] == [] and outcome.skipped == "no_apple_id"
 
     def test_dry_run_never_stores_the_show_url(self):
@@ -257,7 +279,7 @@ class TestShowDiscovery:
             {"feedUrl": "https://anchor.fm/x/rss", "collectionName": "Prof G Markets", "collectionViewUrl": SHOW_URL}
         ]
         svc, _ = _service(repo, lookup=[_episode_entry(1, "g-a")], search=search)
-        assert svc.link_podcast(_podcast(), dry_run=True).linked == 1
+        assert svc.link_podcast(_podcast(), dry_run=True).outcomes[0].linked == 1
         assert repo.set_apple_urls == [] and repo.upserts == []
 
 
@@ -267,3 +289,142 @@ class TestPlatformLinkModel:
             PlatformLink(episode_id="e", platform="mixcloud")
         with pytest.raises(ValueError):
             PlatformLink(episode_id="e", platform="apple", match_method="vibes")
+
+
+def _ocand(
+    episode_id, *, title="Ep", pub_date=NOW, duration=None, description_html="", website_url=None, canonical_id=None
+):
+    return PlatformLinkCandidate(
+        episode_id=episode_id,
+        external_id=f"g-{episode_id}",
+        audio_url=f"https://a/{episode_id}.mp3",
+        title=title,
+        pub_date=pub_date,
+        duration=duration,
+        description_html=description_html,
+        website_url=website_url,
+        canonical_id=canonical_id,
+    )
+
+
+def _rows(repo, platform):
+    return {r.episode_id: r for batch in repo.upserts for r in batch if r.platform == platform}
+
+
+class TestSpotifyPublisherLinks:
+    def test_unique_description_link_and_item_link_are_taken_the_rest_marked_not_found(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [
+            _ocand(
+                "d",
+                description_html='<a href="https://open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH?si=1">listen</a>',
+            ),
+            _ocand("w", website_url="https://open.spotify.com/episode/1AAAAAAAAAAAAAAAAAAAAA"),
+            _ocand(
+                "two",
+                description_html="open.spotify.com/episode/2BBBBBBBBBBBBBBBBBBBBB and open.spotify.com/episode/3CCCCCCCCCCCCCCCCCCCCC",
+            ),
+            _ocand("none"),
+        ]
+        svc, _ = _service(repo)
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+
+        assert (spotify.platform, spotify.linked, spotify.not_found, spotify.matched_by) == (
+            "spotify",
+            2,
+            2,
+            {"publisher": 2},
+        )
+        rows = _rows(repo, "spotify")
+        assert rows["d"].url == "https://open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH"
+        assert rows["d"].match_method == "publisher" and rows["d"].external_ref == "0tkEdaVIsQNGKUGUKTPqeH"
+        assert rows["w"].url == "https://open.spotify.com/episode/1AAAAAAAAAAAAAAAAAAAAA"
+        assert rows["two"].url is None and rows["none"].url is None
+
+    def test_import_canonical_id_wins(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [_ocand("i", canonical_id="spotify:4DDDDDDDDDDDDDDDDDDDDD")]
+        svc, _ = _service(repo)
+        svc.link_podcast(_podcast())
+        assert _rows(repo, "spotify")["i"].external_ref == "4DDDDDDDDDDDDDDDDDDDDD"
+
+    def test_show_link_in_podcast_description_is_stored_once(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [_ocand("x")]
+        svc, _ = _service(repo)
+        podcast = _podcast()
+        podcast.description = "Also on https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL"
+        svc.link_podcast(podcast)
+        assert repo.set_platform_urls == [("spotify", "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL")]
+        svc.link_podcast(podcast, dry_run=True)
+        assert len(repo.set_platform_urls) == 1  # dry run stores nothing
+
+
+def _video(video_id, title, uploaded=NOW, duration=3600):
+    from thestill.core.youtube_episode_linker import YouTubeVideoEntry
+
+    return YouTubeVideoEntry(video_id=video_id, title=title, uploaded=uploaded, duration=duration)
+
+
+class TestYouTube:
+    def test_publisher_links_then_channel_listing(self):
+        from thestill.models.podcast import AlternateEnclosure
+
+        repo = FakeRepo([], youtube_url="https://www.youtube.com/@profgmarkets")
+        repo.other_candidates["youtube"] = [
+            _ocand("alt", title="Alt ep"),
+            _ocand("chan", title="Markets Weekly: Tariffs", duration=3600),
+            _ocand("miss", title="Nothing on YouTube", duration=3600),
+        ]
+        repo.alternates["alt"] = [
+            AlternateEnclosure(
+                episode_id="alt", source_uri="https://www.youtube.com/watch?v=aaaaaaaaaaa", mime_type="video/youtube"
+            )
+        ]
+        videos = [
+            _video("bbbbbbbbbbb", "Markets Weekly: Tariffs", duration=3700),
+            _video("ccccccccccc", "Markets Weekly: Tariffs — CLIP", duration=300),
+        ]
+        svc, calls = _service(repo, videos=videos)
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+
+        assert calls["videos"] == [("https://www.youtube.com/@profgmarkets", 300)]
+        assert (yt.linked, yt.not_found, yt.skipped) == (2, 1, None)
+        assert yt.matched_by == {"publisher": 1, "title_date": 1}
+        rows = _rows(repo, "youtube")
+        assert rows["alt"].external_ref == "aaaaaaaaaaa" and rows["alt"].match_method == "publisher"
+        assert rows["chan"].url == "https://www.youtube.com/watch?v=bbbbbbbbbbb"
+        assert rows["miss"].url is None
+
+    def test_listing_is_skipped_when_the_feed_covered_everything(self):
+        repo = FakeRepo([], youtube_url="https://www.youtube.com/@x")
+        repo.other_candidates["youtube"] = [_ocand("i", canonical_id="youtube:aaaaaaaaaaa")]
+        svc, calls = _service(repo, videos=RuntimeError("must not be called"))
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert calls["videos"] == [] and yt.linked == 1
+
+    def test_no_channel_marks_not_found(self):
+        repo = FakeRepo([])
+        repo.other_candidates["youtube"] = [_ocand("a"), _ocand("b")]
+        svc, calls = _service(repo)
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert (yt.skipped, yt.not_found) == ("no_channel", 2)
+        assert calls["videos"] == []
+        assert {r.episode_id for r in _rows(repo, "youtube").values()} == {"a", "b"}
+
+    def test_listing_failure_writes_nothing_for_the_unresolved(self):
+        repo = FakeRepo([], youtube_url="https://www.youtube.com/@x")
+        repo.other_candidates["youtube"] = [_ocand("pub", canonical_id="youtube:aaaaaaaaaaa"), _ocand("rest")]
+        svc, _ = _service(repo, videos=RuntimeError("Sign in to confirm you're not a bot"))
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert (yt.skipped, yt.linked, yt.not_found) == ("lookup_failed", 1, 0)
+        assert list(_rows(repo, "youtube")) == ["pub"]
+
+    def test_channel_discovered_from_publisher_votes_is_stored_and_used(self):
+        repo = FakeRepo([])
+        text = 'Video: <a href="https://www.youtube.com/@profgmarkets">YouTube</a>'
+        repo.other_candidates["youtube"] = [_ocand(f"e{i}", title=f"Show {i}", description_html=text) for i in range(3)]
+        svc, calls = _service(repo, videos=[])
+        svc.link_podcast(_podcast())
+        assert repo.set_platform_urls == [("youtube", "https://www.youtube.com/@profgmarkets")]
+        assert calls["videos"] == [("https://www.youtube.com/@profgmarkets", 300)]

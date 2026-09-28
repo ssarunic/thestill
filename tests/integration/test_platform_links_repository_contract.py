@@ -87,7 +87,7 @@ def h(request, tmp_path):
 
     ensure_schema(PG_DSN)
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE episodes, episode_platform_links, podcasts CASCADE")
+        conn.execute("TRUNCATE episodes, episode_platform_links, episode_alternate_enclosures, podcasts CASCADE")
 
     def make_podcast(podcast: Podcast) -> str:
         with psycopg.connect(PG_DSN) as conn:
@@ -103,9 +103,21 @@ def h(request, tmp_path):
             )
             for ep in podcast.episodes:
                 conn.execute(
-                    "INSERT INTO episodes (id, podcast_id, external_id, title, description, audio_url, pub_date, created_at) "
-                    "VALUES (%s, %s, %s, %s, '', %s, %s, %s)",
-                    (ep.id, podcast.id, ep.external_id, ep.title, str(ep.audio_url), ep.pub_date, ep.created_at),
+                    "INSERT INTO episodes (id, podcast_id, external_id, title, description, audio_url, pub_date, "
+                    "created_at, duration, description_html, website_url) "
+                    "VALUES (%s, %s, %s, %s, '', %s, %s, %s, %s, %s, %s)",
+                    (
+                        ep.id,
+                        podcast.id,
+                        ep.external_id,
+                        ep.title,
+                        str(ep.audio_url),
+                        ep.pub_date,
+                        ep.created_at,
+                        ep.duration,
+                        ep.description_html,
+                        ep.website_url,
+                    ),
                 )
         return podcast.id
 
@@ -127,6 +139,9 @@ def _episode(n: int, pub_date=None) -> Episode:
         audio_url=f"https://cdn.example.com/{n}.mp3",
         pub_date=pub_date,
         created_at=NOW - timedelta(days=n),
+        duration=1800,
+        description_html='<a href="https://open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH">x</a>',
+        website_url=f"https://example.com/ep/{n}",
     )
 
 
@@ -160,6 +175,10 @@ class TestCandidates:
         assert got[0].audio_url == "https://cdn.example.com/0.mp3"
         assert got[0].title == "Episode 0"
         assert got[0].pub_date == NOW
+        assert got[0].duration == 1800
+        assert got[0].description_html == '<a href="https://open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH">x</a>'
+        assert got[0].website_url == "https://example.com/ep/0"
+        assert got[0].canonical_id is None
 
         # Linking the newest keeps the window anchored: the 4th-newest does NOT enter.
         h.repo.upsert_platform_links([_link(eps[0].id, url="https://podcasts.apple.com/x?i=1", method="guid")])
@@ -263,5 +282,11 @@ class TestShowUrl:
     def test_set_podcast_apple_url_is_read_back_by_chart_sync(self, h):
         pid = h.make_podcast(_podcast([]))
         assert h.repo.sync_podcast_chart_urls(pid)["apple_url"] is None
-        h.repo.set_podcast_apple_url(pid, "https://podcasts.apple.com/us/podcast/x/id123")
-        assert h.repo.sync_podcast_chart_urls(pid)["apple_url"] == "https://podcasts.apple.com/us/podcast/x/id123"
+        h.repo.set_podcast_platform_url(pid, "apple", "https://podcasts.apple.com/us/podcast/x/id123")
+        h.repo.set_podcast_platform_url(pid, "spotify", "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL")
+        urls = h.repo.sync_podcast_chart_urls(pid)
+        assert urls["apple_url"] == "https://podcasts.apple.com/us/podcast/x/id123"
+        assert urls["spotify_url"] == "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL"
+        assert urls["youtube_url"] is None
+        with pytest.raises(KeyError):
+            h.repo.set_podcast_platform_url(pid, "mixcloud", "https://example.com")

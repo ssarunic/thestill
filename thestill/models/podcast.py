@@ -138,7 +138,7 @@ class AlternateEnclosure(BaseModel):
 
 
 PLATFORM_LINK_PLATFORMS = ("apple", "spotify", "youtube")
-PLATFORM_LINK_MATCH_METHODS = ("guid", "audio_url", "title_date")
+PLATFORM_LINK_MATCH_METHODS = ("guid", "audio_url", "title_date", "title_duration", "publisher")
 
 
 class PlatformLink(BaseModel):
@@ -156,7 +156,10 @@ class PlatformLink(BaseModel):
     platform: str  # one of PLATFORM_LINK_PLATFORMS
     url: Optional[str] = None  # None = checked, not found
     external_ref: Optional[str] = None  # Apple trackId, Spotify episode id, YouTube video id
-    match_method: Optional[str] = None  # one of PLATFORM_LINK_MATCH_METHODS, None when not found
+    # One of PLATFORM_LINK_MATCH_METHODS, None when not found. ``publisher`` =
+    # the feed itself carried the link (item link, description, alternate
+    # enclosure, or the import that created the episode).
+    match_method: Optional[str] = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     created_at: Optional[datetime] = None
 
@@ -177,6 +180,11 @@ class PlatformLinkCandidate(BaseModel):
     audio_url: str
     title: str
     pub_date: Optional[datetime] = None
+    duration: Optional[int] = None  # seconds; YouTube matching compares it against the video length
+    # Publisher-provided signals (spec #87 "publisher" method).
+    description_html: str = ""
+    website_url: Optional[str] = None
+    canonical_id: Optional[str] = None
 
 
 class Episode(BaseModel):
@@ -426,6 +434,10 @@ class Podcast(BaseModel):
     # is the only writer.
     apple_url: Optional[str] = None  # Apple Podcasts show page
     youtube_url: Optional[str] = None  # YouTube channel/show page
+    # Spec #87 — never chart-sourced: set only from a Spotify show link the
+    # publisher put in the feed (podcast description / website, or the same
+    # show link in episode descriptions).
+    spotify_url: Optional[str] = None
 
     # THES-145: Feed management (itunes:complete, copyright)
     is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")

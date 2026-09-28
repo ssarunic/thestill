@@ -90,14 +90,14 @@ _MTIME_EPSILON = 1e-6
 _PODCAST_COLS = """id, created_at, rss_url, title, slug, description, image_url, language,
        primary_category_id, secondary_category_id,
        author, explicit, show_type, website_url, is_complete, copyright,
-       apple_url, youtube_url,
+       apple_url, youtube_url, spotify_url,
        last_processed, last_processed_at, etag, last_modified, updated_at"""
 
 # Same projection with a ``p.`` table alias for JOIN queries.
 _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
        p.primary_category_id, p.secondary_category_id,
        p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
-       p.apple_url, p.youtube_url,
+       p.apple_url, p.youtube_url, p.spotify_url,
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
@@ -603,22 +603,26 @@ class PodcastsMixin(CategoryCacheMixin):
         )
 
     def sync_podcast_chart_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        empty = {"apple_url": None, "youtube_url": None, "spotify_url": None}
         if not podcast_id:
-            return {"apple_url": None, "youtube_url": None}
+            return empty
         with self._get_connection() as conn:
             self._backfill_chart_urls(conn, podcast_id)
             row = conn.execute(
-                "SELECT apple_url, youtube_url FROM podcasts WHERE id = %s",
+                "SELECT apple_url, youtube_url, spotify_url FROM podcasts WHERE id = %s",
                 (podcast_id,),
             ).fetchone()
         if row is None:
-            return {"apple_url": None, "youtube_url": None}
-        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"]}
+            return empty
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
-    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
-        """Store a resolver-discovered Apple show URL (spec #87)."""
+    _PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
+
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
+        """Store a resolver-discovered show link on the podcast row (spec #87)."""
+        column = self._PLATFORM_URL_COLUMNS[platform]
         with self._get_connection() as conn:
-            conn.execute("UPDATE podcasts SET apple_url = %s WHERE id = %s", (apple_url, podcast_id))
+            conn.execute(f"UPDATE podcasts SET {column} = %s WHERE id = %s", (url, podcast_id))
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
@@ -1545,6 +1549,7 @@ class PodcastsMixin(CategoryCacheMixin):
                 website_url=row["website_url"],
                 apple_url=row["apple_url"],
                 youtube_url=row["youtube_url"],
+                spotify_url=row["spotify_url"],
                 is_complete=bool(row["is_complete"]) if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=row["last_processed"],
@@ -1855,6 +1860,7 @@ class PodcastsMixin(CategoryCacheMixin):
             "copyright": row["copyright"],
             "apple_url": row["apple_url"],
             "youtube_url": row["youtube_url"],
+            "spotify_url": row["spotify_url"],
         }
 
     def list_podcast_rows(

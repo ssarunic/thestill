@@ -68,6 +68,9 @@ def _iso_to_utc(value: Optional[str]) -> Optional[datetime]:
 
 logger = get_logger(__name__)
 
+# Spec #87 — podcast-row column per platform for resolver-discovered show links.
+_PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
+
 # Float round-trip tolerance for SQLite REAL mtime comparison: ``stat().st_mtime``
 # is float64 but SQLite REAL → Python float can drift below microsecond precision.
 _MTIME_EPSILON = 1e-6
@@ -603,6 +606,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     rss_url TEXT NOT NULL UNIQUE,
                     apple_url TEXT NULL,
                     youtube_url TEXT NULL,
+                    spotify_url TEXT NULL,
                     apple_track_id TEXT NULL,
                     image_url TEXT NULL,
                     category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
@@ -1736,6 +1740,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             conn.execute("ALTER TABLE podcasts ADD COLUMN apple_url TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN youtube_url TEXT NULL")
             self._backfill_chart_urls(conn)
+        # Spec #87 — publisher-provided Spotify show link (never chart-sourced).
+        if "spotify_url" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN spotify_url TEXT NULL")
 
         # spec #69 Phase 1 — performance indices (SQLite parity with
         # migration 0007 where the syntax ports; the pg_trgm / jsonb-GIN
@@ -2431,7 +2438,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
                 UNIQUE(episode_id, platform),
                 CHECK (platform IN ('apple', 'spotify', 'youtube')),
-                CHECK (match_method IS NULL OR match_method IN ('guid', 'audio_url', 'title_date'))
+                CHECK (match_method IS NULL OR match_method IN ('guid', 'audio_url', 'title_date', 'title_duration', 'publisher'))
             );
 
             -- ========================================================================
@@ -2791,7 +2798,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -2813,7 +2820,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -2834,7 +2841,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE id = ?
@@ -2855,7 +2862,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE rss_url = ?
@@ -2879,7 +2886,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 ORDER BY created_at DESC
@@ -2904,7 +2911,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 SELECT id, created_at, rss_url, title, slug, description, image_url, language,
                        primary_category_id, secondary_category_id,
                        author, explicit, show_type, website_url, is_complete, copyright,
-                       apple_url, youtube_url,
+                       apple_url, youtube_url, spotify_url,
                        last_processed, last_processed_at, etag, last_modified, updated_at
                 FROM podcasts
                 WHERE slug = ?
@@ -5005,6 +5012,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 website_url=row["website_url"],
                 apple_url=row["apple_url"],
                 youtube_url=row["youtube_url"],
+                spotify_url=row["spotify_url"],
                 is_complete=row["is_complete"] == 1 if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=datetime.fromisoformat(row["last_processed"]) if row["last_processed"] else None,
@@ -5141,17 +5149,18 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         )
 
     def sync_podcast_chart_urls(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        empty = {"apple_url": None, "youtube_url": None, "spotify_url": None}
         if not podcast_id:
-            return {"apple_url": None, "youtube_url": None}
+            return empty
         with self._get_connection() as conn:
             self._backfill_chart_urls(conn, podcast_id)
             row = conn.execute(
-                "SELECT apple_url, youtube_url FROM podcasts WHERE id = ?",
+                "SELECT apple_url, youtube_url, spotify_url FROM podcasts WHERE id = ?",
                 (podcast_id,),
             ).fetchone()
         if row is None:
-            return {"apple_url": None, "youtube_url": None}
-        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"]}
+            return empty
+        return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
@@ -5544,13 +5553,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             cursor = conn.execute(
                 f"""
                 WITH pool AS (
-                    SELECT id, external_id, audio_url, title, pub_date, created_at
+                    SELECT id, external_id, audio_url, title, pub_date, created_at,
+                           duration, description_html, website_url, canonical_id
                     FROM episodes
                     WHERE podcast_id = ?
                     ORDER BY pub_date DESC NULLS LAST, created_at DESC
                     LIMIT ?
                 )
-                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date
+                SELECT p.id, p.external_id, p.audio_url, p.title, p.pub_date,
+                       p.duration, p.description_html, p.website_url, p.canonical_id
                 FROM pool p
                 LEFT JOIN episode_platform_links l ON l.episode_id = p.id AND l.platform = ?
                 WHERE l.id IS NULL OR {marker_filter}
@@ -5565,6 +5576,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     audio_url=row["audio_url"] or "",
                     title=row["title"] or "",
                     pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])) if row["pub_date"] else None,
+                    duration=row["duration"],
+                    description_html=row["description_html"] or "",
+                    website_url=row["website_url"],
+                    canonical_id=row["canonical_id"],
                 )
                 for row in cursor.fetchall()
             ]
@@ -5600,9 +5615,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
         return len(links)
 
-    def set_podcast_apple_url(self, podcast_id: str, apple_url: str) -> None:
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
+        column = _PLATFORM_URL_COLUMNS[platform]  # KeyError on an unknown platform is the right failure
         with self._get_connection() as conn:
-            conn.execute("UPDATE podcasts SET apple_url = ? WHERE id = ?", (apple_url, podcast_id))
+            conn.execute(f"UPDATE podcasts SET {column} = ? WHERE id = ?", (url, podcast_id))
 
     def _row_to_platform_link(self, row: sqlite3.Row) -> PlatformLink:
         return PlatformLink(
@@ -5637,7 +5653,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        p.image_url, p.language,
                        p.primary_category_id, p.secondary_category_id,
                        p.author, p.explicit, p.show_type, p.website_url, p.is_complete,
-                       p.copyright, p.apple_url, p.youtube_url,
+                       p.copyright, p.apple_url, p.youtube_url, p.spotify_url,
                        p.last_processed, p.last_processed_at, p.etag,
                        p.last_modified, p.updated_at
                 FROM podcasts p
@@ -5869,7 +5885,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
            p.primary_category_id, p.secondary_category_id,
            p.last_processed, p.last_processed_at,
            p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
-           p.apple_url, p.youtube_url"""
+           p.apple_url, p.youtube_url, p.spotify_url"""
 
     _EPISODE_COUNTS_SELECT = """
         (SELECT COUNT(*) FROM episodes e WHERE e.podcast_id = p.id) AS episodes_count,
@@ -5981,6 +5997,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "copyright": row["copyright"],
             "apple_url": row["apple_url"],
             "youtube_url": row["youtube_url"],
+            "spotify_url": row["spotify_url"],
         }
 
     def list_podcast_rows(
