@@ -179,3 +179,26 @@ describe('SearchResults — quote rows play inline (spec #28 §4.2)', () => {
     )
   })
 })
+
+describe('SearchResults — typing is debounced (spec #89)', () => {
+  beforeEach(() => {
+    mockCorpusSearch.mockReset()
+    mockQuickSearch.mockReset()
+    mockCorpusSearch.mockResolvedValue(corpusResponse([]))
+    mockQuickSearch.mockResolvedValue(emptyQuick())
+  })
+
+  it('runs one corpus search for a typed word, not one per keystroke', async () => {
+    renderPage('')
+    const input = screen.getByPlaceholderText('Search the corpus…')
+    let typed = ''
+    for (const ch of 'legora') {
+      typed += ch
+      fireEvent.change(input, { target: { value: typed } })
+    }
+    await waitFor(() => expect(mockCorpusSearch).toHaveBeenCalled())
+    await new Promise((r) => setTimeout(r, 400))
+    const queries = mockCorpusSearch.mock.calls.map((c) => c[0])
+    expect(queries).toEqual(['legora'])
+  })
+})

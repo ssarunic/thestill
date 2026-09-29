@@ -25,6 +25,7 @@ import type {
   SearchResult,
 } from '../api/types'
 import { parseQuery } from '../utils/searchOperators'
+import { useDebouncedSearchParam } from '../hooks/useDebouncedSearchParam'
 import { entityHref, entityStyle } from '../utils/entityColors'
 import { usePlayer } from '../contexts/PlayerContext'
 
@@ -39,21 +40,28 @@ const TABS: Array<{ key: Tab; label: string }> = [
 export default function SearchResults() {
   // Restore scroll position on Back from a result's detail page.
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialQuery = searchParams.get('q') ?? ''
   const initialTab = (searchParams.get('tab') as Tab) ?? 'all'
 
-  const [query, setQuery] = useState(initialQuery)
+  // ``query`` is what the user is typing; ``settledQuery`` (from ?q=) is what
+  // the searches key on. Debounced so typing "legora" runs one search, not
+  // six — each hybrid search embeds, and with spec #89 reranks, on the server.
+  const { value: query, debouncedValue: settledQuery, setValue: setQuery } = useDebouncedSearchParam('q', 300)
   const [tab, setTab] = useState<Tab>(initialTab)
 
-  const parsed = useMemo(() => parseQuery(query), [query])
+  const parsed = useMemo(() => parseQuery(settledQuery), [settledQuery])
 
-  // Keep URL in sync so the page is bookmarkable / shareable.
+  // Keep ?tab= in sync; ?q= is owned by useDebouncedSearchParam.
   useEffect(() => {
-    const next = new URLSearchParams()
-    if (query) next.set('q', query)
-    if (tab !== 'all') next.set('tab', tab)
-    setSearchParams(next, { replace: true })
-  }, [query, tab, setSearchParams])
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (tab !== 'all') next.set('tab', tab)
+        else next.delete('tab')
+        return next
+      },
+      { replace: true },
+    )
+  }, [tab, setSearchParams])
 
   const corpusOptions = useMemo(
     () => ({
