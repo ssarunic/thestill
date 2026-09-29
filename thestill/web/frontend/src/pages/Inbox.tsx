@@ -14,7 +14,7 @@ import { deriveProgress } from '../utils/inbox'
 
 // Compact, single-token timestamp: today → "12:50", this year → "8 Aug",
 // older → "8 Aug 24". Never wraps, so the meta row stays one line on phones.
-function formatDelivered(iso: string): string {
+function formatCompact(iso: string): string {
   const date = new Date(iso)
   const now = new Date()
   if (date.toDateString() === now.toDateString()) {
@@ -24,6 +24,16 @@ function formatDelivered(iso: string): string {
     day: 'numeric',
     month: 'short',
     ...(date.getFullYear() === now.getFullYear() ? {} : { year: '2-digit' }),
+  })
+}
+
+function formatFull(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   })
 }
 
@@ -58,6 +68,10 @@ function InboxRow({ item }: { item: InboxItem }) {
   const showProgress = progress.kind !== 'ready'
   const isUnread = entry.state === 'unread'
   const isDismissed = entry.state === 'dismissed'
+  // The row shows when the episode was published (what the content's age
+  // means to the reader); the list stays sorted by delivery, and the delivery
+  // time lives in the tooltip. Feeds without a pub date fall back to delivery.
+  const shownAt = episode.pub_date ?? entry.delivered_at
   return (
     <ListRow
       align="start"
@@ -77,10 +91,11 @@ function InboxRow({ item }: { item: InboxItem }) {
             <span className="text-xs text-gray-400 italic flex-shrink-0">imported</span>
           )}
           <time
-            dateTime={entry.delivered_at}
+            dateTime={shownAt}
+            title={`Delivered ${formatFull(entry.delivered_at)}`}
             className="text-xs text-gray-400 whitespace-nowrap flex-shrink-0"
           >
-            {formatDelivered(entry.delivered_at)}
+            {formatCompact(shownAt)}
           </time>
           <span className="sr-only">{entry.state}</span>
         </div>
