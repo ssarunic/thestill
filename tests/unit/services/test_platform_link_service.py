@@ -31,6 +31,7 @@ class FakeRepo:
         self.candidates = candidates
         self.apple_url = apple_url
         self.youtube_url = youtube_url
+        self.spotify_url = None
         self.candidate_calls: List[Dict] = []
         self.upserts: List[List[PlatformLink]] = []
         self.set_apple_urls: List[str] = []
@@ -50,7 +51,7 @@ class FakeRepo:
         return self.get_podcast_platform_urls(podcast_id)
 
     def get_podcast_platform_urls(self, podcast_id):
-        return {"apple_url": self.apple_url, "youtube_url": self.youtube_url, "spotify_url": None}
+        return {"apple_url": self.apple_url, "youtube_url": self.youtube_url, "spotify_url": self.spotify_url}
 
     def set_podcast_platform_url(self, podcast_id, platform, url):
         if platform == "apple":
@@ -89,8 +90,17 @@ def _episode_entry(track_id: int, guid: str) -> dict:
     }
 
 
-def _service(repo, lookup=None, search=None, videos=None, video_info=None, spotify_info=None, recheck_hours=24):
-    calls = {"lookup": [], "search": [], "videos": [], "video_info": [], "spotify_info": []}
+def _service(
+    repo,
+    lookup=None,
+    search=None,
+    videos=None,
+    video_info=None,
+    spotify_info=None,
+    spotify_latest=None,
+    recheck_hours=24,
+):
+    calls = {"lookup": [], "search": [], "videos": [], "video_info": [], "spotify_info": [], "spotify_latest": []}
 
     def _lookup(params):
         calls["lookup"].append(params)
@@ -125,6 +135,12 @@ def _service(repo, lookup=None, search=None, videos=None, video_info=None, spoti
             raise RuntimeError(f"no fake Spotify page for {episode_id}")
         return meta
 
+    def _spotify_latest(show_id):
+        calls["spotify_latest"].append(show_id)
+        if isinstance(spotify_latest, Exception):
+            raise spotify_latest
+        return spotify_latest
+
     svc = PlatformLinkService(
         repo,
         recheck_hours=recheck_hours,
@@ -133,6 +149,7 @@ def _service(repo, lookup=None, search=None, videos=None, video_info=None, spoti
         list_videos=_videos,
         fetch_video=_video_info,
         fetch_spotify_episode=_spotify_info,
+        fetch_spotify_latest=_spotify_latest,
         clock=lambda: NOW,
     )
     return svc, calls
@@ -569,3 +586,68 @@ class TestDryRunReadsOnly:
         assert repo.chart_syncs == 0
         svc.link_podcast(_podcast())
         assert repo.chart_syncs == 1
+
+
+class TestSpotifyLatestProbe:
+    """Spec #87 Phase 3 — with a show id, the embed page names the newest episode."""
+
+    SHOW = "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL"
+
+    def _latest(self, title, released=NOW, duration=13410):
+        from thestill.core.spotify_show_probe import SpotifyLatestEpisode
+
+        return SpotifyLatestEpisode(
+            episode_id="082a1V6nazH9ZZqskV1vfz", title=title, released=released, duration=duration
+        )
+
+    def test_links_the_newest_candidate_the_probe_describes(self):
+        repo = FakeRepo([])
+        repo.spotify_url = self.SHOW
+        repo.other_candidates["spotify"] = [
+            _ocand("new", title="#502 – Psychiatry, Insane Asylums", duration=None),
+            _ocand("old", title="#501 – DHH", pub_date=NOW - timedelta(days=20), duration=19317),
+        ]
+        svc, calls = _service(repo, spotify_latest=self._latest("#502 – Psychiatry, Insane Asylums"))
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+
+        assert calls["spotify_latest"] == ["2MAi0BvDc6GTFvKFPXnkCL"]
+        assert (spotify.linked, spotify.not_found, spotify.skipped) == (1, 1, None)
+        assert spotify.matched_by == {"title_date": 1}
+        rows = _rows(repo, "spotify")
+        assert rows["new"].url == "https://open.spotify.com/episode/082a1V6nazH9ZZqskV1vfz"
+        assert rows["new"].match_method == "title_date" and rows["old"].url is None
+
+    def test_no_show_id_means_no_probe(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [_ocand("x")]
+        svc, calls = _service(repo, spotify_latest=self._latest("x"))
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+        assert calls["spotify_latest"] == [] and spotify.skipped == "no_show_id" and spotify.not_found == 1
+
+    def test_probe_failure_writes_nothing_for_the_unresolved(self):
+        repo = FakeRepo([])
+        repo.spotify_url = self.SHOW
+        repo.other_candidates["spotify"] = [_ocand("x")]
+        svc, _ = _service(repo, spotify_latest=RuntimeError("HTTP 503"))
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+        assert (spotify.skipped, spotify.not_found) == ("lookup_failed", 0)
+        assert _rows(repo, "spotify") == {}
+
+    def test_probe_describing_none_of_the_candidates_marks_them_not_found(self):
+        repo = FakeRepo([])
+        repo.spotify_url = self.SHOW
+        repo.other_candidates["spotify"] = [_ocand("x", title="Something Else")]
+        svc, _ = _service(repo, spotify_latest=self._latest("A Trailer", duration=90))
+        spotify = svc.link_podcast(_podcast()).outcomes[1]
+        assert (spotify.linked, spotify.not_found, spotify.skipped) == (0, 1, None)
+
+    def test_publisher_stated_show_link_is_used_the_same_pass(self):
+        repo = FakeRepo([])
+        repo.other_candidates["spotify"] = [_ocand("new", title="Ep 9: Hello World")]
+        svc, calls = _service(repo, spotify_latest=self._latest("Hello World | Prof G Markets", duration=None))
+        podcast = _podcast()
+        podcast.description = f"Listen on {self.SHOW}"
+        spotify = svc.link_podcast(podcast).outcomes[1]
+        assert repo.set_platform_urls == [("spotify", self.SHOW)]
+        assert calls["spotify_latest"] == ["2MAi0BvDc6GTFvKFPXnkCL"]
+        assert spotify.linked == 1  # core titles equal once "Ep 9" and the show name are stripped

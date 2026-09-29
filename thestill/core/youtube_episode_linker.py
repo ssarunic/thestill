@@ -18,7 +18,10 @@ Match feed episodes to a show's YouTube channel uploads (spec #87, Phase 2).
 YouTube has no GUID and channels post clips and shorts beside full episodes,
 so this matcher is deliberately stricter than the Apple one:
 
-- ``title_date``: normalised titles equal and the upload date within
+- ``title_date``: normalised titles equal — or equal once each side's own
+  decoration is removed (the show's name, an ``#NNN`` / ``Ep NNN`` tag:
+  "#502 – Psychiatry, Insane Asylums" and "Psychiatry, Insane Asylums | Lex
+  Fridman Podcast #502" share a core) — and the upload date within
   tolerance of ``pub_date``; when both durations are known they must also
   agree within :func:`duration_tolerance`.
 - ``title_duration``: the date within tolerance, the durations known and
@@ -78,6 +81,9 @@ _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
 # "#502", "#2519" — the episode number publishers put in both titles.
 _EPISODE_NUMBER_RE = re.compile(r"#(\d{1,6})(?!\d)")
+# The decoration publishers hang on a title: "#502", "Ep 12", "Episode 12.",
+# "E12" at a word boundary. Stripped, with the show name, for the core title.
+_EPISODE_TAG_RE = re.compile(r"(?:#|\b(?:ep|episode|e)\.?\s*)\d{1,6}\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -177,20 +183,23 @@ def match_candidates(
     entries: Sequence[YouTubeVideoEntry],
     *,
     now: Optional[datetime] = None,
+    show_name: Optional[str] = None,
 ) -> List[YouTubeEpisodeMatch]:
-    """``now`` anchors the age-dependent date tolerance (defaults to the wall clock)."""
+    """``now`` anchors the age-dependent date tolerance (defaults to the wall
+    clock); ``show_name`` is stripped from both sides for the core-title test."""
     at = now or datetime.now(timezone.utc)
-    normalized: List[_Entry] = [_Entry(e, normalize_title(e.title), episode_number(e.title)) for e in entries]
-    # Equal titles for every candidate first, contained titles / shared
-    # numbers only for what is left, so a looser neighbour cannot consume
-    # the upload that is another episode's exact match.
+    normalized: List[_Entry] = [_entry_for(e, show_name) for e in entries]
+    # Equal titles for every candidate first (verbatim before core-equal),
+    # contained titles / shared numbers only for what is left, so a looser
+    # neighbour cannot consume the upload that is another episode's exact
+    # match.
     used: set[str] = set()
     found_by_id: Dict[str, Tuple[YouTubeVideoEntry, str]] = {}
-    for allowed in (("title_date",), ("title_duration",)):
+    for allowed in (("title_exact",), ("title_core",), ("title_duration",)):
         for candidate in candidates:
             if candidate.episode_id in found_by_id:
                 continue
-            found = _match_one(candidate, normalized, used, at, allowed)
+            found = _match_one(candidate, normalized, used, at, allowed, show_name)
             if found is None:
                 continue
             used.add(found[0].video_id)
@@ -219,6 +228,7 @@ def match_rule(
     released: Optional[datetime],
     duration: Optional[int],
     now: Optional[datetime] = None,
+    show_name: Optional[str] = None,
 ) -> Optional[str]:
     """
     Which rule (``title_date`` / ``title_duration``), if any, says the item
@@ -232,8 +242,8 @@ def match_rule(
     if candidate.pub_date is None or released is None:
         return None
     at = now or datetime.now(timezone.utc)
-    item = _Entry(YouTubeVideoEntry("", title, released, duration), normalize_title(title), episode_number(title))
-    found = _match_one(candidate, [item], set(), at, ("title_date", "title_duration"))
+    item = _entry_for(YouTubeVideoEntry("", title, released, duration), show_name)
+    found = _match_one(candidate, [item], set(), at, ("title_exact", "title_core", "title_duration"), show_name)
     return found[1] if found else None
 
 
@@ -241,7 +251,12 @@ def match_rule(
 class _Entry:
     entry: YouTubeVideoEntry
     title: str  # normalised
+    core: str  # normalised, show name and episode tag removed
     number: Optional[str]
+
+
+def _entry_for(entry: YouTubeVideoEntry, show_name: Optional[str]) -> _Entry:
+    return _Entry(entry, normalize_title(entry.title), core_title(entry.title, show_name), episode_number(entry.title))
 
 
 def claim_corroborated(
@@ -273,11 +288,13 @@ def _match_one(
     entries: Sequence[_Entry],
     used: set[str],
     now: datetime,
-    allowed: Tuple[str, ...],
+    allowed: Tuple[str, ...],  # stages: 'title_exact' | 'title_core' (both reported as title_date) | 'title_duration'
+    show_name: Optional[str] = None,
 ) -> Optional[Tuple[YouTubeVideoEntry, str]]:
     title = normalize_title(candidate.title or "")
     if not title or candidate.pub_date is None:
         return None
+    core = core_title(candidate.title or "", show_name)
     number = episode_number(candidate.title or "")
     tolerance = date_tolerance(candidate.pub_date, now)
     qualifying: List[Tuple[YouTubeVideoEntry, str]] = []
@@ -288,10 +305,11 @@ def _match_one(
         if not _dates_close(entry.uploaded, candidate.pub_date, tolerance):
             continue
         durations_agree = _durations_agree(entry.duration, candidate.duration)
-        if item.title == title:
+        exact = item.title == title
+        if exact or (core and item.core == core):
             if durations_agree is False:
                 continue  # same title, clearly different length: a clip or a re-cut
-            if "title_date" in allowed:
+            if ("title_exact" in allowed and exact) or ("title_core" in allowed and not exact):
                 qualifying.append((entry, "title_date"))
         elif (
             "title_duration" in allowed
@@ -346,6 +364,25 @@ def _as_utc(value: datetime) -> datetime:
 def normalize_title(title: str) -> str:
     folded = _PUNCT_RE.sub(" ", title.casefold())
     return _WS_RE.sub(" ", folded).strip()
+
+
+def core_title(title: str, show_name: Optional[str] = None) -> str:
+    """
+    The title with each side's own decoration removed: ``#NNN`` / ``Ep NNN``
+    tags and the show's name ("… | Lex Fridman Podcast #502"), then
+    normalised. Two titles with the same core describe the same episode
+    even when a feed prefixes the number and YouTube suffixes the show.
+    Empty when nothing but decoration was there, and an empty core never
+    matches.
+    """
+    stripped = _EPISODE_TAG_RE.sub(" ", title or "")
+    core = normalize_title(stripped)
+    show = normalize_title(show_name or "")
+    # "The Joe Rogan Experience" is suffixed as "Joe Rogan Experience".
+    variants = [v for v in (show, show[4:] if show.startswith("the ") else "") if len(v) >= 3]
+    for variant in variants:
+        core = re.sub(rf"(?<![a-z0-9]){re.escape(variant)}(?![a-z0-9])", " ", core)
+    return _WS_RE.sub(" ", core).strip()
 
 
 def _parse_uploaded(timestamp: Any, upload_date: Any) -> Optional[datetime]:
