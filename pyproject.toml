@@ -139,7 +139,18 @@ local-transcription = [
     # Parakeet TDT runs through NeMo's ASR API so the hypothesis carries
     # native segment- and word-level timestamps. The HF transformers
     # path drops them (spec #18 Parakeet word-timestamp fix).
-    "nemo_toolkit[asr]>=2.0.0",
+    #
+    # Floor at 3.0.0: NeMo 2.x pins transformers~=4.53/4.57, which keeps
+    # the transcription fork on transformers 4.x with four open RCE
+    # advisories (GHSA-69w3-r845-3855, GHSA-29pf-2h5f-8g72,
+    # GHSA-fgcw-684q-jj6r, GHSA-xrqw-3rrv-vx5w). 3.0.0 unpins it.
+    # Every NeMo release through 3.0.0 still pins lightning<=2.4.0
+    # (GHSA-qqmf-gpg7-g8gw stays open); a [tool.uv] override to
+    # lightning 2.6.6 breaks NeMo's OneLoggerPTLTrainer subclass at
+    # import time (verified 2026-09-29), so do not add one. A bare
+    # ``uv lock --upgrade-package lightning`` resolves by downgrading
+    # nemo_toolkit to 2.0.0 (PR #256 vs #258); this floor forbids that.
+    "nemo_toolkit[asr]>=3.0.0",
 ]
 search = [
     # Spec #66 — the in-process search stack on its own, for deployments
