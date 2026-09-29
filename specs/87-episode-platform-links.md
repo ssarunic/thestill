@@ -278,6 +278,16 @@ the paired titles and durations found no wrong link; the rejected
 description claims inspected were a bite-size cut, a trailer and a
 guest's own video.
 
+**2026-09-29, Phase 3a/3b rules, forced pass over the same data:** Apple
+4560, YouTube 953 (688 `title_date`, 168 `title_duration`, 97
+`publisher`), Spotify 4. The YouTube total barely moves because the
+core-title rule mostly upgrades matches that already landed as
+`title_duration`, but shows that prefix the number and suffix the show
+name change a lot: Joe Rogan 47 of 47 (was 33), Huberman 25 of 32 (was
+17), Lex Fridman 12 of 17 (was 5). Spotify waits on 3c: no followed show
+has a Spotify id on its row yet, so the probe never ran; it is verified
+live on Lex's show.
+
 ## Open questions
 
 - Episodes older than the newest 200 stay unlinked on Apple. The import
