@@ -70,6 +70,7 @@ logger = get_logger(__name__)
 
 # Spec #87 — podcast-row column per platform for resolver-discovered show links.
 _PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
+PLATFORM_URL_SOURCES = ("chart", "publisher", "resolver", "curated")
 
 # Float round-trip tolerance for SQLite REAL mtime comparison: ``stat().st_mtime``
 # is float64 but SQLite REAL → Python float can drift below microsecond precision.
@@ -606,7 +607,6 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     rss_url TEXT NOT NULL UNIQUE,
                     apple_url TEXT NULL,
                     youtube_url TEXT NULL,
-                    spotify_url TEXT NULL,
                     apple_track_id TEXT NULL,
                     image_url TEXT NULL,
                     category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
@@ -1735,14 +1735,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         # them on every viewport. Nullable and feed-independent: existing
         # rows are backfilled from ``top_podcasts`` on ``rss_url`` right
         # here; new chart imports go through ``sync_podcast_chart_urls``.
-        if "apple_url" not in podcast_columns_now:
+        chart_columns_added = "apple_url" not in podcast_columns_now
+        if chart_columns_added:
             logger.info("Migrating database: adding chart store-link columns to podcasts")
             conn.execute("ALTER TABLE podcasts ADD COLUMN apple_url TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN youtube_url TEXT NULL")
-            self._backfill_chart_urls(conn)
         # Spec #87 — publisher-provided Spotify show link (never chart-sourced).
         if "spotify_url" not in podcast_columns_now:
             conn.execute("ALTER TABLE podcasts ADD COLUMN spotify_url TEXT NULL")
+        # Spec #87 Phase 3c — source of each show link, added BEFORE the chart
+        # backfill below (which reads them). Existing links are 'chart' when
+        # they equal the chart row's, else 'publisher' (the only other writer
+        # before sources existed).
+        if "youtube_url_source" not in podcast_columns_now:
+            for column in ("apple_url_source", "youtube_url_source", "spotify_url_source"):
+                conn.execute(f"ALTER TABLE podcasts ADD COLUMN {column} TEXT NULL")
+            for platform in ("apple", "youtube"):
+                conn.execute(
+                    f"""
+                    UPDATE podcasts SET {platform}_url_source = CASE
+                        WHEN {platform}_url IS NULL THEN NULL
+                        WHEN {platform}_url = (SELECT t.{platform}_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url)
+                            THEN 'chart'
+                        ELSE 'publisher' END
+                    """
+                )
+            conn.execute("UPDATE podcasts SET spotify_url_source = 'publisher' WHERE spotify_url IS NOT NULL")
+        if chart_columns_added:
+            self._backfill_chart_urls(conn)
 
         # spec #69 Phase 1 — performance indices (SQLite parity with
         # migration 0007 where the syntax ports; the pg_trgm / jsonb-GIN
@@ -2182,6 +2202,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 rss_url TEXT NOT NULL UNIQUE,
                 apple_url TEXT NULL,
                 youtube_url TEXT NULL,
+                spotify_url TEXT NULL,
+                -- Spec #87 Phase 3c: where each show link came from
+                -- ('chart' | 'publisher' | 'resolver' | 'curated'); a curated
+                -- value is never overwritten by a chart sync or a resolver.
+                apple_url_source TEXT NULL,
+                youtube_url_source TEXT NULL,
+                spotify_url_source TEXT NULL,
                 apple_track_id TEXT NULL,
                 image_url TEXT NULL,
                 category_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
@@ -2238,6 +2265,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 -- (matched on rss_url); never parsed from the feed.
                 apple_url TEXT NULL,
                 youtube_url TEXT NULL,
+                spotify_url TEXT NULL,
+                -- Spec #87 Phase 3c: where each show link came from
+                -- ('chart' | 'publisher' | 'resolver' | 'curated'); a curated
+                -- value is never overwritten by a chart sync or a resolver.
+                apple_url_source TEXT NULL,
+                youtube_url_source TEXT NULL,
+                spotify_url_source TEXT NULL,
                 -- THES-145: Feed management
                 is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
                 copyright TEXT NULL,
@@ -5136,13 +5170,25 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if podcast_id is not None:
             scope = " AND podcasts.id = ?"
             params = (podcast_id,)
+        # Spec #87 Phase 3c: a curated link (and its source) is left alone;
+        # otherwise the chart wins when it has a value and stamps 'chart'.
         conn.execute(
             f"""
             UPDATE podcasts
-               SET apple_url = COALESCE(
-                       (SELECT t.apple_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), apple_url),
-                   youtube_url = COALESCE(
-                       (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), youtube_url)
+               SET apple_url = CASE WHEN apple_url_source = 'curated' THEN apple_url ELSE COALESCE(
+                       (SELECT t.apple_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), apple_url) END,
+                   apple_url_source = CASE
+                       WHEN apple_url_source = 'curated' THEN 'curated'
+                       WHEN (SELECT t.apple_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url) IS NOT NULL
+                           THEN 'chart'
+                       ELSE apple_url_source END,
+                   youtube_url = CASE WHEN youtube_url_source = 'curated' THEN youtube_url ELSE COALESCE(
+                       (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), youtube_url) END,
+                   youtube_url_source = CASE
+                       WHEN youtube_url_source = 'curated' THEN 'curated'
+                       WHEN (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url) IS NOT NULL
+                           THEN 'chart'
+                       ELSE youtube_url_source END
              WHERE EXISTS (SELECT 1 FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url){scope}
             """,
             params,
@@ -5627,10 +5673,36 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             return empty
         return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
-    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
         column = _PLATFORM_URL_COLUMNS[platform]  # KeyError on an unknown platform is the right failure
+        if source not in PLATFORM_URL_SOURCES:
+            raise ValueError(f"unknown show-link source: {source!r}")
         with self._get_connection() as conn:
-            conn.execute(f"UPDATE podcasts SET {column} = ? WHERE id = ?", (url, podcast_id))
+            cursor = conn.execute(
+                f"""
+                UPDATE podcasts SET {column} = ?, {column}_source = ?
+                 WHERE id = ? AND ({column}_source IS NULL OR {column}_source <> 'curated' OR ? = 'curated')
+                """,
+                (url, source if url else None, podcast_id, source),
+            )
+            return cursor.rowcount > 0
+
+    def get_podcast_platform_url_sources(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        empty = {"apple": None, "youtube": None, "spotify": None}
+        if not podcast_id:
+            return empty
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT apple_url_source, youtube_url_source, spotify_url_source FROM podcasts WHERE id = ?",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return empty
+        return {
+            "apple": row["apple_url_source"],
+            "youtube": row["youtube_url_source"],
+            "spotify": row["spotify_url_source"],
+        }
 
     def _row_to_platform_link(self, row: sqlite3.Row) -> PlatformLink:
         return PlatformLink(

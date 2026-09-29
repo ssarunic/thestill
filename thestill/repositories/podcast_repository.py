@@ -396,12 +396,21 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
-    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
         """
-        Store a resolver-discovered show link on the podcast row (spec #87):
+        Store a show link and where it came from (spec #87 Phase 3c):
         ``apple`` → ``apple_url``, ``youtube`` → ``youtube_url``,
-        ``spotify`` → ``spotify_url``. Unknown platforms raise.
+        ``spotify`` → ``spotify_url``; ``source`` is one of ``chart``,
+        ``publisher``, ``resolver``, ``curated``. A value whose stored source
+        is ``curated`` only yields to another ``curated`` write (``None``
+        clears it). Returns whether the row was written. Unknown platforms
+        or sources raise.
         """
+        pass
+
+    @abstractmethod
+    def get_podcast_platform_url_sources(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        """Read-only ``{"apple", "youtube", "spotify"}`` → source (or None) for one podcast (spec #87 Phase 3c)."""
         pass
 
     # ------------------------------------------------------------------

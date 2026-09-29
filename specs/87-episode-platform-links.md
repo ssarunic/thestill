@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule + Spotify latest-episode probe implemented, curation + verified channel discovery open
+> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery and curated show links implemented; edit field + verified channel discovery open
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -131,10 +131,32 @@ claim that fails, or cannot be fetched, becomes a not-found marker and is
 retried after the recheck interval.
 
 Per show: a Spotify show link or YouTube channel link in the podcast's own
-description / website is taken when unique; the same link in at least
-three episode descriptions is taken when no other competes. A discovered
-YouTube channel fills `youtube_url`, so the podcast page and the channel
-scan below share it.
+description / website URL is taken when unique; then (Phase 3c) the
+publisher's **website page** — its "listen on" buttons, fetched once per
+pass through the SSRF guard and only while a platform is still missing —
+on the same terms; then the same link in at least three episode
+descriptions when no other competes. A source that names two different
+shows or channels (a network site listing all its shows) is left for a
+human, and the channels hosting platforms stamp on every site (Anchor
+pages link Spotify's own "for creators" channel) never count. Measured on
+the 40 most-followed shows with a website that lacked a link: the scan
+fills the Spotify id for 18 of 40 and the YouTube channel for 5 of the 17
+without one; 6 sites could not be fetched (bot walls, dead domains, a
+bare hostname stored as the URL). A discovered link fills `spotify_url` /
+`youtube_url` with source `publisher`, so the podcast page, the probe and
+the channel scan share it.
+
+### Where a show link came from (Phase 3c)
+
+`podcasts.{apple,youtube,spotify}_url_source` is `chart`, `publisher`,
+`resolver` or `curated` (migration 0013; existing links backfilled as
+`chart` when they equal the chart row, else `publisher`). The chart sync
+stamps `chart` and the resolvers stamp their source, but a `curated` value
+only yields to another curated write: `thestill set-show-link --podcast-id
+X --platform spotify --url …` (or `--clear`). That is the homework surface
+for now — an edit field on the podcast page is the remaining 3c item — and
+it is what makes Spotify's probe reachable for shows whose feed and site
+say nothing.
 
 ### Spotify
 
@@ -228,7 +250,8 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | — | Spotify Web API resolver | Dropped: developer program closed to small apps (see "Spotify") |
 | 3a | Core-title rule (show name + episode tag stripped) in the YouTube matcher and the single-item rule used for claims and the probe | ✅ 2026-09-29 |
 | 3b | Spotify latest-episode probe from the show's embed page, driven by `podcasts.spotify_url` | ✅ 2026-09-29 |
-| 3c | Curated show links: a `source` beside `youtube_url` / `spotify_url` (`chart`, `publisher`, `resolver`, `curated`) so a curated value is never overwritten by a chart scrape or a resolver guess; an edit field on the podcast page; ordered by follows, not chart rank (the 39 followed shows without a channel first) | Open |
+| 3c | Show-link provenance (`chart` / `publisher` / `resolver` / `curated`) with the curated guard on both backends, website-scan discovery with the uniqueness and generic-channel guards, `thestill set-show-link` | ✅ 2026-09-29 |
+| 3c′ | An edit field on the podcast page for the curated links; the manual pass ordered by follows, not chart rank (followed shows without a channel or Spotify id first) | Open |
 | 3d | Verified YouTube channel discovery: search by show title, accept a channel only when several of the show's episodes match its uploads on core title and duration — the namesake guard the linker already uses. The chart already carries a channel for 5254 of 7702 charted shows; discovery is for the rest and for off-chart shows | Open |
 | 3e | Feed the #62 playback rendition from `youtube` links once they have been eyeballed in production | Open |
 

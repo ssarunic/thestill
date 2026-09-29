@@ -282,13 +282,45 @@ class TestShowUrl:
     def test_set_podcast_apple_url_is_read_back_by_chart_sync(self, h):
         pid = h.make_podcast(_podcast([]))
         assert h.repo.sync_podcast_chart_urls(pid)["apple_url"] is None
-        h.repo.set_podcast_platform_url(pid, "apple", "https://podcasts.apple.com/us/podcast/x/id123")
-        h.repo.set_podcast_platform_url(pid, "spotify", "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL")
+        assert h.repo.set_podcast_platform_url(
+            pid, "apple", "https://podcasts.apple.com/us/podcast/x/id123", source="resolver"
+        )
+        assert h.repo.set_podcast_platform_url(
+            pid, "spotify", "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL", source="publisher"
+        )
         urls = h.repo.sync_podcast_chart_urls(pid)
         assert urls["apple_url"] == "https://podcasts.apple.com/us/podcast/x/id123"
         assert urls["spotify_url"] == "https://open.spotify.com/show/2MAi0BvDc6GTFvKFPXnkCL"
         assert urls["youtube_url"] is None
+        assert h.repo.get_podcast_platform_url_sources(pid) == {
+            "apple": "resolver",
+            "youtube": None,
+            "spotify": "publisher",
+        }
         with pytest.raises(KeyError):
-            h.repo.set_podcast_platform_url(pid, "mixcloud", "https://example.com")
+            h.repo.set_podcast_platform_url(pid, "mixcloud", "https://example.com", source="resolver")
+        with pytest.raises(ValueError):
+            h.repo.set_podcast_platform_url(pid, "apple", "https://example.com", source="guess")
         assert h.repo.get_podcast_platform_urls(pid) == urls
         assert h.repo.get_podcast_platform_urls("") == {"apple_url": None, "youtube_url": None, "spotify_url": None}
+
+    def test_curated_link_yields_only_to_a_curated_write(self, h):
+        """Spec #87 Phase 3c — the source guard, at the repository."""
+        pid = h.make_podcast(_podcast([]))
+        curated = "https://www.youtube.com/@curated"
+        assert h.repo.set_podcast_platform_url(pid, "youtube", curated, source="curated")
+        # A resolver / publisher / chart write leaves the curated value alone and says so.
+        assert not h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@guess", source="resolver")
+        assert not h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@feed", source="publisher")
+        assert h.repo.get_podcast_platform_urls(pid)["youtube_url"] == curated
+        assert h.repo.get_podcast_platform_url_sources(pid)["youtube"] == "curated"
+        # Another curated write replaces it; a curated None clears it and drops the source.
+        assert h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@better", source="curated")
+        assert h.repo.get_podcast_platform_urls(pid)["youtube_url"] == "https://www.youtube.com/@better"
+        assert h.repo.set_podcast_platform_url(pid, "youtube", None, source="curated")
+        assert h.repo.get_podcast_platform_urls(pid)["youtube_url"] is None
+        assert h.repo.get_podcast_platform_url_sources(pid)["youtube"] is None
+        # Cleared, a resolver may fill it again.
+        assert h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@guess", source="resolver")
+        assert h.repo.get_podcast_platform_url_sources(pid) == {"apple": None, "youtube": "resolver", "spotify": None}
+        assert h.repo.get_podcast_platform_url_sources("") == {"apple": None, "youtube": None, "spotify": None}

@@ -342,6 +342,40 @@ def _make_platform_link_service(repository):
     return PlatformLinkService(repository, recheck_hours=get_platform_links_recheck_hours())
 
 
+@main.command("set-show-link")
+@click.option("--podcast-id", required=True, help="Podcast (index, slug, RSS URL or UUID)")
+@click.option("--platform", type=click.Choice(["apple", "youtube", "spotify"]), required=True)
+@click.option("--url", help="The show's page / channel URL; omit with --clear")
+@click.option("--clear", is_flag=True, help="Remove the curated link (the resolvers may fill it again)")
+@click.pass_context
+@require_config
+@log_command
+def set_show_link(ctx, podcast_id, platform, url, clear):
+    """Curate a show's Apple / YouTube / Spotify link (spec #87 Phase 3c).
+
+    A curated link is never overwritten by a chart sync or a resolver;
+    the per-episode linker uses it on the next refresh (Spotify's
+    latest-episode probe needs the show id it carries).
+    """
+    if bool(url) == clear:
+        click.echo("❌ Give exactly one of --url or --clear.", err=True)
+        ctx.exit(2)
+    podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+    if not podcast:
+        click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+        ctx.exit(1)
+    if url and (
+        platform == "spotify" and "spotify.com/show/" not in url or platform == "youtube" and "youtube.com/" not in url
+    ):
+        click.echo(f"❌ That does not look like a {platform} show link: {url}", err=True)
+        ctx.exit(2)
+    ctx.obj.repository.set_podcast_platform_url(str(podcast.id), platform, None if clear else url, source="curated")
+    if clear:
+        click.echo(f"✓ Cleared the curated {platform} link for {podcast.title}.")
+    else:
+        click.echo(f"✓ {podcast.title}: {platform} → {url} (curated; survives chart syncs and resolvers).")
+
+
 @main.command("link-platforms")
 @click.option("--podcast-id", help="Only this podcast (index or RSS URL)")
 @click.option("--dry-run", "-d", is_flag=True, help="Fetch and match, but write nothing")

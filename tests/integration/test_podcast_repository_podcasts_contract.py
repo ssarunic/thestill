@@ -1181,3 +1181,13 @@ def test_sync_podcast_chart_urls(repo):
         "youtube_url": youtube,
         "spotify_url": None,
     }
+
+    # Spec #87 Phase 3c — the sync stamps its provenance and never touches a
+    # curated link, even when the chart carries a value for it.
+    assert repo.get_podcast_platform_url_sources(on_chart.id) == {"apple": "chart", "youtube": "chart", "spotify": None}
+    curated = "https://www.youtube.com/@hand-picked"
+    assert repo.set_podcast_platform_url(on_chart.id, "youtube", curated, source="curated")
+    _exec(repo, "UPDATE top_podcasts SET youtube_url = ? WHERE rss_url = ?", (youtube, str(on_chart.rss_url)))
+    synced = repo.sync_podcast_chart_urls(on_chart.id)
+    assert (synced["apple_url"], synced["youtube_url"]) == (apple, curated)
+    assert repo.get_podcast_platform_url_sources(on_chart.id)["youtube"] == "curated"

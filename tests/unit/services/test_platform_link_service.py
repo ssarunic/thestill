@@ -36,6 +36,8 @@ class FakeRepo:
         self.upserts: List[List[PlatformLink]] = []
         self.set_apple_urls: List[str] = []
         self.set_platform_urls: List = []
+        self.sources: List = []
+        self.curated: set = set()
         self.chart_syncs = 0
         self.alternates: Dict[str, list] = {}
         self.other_candidates: Dict[str, List[PlatformLinkCandidate]] = {}
@@ -53,12 +55,16 @@ class FakeRepo:
     def get_podcast_platform_urls(self, podcast_id):
         return {"apple_url": self.apple_url, "youtube_url": self.youtube_url, "spotify_url": self.spotify_url}
 
-    def set_podcast_platform_url(self, podcast_id, platform, url):
+    def set_podcast_platform_url(self, podcast_id, platform, url, *, source):
+        self.sources.append((platform, source))
+        if platform in self.curated:
+            return False
         if platform == "apple":
             self.set_apple_urls.append(url)
             self.apple_url = url
         else:
             self.set_platform_urls.append((platform, url))
+        return True
 
     def get_alternate_enclosures_for_episodes(self, episode_ids):
         return {eid: self.alternates.get(eid, []) for eid in episode_ids}
@@ -98,9 +104,18 @@ def _service(
     video_info=None,
     spotify_info=None,
     spotify_latest=None,
+    website=None,
     recheck_hours=24,
 ):
-    calls = {"lookup": [], "search": [], "videos": [], "video_info": [], "spotify_info": [], "spotify_latest": []}
+    calls = {
+        "lookup": [],
+        "search": [],
+        "videos": [],
+        "video_info": [],
+        "spotify_info": [],
+        "spotify_latest": [],
+        "website": [],
+    }
 
     def _lookup(params):
         calls["lookup"].append(params)
@@ -135,6 +150,12 @@ def _service(
             raise RuntimeError(f"no fake Spotify page for {episode_id}")
         return meta
 
+    def _website(url):
+        calls["website"].append(url)
+        if isinstance(website, Exception):
+            raise website
+        return website or ""
+
     def _spotify_latest(show_id):
         calls["spotify_latest"].append(show_id)
         if isinstance(spotify_latest, Exception):
@@ -150,6 +171,7 @@ def _service(
         fetch_video=_video_info,
         fetch_spotify_episode=_spotify_info,
         fetch_spotify_latest=_spotify_latest,
+        fetch_website=_website,
         clock=lambda: NOW,
     )
     return svc, calls
@@ -651,3 +673,64 @@ class TestSpotifyLatestProbe:
         assert repo.set_platform_urls == [("spotify", self.SHOW)]
         assert calls["spotify_latest"] == ["2MAi0BvDc6GTFvKFPXnkCL"]
         assert spotify.linked == 1  # core titles equal once "Ep 9" and the show name are stripped
+
+
+class TestShowLinkSources:
+    """Spec #87 Phase 3c — provenance on every show-link write; the website scan."""
+
+    def test_feed_links_are_stored_as_publisher_and_apple_search_as_resolver(self):
+        repo = FakeRepo([_cand("ep-a", "g-a")], apple_url=None)
+        repo.other_candidates["youtube"] = [_ocand("y")]
+        search = [{"feedUrl": "https://feeds.example.com/profg/rss", "collectionViewUrl": SHOW_URL}]
+        svc, _ = _service(repo, lookup=[_episode_entry(1, "g-a")], search=search, videos=[])
+        podcast = _podcast()
+        podcast.description = "Watch on https://www.youtube.com/@profgmarkets"
+        svc.link_podcast(podcast)
+        assert ("apple", "resolver") in repo.sources and ("youtube", "publisher") in repo.sources
+
+    def test_website_is_scanned_only_while_a_platform_is_missing(self):
+        repo = FakeRepo([], youtube_url="https://www.youtube.com/@known")
+        repo.other_candidates["spotify"] = [_ocand("x")]
+        site = '<a href="https://open.spotify.com/show/7syF2ry9j6nqYc656WHBA7">Listen on Spotify</a>'
+        svc, calls = _service(repo, website=site, videos=[])
+        podcast = _podcast()
+        podcast.website_url = "https://profgmedia.com/markets"
+        svc.link_podcast(podcast)
+        assert calls["website"] == ["https://profgmedia.com/markets"]
+        assert repo.set_platform_urls == [("spotify", "https://open.spotify.com/show/7syF2ry9j6nqYc656WHBA7")]
+        assert ("spotify", "publisher") in repo.sources
+
+        # Both platforms known → no fetch at all.
+        repo2 = FakeRepo([], youtube_url="https://www.youtube.com/@known")
+        repo2.spotify_url = "https://open.spotify.com/show/7syF2ry9j6nqYc656WHBA7"
+        repo2.other_candidates["spotify"] = [_ocand("x")]
+        svc2, calls2 = _service(repo2, website=site, videos=[])
+        svc2.link_podcast(podcast)
+        assert calls2["website"] == []
+
+    def test_website_fetch_failure_is_harmless(self):
+        repo = FakeRepo([])
+        repo.other_candidates["youtube"] = [_ocand("y")]
+        svc, calls = _service(repo, website=RuntimeError("bot wall"))
+        podcast = _podcast()
+        podcast.website_url = "https://example.com"
+        yt = svc.link_podcast(podcast).outcomes[2]
+        assert calls["website"] == ["https://example.com"] and yt.skipped == "no_channel"
+        assert repo.set_platform_urls == []
+
+    def test_no_website_url_means_no_fetch(self):
+        repo = FakeRepo([])
+        repo.other_candidates["youtube"] = [_ocand("y")]
+        svc, calls = _service(repo, website="youtube.com/@x")
+        svc.link_podcast(_podcast())
+        assert calls["website"] == []
+
+    def test_a_curated_link_is_not_overwritten_by_a_discovered_one(self):
+        repo = FakeRepo([])
+        repo.curated.add("youtube")
+        repo.other_candidates["youtube"] = [_ocand("y")]
+        svc, _ = _service(repo, website="youtube.com/@discovered")
+        podcast = _podcast()
+        podcast.website_url = "https://example.com"
+        svc.link_podcast(podcast)
+        assert ("youtube", "publisher") in repo.sources and repo.set_platform_urls == []

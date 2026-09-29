@@ -591,11 +591,21 @@ class PodcastsMixin(CategoryCacheMixin):
         if podcast_id is not None:
             scope = " AND p.id = %s"
             params = (podcast_id,)
+        # Spec #87 Phase 3c: a curated link (and its source) is left alone;
+        # otherwise the chart wins when it has a value and stamps 'chart'.
         conn.execute(
             f"""
             UPDATE podcasts AS p
-               SET apple_url = COALESCE(t.apple_url, p.apple_url),
-                   youtube_url = COALESCE(t.youtube_url, p.youtube_url)
+               SET apple_url = CASE WHEN p.apple_url_source = 'curated' THEN p.apple_url
+                                    ELSE COALESCE(t.apple_url, p.apple_url) END,
+                   apple_url_source = CASE WHEN p.apple_url_source = 'curated' THEN 'curated'
+                                           WHEN t.apple_url IS NOT NULL THEN 'chart'
+                                           ELSE p.apple_url_source END,
+                   youtube_url = CASE WHEN p.youtube_url_source = 'curated' THEN p.youtube_url
+                                      ELSE COALESCE(t.youtube_url, p.youtube_url) END,
+                   youtube_url_source = CASE WHEN p.youtube_url_source = 'curated' THEN 'curated'
+                                             WHEN t.youtube_url IS NOT NULL THEN 'chart'
+                                             ELSE p.youtube_url_source END
               FROM top_podcasts AS t
              WHERE t.rss_url = p.rss_url{scope}
             """,
@@ -630,12 +640,39 @@ class PodcastsMixin(CategoryCacheMixin):
         return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
     _PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
+    _PLATFORM_URL_SOURCES = ("chart", "publisher", "resolver", "curated")
 
-    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: str) -> None:
-        """Store a resolver-discovered show link on the podcast row (spec #87)."""
+    def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
+        """Store a show link + its source (spec #87 Phase 3c); a curated value only yields to 'curated'."""
         column = self._PLATFORM_URL_COLUMNS[platform]
+        if source not in self._PLATFORM_URL_SOURCES:
+            raise ValueError(f"unknown show-link source: {source!r}")
         with self._get_connection() as conn:
-            conn.execute(f"UPDATE podcasts SET {column} = %s WHERE id = %s", (url, podcast_id))
+            cursor = conn.execute(
+                f"""
+                UPDATE podcasts SET {column} = %s, {column}_source = %s
+                 WHERE id = %s AND ({column}_source IS NULL OR {column}_source <> 'curated' OR %s = 'curated')
+                """,
+                (url, source if url else None, podcast_id, source),
+            )
+            return cursor.rowcount > 0
+
+    def get_podcast_platform_url_sources(self, podcast_id: str) -> Dict[str, Optional[str]]:
+        empty = {"apple": None, "youtube": None, "spotify": None}
+        if not podcast_id:
+            return empty
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT apple_url_source, youtube_url_source, spotify_url_source FROM podcasts WHERE id = %s",
+                (podcast_id,),
+            ).fetchone()
+        if row is None:
+            return empty
+        return {
+            "apple": row["apple_url_source"],
+            "youtube": row["youtube_url_source"],
+            "spotify": row["spotify_url_source"],
+        }
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.
