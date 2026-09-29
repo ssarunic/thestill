@@ -106,7 +106,13 @@ jobs:
             --kit-ref "${{ steps.rev.outputs.sha }}"
 
       - name: Verify the tag is running and ready
+        # pipefail is mandatory here: without it the step's exit status is
+        # tee's, and a failed verification (exit 1 from thestill-aws) still
+        # passed the job — the v1.12.5 deploy on 2026-09-29 went green with
+        # "Verification failed: app is not ready" in its own log, and the
+        # release job published on top of it.
         run: |
+          set -o pipefail
           python deploy/aws-ec2/thestill-aws status \
             --expect-image-tag "prod-${{ steps.rev.outputs.sha }}" \
             --wait 300 | tee -a "$GITHUB_STEP_SUMMARY"
