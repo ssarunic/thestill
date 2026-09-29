@@ -34,6 +34,7 @@ import type {
 import SmartImage from '../components/SmartImage'
 import { formatEyebrowDate } from '../utils/episodeFormat'
 import { formatClock } from '../utils/formatClock'
+import { groupByEpisode } from '../utils/groupByEpisode'
 import { parseQuery } from '../utils/searchOperators'
 import { useDebouncedSearchParam } from '../hooks/useDebouncedSearchParam'
 import { entityHref, entityStyle } from '../utils/entityColors'
@@ -112,6 +113,7 @@ export default function SearchResults() {
     return quick.data.groups.filter((g) => g.type === 'person' || g.type === 'company' || g.type === 'topic')
   }, [quick.data])
 
+  // Hits arrive best-first, so each episode sits at its best hit's rank.
   const episodeGroups = useMemo(() => groupByEpisode(corpus.data?.results ?? []), [corpus.data])
   const matchCounts = corpus.data?.match_counts ?? {}
 
@@ -226,17 +228,6 @@ function Section({ title, aside, children }: { title?: string; aside?: string; c
       {children}
     </section>
   )
-}
-
-/** Hits grouped by episode, episodes in the order of their best hit. */
-function groupByEpisode(results: SearchResult[]): SearchResult[][] {
-  const groups = new Map<string, SearchResult[]>()
-  for (const r of results) {
-    const group = groups.get(r.episode_id)
-    if (group) group.push(r)
-    else groups.set(r.episode_id, [r])
-  }
-  return [...groups.values()]
 }
 
 /** The quote without the "Speaker: " prefix the chunk writer indexes it with. */

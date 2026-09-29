@@ -40,7 +40,15 @@ from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRo
 # ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
 # spec #44; re-exported here so existing call sites keep importing them
 # from this module.
-from .entity_repository import ROLE_BY_SCORE, AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
+from .entity_repository import (
+    RECENT_MENTIONS_BY_EPISODE_SQL,
+    ROLE_BY_SCORE,
+    AliasEvidence,
+    EntityEpisode,
+    EntityHit,
+    EntityRepository,
+    MentionContext,
+)
 
 __all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
 
@@ -763,6 +771,7 @@ class SqliteEntityRepository(EntityRepository):
         *,
         cooccurring_limit: int = 20,
         recent_mentions_limit: int = 10,
+        recent_mentions_per_episode: Optional[int] = None,
         most_discussed_limit: int = 10,
     ) -> Optional[dict]:
         """Return entity + mention_count + cooccurring + recent_mentions.
@@ -834,19 +843,38 @@ class SqliteEntityRepository(EntityRepository):
             }
             for row in cooccur_rows
         ]
-        recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
+        recent_mention_counts: Optional[Dict[str, int]] = None
+        if recent_mentions_per_episode is None:
+            recent_mentions = self.find_mentions(entity_id=entity_id, limit=recent_mentions_limit)
+        else:
+            recent_mentions, recent_mention_counts = self._recent_mentions_by_episode(
+                entity_id, recent_mentions_limit, recent_mentions_per_episode
+            )
         roles = self.get_entity_roles(entity_id)
         return {
             "entity": entity,
             "mention_count": mention_count,
             "cooccurring": cooccurring,
             "recent_mentions": recent_mentions,
+            "recent_mention_counts": recent_mention_counts,
             "hosts_podcasts": roles["hosts_podcasts"],
             "recurring_podcasts": roles["recurring_podcasts"],
             "guest_episodes": roles["guest_episodes"],
             "most_discussed_on": [dict(r) for r in most_discussed_rows],
             "enrichment": _row_to_enrichment(enrichment_row) if enrichment_row else None,
         }
+
+    def _recent_mentions_by_episode(
+        self, entity_id: str, episodes_limit: int, per_episode: int
+    ) -> Tuple[List[MentionContext], Dict[str, int]]:
+        """Newest ``episodes_limit`` episodes' top moments + moments per episode."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                RECENT_MENTIONS_BY_EPISODE_SQL.format(p="?"),
+                (entity_id, episodes_limit, per_episode),
+            ).fetchall()
+        counts = {r["episode_id"]: r["episode_moments"] for r in rows}
+        return [_row_to_mention_context(r) for r in rows], counts
 
     def get_entity_roles(
         self,

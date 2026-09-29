@@ -51,6 +51,7 @@ import {
   corpusSearch,
   getEpisodeEntities,
   getRelatedEpisodes,
+  getEntityEpisodeMentions,
   getEntitySummary,
   getInbox,
   markInboxRead,
@@ -1010,6 +1011,16 @@ export function useEntitySummary(entityType: EntityType | null, idSlug: string |
     queryKey: ['entities', entityType, idSlug],
     queryFn: () => getEntitySummary(entityType!, idSlug!),
     enabled: !!entityType && !!idSlug,
+    staleTime: 60_000,
+  })
+}
+
+/** Every moment the entity comes up in one episode; idle until `episodeId` is set. */
+export function useEntityEpisodeMentions(entityType: EntityType, idSlug: string, episodeId: string | null) {
+  return useQuery({
+    queryKey: ['entities', entityType, idSlug, 'mentions', episodeId],
+    queryFn: () => getEntityEpisodeMentions(entityType, idSlug, episodeId!),
+    enabled: !!episodeId,
     staleTime: 60_000,
   })
 }

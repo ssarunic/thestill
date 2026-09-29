@@ -155,6 +155,34 @@ def _seed_corpus(db_path: Path) -> tuple[str, str, str]:
     return podcast_id, episode_id, other_episode_id
 
 
+def _musk_mention(episode_id: str, *, segment_id: int, quote: str, **overrides) -> EntityMention:
+    base = dict(
+        entity_id="person:elon-musk",
+        episode_id=episode_id,
+        segment_id=segment_id,
+        start_ms=segment_id * 5_000,
+        end_ms=segment_id * 5_000 + 3_000,
+        speaker="Scott Galloway",
+        role=MentionRole.MENTIONED,
+        surface_form="Musk",
+        quote_excerpt=quote,
+        confidence=0.9,
+        extractor="gliner:test",
+    )
+    base.update(overrides)
+    return EntityMention(**base)
+
+
+def _insert_resolved(db_path: Path, mentions: list[EntityMention]) -> None:
+    SqliteEntityRepository(db_path=str(db_path)).insert_mentions(mentions)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("UPDATE entity_mentions SET resolution_status = 'resolved'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class TestEpisodeEntitiesEndpoint:
     def test_returns_grouped_entities_with_mentions(self, client, app_state):
         _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
@@ -361,6 +389,8 @@ class TestEntitySummaryEndpoint:
         assert first["podcast_title"] == "Fixture Pod"
         assert first["episode_title"] == "First Episode"
         assert first["surface_form"] in {"Elon Musk", "Musk"}
+        # Grouped by episode: both are in the first episode, which says so.
+        assert body["recent_mention_counts"] == {first["episode_id"]: 2}
 
     def test_recent_mentions_include_episode_audio_url(self, client, app_state):
         """Spec #28 §5.1 — the entity page wires recent-mention timestamps
@@ -386,6 +416,21 @@ class TestEntitySummaryEndpoint:
             # to ``player.play()``.
             assert "image_url" in row
             assert "duration" in row
+
+    def test_recent_mentions_cap_moments_per_episode(self, client, app_state):
+        """One episode that names the entity over and over shows two moments
+        and a count, so it can't push every other episode off the page."""
+        _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
+        _insert_resolved(
+            Path(app_state.repository.db_path),
+            [_musk_mention(episode_id, segment_id=20 + i, quote=f"Musk again, part {i}.") for i in range(5)],
+        )
+
+        body = client.get("/api/entities/person/elon-musk").json()
+
+        assert [r["start_ms"] for r in body["recent_mentions"]] == [15_000, 60_000]
+        assert body["recent_mention_counts"] == {episode_id: 7}
+        assert body["mention_count"] == 7
 
     def test_accepts_full_id_form_in_url_path(self, client, app_state):
         _seed_corpus(Path(app_state.repository.db_path))
@@ -463,3 +508,53 @@ class TestEntitySummaryEndpoint:
         assert titles == ["Second Episode", "First Episode"]
         assert body["guest_episodes"][0]["podcast_slug"] == "fixture-pod"
         assert body["guest_episodes"][0]["episode_slug"] == "second-episode"
+
+
+class TestEntityEpisodeMentionsEndpoint:
+    """``GET /api/entities/{type}/{slug}/mentions?episode_id=`` — the entity
+    page's "Show all N mentions" for one episode card."""
+
+    def test_lists_every_moment_in_episode_order_one_per_segment(self, client, app_state):
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, other_episode_id = _seed_corpus(db_path)
+        _insert_resolved(
+            db_path,
+            [
+                # Musk speaking in segment 5, which already names him: one moment.
+                _musk_mention(
+                    episode_id, segment_id=5, quote="I speak here.", role=MentionRole.SPEAKING, speaker="Elon Musk"
+                ),
+                _musk_mention(episode_id, segment_id=2, quote="Musk opened the show."),
+                _musk_mention(other_episode_id, segment_id=1, quote="Another episode's Musk."),
+            ],
+        )
+
+        resp = client.get(f"/api/entities/person/elon-musk/mentions?episode_id={episode_id}")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["episode_id"] == episode_id
+        assert [(m["start_ms"], m["quote"]) for m in body["mentions"]] == [
+            (10_000, "Musk opened the show."),
+            (15_000, "Elon Musk is back in the news."),
+            (60_000, "...and Musk said today..."),
+        ]
+        assert body["mentions"][0]["audio_url"] == "https://example.com/ep1.mp3"
+        # The summary counts the same moments this endpoint lists.
+        summary = client.get("/api/entities/person/elon-musk").json()
+        assert summary["recent_mention_counts"][episode_id] == len(body["mentions"])
+
+    def test_rejects_non_uuid_episode_id(self, client, app_state):
+        _seed_corpus(Path(app_state.repository.db_path))
+        resp = client.get("/api/entities/person/elon-musk/mentions?episode_id=nope")
+        assert resp.status_code == 422
+
+    def test_returns_404_for_unknown_entity(self, client, app_state):
+        _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
+        resp = client.get(f"/api/entities/person/nobody/mentions?episode_id={episode_id}")
+        assert resp.status_code == 404
+
+    def test_rejects_invalid_entity_type(self, client, app_state):
+        _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
+        resp = client.get(f"/api/entities/celebrity/foo/mentions?episode_id={episode_id}")
+        assert resp.status_code == 400

@@ -8,7 +8,7 @@
 
 """Spec #28 §5.2 — REST surface for the episode-page entity UX.
 
-Two endpoints:
+Three endpoints:
 
 - ``GET /api/episodes/{episode_id}/entities`` — every resolved
   ``entity_mention`` for the episode joined with its canonical
@@ -18,6 +18,9 @@ Two endpoints:
 - ``GET /api/entities/{type}/{id_slug}`` — entity summary
   (``EntityRecord`` + mention_count + cooccurring + recent_mentions).
   Used by the entity page (Phase 5.1) and the hover card.
+- ``GET /api/entities/{type}/{id_slug}/mentions?episode_id=`` — every
+  moment the entity comes up in one episode, for the entity page's
+  "Show all N mentions".
 
 Both wrap ``SqliteEntityRepository`` methods that already exist; this
 module is the FastAPI shell that gives the React frontend a reachable
@@ -27,9 +30,10 @@ URL.
 from __future__ import annotations
 
 import math
+import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
@@ -38,7 +42,9 @@ from structlog import get_logger
 from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
 from ...core.wikidata_client import WikidataClient
 from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
+from ...models.entities import MentionRole
 from ...models.user import User
+from ...repositories.entity_repository import MentionContext
 from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import api_response
 
@@ -261,13 +267,25 @@ class MostDiscussedRef(BaseModel):
     mention_count: int
 
 
+class EntityEpisodeMentionsResponse(BaseModel):
+    """Every moment an entity comes up in one episode, in episode order."""
+
+    episode_id: str
+    mentions: List[CitationRow]
+
+
 class EntitySummaryResponse(BaseModel):
     entity: EntityRef
     aliases: List[str]
     description: Optional[str] = None
     mention_count: int
     cooccurring: List[EntityCooccurrenceRef]
+    # Grouped by episode: the newest episodes that mention the entity, each
+    # with its first few moments (one per transcript segment), newest first.
     recent_mentions: List[CitationRow]
+    # episode_id → that episode's moments, so a card showing two of them
+    # can say "109 mentions" and offer the rest.
+    recent_mention_counts: Dict[str, int] = {}
     # Spec #28 §1.13.1: host/guest is an entity↔podcast/episode anchor,
     # not a mention. Surface anchors separately so a host who never says
     # their own name still renders their affiliation.
@@ -415,6 +433,63 @@ def get_episode_entities(
 
 _VALID_TYPES = {"person", "company", "product", "topic"}
 
+# The entity page's recent mentions: the newest episodes, each showing this
+# many moments before "Show all N mentions".
+_RECENT_EPISODES = 10
+_MOMENTS_PER_EPISODE = 2
+# An episode's mentions scanned for "Show all" — far above any real
+# episode's count for one entity (the busiest on prod is ~110).
+_EPISODE_MENTIONS_SCAN = 2000
+
+
+def _entity_id_from_path(entity_type: str, id_slug: str) -> str:
+    """``"{type}:{slug}"`` from the URL, which may carry either the bare slug
+    (``elon-musk``) or the full id (``person:elon-musk``)."""
+    if entity_type not in _VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid entity type: {entity_type}")
+    prefix = f"{entity_type}:"
+    bare_slug = id_slug[len(prefix) :] if id_slug.startswith(prefix) else id_slug
+    return f"{entity_type}:{bare_slug}"
+
+
+def _citation_row(ctx: MentionContext) -> CitationRow:
+    m = ctx.mention
+    # Deeplink/player fields ride along on the mention-context JOIN
+    # (spec #69 Phase 5) — no per-mention episode re-fetch.
+    return CitationRow(
+        episode_id=ctx.episode_id,
+        podcast_id=ctx.podcast_id,
+        podcast_slug=ctx.podcast_slug,
+        episode_slug=ctx.episode_slug,
+        podcast_title=ctx.podcast_title,
+        episode_title=ctx.episode_title,
+        published_at=(ctx.episode_pub_date.isoformat() if ctx.episode_pub_date else None),
+        start_ms=m.start_ms,
+        end_ms=m.end_ms,
+        speaker=m.speaker,
+        quote=m.quote_excerpt,
+        surface_form=m.surface_form,
+        audio_url=ctx.episode_audio_url,
+        image_url=ctx.episode_image_url,
+        duration=ctx.episode_duration,
+    )
+
+
+def _one_per_segment(contexts: List[MentionContext]) -> List[MentionContext]:
+    """One moment per transcript segment, in episode order — the same pick as
+    ``RECENT_MENTIONS_BY_EPISODE_SQL``: someone naming the entity beats its own
+    ``speaking`` row, then the first row written."""
+    best: Dict[int, MentionContext] = {}
+    for ctx in contexts:
+        current = best.get(ctx.mention.segment_id)
+        if current is None or _segment_preference(ctx) < _segment_preference(current):
+            best[ctx.mention.segment_id] = ctx
+    return sorted(best.values(), key=lambda c: (c.mention.start_ms, c.mention.id or 0))
+
+
+def _segment_preference(ctx: MentionContext) -> tuple[bool, int]:
+    return (ctx.mention.role is MentionRole.SPEAKING, ctx.mention.id or 0)
+
 
 @router.get(
     "/entities/{entity_type}/{id_slug}",
@@ -432,18 +507,15 @@ def get_entity_summary(
     full id can use either ``person/elon-musk`` or
     ``person/person:elon-musk`` (we strip a leading ``"{type}:"`` prefix).
     """
-    if entity_type not in _VALID_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid entity type: {entity_type}")
-
     # Accept both bare slug and full id forms so deeplinks survive
     # whichever shape the caller has on hand.
-    bare_slug = id_slug
-    prefix = f"{entity_type}:"
-    if bare_slug.startswith(prefix):
-        bare_slug = bare_slug[len(prefix) :]
-    entity_id = f"{entity_type}:{bare_slug}"
+    entity_id = _entity_id_from_path(entity_type, id_slug)
 
-    summary = state.entity_repository.get_entity_summary(entity_id)
+    summary = state.entity_repository.get_entity_summary(
+        entity_id,
+        recent_mentions_limit=_RECENT_EPISODES,
+        recent_mentions_per_episode=_MOMENTS_PER_EPISODE,
+    )
     if summary is None:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
 
@@ -471,30 +543,7 @@ def get_entity_summary(
             )
         )
 
-    recent_mentions: list[CitationRow] = []
-    for ctx in summary["recent_mentions"]:
-        m = ctx.mention
-        # Deeplink/player fields ride along on the mention-context JOIN
-        # (spec #69 Phase 5) — no per-mention episode re-fetch.
-        recent_mentions.append(
-            CitationRow(
-                episode_id=ctx.episode_id,
-                podcast_id=ctx.podcast_id,
-                podcast_slug=ctx.podcast_slug,
-                episode_slug=ctx.episode_slug,
-                podcast_title=ctx.podcast_title,
-                episode_title=ctx.episode_title,
-                published_at=(ctx.episode_pub_date.isoformat() if ctx.episode_pub_date else None),
-                start_ms=m.start_ms,
-                end_ms=m.end_ms,
-                speaker=m.speaker,
-                quote=m.quote_excerpt,
-                surface_form=m.surface_form,
-                audio_url=ctx.episode_audio_url,
-                image_url=ctx.episode_image_url,
-                duration=ctx.episode_duration,
-            )
-        )
+    recent_mentions = [_citation_row(ctx) for ctx in summary["recent_mentions"]]
 
     hosts_podcasts = [
         HostedPodcastRef(
@@ -561,11 +610,42 @@ def get_entity_summary(
         mention_count=summary["mention_count"],
         cooccurring=cooccurring,
         recent_mentions=recent_mentions,
+        recent_mention_counts=summary.get("recent_mention_counts") or {},
         hosts_podcasts=hosts_podcasts,
         recurring_podcasts=recurring_podcasts,
         guest_episodes=guest_episodes,
         most_discussed_on=most_discussed_on,
         enrichment=enrichment_wire,
+    )
+
+
+@router.get(
+    "/entities/{entity_type}/{id_slug}/mentions",
+    response_model=EntityEpisodeMentionsResponse,
+)
+def get_entity_episode_mentions(
+    entity_type: str,
+    id_slug: str,
+    episode_id: str = Query(..., description="The episode whose mentions to list."),
+    state: AppState = Depends(get_app_state),
+) -> EntityEpisodeMentionsResponse:
+    """Every moment the entity comes up in one episode — the entity page's
+    "Show all N mentions" for an episode card. One row per transcript
+    segment, the same moments ``recent_mention_counts`` counts.
+    """
+    entity_id = _entity_id_from_path(entity_type, id_slug)
+    try:
+        uuid.UUID(episode_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="episode_id must be a UUID") from None
+    if state.entity_repository.get_entity(entity_id) is None:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
+    contexts = state.entity_repository.find_mentions(
+        entity_id=entity_id, episode_id=episode_id, limit=_EPISODE_MENTIONS_SCAN
+    )
+    return EntityEpisodeMentionsResponse(
+        episode_id=episode_id,
+        mentions=[_citation_row(ctx) for ctx in _one_per_segment(contexts)],
     )
 
 

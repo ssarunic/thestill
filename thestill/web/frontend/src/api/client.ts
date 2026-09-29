@@ -48,6 +48,7 @@ import type {
   SearchResponse,
   RelatedEpisodesResponse,
   EpisodeEntitiesResponse,
+  EntityEpisodeMentionsResponse,
   EntitySummaryResponse,
   EntityType,
   BriefingResponse,
@@ -650,6 +651,15 @@ export async function getEntitySummary(
   idSlug: string,
 ): Promise<EntitySummaryResponse> {
   return fetchApi<EntitySummaryResponse>(`/entities/${entityType}/${idSlug}`)
+}
+
+export async function getEntityEpisodeMentions(
+  entityType: EntityType,
+  idSlug: string,
+  episodeId: string,
+): Promise<EntityEpisodeMentionsResponse> {
+  const params = new URLSearchParams({ episode_id: episodeId })
+  return fetchApi<EntityEpisodeMentionsResponse>(`/entities/${entityType}/${idSlug}/mentions?${params.toString()}`)
 }
 
 // ============================================================================

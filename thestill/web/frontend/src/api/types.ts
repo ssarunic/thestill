@@ -1162,6 +1162,13 @@ export interface EntityCitationRow {
   duration?: number | null
 }
 
+// Every moment an entity comes up in one episode, in episode order — the
+// entity page's "Show all N mentions".
+export interface EntityEpisodeMentionsResponse {
+  episode_id: string
+  mentions: EntityCitationRow[]
+}
+
 export interface HostedPodcastRef {
   podcast_id: string
   podcast_slug: string | null
@@ -1218,7 +1225,12 @@ export interface EntitySummaryResponse {
   description: string | null
   mention_count: number
   cooccurring: EntityCooccurrenceRef[]
+  // Grouped by episode: the newest episodes that mention the entity, each
+  // with its first few moments, newest episode first.
   recent_mentions: EntityCitationRow[]
+  // episode_id → that episode's moments (one per transcript segment), so a
+  // card showing two of them can say "109 mentions". Older responses omit it.
+  recent_mention_counts?: Record<string, number>
   hosts_podcasts: HostedPodcastRef[]
   recurring_podcasts: HostedPodcastRef[]
   guest_episodes: GuestEpisodeRef[]

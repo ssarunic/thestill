@@ -136,7 +136,8 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/episodes/{episode_id}/entities` | GET | Entities mentioned in an episode |
-| `/api/entities/{entity_type}/{id_slug}` | GET | Entity page payload — record, aggregates, recent mentions |
+| `/api/entities/{entity_type}/{id_slug}` | GET | Entity page payload — record, aggregates, recent mentions grouped by episode (`recent_mention_counts`) |
+| `/api/entities/{entity_type}/{id_slug}/mentions` | GET | Every moment the entity comes up in one episode (`?episode_id=`), in episode order (the entity page's "Show all N mentions") |
 | `/api/entities/review-queue` | GET | Entities pending review |
 | `/api/entities/corrections` | POST | Submit an entity correction |
 

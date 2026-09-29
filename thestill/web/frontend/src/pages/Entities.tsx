@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useEntitySummary } from '../hooks/useApi'
+import { useEntityEpisodeMentions, useEntitySummary } from '../hooks/useApi'
 import type { EntityCitationRow, EntityType, HostedPodcastRef } from '../api/types'
+import SmartImage from '../components/SmartImage'
 import { entityHref, entityStyle } from '../utils/entityColors'
 import { formatClock } from '../utils/formatClock'
+import { groupByEpisode } from '../utils/groupByEpisode'
 import { episodeTimestampPath } from '../hooks/useDeepLinkSeek'
 import { usePlayer } from '../contexts/PlayerContext'
 
@@ -80,6 +82,121 @@ function PodcastRoleList({ podcasts, keyPrefix }: { podcasts: HostedPodcastRef[]
   )
 }
 
+// One card per episode in "Recent mentions" — like the search results page,
+// so an episode that names the entity a hundred times shows its first couple
+// of moments and a count instead of filling the section. "Show all N
+// mentions" loads the episode's every moment, in episode order.
+function EpisodeMentionsCard({
+  entityType,
+  idSlug,
+  moments,
+  mentionCount,
+  onPlay,
+}: {
+  entityType: EntityType
+  idSlug: string
+  moments: EntityCitationRow[]
+  mentionCount: number
+  onPlay: (row: EntityCitationRow) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lead = moments[0]
+  const all = useEntityEpisodeMentions(entityType, idSlug, expanded ? lead.episode_id : null)
+  const shown = expanded && all.data ? all.data.mentions : moments
+  const episodeHref =
+    lead.podcast_slug && lead.episode_slug ? `/podcasts/${lead.podcast_slug}/episodes/${lead.episode_slug}` : null
+
+  return (
+    <li className="py-4" data-testid="entity-episode-mentions">
+      <div className="flex items-start gap-3">
+        <SmartImage
+          sources={[lead.image_url]}
+          alt=""
+          width={40}
+          height={40}
+          loading="lazy"
+          className="h-10 w-10 flex-shrink-0 rounded object-cover"
+          fallback={<div className="h-10 w-10 flex-shrink-0 rounded bg-gradient-to-br from-primary-100 to-secondary-100" />}
+        />
+        <div className="min-w-0 flex-1">
+          {episodeHref ? (
+            <Link to={episodeHref} className="line-clamp-2 text-sm font-semibold text-gray-900 hover:text-primary-700">
+              {lead.episode_title}
+            </Link>
+          ) : (
+            <span className="line-clamp-2 text-sm font-semibold text-gray-900">{lead.episode_title}</span>
+          )}
+          <p className="mt-0.5 text-xs text-gray-500">
+            {lead.podcast_title}
+            {lead.published_at && ` · ${formatDate(lead.published_at)}`}
+            <span data-testid="entity-episode-mention-count">
+              {' · '}{mentionCount} mention{mentionCount === 1 ? '' : 's'}
+            </span>
+          </p>
+        </div>
+      </div>
+      <ul className="mt-2 space-y-1">
+        {shown.map((row, idx) => (
+          <MentionMoment key={`${row.start_ms}-${idx}`} row={row} onPlay={onPlay} />
+        ))}
+      </ul>
+      {expanded && all.isLoading && <p className="mt-2 text-xs text-gray-500">Loading mentions…</p>}
+      {expanded && all.isError && <p className="mt-2 text-xs text-red-600">Couldn't load the other mentions.</p>}
+      {mentionCount > moments.length && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 text-sm font-medium text-primary-600 hover:text-primary-800"
+          data-testid="entity-episode-expand"
+        >
+          {expanded ? 'Show fewer' : `Show all ${mentionCount} mentions`}
+        </button>
+      )}
+    </li>
+  )
+}
+
+// Spec #28 §5.1 — clicking a quote timestamp on the entity page must open
+// the FloatingPlayer at the right moment, not navigate away to the episode
+// detail page (which loses the user's place). Falls back to a deep-link
+// Link when ``audio_url`` is missing (older API responses, episode without
+// resolved feed audio).
+function MentionMoment({ row, onPlay }: { row: EntityCitationRow; onPlay: (row: EntityCitationRow) => void }) {
+  const seekHref = row.podcast_slug && row.episode_slug
+    ? episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
+    : null
+  const canPlayInline = Boolean(row.audio_url) && Boolean(row.podcast_slug) && Boolean(row.episode_slug)
+  const timestamp = formatTimestamp(row.start_ms)
+  const timestampClass = 'font-mono tabular-nums text-primary-700 hover:underline'
+  return (
+    <li className="flex gap-3 text-sm">
+      <span className="w-12 flex-shrink-0 pt-0.5 text-right text-xs">
+        {canPlayInline ? (
+          <button
+            type="button"
+            onClick={() => onPlay(row)}
+            aria-label={`Play "${row.quote}" at ${timestamp}`}
+            className={`${timestampClass} focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded-sm`}
+            data-testid="entity-mention-play"
+          >
+            {timestamp}
+          </button>
+        ) : seekHref ? (
+          <Link to={seekHref} className={timestampClass}>
+            {timestamp}
+          </Link>
+        ) : (
+          <span className="font-mono tabular-nums text-gray-500">{timestamp}</span>
+        )}
+      </span>
+      <p className="min-w-0 flex-1 text-gray-800">
+        {row.speaker && <span className="font-medium text-gray-600">{row.speaker}: </span>}
+        "{boldSurfaceForm(row.quote, row.surface_form)}"
+      </p>
+    </li>
+  )
+}
+
 export default function Entities() {
   const { entityType, idSlug } = useParams<{ entityType: string; idSlug: string }>()
   const validType = entityType && VALID_TYPES.has(entityType as EntityType)
@@ -87,14 +204,10 @@ export default function Entities() {
     : null
   const { data, isLoading, error } = useEntitySummary(validType, idSlug ?? null)
   const player = usePlayer()
+  const mentionGroups = useMemo(() => groupByEpisode(data?.recent_mentions ?? []), [data])
 
-  // Spec #28 §5.1 — clicking a quote timestamp on the entity page must
-  // open the FloatingPlayer at the right moment, not navigate away to
-  // the episode detail page (which loses the user's place). We hand
-  // the audio URL + start offset directly to ``player.play`` so the
-  // MiniPlayer takes over inline. Falls back to a deep-link Link when
-  // ``audio_url`` is missing (older API responses, episode without
-  // resolved feed audio).
+  // We hand the audio URL + start offset directly to ``player.play`` so
+  // the MiniPlayer takes over inline (see ``MentionMoment``).
   const playMention = (row: EntityCitationRow) => {
     if (!row.audio_url || !row.podcast_slug || !row.episode_slug) return
     const startAt = row.start_ms / 1000
@@ -413,60 +526,23 @@ export default function Entities() {
             <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500">
               Recent mentions
             </h2>
-            {data.recent_mentions.length === 0 ? (
+            {mentionGroups.length === 0 ? (
               <p className="mt-3 text-sm italic text-gray-400">
                 No transcript mentions yet.
                 {hostsPodcasts.length > 0 && ' Hosts often go unnamed in their own show.'}
               </p>
             ) : (
-              <ul className="mt-3 divide-y divide-gray-100">
-                {data.recent_mentions.map((row, idx) => {
-                  const seekHref = row.podcast_slug && row.episode_slug
-                    ? episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
-                    : null
-                  const canPlayInline =
-                    Boolean(row.audio_url) && Boolean(row.podcast_slug) && Boolean(row.episode_slug)
-                  const timestamp = formatTimestamp(row.start_ms)
-                  return (
-                    <li key={`${row.episode_id}-${row.start_ms}-${idx}`} className="py-3">
-                      <div className="flex items-baseline gap-2 text-xs text-gray-500">
-                        {canPlayInline ? (
-                          <button
-                            type="button"
-                            onClick={() => playMention(row)}
-                            aria-label={`Play "${row.quote}" at ${timestamp}`}
-                            className="font-mono tabular-nums text-primary-700 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 rounded-sm"
-                            data-testid="entity-mention-play"
-                          >
-                            {timestamp}
-                          </button>
-                        ) : seekHref ? (
-                          <Link to={seekHref} className="font-mono tabular-nums text-primary-700 hover:underline">
-                            {timestamp}
-                          </Link>
-                        ) : (
-                          <span className="font-mono tabular-nums">{timestamp}</span>
-                        )}
-                        <span>·</span>
-                        {row.speaker && <span>{row.speaker}</span>}
-                        <span className="ml-auto">{formatDate(row.published_at)}</span>
-                      </div>
-                      <p className="mt-1 text-sm text-gray-800">
-                        "{boldSurfaceForm(row.quote, row.surface_form)}"
-                      </p>
-                      <div className="mt-1 text-xs text-gray-500">
-                        {seekHref ? (
-                          <Link to={seekHref} className="font-medium text-gray-700 hover:underline">
-                            {row.episode_title}
-                          </Link>
-                        ) : (
-                          <span className="font-medium text-gray-700">{row.episode_title}</span>
-                        )}
-                        {' · '}{row.podcast_title}
-                      </div>
-                    </li>
-                  )
-                })}
+              <ul className="mt-1 divide-y divide-gray-100">
+                {mentionGroups.map((moments) => (
+                  <EpisodeMentionsCard
+                    key={moments[0].episode_id}
+                    entityType={validType}
+                    idSlug={idSlug}
+                    moments={moments}
+                    mentionCount={data.recent_mention_counts?.[moments[0].episode_id] ?? moments.length}
+                    onPlay={playMention}
+                  />
+                ))}
               </ul>
             )}
           </section>
