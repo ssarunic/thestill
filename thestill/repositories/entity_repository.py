@@ -62,6 +62,56 @@ class EntityHit:
 # shared decoder so the label can never drift between them.
 ROLE_BY_SCORE = {3: "host", 2: "guest", 1: "recurring"}
 
+# The entity page's recent mentions, grouped by episode, so one episode that
+# names the entity a hundred times can't fill them. A moment is one transcript
+# segment: several mentions in one segment (a name plus its coreference, or a
+# synthesized ``speaking`` row) show its quote once. Within an episode someone
+# naming the entity outranks the entity's own ``speaking`` rows, then earliest
+# first; ``episode_moments`` counts the episode's moments. Shared by both
+# backends — ``{p}`` is the driver's placeholder — so the ranking can't drift
+# between them. Params: entity_id, newest-episodes limit, moments per episode.
+RECENT_MENTIONS_BY_EPISODE_SQL = """
+    WITH segments AS (
+        SELECT m.*,
+               ROW_NUMBER() OVER (
+                   PARTITION BY m.episode_id, m.segment_id
+                   ORDER BY CASE WHEN m.role = 'speaking' THEN 1 ELSE 0 END, m.id
+               ) AS segment_rank
+        FROM entity_mentions m
+        WHERE m.entity_id = {p} AND m.resolution_status = 'resolved'
+    ),
+    moments AS (
+        SELECT s.*,
+               ROW_NUMBER() OVER (
+                   PARTITION BY s.episode_id
+                   ORDER BY CASE WHEN s.role = 'speaking' THEN 1 ELSE 0 END, s.start_ms, s.id
+               ) AS episode_rank,
+               COUNT(*) OVER (PARTITION BY s.episode_id) AS episode_moments
+        FROM segments s
+        WHERE s.segment_rank = 1
+    ),
+    recent AS (
+        SELECT mo.episode_id
+        FROM moments mo
+        JOIN episodes e ON e.id = mo.episode_id
+        WHERE mo.episode_rank = 1
+        ORDER BY e.pub_date IS NULL, e.pub_date DESC, mo.episode_id
+        LIMIT {p}
+    )
+    SELECT mo.*, e.title AS episode_title, e.pub_date AS episode_pub_date,
+           e.slug AS episode_slug, e.audio_url AS episode_audio_url,
+           e.image_url AS episode_image_url, e.duration AS episode_duration,
+           p.id AS podcast_id, p.title AS podcast_title, p.slug AS podcast_slug,
+           ent.type AS entity_type, ent.canonical_name AS entity_canonical_name
+    FROM moments mo
+    JOIN recent r ON r.episode_id = mo.episode_id
+    JOIN episodes e ON e.id = mo.episode_id
+    JOIN podcasts p ON p.id = e.podcast_id
+    LEFT JOIN entities ent ON ent.id = mo.entity_id
+    WHERE mo.episode_rank <= {p}
+    ORDER BY e.pub_date IS NULL, e.pub_date DESC, mo.episode_id, mo.start_ms, mo.id
+"""
+
 
 @dataclass(frozen=True)
 class MentionContext:
@@ -373,11 +423,18 @@ class EntityRepository(ABC):
         *,
         cooccurring_limit: int = 20,
         recent_mentions_limit: int = 10,
+        recent_mentions_per_episode: Optional[int] = None,
         most_discussed_limit: int = 10,
     ) -> Optional[dict]:
         """Entity + mention_count + cooccurring + recent_mentions +
         roles + most_discussed_on + enrichment (spec #28 §1.8 /
         spec #45). ``None`` if the entity doesn't exist.
+
+        With ``recent_mentions_per_episode`` the recent mentions are grouped
+        by episode (see ``RECENT_MENTIONS_BY_EPISODE_SQL``):
+        ``recent_mentions_limit`` then counts the newest episodes, each
+        contributes at most that many moments, and ``recent_mention_counts``
+        maps each of those episodes to its number of moments.
         """
 
     @abstractmethod

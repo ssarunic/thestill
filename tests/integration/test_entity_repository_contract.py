@@ -753,6 +753,38 @@ def test_get_entity_summary_shape(repo):
     assert [(d["podcast_id"], d["mention_count"]) for d in discussed] == [(POD_1, 2), (POD_2, 1)]
     assert discussed[0]["podcast_slug"] == "prof-g-markets"
     assert summary["hosts_podcasts"] == []
+    assert summary["recent_mention_counts"] is None  # ungrouped by default
+
+
+def test_get_entity_summary_groups_recent_mentions_by_episode(repo):
+    """One chatty episode can't fill the recent mentions: each episode gives at
+    most ``per_episode`` moments, one per segment, naming before speaking."""
+    _seed_resolved_corpus(repo)
+    speaking = dict(role=MentionRole.SPEAKING, speaker="Elon Musk", surface="Elon Musk")
+    repo.insert_mentions(
+        [
+            # EP_1 seg 1 already names musk; its speaking row must not repeat the quote.
+            _resolved_mention("person:elon-musk", episode_id=EP_1, segment_id=1, **speaking),
+            # Earlier in EP_1 than seg 5, but only speaking: ranks after the naming rows.
+            _resolved_mention("person:elon-musk", episode_id=EP_1, segment_id=3, **speaking),
+            _resolved_mention("person:elon-musk", episode_id=EP_1, segment_id=4, **speaking),
+            _resolved_mention("person:elon-musk", episode_id=EP_1, segment_id=5),
+        ]
+    )
+
+    summary = repo.get_entity_summary("person:elon-musk", recent_mentions_limit=10, recent_mentions_per_episode=2)
+
+    rows = [(r.episode_id, r.mention.segment_id) for r in summary["recent_mentions"]]
+    # Newest episode first; within one, the picked moments in episode order.
+    assert rows == [(EP_1, 1), (EP_1, 5), (EP_3, 1), (EP_2, 1)]
+    assert summary["recent_mentions"][0].mention.role is MentionRole.MENTIONED
+    # EP_1 has 4 moments (segments 1, 3, 4, 5) from 5 mention rows.
+    assert summary["recent_mention_counts"] == {EP_1: 4, EP_2: 1, EP_3: 1}
+    assert summary["mention_count"] == 7  # the header total still counts every row
+
+    newest_two = repo.get_entity_summary("person:elon-musk", recent_mentions_limit=2, recent_mentions_per_episode=1)
+    assert [r.episode_id for r in newest_two["recent_mentions"]] == [EP_1, EP_3]
+    assert newest_two["recent_mention_counts"] == {EP_1: 4, EP_3: 1}
 
 
 def test_get_entity_roles_and_anchor_roundtrip(repo):

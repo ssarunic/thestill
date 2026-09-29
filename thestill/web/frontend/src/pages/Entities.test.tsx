@@ -7,12 +7,12 @@
 // never showed up while the user was browsing entity mentions.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import Entities from './Entities'
-import type { EntitySummaryResponse } from '../api/types'
+import type { EntityCitationRow, EntitySummaryResponse } from '../api/types'
 
 // Player context — capture every play() call so we can assert that
 // clicking a timestamp seeks the right track at the right offset.
@@ -46,11 +46,13 @@ vi.mock('../contexts/PlayerContext', () => ({
 
 vi.mock('../api/client', () => ({
   getEntitySummary: vi.fn(),
+  getEntityEpisodeMentions: vi.fn(),
 }))
 
-import { getEntitySummary } from '../api/client'
+import { getEntityEpisodeMentions, getEntitySummary } from '../api/client'
 
 const mockGetEntitySummary = getEntitySummary as ReturnType<typeof vi.fn>
+const mockGetEntityEpisodeMentions = getEntityEpisodeMentions as ReturnType<typeof vi.fn>
 
 function summary(overrides: Partial<EntitySummaryResponse> = {}): EntitySummaryResponse {
   return {
@@ -262,5 +264,93 @@ describe('Entities page — Tier 0 enrichment (spec #45)', () => {
     expect(screen.queryByText('Vital stats')).toBeNull()
     expect(screen.queryByText('About')).toBeNull()
     expect(screen.queryByRole('img', { name: 'Cliff Weitzman' })).toBeNull()
+  })
+})
+
+// Recent mentions are grouped by episode, like search results: one card per
+// episode with its first couple of moments and a count, so an episode that
+// names the entity a hundred times can't fill the section.
+describe('Entities page — recent mentions grouped by episode', () => {
+  beforeEach(() => {
+    mockGetEntitySummary.mockReset()
+    mockGetEntityEpisodeMentions.mockReset()
+    isCurrentTrack = false
+    isPlayingNow = false
+  })
+
+  function moment(episode: 'ep-1' | 'ep-2', startSec: number, quote: string): EntityCitationRow {
+    const base = summary().recent_mentions[0]
+    return episode === 'ep-1'
+      ? { ...base, start_ms: startSec * 1000, quote }
+      : {
+          ...base,
+          episode_id: 'ep-2',
+          episode_slug: 'older-episode',
+          episode_title: 'An older episode',
+          published_at: '2026-04-01T00:00:00Z',
+          start_ms: startSec * 1000,
+          quote,
+        }
+  }
+
+  it('shows one card per episode with its moments and mention count', async () => {
+    mockGetEntitySummary.mockResolvedValue(
+      summary({
+        recent_mentions: [
+          moment('ep-1', 10, 'Cliff opens the show.'),
+          moment('ep-1', 70, 'Cliff again.'),
+          moment('ep-2', 5, 'Cliff in April.'),
+        ],
+        recent_mention_counts: { 'ep-1': 109, 'ep-2': 1 },
+      }),
+    )
+    renderPage()
+
+    const cards = await screen.findAllByTestId('entity-episode-mentions')
+    expect(cards).toHaveLength(2)
+    expect(within(cards[0]).getByRole('link', { name: 'Cliff Weitzman on Speechify' })).toHaveAttribute(
+      'href',
+      '/podcasts/twenty-minute-vc/episodes/cliff-weitzman-on-speechify',
+    )
+    expect(within(cards[0]).getByTestId('entity-episode-mention-count')).toHaveTextContent('109 mentions')
+    expect(within(cards[0]).getAllByTestId('entity-mention-play')).toHaveLength(2)
+    expect(within(cards[0]).getByRole('button', { name: 'Show all 109 mentions' })).toBeInTheDocument()
+    // Every moment of the second episode is already on screen: nothing to expand.
+    expect(within(cards[1]).getByTestId('entity-episode-mention-count')).toHaveTextContent('1 mention')
+    expect(within(cards[1]).queryByTestId('entity-episode-expand')).toBeNull()
+  })
+
+  it('"Show all" loads every moment of that episode', async () => {
+    mockGetEntitySummary.mockResolvedValue(
+      summary({
+        recent_mentions: [moment('ep-1', 10, 'Cliff opens the show.'), moment('ep-1', 70, 'Cliff again.')],
+        recent_mention_counts: { 'ep-1': 3 },
+      }),
+    )
+    mockGetEntityEpisodeMentions.mockResolvedValue({
+      episode_id: 'ep-1',
+      mentions: [
+        moment('ep-1', 10, 'Cliff opens the show.'),
+        moment('ep-1', 40, 'Cliff, in the middle.'),
+        moment('ep-1', 70, 'Cliff again.'),
+      ],
+    })
+    renderPage()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Show all 3 mentions' }))
+
+    expect(await screen.findByText(/Cliff, in the middle\./)).toBeInTheDocument()
+    expect(mockGetEntityEpisodeMentions).toHaveBeenCalledWith('person', 'cliff-weitzman', 'ep-1')
+    expect(screen.getAllByTestId('entity-mention-play')).toHaveLength(3)
+    await userEvent.click(screen.getByRole('button', { name: 'Show fewer' }))
+    expect(screen.queryByText(/Cliff, in the middle\./)).toBeNull()
+  })
+
+  it('counts the moments on hand when an older response has no counts', async () => {
+    mockGetEntitySummary.mockResolvedValue(summary())
+    renderPage()
+
+    expect(await screen.findByTestId('entity-episode-mention-count')).toHaveTextContent('1 mention')
+    expect(screen.queryByTestId('entity-episode-expand')).toBeNull()
   })
 })
