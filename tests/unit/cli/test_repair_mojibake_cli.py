@@ -69,7 +69,7 @@ def _seed(storage, db_path, monkeypatch) -> dict:
         episode_id=eid,
         segments=[
             AnnotatedSegment(
-                id=0, start=0, end=1, text=f"{BAD} explains the raise in detail", speaker=BAD, kind="content"
+                id=0, start=0, end=1, text=f"{BAD} explains the raise — “we’re doubling”", speaker=BAD, kind="content"
             ),
             AnnotatedSegment(
                 id=1, start=1, end=2, text="Jacob Effron asks about US expansion plans", speaker="Jacob", kind="content"

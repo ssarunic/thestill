@@ -108,3 +108,31 @@ class TestRepairMojibake:
         fixed, changed = repair_mojibake(text)
         assert changed is True
         assert fixed == "Speaker: Max Jungestål talks.\nBad line âhiâ here.\nAnother Müller line.\n"
+
+    @pytest.mark.parametrize(
+        ("damaged", "expected"),
+        [
+            # The prod shape: damaged speaker label, correct curly quotes in the text.
+            ("Max JungestÃ¥l: So we’re doubling revenue", "Max Jungestål: So we’re doubling revenue"),
+            ("Max JungestÃ¥l kaže da je ovo dobro", "Max Jungestål kaže da je ovo dobro"),
+            ("Ã¥ next to 日本語", "å next to 日本語"),
+            ("MÃ¼ller & JungestÃ¥l – ok", "Müller & Jungestål – ok"),
+            ("naÃ¯ve â€” dash", "naïve — dash"),
+        ],
+    )
+    def test_mixed_lines_repair_each_run_when_ftfy_declines(self, damaged, expected):
+        """ftfy leaves a line alone once it also holds correct non-ASCII text (or
+        fixes only part of it); the run pass finishes the job."""
+        assert repair_mojibake(damaged) == (expected, True)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "café… “quoted” — é’s fine",  # é followed by a cp1252 glyph, but not a full sequence
+            "Ã",  # a lead with no continuation
+            "à propos — ça va",
+            "Ræv på vej, Ålborg og København",
+        ],
+    )
+    def test_run_pass_leaves_correct_text_alone(self, text):
+        assert repair_mojibake(text) == (text, False)
