@@ -2974,6 +2974,127 @@ def eval_compare(ctx, run_a, run_b, json_output):
             click.echo(f"  failed items: {comparison.failed_excluded}")
 
 
+# ---------------------------------------------------------------------------
+# Spec #89 — corpus search quality against the golden query set
+# ---------------------------------------------------------------------------
+
+
+def _search_eval_paths(ctx, judgments):
+    from pathlib import Path
+
+    base = Path(ctx.obj.path_manager.storage_path) / "evals"
+    return base / "search", Path(judgments) if judgments else base / "search_judgments.jsonl"
+
+
+@eval_group.command("search")
+@click.option("--label", required=True, help="Name for this run, e.g. baseline or rerank-mmarco.")
+@click.option("--k", default=10, show_default=True, type=int, help="Results kept per query.")
+@click.option(
+    "--golden", type=click.Path(exists=True, dir_okay=False), default=None, help="Golden set (default: bundled)."
+)
+@click.option("--only", default=None, help="Comma-separated query ids or kinds to run.")
+@click.option("--no-judge", is_flag=True, help="Record hits only; grade later with another run or search-report.")
+@click.option(
+    "--judgments",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Judgment cache (default: data/evals/search_judgments.jsonl).",
+)
+@click.option("--judge-provider", default=None, help="Override the judge provider for this run.")
+@click.option("--judge-model", default=None, help="Override the judge model for this run.")
+@click.option("--judge-temperature", default=None, type=float, help="Override the judge temperature.")
+@click.pass_context
+@require_config
+@log_command
+def eval_search(ctx, label, k, golden, only, no_judge, judgments, judge_provider, judge_model, judge_temperature):
+    """Run the golden queries through hybrid search and judge unseen results (spec #89)."""
+    import json
+    from pathlib import Path
+
+    from .evals.search_quality import GOLDEN_PATH, Hit, JudgmentCache, load_golden, run_golden, score_runs
+    from .search.base import SearchMode
+
+    queries = load_golden(Path(golden) if golden else GOLDEN_PATH)
+    if only:
+        wanted = {w.strip() for w in only.split(",") if w.strip()}
+        queries = [q for q in queries if q.id in wanted or q.kind in wanted]
+    backend = ctx.obj.search_backend
+
+    def search(text, limit):
+        return [
+            Hit(episode_id=h.episode_id, segment_id=h.segment_id, text=h.text, score=h.score, origin=h.origin)
+            for h in backend.search(text, mode=SearchMode.HYBRID, limit=limit, filters=None)
+        ]
+
+    runs_dir, cache_path = _search_eval_paths(ctx, judgments)
+    cache = JudgmentCache(cache_path)
+    judge = None if no_judge else _resolve_judge_or_exit(ctx, judge_provider, judge_model, judge_temperature)
+    run = run_golden(search, queries, label=label, k=k, judge=judge, cache=cache)
+
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    out = runs_dir / f"{label}.json"
+    out.write_text(json.dumps(run.to_json(), ensure_ascii=False, indent=1), encoding="utf-8")
+    click.echo(f"✓ {len(queries)} queries → {out}")
+    _print_search_scores([run], cache)
+
+
+def _print_search_scores(runs, cache):
+    from .evals.search_quality import latency_summary, score_runs
+
+    scores = score_runs(runs, cache)
+    kinds = ["all", "name", "concept", "croatian", "nonsense"]
+    click.echo("")
+    click.echo(f"{'run':28} {'kind':9} {'nDCG@k':>7} {'junk@k':>7} {'results':>8} {'unjudged':>9}")
+    for run in runs:
+        for kind in kinds:
+            s = scores[run.label].get(kind)
+            if s is None:
+                continue
+            ndcg = "-" if s.ndcg is None else f"{s.ndcg:.3f}"
+            click.echo(f"{run.label[:28]:28} {kind:9} {ndcg:>7} {s.junk:>7.2f} {s.results:>8.1f} {s.unjudged:>9}")
+        p50, p95 = latency_summary(run)
+        click.echo(f"{run.label[:28]:28} latency   p50 {p50:.0f} ms   p95 {p95:.0f} ms")
+
+
+@eval_group.command("search-report")
+@click.argument("labels", nargs=-1, required=True)
+@click.option(
+    "--judgments",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Judgment cache (default: data/evals/search_judgments.jsonl).",
+)
+@click.option("--per-query", is_flag=True, help="Also print nDCG and junk per query for every run.")
+@click.pass_context
+@require_config
+@log_command
+def eval_search_report(ctx, labels, judgments, per_query):
+    """Score saved search runs side by side against the pooled judgments (spec #89)."""
+    import json
+
+    from .evals.search_quality import JudgmentCache, Run, per_query_table
+
+    runs_dir, cache_path = _search_eval_paths(ctx, judgments)
+    cache = JudgmentCache(cache_path)
+    runs = []
+    for label in labels:
+        path = runs_dir / f"{label}.json"
+        if not path.exists():
+            click.echo(f"❌ No run named {label} in {runs_dir}", err=True)
+            ctx.exit(1)
+        runs.append(Run.from_json(json.loads(path.read_text(encoding="utf-8"))))
+    _print_search_scores(runs, cache)
+    if per_query:
+        click.echo("")
+        click.echo(f"{'query':32} " + " ".join(f"{r.label[:16]:>16}" for r in runs))
+        for row in per_query_table(runs, cache):
+            cells = []
+            for r in runs:
+                ndcg, junk = row.get(r.label, (None, 0))
+                cells.append(f"{'-' if ndcg is None else f'{ndcg:.2f}':>9} j{junk:<5}")
+            click.echo(f"{row['query'][:32]:32} " + " ".join(f"{c:>16}" for c in cells))
+
+
 def _deprecated_eval_wrapper(
     ctx, rubric_name, transcript_path, original, output, podcast_id, episode_id, max_episodes, dry_run, force
 ):

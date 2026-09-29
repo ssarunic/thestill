@@ -115,6 +115,29 @@ thestill eval run --rubric clean-transcript \
 thestill eval compare <before-run-id> <after-run-id>
 ```
 
+## Search quality (spec #89)
+
+`thestill/evals/data/search_golden.json` holds 57 queries in four kinds:
+`name` (in both cases: the 2026-09-29 incident was lowercase `legora`),
+`concept`, `croatian` and `nonsense` (typos and gibberish, where an empty
+page is the right answer).
+
+```bash
+thestill eval search --label baseline          # run + judge unseen results
+SEARCH_RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1 \
+  thestill eval search --label rerank
+thestill eval search-report baseline rerank --per-query
+```
+
+Each run stores its hits with scores and origins under
+`data/evals/search/<label>.json`. Grades (0 unrelated, 1 related, 2 about
+it) are cached in `data/evals/search_judgments.jsonl` per query, episode,
+segment and text hash, so a rerun only pays for new passages. The report
+scores all named runs against the pooled judgments: nDCG@10's ideal
+ranking includes every relevant passage any run found, which is what makes
+runs comparable. `junk@10` counts unrelated results shown. Judge with a
+pinned model, and re-baseline after changing it.
+
 ## Golden episode set
 
 `tests/fixtures/eval/golden_episodes.json` pins 5 episodes across 5

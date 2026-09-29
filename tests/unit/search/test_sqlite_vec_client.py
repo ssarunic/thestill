@@ -374,3 +374,43 @@ class TestShortChunkGuards:
         assert {h.segment_id for h in hits} == {0, 1}
         hits = backend.search("Legora", mode=SearchMode.HYBRID, limit=5, filters=None)
         assert [h.segment_id for h in hits] == [0]
+
+
+class TestEntityLeg:
+    """Spec #89 Phase 3 — chunks where a name was said (surface form) or where
+    a mention links to an entity of that canonical name, case-insensitively."""
+
+    def _seed_mentions(self, db_path, episode_id):
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO entities (id, type, canonical_name) VALUES ('company:acme', 'company', 'Acme Quantum')"
+            )
+            for seg, entity_id, surface, status in [
+                (0, "company:acme", "quantum lasers", "resolved"),
+                (1, None, "Sourdough", "pending"),
+            ]:
+                conn.execute(
+                    """INSERT INTO entity_mentions (entity_id, resolution_status, episode_id, segment_id, start_ms, end_ms,
+                                                    surface_form, quote_excerpt, confidence, extractor)
+                       VALUES (?, ?, ?, ?, 0, 1000, ?, '', 0.9, 'gliner')""",
+                    (entity_id, status, episode_id, seg, surface),
+                )
+            conn.commit()
+
+    def test_matches_canonical_name_and_unlinked_surface_forms(self, tmp_path):
+        db_path, fixtures = _seed_db(tmp_path)
+        e1 = fixtures["episodes"]["e1"]["id"]
+        _populate_chunks(
+            db_path,
+            e1,
+            [
+                (0, 1.0, 5.0, "alpha text about quantum lasers", "Host"),
+                (1, 5.0, 10.0, "beta text about sourdough baking", "Host"),
+            ],
+        )
+        self._seed_mentions(db_path, e1)
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        assert [r["segment_id"] for r in backend._entity_rows("acme QUANTUM", limit=10, filters=None)] == [0]
+        assert [r["segment_id"] for r in backend._entity_rows("sourdough", limit=10, filters=None)] == [1]
+        assert backend._entity_rows("nothing here", limit=10, filters=None) == []
+        assert backend._entity_rows("   ", limit=10, filters=None) == []

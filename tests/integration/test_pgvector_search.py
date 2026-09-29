@@ -286,3 +286,28 @@ def test_semantic_leg_skips_legacy_short_rows(seeded):
     hits = _backend(model).search("tell me about computing", mode=SearchMode.SEMANTIC, limit=10, filters=None)
     assert hits
     assert all(h.segment_id != 99 for h in hits)
+
+
+def test_entity_leg_matches_canonical_name_and_surface_form(seeded):
+    """Spec #89 Phase 3 — same contract as the SQLite backend's entity leg."""
+    import psycopg
+
+    model, _ = seeded
+    with psycopg.connect(PG_DSN) as conn:
+        conn.execute(
+            "INSERT INTO entities (id, type, canonical_name) VALUES ('company:acme', 'company', 'Acme Quantum')"
+        )
+        for seg, entity_id, surface, status in [
+            (0, "company:acme", "quantum computing", "resolved"),
+            (1, None, "Sourdough", "pending"),
+        ]:
+            conn.execute(
+                """INSERT INTO entity_mentions (entity_id, resolution_status, episode_id, segment_id, start_ms, end_ms,
+                                                surface_form, quote_excerpt, confidence, extractor)
+                   VALUES (%s, %s, %s, %s, 0, 1000, %s, '', 0.9, 'gliner')""",
+                (entity_id, status, EPISODE_A, seg, surface),
+            )
+    backend = _backend(model)
+    assert [r["segment_id"] for r in backend._entity_rows("acme QUANTUM", limit=10, filters=None)] == [0]
+    assert [r["segment_id"] for r in backend._entity_rows("sourdough", limit=10, filters=None)] == [1]
+    assert backend._entity_rows("nothing here", limit=10, filters=None) == []
