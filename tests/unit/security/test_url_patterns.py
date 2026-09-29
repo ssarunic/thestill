@@ -231,6 +231,20 @@ class TestSpec87TextScanners:
             "https://www.youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA",
         ]
 
+    def test_apple_show_links_in_text(self):
+        from thestill.utils.url_patterns import find_apple_show_links
+
+        text = (
+            'Listen on <a href="https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711?i=1000792176970">Apple</a> '
+            "podcasts.apple.com/gb/podcast/id842818711 podcasts.apple.com/podcast/id123456 "
+            "https://music.apple.com/us/album/id999 podcasts.apple.com/us/podcast/x/id1234567890123"
+        )
+        assert find_apple_show_links(text) == [
+            ("842818711", "https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711"),
+            ("123456", "https://podcasts.apple.com/podcast/id123456"),
+        ]
+        assert find_apple_show_links("") == []
+
     def test_spotify_entities_in_text(self):
         from thestill.utils.url_patterns import find_spotify_entities
 

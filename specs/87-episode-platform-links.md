@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery and curated show links implemented; edit field + verified channel discovery open
+> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery, curated show links and the 3f resolver follow-ups implemented; edit field + verified channel discovery open
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -74,14 +74,29 @@ that Apple never indexed does not keep the show in the candidate set forever.
   rows for every candidate, all stamped `checked_at = now`.
 - A lookup error writes nothing; the next refresh retries.
 
+**Young recheck** (Phase 3f). An episode whose `pub_date` is inside the
+last `PLATFORM_LINKS_YOUNG_AGE_HOURS` (48) is a candidate again after
+`PLATFORM_LINKS_YOUNG_RECHECK_HOURS` (2) instead of the full interval.
+The a16z case showed why: the first pass after publication ran before
+Apple had indexed the episode and before Spotify's embed page listed it,
+and the 24-hour marker then outlived the episode's turn as the show's
+newest — which is the only turn the Spotify probe ever sees. Set the age
+to `0`, or the young interval no shorter than the full one, to turn it off.
+
 With `PLATFORM_LINKS_RECHECK_HOURS=24` the worst case is one request per
-show per day for shows that have unindexed episodes inside the window.
+show per day for shows that have unindexed episodes inside the window,
+plus one every two hours per platform for the two days after each new
+episode.
 
 ### Apple resolver (Phase 1)
 
 1. **Show id.** `podcasts.apple_url` (chart-sourced, [#73](73-mobile-list-row-density.md))
-   gives the collection id. When it is empty, one iTunes search by show
-   title (`media=podcast`) is run. A result is accepted outright when its
+   gives the collection id. When it is empty, the Apple show page the
+   publisher links in its own text (podcast description, or the same page
+   in at least three episode descriptions on the share rule below) is tried
+   first, provisionally: its window must yield an exact GUID or enclosure
+   match, and then the link is stored with source `publisher`. Otherwise
+   one iTunes search by show title (`media=podcast`) is run. A result is accepted outright when its
    `feedUrl` equals the podcast's `rss_url` after normalisation (scheme and
    trailing slash ignored). Otherwise a **unique** result with the same
    normalised title is accepted provisionally, and only kept if its episode
@@ -135,10 +150,16 @@ description / website URL is taken when unique; then (Phase 3c) the
 publisher's **website page** — its "listen on" buttons, fetched once per
 pass through the SSRF guard and only while a platform is still missing —
 on the same terms; then the same link in at least three episode
-descriptions when no other competes. A source that names two different
-shows or channels (a network site listing all its shows) is left for a
-human, and the channels hosting platforms stamp on every site (Anchor
-pages link Spotify's own "for creators" channel) never count. Measured on
+descriptions when it holds at least 80 % of that platform's votes
+(`DOMINANT_SHARE`). The share rule replaced strict exclusivity in Phase
+3f: a16z's footer names `@a16z` in all 123 stored episodes while three
+episodes also link a guest's channel, which under exclusivity left the
+show with no channel at all. A source that names two different shows or
+channels (a network site listing all its shows), or votes split between
+two, is left for a human, and the channels hosting platforms stamp on
+every site (Anchor pages link Spotify's own "for creators" channel) never
+count. The same harvest now yields the Apple show page for the Apple
+resolver above. Measured on
 the 40 most-followed shows with a website that lacked a link: the scan
 fills the Spotify id for 18 of 40 and the YouTube channel for 5 of the 17
 without one; 6 sites could not be fetched (bot walls, dead domains, a
@@ -254,6 +275,7 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | 3c′ | An edit field on the podcast page for the curated links; the manual pass ordered by follows, not chart rank (followed shows without a channel or Spotify id first) | Open |
 | 3d | Verified YouTube channel discovery: search by show title, accept a channel only when several of the show's episodes match its uploads on core title and duration — the namesake guard the linker already uses. The chart already carries a channel for 5254 of 7702 charted shows; discovery is for the rest and for off-chart shows | Open |
 | 3e | Feed the #62 playback rendition from `youtube` links once they have been eyeballed in production | Open |
+| 3f | Resolver follow-ups from the a16z case: dominant-share vote for show links, young-episode recheck, publisher-stated Apple show page tried before the title search | ✅ 2026-09-29 |
 
 ## Configuration
 
@@ -261,6 +283,8 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 |----------|-------------|---------|
 | `PLATFORM_LINKS_ENABLED` | Resolve per-episode platform links after refresh and via the CLI | `true` |
 | `PLATFORM_LINKS_RECHECK_HOURS` | How long a not-found row suppresses another lookup for that episode | `24` |
+| `PLATFORM_LINKS_YOUNG_RECHECK_HOURS` | The shorter suppression for an episode still inside its young window | `2` |
+| `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables | `48` |
 
 ## Testing
 
@@ -269,7 +293,11 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
   candidates → no call; show search accepted on feed URL equality, or on a
   unique title hit proven by the window (an unproven hit stores nothing);
   lookup error writes nothing; dry run writes nothing; force ignores the
-  throttle.
+  throttle; the young thresholds reach the repository unless forced or
+  disabled; a publisher-stated Apple show is tried before the search and
+  falls back to it when its window does not prove it.
+- Repository contract (SQLite and Postgres): a young episode's marker
+  expires at the short interval while an old one waits for the full one.
 - Dual-backend repository contract tests (SQLite and Postgres via
   `TEST_DATABASE_URL`): candidate window, recheck filter, upsert keeps a
   found URL, cascade delete.

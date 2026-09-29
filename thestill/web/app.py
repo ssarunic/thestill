@@ -61,6 +61,8 @@ from ..services.refresh_on_open import RefreshOnOpenService
 from ..utils.config import (
     Config,
     get_platform_links_recheck_hours,
+    get_platform_links_young_age_hours,
+    get_platform_links_young_recheck_hours,
     get_refresh_min_interval_seconds,
     is_platform_links_enabled,
     is_refresh_on_open_enabled,
@@ -224,7 +226,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Spec #87 — per-episode platform links (Apple). One service instance is
     # shared by the inline refresh and the queued REFRESH_FEED handler.
     platform_link_service = (
-        PlatformLinkService(repository, recheck_hours=get_platform_links_recheck_hours())
+        PlatformLinkService(
+            repository,
+            recheck_hours=get_platform_links_recheck_hours(),
+            young_recheck_hours=get_platform_links_young_recheck_hours(),
+            young_age_hours=get_platform_links_young_age_hours(),
+        )
         if is_platform_links_enabled()
         else None
     )

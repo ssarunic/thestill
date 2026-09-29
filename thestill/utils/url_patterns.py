@@ -212,6 +212,15 @@ APPLE_EPISODE_ID_RE: Final[re.Pattern[str]] = re.compile(r"[?&]i=(\d{1,15})")
 
 APPLE_PODCAST_HOST_RE: Final[re.Pattern[str]] = re.compile(r"podcasts\.apple\.com/", re.IGNORECASE)
 
+# A show page link as show notes carry it: ``podcasts.apple.com/<cc>/podcast/
+# <slug>/id<digits>`` (the country and slug are optional; an episode share
+# link carries the same show id ahead of its ``?i=`` track id). Group 1 is
+# the URL up to the id, group 2 the collection id.
+APPLE_SHOW_LINK_RE: Final[re.Pattern[str]] = re.compile(
+    r"(podcasts\.apple\.com/(?:[a-z]{2}/)?podcast/(?:[A-Za-z0-9%_.\-]{1,200}/)?id(\d{1,12}))(?!\d)",
+    re.IGNORECASE,
+)
+
 
 def extract_apple_podcast_id(text: str) -> str | None:
     """Return the first ``id<digits>`` match in ``text``, or None."""
@@ -228,6 +237,18 @@ def extract_apple_episode_id(text: str) -> str | None:
 def is_apple_podcast_url(url: str) -> bool:
     """Return True iff ``url`` is a podcasts.apple.com link."""
     return bool(APPLE_PODCAST_HOST_RE.search(url))
+
+
+def find_apple_show_links(text: str) -> list[tuple[str, str]]:
+    """
+    Distinct ``(collection id, url)`` pairs for the Apple show pages linked
+    anywhere in ``text``, first-seen order. The URL is the link as written,
+    cut after ``id<digits>`` (no ``?i=`` track id, no tracking query).
+    """
+    seen: dict[str, str] = {}
+    for match in APPLE_SHOW_LINK_RE.finditer(text or ""):
+        seen.setdefault(match.group(2), "https://" + match.group(1))
+    return list(seen.items())
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +333,7 @@ ALL_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     APPLE_PODCAST_ID_RE,
     APPLE_EPISODE_ID_RE,
     APPLE_PODCAST_HOST_RE,
+    APPLE_SHOW_LINK_RE,
     SPOTIFY_HOST_RE,
     SPOTIFY_ENTITY_RE,
     SPOTIFY_URI_RE,

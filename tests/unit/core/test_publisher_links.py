@@ -93,10 +93,40 @@ class TestShowLinks:
         )
         assert show.spotify_url == f"https://open.spotify.com/show/{SPOT2}"
 
-    def test_votes_need_three_and_no_competitor(self):
+    def test_votes_need_three_and_a_dominant_share(self):
+        a = "https://www.youtube.com/@a"
         assert show_links_from_sources([], ["youtube.com/@a"] * 2).youtube_url is None
-        assert show_links_from_sources([], ["youtube.com/@a"] * 3).youtube_url == "https://www.youtube.com/@a"
+        assert show_links_from_sources([], ["youtube.com/@a"] * 3).youtube_url == a
+        # 3 of 4 is 75 %: below the 80 % share a competitor forces.
         assert show_links_from_sources([], ["youtube.com/@a"] * 3 + ["youtube.com/@guest"]).youtube_url is None
+        assert show_links_from_sources([], ["youtube.com/@a"] * 8 + ["youtube.com/@guest"] * 2).youtube_url == a
+        # a16z: every episode footer names the show's channel, three episodes also link a guest's.
+        guests = ["youtube.com/@NEWECONOMIESPOD", "youtube.com/@a16zcrypto", "youtube.com/@CS153Team"]
+        assert show_links_from_sources([], ["youtube.com/@a"] * 123 + guests).youtube_url == a
+        # Two shows splitting the votes (a network feed) are left alone.
+        assert show_links_from_sources([], ["youtube.com/@a"] * 4 + ["youtube.com/@b"] * 4).youtube_url is None
+        assert show_links_from_sources([], [f"open.spotify.com/show/{SPOT}"] * 5 + [SPOT2]).spotify_url == (
+            f"https://open.spotify.com/show/{SPOT}"
+        )
+
+    def test_apple_show_page_as_the_publisher_links_it(self):
+        # An episode share link carries the show id too; the stored URL stops at ``id<digits>``.
+        notes = "https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711?i=1000792176970&uo=4"
+        show = show_links_from_sources([], [notes] * 3)
+        assert show.apple_url == "https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711"
+        assert show_links_from_sources([], [notes] * 2).apple_url is None
+        assert (
+            show_links_from_sources(["podcasts.apple.com/podcast/id1 podcasts.apple.com/podcast/id2"], []).apple_url
+            is None
+        )
+        site = '<a href="https://podcasts.apple.com/gb/podcast/id123">Apple</a>'
+        assert (
+            show_links_from_sources([], [], website_html=site).apple_url
+            == "https://podcasts.apple.com/gb/podcast/id123"
+        )
+        assert show_links_from_sources(["see https://podcasts.apple.com/podcast/id7"], [notes] * 3).apple_url == (
+            "https://podcasts.apple.com/podcast/id7"
+        )
 
     def test_nothing(self):
         assert show_links_from_sources([None, ""], [None]) == show_links_from_sources([], [])

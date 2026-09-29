@@ -39,7 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from structlog import get_logger
@@ -116,6 +116,16 @@ class _ShowMatch:
     collection_id: str
     view_url: Optional[str]
     verified: bool
+    source: str = "resolver"  # provenance stamped on the stored show link
+
+
+@dataclass(frozen=True)
+class _Recheck:
+    """Which not-found markers have expired for this pass (all ``None`` = forced)."""
+
+    before: Optional[datetime]
+    young_before: Optional[datetime] = None
+    young_since: Optional[datetime] = None
 
 
 class PlatformLinkService:
@@ -127,6 +137,8 @@ class PlatformLinkService:
         *,
         window: int = DEFAULT_WINDOW,
         recheck_hours: int = 24,
+        young_recheck_hours: int = 2,
+        young_age_hours: int = 48,
         youtube_listing_limit: int = youtube.DEFAULT_LISTING_LIMIT,
         lookup: Callable[[str], list] = itunes_lookup,
         search: Callable[[str], list] = itunes_search,
@@ -142,6 +154,12 @@ class PlatformLinkService:
         self.repository = repository
         self.window = window
         self.recheck = timedelta(hours=recheck_hours)
+        # A not-found marker on an episode younger than ``young_age`` expires
+        # after ``young_recheck`` instead: Apple indexes with a lag and the
+        # Spotify probe only ever sees the newest episode, so a daily show
+        # would otherwise miss both (spec #87 "Candidates and throttle").
+        self.young_recheck = timedelta(hours=young_recheck_hours)
+        self.young_age = timedelta(hours=young_age_hours)
         self.youtube_listing_limit = youtube_listing_limit
         self._lookup = lookup
         self._search = search
@@ -163,7 +181,14 @@ class PlatformLinkService:
         down; a failed listing is simply retried on the next refresh.
         """
         now = self._clock()
-        recheck_before = None if force else now - self.recheck
+        recheck = _Recheck(None)
+        if not force:
+            young = self.young_age > timedelta(0) and self.young_recheck < self.recheck
+            recheck = _Recheck(
+                before=now - self.recheck,
+                young_before=now - self.young_recheck if young else None,
+                young_since=now - self.young_age if young else None,
+            )
         # The chart sync writes (it backfills apple_url / youtube_url from the
         # chart row); a dry run promises to write nothing, so it reads only.
         urls = (
@@ -173,8 +198,8 @@ class PlatformLinkService:
         )
         if not isinstance(urls, dict):
             urls = {}
-        outcomes = [self._link_apple(podcast, urls, now, recheck_before, dry_run=dry_run)]
-        outcomes.extend(self._link_spotify_and_youtube(podcast, urls, now, recheck_before, dry_run=dry_run))
+        outcomes = [self._link_apple(podcast, urls, now, recheck, dry_run=dry_run)]
+        outcomes.extend(self._link_spotify_and_youtube(podcast, urls, now, recheck, dry_run=dry_run))
         return PodcastLinkReport(podcast.id, outcomes)
 
     def link_all(
@@ -192,11 +217,14 @@ class PlatformLinkService:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _candidates(
-        self, podcast_id: str, platform: str, recheck_before: Optional[datetime]
-    ) -> List[PlatformLinkCandidate]:
+    def _candidates(self, podcast_id: str, platform: str, recheck: _Recheck) -> List[PlatformLinkCandidate]:
         found = self.repository.get_platform_link_candidates(
-            podcast_id, platform, window=self.window, recheck_before=recheck_before
+            podcast_id,
+            platform,
+            window=self.window,
+            recheck_before=recheck.before,
+            young_recheck_before=recheck.young_before,
+            young_since=recheck.young_since,
         )
         return list(found) if isinstance(found, list) else []
 
@@ -235,55 +263,70 @@ class PlatformLinkService:
         podcast: Podcast,
         urls: Dict[str, Optional[str]],
         now: datetime,
-        recheck_before: Optional[datetime],
+        recheck: _Recheck,
         *,
         dry_run: bool,
     ) -> PodcastLinkOutcome:
-        candidates = self._candidates(podcast.id, PLATFORM_APPLE, recheck_before)
+        candidates = self._candidates(podcast.id, PLATFORM_APPLE, recheck)
         if not candidates:
             return PodcastLinkOutcome(podcast.id, PLATFORM_APPLE, candidates=0, skipped="no_candidates")
 
-        show = self._resolve_apple_show(podcast, urls.get("apple_url"), dry_run=dry_run)
-        if show is None:
-            return self._no_apple_id(podcast, candidates, now, dry_run=dry_run)
-        collection_id = show.collection_id
+        # The show page the publisher links in its own text, when the chart
+        # has none: the a16z footer names Apple, Spotify and YouTube in every
+        # episode. Provisional like a title hit — the window has to prove it.
+        publisher_url = None
+        if not urls.get("apple_url"):
+            publisher_url = show_links_from_sources(
+                [podcast.description, getattr(podcast, "description_html", None), podcast.website_url],
+                [c.description_html for c in candidates],
+            ).apple_url
 
-        try:
-            results = self._lookup(f"id={collection_id}&entity=podcastEpisode&limit={self.window}")
-        except Exception as exc:  # noqa: BLE001 — any resolver/network failure: retry next refresh
-            logger.warning(
-                "platform_links_lookup_failed",
-                podcast_id=podcast.id,
-                platform=PLATFORM_APPLE,
-                collection_id=collection_id,
-                error=str(exc),
-            )
-            return PodcastLinkOutcome(podcast.id, PLATFORM_APPLE, candidates=len(candidates), skipped="lookup_failed")
+        for show in self._apple_show_candidates(podcast, urls.get("apple_url"), publisher_url, dry_run=dry_run):
+            collection_id = show.collection_id
+            try:
+                results = self._lookup(f"id={collection_id}&entity=podcastEpisode&limit={self.window}")
+            except Exception as exc:  # noqa: BLE001 — any resolver/network failure: retry next refresh
+                logger.warning(
+                    "platform_links_lookup_failed",
+                    podcast_id=podcast.id,
+                    platform=PLATFORM_APPLE,
+                    collection_id=collection_id,
+                    error=str(exc),
+                )
+                return PodcastLinkOutcome(
+                    podcast.id, PLATFORM_APPLE, candidates=len(candidates), skipped="lookup_failed"
+                )
 
-        entries = parse_lookup_window(results)
-        matches = match_candidates(candidates, entries)
-        if not show.verified:
-            # A title-only show hit is accepted only when its window proves it
-            # is our feed: at least one exact GUID / enclosure match. Title-date
-            # matches alone are not proof — a namesake show could share them.
+            entries = parse_lookup_window(results)
+            matches = match_candidates(candidates, entries)
+            if show.verified:
+                break
+            # A publisher-stated or title-only show is accepted only when its
+            # window proves it is our feed: at least one exact GUID / enclosure
+            # match. Title-date matches alone are not proof — a namesake show
+            # could share them. Otherwise the next candidate show is tried.
             if not any(m.match_method in ("guid", "audio_url") for m in matches):
                 logger.info(
                     "platform_links_show_unverified",
                     podcast_id=podcast.id,
                     podcast_title=podcast.title,
                     collection_id=collection_id,
+                    source=show.source,
                     window_entries=len(entries),
                 )
-                return self._no_apple_id(podcast, candidates, now, dry_run=dry_run)
+                continue
             if show.view_url:
                 self._store_show_url(
                     podcast,
                     PLATFORM_APPLE,
                     show.view_url,
                     verified_by="episode_window",
-                    source="resolver",
+                    source=show.source,
                     dry_run=dry_run,
                 )
+            break
+        else:
+            return self._no_apple_id(podcast, candidates, now, dry_run=dry_run)
         matched_ids = {m.episode_id for m in matches}
         rows = [
             PlatformLink(
@@ -312,24 +355,33 @@ class PlatformLinkService:
         self._log_outcome(podcast, outcome, dry_run=dry_run, collection_id=collection_id, window_entries=len(entries))
         return outcome
 
-    def _resolve_apple_show(self, podcast: Podcast, stored: Optional[str], *, dry_run: bool) -> Optional[_ShowMatch]:
+    def _apple_show_candidates(
+        self, podcast: Podcast, stored: Optional[str], publisher_url: Optional[str], *, dry_run: bool
+    ) -> Iterator[_ShowMatch]:
         """
-        The show's Apple collection: from the stored (chart-sourced)
-        ``apple_url`` first; else one iTunes search by title, accepted
-        outright when a result's ``feedUrl`` is the podcast's RSS URL, or
-        provisionally (``verified=False``) when exactly one result carries
-        the same title — the same show on another feed host is common
-        (megaphone vs anchor, substack vs flightcast).
+        The show's Apple collection, best first: the stored (chart-sourced)
+        ``apple_url`` alone when present; else the show page the publisher
+        links in the feed (provisional, source ``publisher``); else one
+        iTunes search by title, accepted outright when a result's
+        ``feedUrl`` is the podcast's RSS URL, or provisionally when exactly
+        one result carries the same title — the same show on another feed
+        host is common (megaphone vs anchor, substack vs flightcast). The
+        search runs only when the earlier candidates did not settle it.
         """
         collection_id = apple_collection_id(stored)
         if collection_id:
-            return _ShowMatch(collection_id, stored, verified=True)
+            yield _ShowMatch(collection_id, stored, verified=True)
+            return
+
+        publisher_id = apple_collection_id(publisher_url)
+        if publisher_id:
+            yield _ShowMatch(publisher_id, publisher_url, verified=False, source="publisher")
 
         try:
             results = self._search(f"term={quote_plus(podcast.title)}&media=podcast&entity=podcast&limit=25")
         except Exception as exc:  # noqa: BLE001
             logger.warning("platform_links_show_search_failed", podcast_id=podcast.id, error=str(exc))
-            return None
+            return
 
         wanted = _feed_key(str(podcast.rss_url))
         title_key = normalize_title(podcast.title)
@@ -349,13 +401,13 @@ class PlatformLinkService:
                     self._store_show_url(
                         podcast, PLATFORM_APPLE, view_url, verified_by="feed_url", source="resolver", dry_run=dry_run
                     )
-                return _ShowMatch(found, view_url, verified=True)
+                yield _ShowMatch(found, view_url, verified=True)
+                return
             name = entry.get("collectionName")
             if isinstance(name, str) and title_key and normalize_title(name) == title_key:
                 same_title.append(_ShowMatch(found, view_url, verified=False))
-        if len(same_title) == 1:
-            return same_title[0]
-        return None
+        if len(same_title) == 1 and same_title[0].collection_id != publisher_id:
+            yield same_title[0]
 
     def _no_apple_id(
         self, podcast: Podcast, candidates: List[PlatformLinkCandidate], now: datetime, *, dry_run: bool
@@ -380,12 +432,12 @@ class PlatformLinkService:
         podcast: Podcast,
         urls: Dict[str, Optional[str]],
         now: datetime,
-        recheck_before: Optional[datetime],
+        recheck: _Recheck,
         *,
         dry_run: bool,
     ) -> List[PodcastLinkOutcome]:
-        spotify_cands = self._candidates(podcast.id, PLATFORM_SPOTIFY, recheck_before)
-        youtube_cands = self._candidates(podcast.id, PLATFORM_YOUTUBE, recheck_before)
+        spotify_cands = self._candidates(podcast.id, PLATFORM_SPOTIFY, recheck)
+        youtube_cands = self._candidates(podcast.id, PLATFORM_YOUTUBE, recheck)
         if not spotify_cands and not youtube_cands:
             return [
                 PodcastLinkOutcome(podcast.id, PLATFORM_SPOTIFY, candidates=0, skipped="no_candidates"),

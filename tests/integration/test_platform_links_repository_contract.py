@@ -205,6 +205,38 @@ class TestCandidates:
         assert [c.episode_id for c in stale] == [ep.id]
         assert [c.episode_id for c in forced] == [ep.id]
 
+    def test_young_episode_marker_expires_at_the_short_interval(self, h):
+        young = _episode(1, pub_date=NOW - timedelta(hours=5))
+        old = _episode(2, pub_date=NOW - timedelta(days=10))
+        pid = h.make_podcast(_podcast([young, old]))
+        h.repo.upsert_platform_links(
+            [_link(young.id, checked_at=NOW - timedelta(hours=3)), _link(old.id, checked_at=NOW - timedelta(hours=3))]
+        )
+        day = NOW - timedelta(hours=24)
+
+        assert h.repo.get_platform_link_candidates(pid, "apple", window=10, recheck_before=day) == []
+        got = h.repo.get_platform_link_candidates(
+            pid,
+            "apple",
+            window=10,
+            recheck_before=day,
+            young_recheck_before=NOW - timedelta(hours=2),
+            young_since=NOW - timedelta(hours=48),
+        )
+        assert [c.episode_id for c in got] == [young.id]  # the old one waits for the day to pass
+
+        # A marker fresher than the short interval still suppresses the young one.
+        h.repo.upsert_platform_links([_link(young.id, checked_at=NOW - timedelta(hours=1))])
+        got = h.repo.get_platform_link_candidates(
+            pid,
+            "apple",
+            window=10,
+            recheck_before=day,
+            young_recheck_before=NOW - timedelta(hours=2),
+            young_since=NOW - timedelta(hours=48),
+        )
+        assert got == []
+
     def test_other_platform_rows_do_not_count(self, h):
         ep = _episode(1, pub_date=NOW)
         pid = h.make_podcast(_podcast([ep]))

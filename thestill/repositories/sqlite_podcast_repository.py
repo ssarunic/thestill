@@ -5586,6 +5586,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         *,
         window: int,
         recheck_before: Optional[datetime],
+        young_recheck_before: Optional[datetime] = None,
+        young_since: Optional[datetime] = None,
     ) -> List[PlatformLinkCandidate]:
         # The window is the show's newest ``window`` episodes BEFORE the link
         # filter (see the interface docstring). ``NULLS LAST`` keeps undated
@@ -5595,6 +5597,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         if recheck_before is not None:
             marker_filter = "(l.url IS NULL AND l.checked_at < ?)"
             params = params + (ensure_utc(recheck_before).isoformat(),)
+            if young_recheck_before is not None and young_since is not None:
+                # A fresh episode's marker expires sooner: the platform may
+                # simply not have indexed it yet (spec #87 "young recheck").
+                marker_filter = "(l.url IS NULL AND (l.checked_at < ? OR (p.pub_date >= ? AND l.checked_at < ?)))"
+                params = params + (ensure_utc(young_since).isoformat(), ensure_utc(young_recheck_before).isoformat())
         with self._get_connection() as conn:
             cursor = conn.execute(
                 f"""

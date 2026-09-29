@@ -1706,12 +1706,19 @@ class EpisodesMixin(CategoryCacheMixin):
         *,
         window: int,
         recheck_before: Optional[datetime],
+        young_recheck_before: Optional[datetime] = None,
+        young_since: Optional[datetime] = None,
     ) -> List[PlatformLinkCandidate]:
         marker_filter = "l.url IS NULL"
         params: Tuple[Any, ...] = (podcast_id, int(window), platform)
         if recheck_before is not None:
             marker_filter = "(l.url IS NULL AND l.checked_at < %s)"
             params = params + (recheck_before,)
+            if young_recheck_before is not None and young_since is not None:
+                # A fresh episode's marker expires sooner: the platform may
+                # simply not have indexed it yet (spec #87 "young recheck").
+                marker_filter = "(l.url IS NULL AND (l.checked_at < %s OR (p.pub_date >= %s AND l.checked_at < %s)))"
+                params = params + (young_since, young_recheck_before)
         with connect(self.dsn) as conn:
             rows = conn.execute(
                 f"""

@@ -28,13 +28,17 @@ No network. For an episode, in order of trust:
    establish identity. The service checks the linked item's own title,
    date and duration against the episode before it becomes a link.
 
-For a show: a Spotify show link or a YouTube channel link in the podcast's
-own description / website URL is taken as-is when unique; then the
-podcast's website page (its "listen on" buttons — same trust, it is the
-publisher's own site); then the same link appearing in at least
-:data:`MIN_EPISODE_VOTES` episode descriptions when no other show /
-channel competes with it. Generic channels that hosting platforms stamp
-on every site (:data:`GENERIC_YOUTUBE_CHANNELS`) never count.
+For a show: an Apple show page, a Spotify show link or a YouTube channel
+link in the podcast's own description / website URL is taken as-is when
+unique; then the podcast's website page (its "listen on" buttons — same
+trust, it is the publisher's own site); then the link appearing in at
+least :data:`MIN_EPISODE_VOTES` episode descriptions when it holds at
+least :data:`DOMINANT_SHARE` of the votes for that platform. The share
+rule is what lets a show's own "follow us" footer win over the guest
+channels a few episodes cross-link (a16z: 123 votes against three
+one-offs); two shows sharing the votes are still left for a human.
+Generic channels that hosting platforms stamp on every site
+(:data:`GENERIC_YOUTUBE_CHANNELS`) never count.
 """
 
 from __future__ import annotations
@@ -47,12 +51,16 @@ from ..models.podcast import AlternateEnclosure, PlatformLinkCandidate
 from ..utils.url_patterns import (
     extract_spotify_entity,
     extract_youtube_video_id,
+    find_apple_show_links,
     find_spotify_entities,
     find_youtube_channel_urls,
     find_youtube_video_ids,
 )
 
 MIN_EPISODE_VOTES = 3
+# Of the episode descriptions naming any show / channel on a platform, the
+# share the winner needs. Below it two shows compete and nothing is stored.
+DOMINANT_SHARE = 0.8
 
 # Channels that a hosting platform's page template links on every show's
 # site — Anchor pages link Spotify's own "for creators" channel — so their
@@ -96,6 +104,7 @@ class PublisherLink:
 class ShowLinks:
     spotify_url: Optional[str] = None
     youtube_url: Optional[str] = None
+    apple_url: Optional[str] = None  # the show page as the publisher links it
 
 
 def spotify_episode_url(episode_id: str) -> str:
@@ -167,34 +176,53 @@ def show_links_from_sources(
     website_html: Optional[str] = None,
 ) -> ShowLinks:
     """
-    The show's own Spotify page / YouTube channel as the publisher states it.
+    The show's own Apple page / Spotify page / YouTube channel as the
+    publisher states it.
 
     Podcast-level text wins when it names exactly one show / channel; then
     the website page, on the same terms; then a show / channel named in at
-    least :data:`MIN_EPISODE_VOTES` episode descriptions when it is the
-    only one named at all. Two different shows / channels in one source
-    (a network site listing all its shows) are left for a human.
+    least :data:`MIN_EPISODE_VOTES` episode descriptions when it holds
+    :data:`DOMINANT_SHARE` of that platform's votes. Two different shows /
+    channels in one source (a network site listing all its shows), or
+    splitting the votes, are left for a human.
     """
+    apple_urls: Dict[str, str] = {}
+
+    def apple_ids(text: str) -> List[str]:
+        ids = []
+        for cid, url in find_apple_show_links(text):
+            apple_urls.setdefault(cid, url)
+            ids.append(cid)
+        return ids
+
     podcast_blob = " ".join(t for t in podcast_texts if t)
+    apple = _unique(apple_ids(podcast_blob))
     spotify = _unique(sid for kind, sid in find_spotify_entities(podcast_blob) if kind == "show")
     youtube = _unique(_real_channels(find_youtube_channel_urls(podcast_blob)))
 
-    if website_html and (spotify is None or youtube is None):
+    if website_html and (apple is None or spotify is None or youtube is None):
+        if apple is None:
+            apple = _unique(apple_ids(website_html))
         if spotify is None:
             spotify = _unique(sid for kind, sid in find_spotify_entities(website_html) if kind == "show")
         if youtube is None:
             youtube = _unique(_real_channels(find_youtube_channel_urls(website_html)))
 
-    if spotify is None or youtube is None:
+    if apple is None or spotify is None or youtube is None:
+        apple_votes: Counter = Counter()
         spotify_votes: Counter = Counter()
         youtube_votes: Counter = Counter()
         for text in episode_texts:
             if not text:
                 continue
+            for cid in set(apple_ids(text)):
+                apple_votes[cid] += 1
             for sid in {sid for kind, sid in find_spotify_entities(text) if kind == "show"}:
                 spotify_votes[sid] += 1
             for url in set(_real_channels(find_youtube_channel_urls(text))):
                 youtube_votes[url] += 1
+        if apple is None:
+            apple = _voted(apple_votes)
         if spotify is None:
             spotify = _voted(spotify_votes)
         if youtube is None:
@@ -203,6 +231,7 @@ def show_links_from_sources(
     return ShowLinks(
         spotify_url=spotify_show_url(spotify) if spotify else None,
         youtube_url=youtube,
+        apple_url=apple_urls.get(apple) if apple else None,
     )
 
 
@@ -217,10 +246,16 @@ def _unique(values: Iterable[str]) -> Optional[str]:
 
 
 def _voted(votes: Counter) -> Optional[str]:
-    if len(votes) != 1:
+    """The winner when it has :data:`MIN_EPISODE_VOTES` and :data:`DOMINANT_SHARE` of all votes."""
+    if not votes:
         return None
-    ((value, count),) = votes.items()
-    return value if count >= MIN_EPISODE_VOTES else None
+    ranked = votes.most_common()
+    value, count = ranked[0]
+    if count < MIN_EPISODE_VOTES:
+        return None
+    if len(ranked) > 1 and count < DOMINANT_SHARE * sum(votes.values()):
+        return None
+    return value
 
 
 def describe_sources(links: Iterable[PublisherLink]) -> Dict[str, int]:
@@ -233,6 +268,7 @@ def describe_sources(links: Iterable[PublisherLink]) -> Dict[str, int]:
 
 __all__: List[str] = [
     "MIN_EPISODE_VOTES",
+    "DOMINANT_SHARE",
     "GENERIC_YOUTUBE_CHANNELS",
     "PublisherLink",
     "ShowLinks",
