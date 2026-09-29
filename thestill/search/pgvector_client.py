@@ -82,6 +82,18 @@ _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE = 0.5
 # full text (speaker prefix included).
 _MIN_SEMANTIC_TEXT_CHARS = 30
 
+# Keyword queries (at most this many words) get NO semantic-only rows in the
+# hybrid fusion. A one- or two-word query is a
+# name lookup, and the embedding of a rare name is tokenizer noise: the
+# multilingual MiniLM splits "Legora" into "Lego"+"ra" but "legora" into
+# "le"+"gora" ("mountain" in Croatian), which lands 0.37 from short Croatian
+# sentences and 0.95 from the real Legora quotes (2026-09-29 incident: every
+# other row of a lowercase "legora" search was Netokracija filler, and a typo
+# like "legoraaaa" returned nothing BUT filler). Semantic still re-ranks the
+# chunks the lexical leg found; a keyword that matches nothing literally
+# returns nothing, which is the honest answer.
+_SHORT_QUERY_MAX_WORDS = 2
+
 _SELECT = """
     SELECT c.id            AS chunk_id,
            c.episode_id    AS episode_id,
@@ -173,6 +185,7 @@ class PgVectorBackend:
                 query_embedding,
                 limit=limit,
                 filters=effective_filters,
+                keyword_query=len(translated.embedding_text.split()) <= _SHORT_QUERY_MAX_WORDS,
             )
         raise ValueError(f"unknown SearchMode: {mode!r}")
 
@@ -266,15 +279,18 @@ class PgVectorBackend:
         *,
         limit: int,
         filters: Optional[SearchFilters],
+        keyword_query: bool = False,
     ) -> List[ResolvedHit]:
         lex_rows = self._lexical(query, limit=_HYBRID_FETCH, filters=filters) if query else []
         sem_rows = self._semantic(query_embedding, limit=_HYBRID_FETCH, filters=filters)
 
         lex_ids = {row["chunk_id"] for row in lex_rows}
+        semantic_only_allowed = not keyword_query
         sem_rows = [
             row
             for row in sem_rows
-            if row["chunk_id"] in lex_ids or float(row["score"]) <= _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE
+            if row["chunk_id"] in lex_ids
+            or (semantic_only_allowed and float(row["score"]) <= _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE)
         ]
 
         scores: dict[int, float] = {}
