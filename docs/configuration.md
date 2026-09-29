@@ -191,6 +191,8 @@ the scheduler are off by default.
 | `REFRESH_ON_OPEN_ENABLED` | Opening a podcast detail page enqueues one throttled `REFRESH_FEED` (spec #74); discovery only for feeds nobody follows. Set `false` on scratch/E2E servers | `true` |
 | `PLATFORM_LINKS_ENABLED` | Resolve per-episode Apple Podcasts, Spotify and YouTube links after each refresh and via `thestill link-platforms` (spec #87); at most one iTunes lookup and one flat yt-dlp channel listing per show, only while it has unlinked recent episodes | `true` |
 | `PLATFORM_LINKS_RECHECK_HOURS` | How long a "checked, not found" platform link suppresses another lookup for that episode | `24` |
+| `PLATFORM_LINKS_YOUNG_RECHECK_HOURS` | The shorter suppression for an episode published within the last `PLATFORM_LINKS_YOUNG_AGE_HOURS`: platforms index a fresh episode with a lag, and Spotify's probe only sees the show's newest | `2` |
+| `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables it | `48` |
 
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 

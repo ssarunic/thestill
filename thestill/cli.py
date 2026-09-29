@@ -335,11 +335,21 @@ def list_podcasts(ctx):
 def _make_platform_link_service(repository):
     """Spec #87 — the shared Apple episode-link resolver, or None when disabled."""
     from .services.platform_link_service import PlatformLinkService
-    from .utils.config import get_platform_links_recheck_hours, is_platform_links_enabled
+    from .utils.config import (
+        get_platform_links_recheck_hours,
+        get_platform_links_young_age_hours,
+        get_platform_links_young_recheck_hours,
+        is_platform_links_enabled,
+    )
 
     if not is_platform_links_enabled():
         return None
-    return PlatformLinkService(repository, recheck_hours=get_platform_links_recheck_hours())
+    return PlatformLinkService(
+        repository,
+        recheck_hours=get_platform_links_recheck_hours(),
+        young_recheck_hours=get_platform_links_young_recheck_hours(),
+        young_age_hours=get_platform_links_young_age_hours(),
+    )
 
 
 @main.command("set-show-link")

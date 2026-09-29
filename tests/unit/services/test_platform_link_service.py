@@ -42,8 +42,18 @@ class FakeRepo:
         self.alternates: Dict[str, list] = {}
         self.other_candidates: Dict[str, List[PlatformLinkCandidate]] = {}
 
-    def get_platform_link_candidates(self, podcast_id, platform, *, window, recheck_before):
-        self.candidate_calls.append({"platform": platform, "window": window, "recheck_before": recheck_before})
+    def get_platform_link_candidates(
+        self, podcast_id, platform, *, window, recheck_before, young_recheck_before=None, young_since=None
+    ):
+        self.candidate_calls.append(
+            {
+                "platform": platform,
+                "window": window,
+                "recheck_before": recheck_before,
+                "young_recheck_before": young_recheck_before,
+                "young_since": young_since,
+            }
+        )
         if platform == "apple":
             return list(self.candidates)
         return list(self.other_candidates.get(platform, []))
@@ -106,6 +116,7 @@ def _service(
     spotify_latest=None,
     website=None,
     recheck_hours=24,
+    **kwargs,
 ):
     calls = {
         "lookup": [],
@@ -121,6 +132,8 @@ def _service(
         calls["lookup"].append(params)
         if isinstance(lookup, Exception):
             raise lookup
+        if callable(lookup):
+            return lookup(params)
         return lookup or []
 
     def _search(params):
@@ -173,6 +186,7 @@ def _service(
         fetch_spotify_latest=_spotify_latest,
         fetch_website=_website,
         clock=lambda: NOW,
+        **kwargs,
     )
     return svc, calls
 
@@ -188,13 +202,27 @@ class TestThrottle:
 
     def test_recheck_window_is_passed_unless_forced(self):
         repo = FakeRepo([])
-        svc, _ = _service(repo, recheck_hours=6)
+        svc, _ = _service(repo, recheck_hours=6, young_recheck_hours=1, young_age_hours=48)
         svc.link_podcast(_podcast())
         svc.link_podcast(_podcast(), force=True)
         first_pass, forced_pass = repo.candidate_calls[:3], repo.candidate_calls[3:]
         assert [c["platform"] for c in first_pass] == ["apple", "spotify", "youtube"]
         assert all(c["recheck_before"] == NOW - timedelta(hours=6) and c["window"] == 200 for c in first_pass)
-        assert all(c["recheck_before"] is None for c in forced_pass)
+        # A young episode's marker expires at the short interval (spec #87 "young recheck").
+        assert all(c["young_recheck_before"] == NOW - timedelta(hours=1) for c in first_pass)
+        assert all(c["young_since"] == NOW - timedelta(hours=48) for c in first_pass)
+        assert all(
+            c["recheck_before"] is None and c["young_recheck_before"] is None and c["young_since"] is None
+            for c in forced_pass
+        )
+
+    def test_young_recheck_is_off_when_disabled_or_not_shorter(self):
+        for kwargs in ({"young_age_hours": 0}, {"young_recheck_hours": 24}, {"young_recheck_hours": 48}):
+            repo = FakeRepo([])
+            svc, _ = _service(repo, recheck_hours=24, **kwargs)
+            svc.link_podcast(_podcast())
+            assert all(c["young_recheck_before"] is None and c["young_since"] is None for c in repo.candidate_calls)
+            assert all(c["recheck_before"] == NOW - timedelta(hours=24) for c in repo.candidate_calls)
 
 
 class TestResolution:
@@ -673,6 +701,76 @@ class TestSpotifyLatestProbe:
         assert repo.set_platform_urls == [("spotify", self.SHOW)]
         assert calls["spotify_latest"] == ["2MAi0BvDc6GTFvKFPXnkCL"]
         assert spotify.linked == 1  # core titles equal once "Ep 9" and the show name are stripped
+
+
+class TestPublisherStatedAppleShow:
+    """The Apple show page a publisher links in its own notes fills in for a missing chart link."""
+
+    NOTES = 'Listen on <a href="https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711?uo=4">Apple</a>'
+    NOTES_URL = "https://podcasts.apple.com/us/podcast/a16z-podcast/id842818711"
+
+    def _repo(self, notes=NOTES):
+        cands = [
+            PlatformLinkCandidate(
+                episode_id=f"ep-{i}",
+                external_id=f"g-{i}",
+                audio_url=f"https://a/{i}.mp3",
+                title=f"ep-{i}",
+                description_html=notes,
+            )
+            for i in range(3)
+        ]
+        return FakeRepo(cands, apple_url=None)
+
+    def test_notes_link_is_tried_before_the_title_search_and_stored_once_proven(self):
+        repo = self._repo()
+        svc, calls = _service(repo, lookup=[_episode_entry(1, "g-0")])
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
+
+        assert calls["lookup"] == ["id=842818711&entity=podcastEpisode&limit=200"]
+        assert calls["search"] == []  # the publisher said which show; no iTunes search needed
+        assert repo.set_apple_urls == [self.NOTES_URL]  # ``?uo=4`` and ``?i=`` never stored
+        assert repo.sources == [("apple", "publisher")]
+        assert (outcome.linked, outcome.not_found, outcome.skipped) == (1, 2, None)
+
+    def test_unproven_notes_link_falls_back_to_the_title_search(self):
+        # The notes name a show whose window shares no GUID with our feed (a
+        # sister show, say): the title search still gets its turn.
+        repo = self._repo()
+        search = [{"feedUrl": "https://feeds.example.com/profg/rss", "collectionViewUrl": SHOW_URL}]
+
+        def lookup(params):
+            return [_episode_entry(1, "g-0")] if params.startswith("id=1498802610") else [_episode_entry(9, "x")]
+
+        svc, calls = _service(repo, lookup=lookup, search=search)
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
+
+        assert [p.split("&")[0] for p in calls["lookup"]] == ["id=842818711", "id=1498802610"]
+        assert repo.set_apple_urls == [SHOW_URL] and repo.sources == [("apple", "resolver")]
+        assert (outcome.linked, outcome.skipped) == (1, None)
+
+    def test_unproven_notes_link_and_no_search_hit_marks_not_found(self):
+        repo = self._repo()
+        svc, calls = _service(repo, lookup=[_episode_entry(9, "x")], search=[])
+        outcome = svc.link_podcast(_podcast()).outcomes[0]
+        assert len(calls["lookup"]) == 1 and len(calls["search"]) == 1
+        assert repo.set_apple_urls == [] and outcome.skipped == "no_apple_id" and outcome.not_found == 3
+
+    def test_stored_chart_link_wins_without_reading_the_notes(self):
+        repo = self._repo()
+        repo.apple_url = SHOW_URL
+        svc, calls = _service(repo, lookup=[_episode_entry(1, "g-0")])
+        svc.link_podcast(_podcast())
+        assert calls["lookup"] == ["id=1498802610&entity=podcastEpisode&limit=200"]
+        assert repo.set_apple_urls == []
+
+    def test_notes_split_between_two_shows_say_nothing(self):
+        repo = self._repo()
+        repo.candidates[1].description_html = "https://podcasts.apple.com/us/podcast/other/id1"
+        repo.candidates[2].description_html = "https://podcasts.apple.com/us/podcast/other/id1"
+        svc, calls = _service(repo, lookup=[], search=[])
+        svc.link_podcast(_podcast())
+        assert calls["lookup"] == [] and len(calls["search"]) == 1
 
 
 class TestShowLinkSources:

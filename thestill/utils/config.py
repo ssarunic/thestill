@@ -63,6 +63,16 @@ def get_platform_links_recheck_hours() -> int:
     return max(1, _env_int("PLATFORM_LINKS_RECHECK_HOURS", 24))
 
 
+def get_platform_links_young_recheck_hours() -> int:
+    """Spec #87 — the shorter suppression for an episode still inside its young window."""
+    return max(1, _env_int("PLATFORM_LINKS_YOUNG_RECHECK_HOURS", 2))
+
+
+def get_platform_links_young_age_hours() -> int:
+    """Spec #87 — how long after ``pub_date`` an episode is rechecked at the young interval; 0 disables."""
+    return max(0, _env_int("PLATFORM_LINKS_YOUNG_AGE_HOURS", 48))
+
+
 def get_default_refresh_interval_seconds() -> int:
     """Seeded/initial per-feed refresh interval (default 1h)."""
     return _env_int("REFRESH_DEFAULT_INTERVAL_SECONDS", 3600)

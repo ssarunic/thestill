@@ -362,6 +362,8 @@ class PodcastRepository(ABC):
         *,
         window: int,
         recheck_before: Optional[datetime],
+        young_recheck_before: Optional[datetime] = None,
+        young_since: Optional[datetime] = None,
     ) -> List[PlatformLinkCandidate]:
         """
         Episodes a platform resolver should try to link (spec #87).
@@ -371,7 +373,11 @@ class PodcastRepository(ABC):
         cannot keep the show in the candidate set once it ages out). From
         that pool: episodes with no found link for ``platform`` whose
         not-found marker is absent or has ``checked_at < recheck_before``.
-        ``recheck_before=None`` ignores markers (a forced pass). Newest first.
+        An episode with ``pub_date >= young_since`` is also a candidate when
+        its marker has ``checked_at < young_recheck_before`` — the shorter
+        interval that catches a platform indexing a fresh episode late
+        (both given, or neither). ``recheck_before=None`` ignores markers
+        (a forced pass). Newest first.
         """
         pass
 
