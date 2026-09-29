@@ -27,7 +27,9 @@ Benefits:
 - Type safety: Explicit contracts via ABC
 """
 
+import codecs
 import json
+import re
 import urllib.request
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -74,6 +76,59 @@ def _upgrade_image_url_to_https(url: Optional[str]) -> Optional[str]:
     if url.startswith("http://"):
         return "https://" + url[len("http://") :]
     return url
+
+
+# An XML declaration with an explicit encoding, e.g. <?xml version="1.0" encoding="ISO-8859-1"?>
+_XML_DECL_ENCODING_RE = re.compile(rb"^\s*<\?xml[^>]*?encoding=[\"']([A-Za-z0-9._-]+)[\"']")
+# A charset parameter on a Content-Type header value.
+_HEADER_CHARSET_RE = re.compile(r"charset=[\"']?([A-Za-z0-9._-]+)", re.IGNORECASE)
+
+
+def decode_feed_body(raw: bytes, content_type: Optional[str] = None) -> Tuple[str, str]:
+    """Decode an RSS/Atom HTTP body to text without trusting ``Response.text``.
+
+    ``requests.Response.text`` picks its codec from the ``Content-Type``
+    header alone: ISO-8859-1 for ``text/*`` without a charset (RFC 2616),
+    and a statistical guess (charset_normalizer) for ``application/xml``
+    and friends without one. Feeds routinely omit the charset, and the
+    guess depends on the body of the day — a mostly-ASCII feed with a few
+    accented names comes back as cp1252 on one host and UTF-8 on another.
+    A wrong guess turns every ``å`` into ``Ã¥`` and, because feedparser is
+    then handed a *str*, the XML declaration that says UTF-8 is never
+    consulted. That mojibake was stored in episode descriptions, copied
+    into facts, speaker names and cleaned transcripts, and indexed for
+    search ("Max JungestÃ¥l", 2026-09-29).
+
+    Order of trust: a BOM; strict UTF-8 (a body that decodes as UTF-8 with
+    non-ASCII content is UTF-8 — a Latin-1 body virtually never passes);
+    the XML declaration; the header charset; finally cp1252 with
+    replacement so a broken feed still parses instead of raising.
+
+    Returns ``(text, encoding_used)`` so the caller can log the codec.
+    """
+    if raw.startswith(codecs.BOM_UTF8):
+        return raw[len(codecs.BOM_UTF8) :].decode("utf-8", errors="replace"), "utf-8-sig"
+    for bom, enc in ((codecs.BOM_UTF16_LE, "utf-16-le"), (codecs.BOM_UTF16_BE, "utf-16-be")):
+        if raw.startswith(bom):
+            return raw[len(bom) :].decode(enc, errors="replace"), enc
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+    candidates: List[str] = []
+    decl = _XML_DECL_ENCODING_RE.match(raw)
+    if decl:
+        candidates.append(decl.group(1).decode("ascii", errors="ignore"))
+    if content_type:
+        header = _HEADER_CHARSET_RE.search(content_type)
+        if header:
+            candidates.append(header.group(1))
+    for enc in candidates:
+        try:
+            return raw.decode(enc), enc
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("cp1252", errors="replace"), "cp1252-replace"
 
 
 class FetchRSSResult(NamedTuple):
@@ -657,8 +712,10 @@ class RSSMediaSource(MediaSource):
                         error=None,
                     )
                 response.raise_for_status()
-                rss_content = response.text
-                timing_ctx["bytes"] = len(rss_content)
+                # Never ``response.text`` here — see ``decode_feed_body``.
+                rss_content, body_encoding = decode_feed_body(response.content, response.headers.get("Content-Type"))
+                timing_ctx["bytes"] = len(response.content)
+                timing_ctx["encoding"] = body_encoding
             except (requests.RequestException, UnsafeURLError) as e:
                 # Spec #60: classify structurally instead of flattening every
                 # failure to status_code=0 — a DNS outage, an HTTP 410 and an
