@@ -505,3 +505,126 @@ def test_collect_host_evidence_counts_and_ignores_guests(tmp_path):
     )
     assert files == 2
     assert counts == {"person:jane-doe": 2, "person:john-roe": 1}
+
+
+# ---------------------------------------------------------------------------
+# Review of 765f8d4: an all-ambiguous list must clear stale links, and host
+# evidence must reuse the identity the facts-file bio settled.
+# ---------------------------------------------------------------------------
+
+
+def _stored(db_path: Path, column: str, table: str = "podcasts") -> str:
+    with sqlite3.connect(str(db_path)) as conn:
+        return conn.execute(f"SELECT {column} FROM {table}").fetchone()[0]
+
+
+def test_all_hosts_ambiguous_clears_the_stale_namesake_link(tmp_path):
+    """Galloway incident, second half: an earlier run stored the footballer.
+    Refusing the name now must also drop that row, or it stays an anchor
+    and keeps receiving speaker mentions."""
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er)
+    er.set_podcast_hosts(podcast_id, ["person:scott-galloway"])
+    _podcast_facts_with_hosts(tmp_path, podcast_slug, ["Scott Galloway - the host"])
+
+    result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=PathManager(str(tmp_path))
+    )
+
+    assert result.hosts == [] and result.ambiguous_names == ["Scott Galloway"]
+    assert _stored(db_path, "host_entity_ids") == "[]"
+
+
+def test_missing_or_empty_facts_leave_stored_roles_untouched(tmp_path):
+    db_path, podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.set_podcast_hosts(podcast_id, ["person:someone"])
+    er.set_podcast_recurring(podcast_id, ["person:narrator"])
+    er.set_episode_guests(episode_id, ["person:visitor"])
+    pm = PathManager(str(tmp_path))
+
+    link_podcast_roles(podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=pm)
+    link_episode_roles(
+        episode_id=episode_id, podcast_slug=podcast_slug, episode_slug=episode_slug, entity_repo=er, path_manager=pm
+    )
+    assert _stored(db_path, "host_entity_ids") == '["person:someone"]'
+    assert _stored(db_path, "recurring_entity_ids") == '["person:narrator"]'
+    assert _stored(db_path, "guest_entity_ids", "episodes") == '["person:visitor"]'
+
+    # Only non-person names ("Narrator") parsed: still nothing written.
+    _podcast_facts_with_hosts(tmp_path, podcast_slug, ["Narrator - reads the intro"])
+    result = link_podcast_roles(podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=pm)
+    assert result.skipped_names == ["Narrator"] and result.hosts == []
+    assert _stored(db_path, "host_entity_ids") == '["person:someone"]'
+
+
+def test_all_ambiguous_recurring_and_guests_clear_their_columns_too(tmp_path):
+    db_path, podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er)
+    er.set_podcast_recurring(podcast_id, ["person:scott-galloway"])
+    er.set_episode_guests(episode_id, ["person:scott-galloway"])
+    pm = PathManager(str(tmp_path))
+    pm.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
+    pm.podcast_facts_file(podcast_slug).write_text("## Recurring Roles\n- Scott Galloway - drops by\n")
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text("## Guest(s)\n- Scott Galloway - the guest\n")
+
+    podcast_result = link_podcast_roles(
+        podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=pm
+    )
+    episode_result = link_episode_roles(
+        episode_id=episode_id, podcast_slug=podcast_slug, episode_slug=episode_slug, entity_repo=er, path_manager=pm
+    )
+
+    assert podcast_result.ambiguous_names == ["Scott Galloway"] and podcast_result.recurring == []
+    assert episode_result.ambiguous_names == ["Scott Galloway"] and episode_result.guests == []
+    assert _stored(db_path, "recurring_entity_ids") == "[]"
+    assert _stored(db_path, "guest_entity_ids", "episodes") == "[]"
+
+
+def test_bio_settled_host_keeps_its_episode_evidence(tmp_path):
+    """Scott resolves to the professor by his bio; the show description is
+    generic. Episode files name him as host throughout, so he must keep
+    the evidence rather than be demoted for being ambiguous on the
+    description alone."""
+    db_path, podcast_id, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er, footballer_description="Australian soccer player")
+    _write_prof_g_facts(tmp_path, podcast_slug, "Bestselling author, professor, and entrepreneur")
+    for i in range(6):
+        _write_episode_host_facts(
+            tmp_path, podcast_slug, f"ep-{i}", ["SPEAKER_01: Scott Galloway (Host)", "SPEAKER_02: Ed Elson (Host)"]
+        )
+
+    result = link_podcast_roles(
+        podcast_id=podcast_id,
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=PathManager(str(tmp_path)),
+        context_text="A show about business and markets.",
+    )
+
+    assert result.hosts == ["person:scott-galloway-professor", "person:ed-elson"]
+    assert result.demoted_hosts == []
+    assert _stored(db_path, "host_entity_ids") == '["person:scott-galloway-professor", "person:ed-elson"]'
+
+
+def test_collect_host_evidence_reuses_settled_identities(tmp_path):
+    db_path, _, podcast_slug, _, _ = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    _seed_galloways(er)
+    pm = PathManager(str(tmp_path))
+    _write_episode_host_facts(tmp_path, podcast_slug, "ep1", ["SPEAKER_00: Scott Galloway (Host)"])
+
+    # Ambiguous on its own (see the test above) …
+    assert collect_host_evidence(podcast_slug=podcast_slug, entity_repo=er, path_manager=pm) == (0, {})
+    # … but counted for the identity the facts file settled, case-insensitively.
+    files, counts = collect_host_evidence(
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=pm,
+        resolved_names={"SCOTT GALLOWAY": "person:scott-galloway-professor"},
+    )
+    assert (files, counts) == (1, {"person:scott-galloway-professor": 1})

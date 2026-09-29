@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
@@ -317,16 +317,22 @@ def collect_host_evidence(
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
     context_text: str = "",
+    resolved_names: Optional[Dict[str, str]] = None,
 ) -> Tuple[int, dict]:
     """Aggregate ``Name (Host)`` speaker-mapping annotations across a
     podcast's episode facts files.
 
     Returns ``(files_with_host_annotations, {entity_id: n_files})`` where
-    each file counts an entity at most once. Names are resolved read-only
-    via ``_resolve_existing_person`` — unresolved name variants and names
-    shared by several entities simply contribute no evidence; nothing is
-    created here.
+    each file counts an entity at most once. ``resolved_names`` maps a
+    name to the entity the podcast facts file already settled it to (its
+    bio told the namesakes apart); those identities are reused as-is, so
+    a name that is ambiguous on the show description alone still counts
+    for the host it resolved to — ambiguity here must not read as absence.
+    Every other name is resolved read-only via ``_resolve_existing_person``
+    — unresolved variants and names shared by several entities contribute
+    no evidence; nothing is created here.
     """
+    known = {name.casefold(): entity_id for name, entity_id in (resolved_names or {}).items()}
     episode_dir = path_manager.episode_facts_dir() / podcast_slug
     if not episode_dir.is_dir():
         return 0, {}
@@ -347,8 +353,11 @@ def collect_host_evidence(
             if not _is_real_person_name(name):
                 continue
             if name not in name_cache:
-                existing, _ambiguous = _resolve_existing_person(entity_repo, name, context_text)
-                name_cache[name] = existing.id if existing is not None else None
+                if name.casefold() in known:
+                    name_cache[name] = known[name.casefold()]
+                else:
+                    existing, _ambiguous = _resolve_existing_person(entity_repo, name, context_text)
+                    name_cache[name] = existing.id if existing is not None else None
             if name_cache[name] is not None:
                 file_entity_ids.add(name_cache[name])
         if file_entity_ids:
@@ -396,22 +405,29 @@ def link_podcast_roles(
     facts_path = path_manager.podcast_facts_file(podcast_slug)
     roles = parse_facts_file(facts_path)
     result = LinkResult(target_id=podcast_id)
-    result.hosts, result.created_entities, result.skipped_names, result.ambiguous_names = _resolve_role_list(
+    hosts = _resolve_role_list(
         entity_repo, roles.hosts, accumulator_for_created=result.created_entities, context_text=context_text
     )
-    recurring_ids, created_recurring, skipped_recurring, ambiguous_recurring = _resolve_role_list(
+    result.hosts, result.created_entities, result.skipped_names, result.ambiguous_names = (
+        hosts.entity_ids,
+        hosts.created_ids,
+        hosts.skipped,
+        list(hosts.ambiguous),
+    )
+    recurring = _resolve_role_list(
         entity_repo, roles.recurring, accumulator_for_created=result.created_entities, context_text=context_text
     )
-    result.recurring = recurring_ids
-    result.created_entities.extend(created_recurring)
-    result.skipped_names.extend(skipped_recurring)
-    result.ambiguous_names.extend(ambiguous_recurring)
+    result.recurring = recurring.entity_ids
+    result.created_entities.extend(recurring.created_ids)
+    result.skipped_names.extend(recurring.skipped)
+    result.ambiguous_names.extend(recurring.ambiguous)
     if result.hosts:
         evidence_files, host_counts = collect_host_evidence(
             podcast_slug=podcast_slug,
             entity_repo=entity_repo,
             path_manager=path_manager,
             context_text=context_text,
+            resolved_names=hosts.resolved_names,
         )
         result.hosts, result.demoted_hosts = _filter_hosts_by_evidence(result.hosts, evidence_files, host_counts)
         if result.demoted_hosts:
@@ -423,8 +439,14 @@ def link_podcast_roles(
                 evidence_files=evidence_files,
                 appearances={h: host_counts.get(h, 0) for h in result.demoted_hosts},
             )
+    # Write whenever the facts file named someone, including when every
+    # name was refused as ambiguous: the stored list may still carry the
+    # namesake an earlier run guessed (the footballer as Prof G's host),
+    # and that row keeps anchoring speaker mentions until it is cleared.
+    # A missing or empty facts file still leaves the columns untouched.
+    if hosts.writes:
         entity_repo.set_podcast_hosts(podcast_id, result.hosts)
-    if result.recurring:
+    if recurring.writes:
         entity_repo.set_podcast_recurring(podcast_id, result.recurring)
     logger.info(
         "podcast_roles_linked",
@@ -456,10 +478,16 @@ def link_episode_roles(
     facts_path = path_manager.episode_facts_file(podcast_slug, episode_slug)
     roles = parse_facts_file(facts_path)
     result = LinkResult(target_id=episode_id)
-    result.guests, result.created_entities, result.skipped_names, result.ambiguous_names = _resolve_role_list(
+    guests = _resolve_role_list(
         entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
     )
-    if result.guests:
+    result.guests, result.created_entities, result.skipped_names, result.ambiguous_names = (
+        guests.entity_ids,
+        guests.created_ids,
+        guests.skipped,
+        list(guests.ambiguous),
+    )
+    if guests.writes:  # see link_podcast_roles: an all-ambiguous list clears stale guests
         entity_repo.set_episode_guests(episode_id, result.guests)
     logger.info(
         "episode_roles_linked",
@@ -473,41 +501,60 @@ def link_episode_roles(
     return result
 
 
+@dataclass
+class _ResolvedRoles:
+    """One role list resolved to entity ids.
+
+    ``entity_ids`` is deduplicated while preserving first-occurrence order
+    so the resulting JSON column reads in the LLM's preferred order.
+    ``ambiguous`` are real names that several existing entities share and
+    the context could not settle; they are left unlinked. ``resolved_names``
+    maps each linked name to its entity so later read-only lookups (host
+    evidence) reuse the identity the bio settled instead of re-deciding on
+    weaker context.
+    """
+
+    entity_ids: List[str] = field(default_factory=list)
+    created_ids: List[str] = field(default_factory=list)
+    skipped: List[str] = field(default_factory=list)
+    ambiguous: List[str] = field(default_factory=list)
+    resolved_names: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def writes(self) -> bool:
+        """Whether the stored column should be replaced with ``entity_ids``:
+        the facts file named at least one real person, even if every one
+        was refused as ambiguous (then the column is cleared). Names that
+        were skipped as non-persons, or no names at all, leave it alone."""
+        return bool(self.entity_ids or self.ambiguous)
+
+
 def _resolve_role_list(
     entity_repo: SqliteEntityRepository,
     items: Iterable[Tuple[str, Optional[str]]],
     *,
     accumulator_for_created: List[str],
     context_text: str = "",
-) -> Tuple[List[str], List[str], List[str], List[str]]:
-    """Resolve a list of ``(name, bio)`` pairs to entity ids.
-
-    Returns ``(entity_ids, created_ids, skipped_names, ambiguous_names)``.
-    ``entity_ids`` is deduplicated while preserving first-occurrence order
-    so the resulting JSON column reads in the LLM's preferred order.
-    ``ambiguous_names`` are real names that several existing entities
-    share and the context could not settle; they are left unlinked.
-    """
-    entity_ids: List[str] = []
-    created_ids: List[str] = []
-    skipped: List[str] = []
-    ambiguous: List[str] = []
+) -> _ResolvedRoles:
+    """Resolve a list of ``(name, bio)`` pairs to entity ids (see ``_ResolvedRoles``)."""
+    out = _ResolvedRoles()
     seen_ids: set = set()
     for name, bio in items:
         if not _is_real_person_name(name):
-            skipped.append(name)
+            out.skipped.append(name)
             continue
         entity_id, created = _resolve_or_create_person(entity_repo, name, bio, context_text=context_text)
         if entity_id is None:
-            ambiguous.append(name)
+            out.ambiguous.append(name)
             continue
+        out.resolved_names.setdefault(name, entity_id)
         if entity_id in seen_ids:
             continue
         seen_ids.add(entity_id)
-        entity_ids.append(entity_id)
+        out.entity_ids.append(entity_id)
         if created:
-            created_ids.append(entity_id)
-    return entity_ids, created_ids, skipped, ambiguous
+            out.created_ids.append(entity_id)
+    return out
 
 
 def role_context(podcast, episode=None) -> str:
