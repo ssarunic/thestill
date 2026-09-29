@@ -61,8 +61,12 @@ HTTP/1.1 200 OK
     "title": "Some Talk",
     "kind": "youtube",
     "source_handle": "Lex Fridman",
-    "deduplicated": false,
+    "outcome": "new_episode",
     "inbox_created": true,
+    "episode_slug": "some-talk",
+    "podcast_slug": "lex-fridman",
+    "episode_state": "discovered",
+    "episode_failed": false,
     "inbox_entry": { "...": "..." },
     "parent": {
       "id": "...",
@@ -82,8 +86,13 @@ to a public feed.
 
 ## Idempotency
 
+- `outcome` (spec #88) says what happened: `new_episode` (a fresh import),
+  `added_existing` (the episode already existed and is now in your inbox),
+  or `already_in_inbox` (your existing row, returned untouched).
 - Pasting the **same URL twice** by the same user returns the existing
-  episode and inbox row (`deduplicated: true`, `inbox_created: false`).
+  episode and inbox row (`outcome: "already_in_inbox"`). Delivery is
+  immutable: the row keeps its original `delivered_at` and state. If the
+  episode exists but was never processed, the import starts its pipeline.
 - Pasting the **same URL by a second user** shares the episode (one
   Whisper run for the system) but creates a new inbox row for the second
   user.

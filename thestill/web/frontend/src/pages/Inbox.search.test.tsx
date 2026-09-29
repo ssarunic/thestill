@@ -12,6 +12,7 @@ import type { Episode, InboxItem, InboxListResponse } from '../api/types'
 // ``getInbox``.
 vi.mock('../api/client', () => ({
   getInbox: vi.fn(),
+  getArriving: vi.fn(() => Promise.resolve({ status: 'ok', timestamp: '', items: [], count: 0, total: 0 })),
 }))
 
 vi.mock('../components/BriefingCard', () => ({

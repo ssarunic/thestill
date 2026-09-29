@@ -21,7 +21,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from thestill.models.inbox import InboxEntry, InboxItem, PodcastInboxSummary
+from thestill.models.inbox import ArrivingItem, InboxEntry, InboxItem, PodcastInboxSummary
 from thestill.models.podcast import Episode
 from thestill.models.user import User
 from thestill.services.inbox_service import InboxEntryNotFoundError, InvalidInboxStateError
@@ -280,3 +280,87 @@ class TestSetInboxState:
         response = client.post("/api/inbox/ep-1/state", json={})
         # FastAPI's Pydantic validation rejects with 422 on missing field.
         assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Spec #88 — arriving, entry lookup, send to inbox
+# ---------------------------------------------------------------------------
+class TestArriving:
+    def test_returns_items_count_and_total(self, client, mock_app_state):
+        item = ArrivingItem(
+            episode=_episode("ep-9"), podcast=PodcastInboxSummary(id="pod-1", title="P", slug="p", image_url=None)
+        )
+        mock_app_state.inbox_service.arriving.return_value = ([item], 4)
+
+        response = client.get("/api/inbox/arriving?limit=1")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["total"] == 4
+        assert data["items"][0]["episode"]["id"] == "ep-9"
+        assert data["items"][0]["podcast"]["slug"] == "p"
+        mock_app_state.inbox_service.arriving.assert_called_once_with("user-1", limit=1)
+
+    def test_is_not_shadowed_by_the_episode_route(self, client, mock_app_state):
+        mock_app_state.inbox_service.arriving.return_value = ([], 0)
+        client.get("/api/inbox/arriving")
+        mock_app_state.inbox_service.get_entry.assert_not_called()
+
+
+class TestGetInboxEntry:
+    def test_returns_entry(self, client, mock_app_state):
+        entry = InboxEntry(user_id="user-1", episode_id="ep-1", source="ad_hoc", state="saved")
+        mock_app_state.inbox_service.get_entry.return_value = entry
+
+        response = client.get("/api/inbox/ep-1")
+
+        assert response.status_code == 200
+        assert response.json()["entry"]["state"] == "saved"
+        mock_app_state.inbox_service.get_entry.assert_called_once_with("user-1", "ep-1")
+
+    def test_returns_null_when_never_delivered(self, client, mock_app_state):
+        mock_app_state.inbox_service.get_entry.return_value = None
+
+        response = client.get("/api/inbox/ep-1")
+
+        assert response.status_code == 200
+        assert response.json()["entry"] is None
+
+    def test_unread_count_route_still_wins(self, client, mock_app_state):
+        mock_app_state.inbox_service.unread_count.return_value = 3
+        assert client.get("/api/inbox/unread-count").json()["unread_count"] == 3
+        mock_app_state.inbox_service.get_entry.assert_not_called()
+
+
+class TestSendToInbox:
+    def test_new_row_returns_201(self, client, mock_app_state):
+        entry = InboxEntry(user_id="user-1", episode_id="ep-1", source="ad_hoc")
+        mock_app_state.inbox_service.episode_exists.return_value = True
+        mock_app_state.inbox_service.deliver_to_user.return_value = (entry, True)
+
+        response = client.post("/api/inbox/ep-1")
+
+        assert response.status_code == 201
+        assert response.json()["created"] is True
+        assert response.json()["entry"]["source"] == "ad_hoc"
+        mock_app_state.inbox_service.deliver_to_user.assert_called_once_with("user-1", "ep-1", source="ad_hoc")
+
+    def test_existing_row_returns_200_untouched(self, client, mock_app_state):
+        entry = InboxEntry(user_id="user-1", episode_id="ep-1", source="follow_new", state="dismissed")
+        mock_app_state.inbox_service.episode_exists.return_value = True
+        mock_app_state.inbox_service.deliver_to_user.return_value = (entry, False)
+
+        response = client.post("/api/inbox/ep-1")
+
+        assert response.status_code == 200
+        assert response.json()["created"] is False
+        assert response.json()["entry"]["state"] == "dismissed"
+
+    def test_missing_episode_returns_404_without_delivering(self, client, mock_app_state):
+        mock_app_state.inbox_service.episode_exists.return_value = False
+
+        response = client.post("/api/inbox/nope")
+
+        assert response.status_code == 404
+        mock_app_state.inbox_service.deliver_to_user.assert_not_called()

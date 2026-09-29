@@ -511,7 +511,7 @@ def test_list_episode_ids_in_window_returns_empty_for_empty_states(inbox_repo, u
 # ============================================================================
 
 
-def test_count_imports_for_user_since_only_counts_import_source(inbox_repo, user_repo, podcast_repo):
+def test_count_imports_for_user_since_ignores_follow_sources(inbox_repo, user_repo, podcast_repo):
     alice = _make_user(user_repo, "alice@example.com")
     podcast = _make_podcast(podcast_repo, slug="p1")
     ep1 = _make_episode(podcast_repo, podcast_id=podcast.id, title="ep1")

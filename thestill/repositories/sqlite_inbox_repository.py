@@ -29,10 +29,17 @@ from typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
-from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState, PodcastInboxSummary
+from ..models.inbox import (
+    INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
+    ArrivingItem,
+    InboxEntry,
+    InboxItem,
+    InboxState,
+    PodcastInboxSummary,
+)
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from ..utils.sqlite_ext import connect
-from .inbox_repository import InboxRepository
+from .inbox_repository import ARRIVING_WHERE_SQL, InboxRepository
 from .sqlite_podcast_repository import episode_from_row
 
 logger = get_logger(__name__)
@@ -218,7 +225,6 @@ class SqliteInboxRepository(InboxRepository):
         if limit <= 0:
             return []
 
-        episode_select = ", ".join(f"e.{col} AS ep_{col}" for col in _EPISODE_COLUMNS)
         clauses = ["i.user_id = ?"]
         params: List[Any] = [user_id]
         if state is None:
@@ -241,9 +247,11 @@ class SqliteInboxRepository(InboxRepository):
                 f" OR LOWER(COALESCE(e.description, '')) LIKE ? {LIKE_ESCAPE_CLAUSE})"
             )
             params.extend([pattern, pattern, pattern])
-        where = " AND ".join(clauses)
-        params.append(limit)
+        return self._select_items(" AND ".join(clauses), params, limit)
 
+    def _select_items(self, where: str, params: List[Any], limit: int) -> List[InboxItem]:
+        """The inbox JOIN shared by ``list_items`` and ``get_item``."""
+        episode_select = ", ".join(f"e.{col} AS ep_{col}" for col in _EPISODE_COLUMNS)
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
@@ -267,10 +275,17 @@ class SqliteInboxRepository(InboxRepository):
                  ORDER BY i.delivered_at DESC
                  LIMIT ?
                 """,
-                params,
+                [*params, limit],
             ).fetchall()
-
         return [self._row_to_item(row) for row in rows]
+
+    def get_item(self, user_id: str, episode_id: str) -> Optional[InboxItem]:
+        items = self._select_items("i.user_id = ? AND i.episode_id = ?", [user_id, episode_id], 1)
+        return items[0] if items else None
+
+    def episode_exists(self, episode_id: str) -> bool:
+        with self._get_connection() as conn:
+            return conn.execute("SELECT 1 FROM episodes WHERE id = ?", (episode_id,)).fetchone() is not None
 
     def count_imports_for_user_since(self, user_id: str, since: datetime) -> int:
         with self._get_connection() as conn:
@@ -279,12 +294,45 @@ class SqliteInboxRepository(InboxRepository):
                 SELECT COUNT(*) AS n
                   FROM user_episode_inbox
                  WHERE user_id = ?
-                   AND source = 'import'
+                   AND source IN ('import', 'ad_hoc')
                    AND delivered_at >= ?
                 """,
                 (user_id, since.isoformat()),
             ).fetchone()
             return int(row["n"]) if row else 0
+
+    def list_arriving(self, user_id: str, *, limit: int = 5) -> Tuple[List[ArrivingItem], int]:
+        if limit <= 0:
+            return [], 0
+        episode_select = ", ".join(f"e.{col} AS ep_{col}" for col in _EPISODE_COLUMNS)
+        where = ARRIVING_WHERE_SQL.replace("%s", "?")
+        with self._get_connection() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM episodes e {where}",
+                (user_id, user_id),
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT {episode_select},
+                       p.id AS p_id, p.title AS p_title, p.slug AS p_slug, p.image_url AS p_image_url
+                  FROM episodes e
+                  JOIN podcasts p ON p.id = e.podcast_id
+                  {where}
+                 ORDER BY COALESCE(e.pub_date, e.created_at) DESC
+                 LIMIT ?
+                """,
+                (user_id, user_id, limit),
+            ).fetchall()
+        items = [
+            ArrivingItem(
+                episode=episode_from_row(row, prefix="ep_"),
+                podcast=PodcastInboxSummary(
+                    id=row["p_id"], title=row["p_title"], slug=row["p_slug"] or "", image_url=row["p_image_url"]
+                ),
+            )
+            for row in rows
+        ]
+        return items, int(total_row["n"]) if total_row else 0
 
     def unread_count(self, user_id: str) -> int:
         with self._get_connection() as conn:

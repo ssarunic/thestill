@@ -1222,9 +1222,12 @@ export interface EntitySummaryResponse {
 // Inbox API
 // ============================================================================
 //
-// Two write paths fill the inbox:
+// Four write paths fill the inbox:
 //   - follow_new:  an episode the user follows just published.
 //   - follow_seed: a few recent episodes pulled in when the user follows.
+//   - import:      the user pasted a link (spec #31).
+//   - ad_hoc:      "Send to my inbox" on an episode page (spec #88).
+// Delivery is immutable: a row's delivered_at never changes (spec #88).
 // State is per-user; two users following the same podcast keep independent
 // state on the same episode.
 
@@ -1273,6 +1276,36 @@ export interface InboxUnreadCountResponse {
 
 export interface InboxStateRequest {
   state: InboxState
+}
+
+// Spec #88 — GET /api/inbox/{episode_id}: null when never delivered.
+export interface InboxEntryResponse {
+  status: string
+  timestamp: string
+  entry: InboxEntry | null
+}
+
+// Spec #88 — POST /api/inbox/{episode_id}: 201 created, 200 existing row.
+export interface SendToInboxResponse {
+  status: string
+  timestamp: string
+  entry: InboxEntry
+  created: boolean
+}
+
+// Spec #88 "Arriving soon": followed podcasts' in-flight episodes that are
+// not inbox rows yet. No read state; read-only.
+export interface ArrivingItem {
+  episode: Episode
+  podcast: InboxPodcastSummary
+}
+
+export interface ArrivingResponse {
+  status: string
+  timestamp: string
+  items: ArrivingItem[]
+  count: number
+  total: number
 }
 
 export interface InboxStateResponse {
@@ -1435,11 +1468,22 @@ export interface ImportPayload {
   title: string
   kind: ImportKind
   source_handle: string
-  deduplicated: boolean
+  // Spec #88: what happened, in the user's terms. ``new_episode`` started a
+  // fresh import; ``added_existing`` delivered an episode the corpus already
+  // had; ``already_in_inbox`` found the user's existing row, untouched.
+  outcome: ImportOutcome
   inbox_created: boolean
   inbox_entry: InboxEntry
   parent: ImportParent | null
+  // The episode's own parent (including the synthetic audio-imports row),
+  // for building a link; ``parent`` is only set for a followable show.
+  episode_slug: string
+  podcast_slug: string
+  episode_state: Episode['state']
+  episode_failed: boolean
 }
+
+export type ImportOutcome = 'new_episode' | 'added_existing' | 'already_in_inbox'
 
 export interface ImportResponse {
   status: string

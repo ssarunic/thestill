@@ -24,7 +24,25 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Iterable, List, Optional, Sequence, Tuple
 
-from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxEntry, InboxItem, InboxState
+from ..models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, ArrivingItem, InboxEntry, InboxItem, InboxState
+
+# Spec #88 "Arriving soon" predicate, shared by the count and the page query.
+# Written with ``%s`` placeholders (user_id twice) so the Postgres port can
+# use it verbatim; the SQLite port swaps them for ``?``.
+ARRIVING_WHERE_SQL = """
+ WHERE e.podcast_id IN (SELECT f.podcast_id FROM podcast_followers f WHERE f.user_id = %s)
+   AND e.published_at IS NULL
+   AND e.failed_at_stage IS NULL
+   AND EXISTS (
+        SELECT 1 FROM tasks t
+         WHERE t.episode_id = e.id
+           AND t.status IN ('pending', 'processing', 'retry_scheduled')
+   )
+   AND NOT EXISTS (
+        SELECT 1 FROM user_episode_inbox i
+         WHERE i.user_id = %s AND i.episode_id = e.id
+   )
+"""
 
 
 class InboxRepository(ABC):
@@ -113,6 +131,29 @@ class InboxRepository(ABC):
         """
 
     @abstractmethod
+    def get_item(self, user_id: str, episode_id: str) -> Optional[InboxItem]:
+        """The composed row (entry + episode + podcast summary) for one
+        ``(user_id, episode_id)`` pair, or ``None``. Never builds a full
+        ``Podcast``, so it works for the synthetic ``audio-imports`` parent.
+        """
+
+    @abstractmethod
+    def episode_exists(self, episode_id: str) -> bool:
+        """Whether an ``episodes`` row with this id exists (spec #88 send guard)."""
+
+    @abstractmethod
+    def list_arriving(self, user_id: str, *, limit: int = 5) -> Tuple[List[ArrivingItem], int]:
+        """
+        Spec #88 "Arriving soon": episodes of podcasts ``user_id`` follows
+        that are in flight — ``published_at IS NULL``, not failed, with an
+        active (pending / processing / retry_scheduled) queue task — and for
+        which the user has no inbox row yet.
+
+        Ordered by ``COALESCE(pub_date, created_at) DESC``. Returns
+        ``(items[:limit], total)`` so the caller can say "and N more".
+        """
+
+    @abstractmethod
     def unread_count(self, user_id: str) -> int:
         """Return the number of unread rows for the user."""
 
@@ -162,8 +203,9 @@ class InboxRepository(ABC):
     @abstractmethod
     def count_imports_for_user_since(self, user_id: str, since: datetime) -> int:
         """
-        Number of ``source='import'`` rows for ``user_id`` whose
-        ``delivered_at`` is at or after ``since``.
+        Number of user-initiated rows (``source`` in ``import`` or
+        ``ad_hoc``, spec #88) for ``user_id`` whose ``delivered_at`` is at
+        or after ``since``. Both start a pipeline run on the user's behalf.
 
         Plumbing for a future per-user import quota: the current import
         flow only emits the count as a structured-log field; nothing is

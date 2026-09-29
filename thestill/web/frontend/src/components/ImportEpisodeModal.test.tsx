@@ -8,11 +8,13 @@ import type { ImportResponse } from '../api/types'
 
 vi.mock('../api/client', () => ({
   importEpisode: vi.fn(),
+  setInboxState: vi.fn(),
 }))
 
-import { importEpisode } from '../api/client'
+import { importEpisode, setInboxState } from '../api/client'
 
 const mockImportEpisode = importEpisode as ReturnType<typeof vi.fn>
+const mockSetInboxState = setInboxState as ReturnType<typeof vi.fn>
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -37,8 +39,12 @@ function bareAudioResponse(overrides?: Partial<ImportResponse['import']>): Impor
       title: 'Some Audio File',
       kind: 'bare_audio',
       source_handle: 'cdn.example.com',
-      deduplicated: false,
+      outcome: 'new_episode',
       inbox_created: true,
+      episode_slug: 'some-audio-file',
+      podcast_slug: 'audio-imports',
+      episode_state: 'discovered',
+      episode_failed: false,
       inbox_entry: {
         id: 'i-1',
         user_id: 'u-1',
@@ -165,19 +171,140 @@ describe('ImportEpisodeModal', () => {
     expect(cta.closest('a')?.getAttribute('href')).toBe('/podcasts/rick-astley')
   })
 
-  it("shows 'Already in your inbox' when the import is a dedup hit", async () => {
-    mockImportEpisode.mockResolvedValue(
-      bareAudioResponse({ deduplicated: true, inbox_created: false }),
-    )
+  async function importAndWait(response: ImportResponse) {
+    mockImportEpisode.mockResolvedValue(response)
+    const onClose = vi.fn()
     const user = userEvent.setup()
-    render(<ImportEpisodeModal isOpen={true} onClose={vi.fn()} />, {
+    render(<ImportEpisodeModal isOpen={true} onClose={onClose} />, {
       wrapper: createWrapper(),
     })
-
     await user.type(screen.getByRole('textbox'), 'https://example.com/foo.mp3')
     await user.click(screen.getByRole('button', { name: 'Import' }))
+    await screen.findByText('Some Audio File')
+    return { user, onClose }
+  }
 
-    expect(await screen.findByText(/Already in your inbox/)).toBeInTheDocument()
+  // Spec #88 — one view per real outcome.
+  describe('outcomes (spec #88)', () => {
+    it('added_existing + summarised offers Read now straight into the episode', async () => {
+      await importAndWait(
+        bareAudioResponse({ outcome: 'added_existing', episode_state: 'summarized' }),
+      )
+      expect(screen.getByText('Added to your inbox')).toBeInTheDocument()
+      expect(screen.getByText(/already transcribed and summarised/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Read now' })).toHaveAttribute(
+        'href',
+        '/podcasts/audio-imports/episodes/some-audio-file',
+      )
+      expect(screen.queryByText(/Already in your inbox/i)).toBeNull()
+    })
+
+    it('added_existing + in progress shows the pipeline stage and Go to inbox', async () => {
+      await importAndWait(
+        bareAudioResponse({ outcome: 'added_existing', episode_state: 'downloaded' }),
+      )
+      expect(screen.getByText('Added to your inbox')).toBeInTheDocument()
+      expect(screen.getByText('Transcribing…')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Go to inbox' })).toHaveAttribute('href', '/inbox')
+    })
+
+    it('added_existing + failed points at the episode page for retry', async () => {
+      await importAndWait(
+        bareAudioResponse({ outcome: 'added_existing', episode_state: 'discovered', episode_failed: true }),
+      )
+      expect(screen.getByText(/Processing failed earlier/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Open episode' })).toBeInTheDocument()
+    })
+
+    it('new_episode with a parent still offers the follow CTA; other outcomes do not', async () => {
+      await importAndWait(
+        bareAudioResponse({
+          outcome: 'added_existing',
+          episode_state: 'summarized',
+          parent: { id: 'p-1', title: 'Rick Astley', slug: 'rick-astley' },
+        }),
+      )
+      expect(screen.queryByText('View channel')).toBeNull()
+    })
+
+    function alreadyInInbox(state: 'unread' | 'read' | 'saved' | 'dismissed') {
+      return bareAudioResponse({
+        outcome: 'already_in_inbox',
+        inbox_created: false,
+        episode_state: 'summarized',
+        inbox_entry: {
+          id: 'i-1',
+          user_id: 'u-1',
+          episode_id: 'ep-1',
+          source: 'follow_new',
+          state,
+          delivered_at: '2026-05-11T09:12:00Z',
+          state_changed_at: null,
+        },
+      })
+    }
+
+    it('already_in_inbox names the delivery date and opens the episode', async () => {
+      await importAndWait(alreadyInInbox('read'))
+      expect(screen.getByText(/Good news — this is already in your inbox/)).toBeInTheDocument()
+      // Locale-formatted: "11 May" or "May 11".
+      expect(screen.getByText(/Delivered (11 May|May 11)\./)).toBeInTheDocument()
+      expect(screen.getByText(/You've read it\./)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Open episode' })).toHaveAttribute(
+        'href',
+        '/podcasts/audio-imports/episodes/some-audio-file',
+      )
+    })
+
+    it.each([
+      ['unread', /You haven't read it yet\./, 'Save for later'],
+      ['read', /You've read it\./, 'Save for later'],
+      ['dismissed', /You dismissed it/, 'Restore to inbox'],
+    ] as const)('already_in_inbox (%s) offers one in-place action', async (state, sentence, action) => {
+      await importAndWait(alreadyInInbox(state))
+      expect(screen.getByText(sentence)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: action })).toBeInTheDocument()
+    })
+
+    it('already_in_inbox (saved) has no action, only a link to the Saved view', async () => {
+      await importAndWait(alreadyInInbox('saved'))
+      expect(screen.getByText(/in your saved items/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Save for later|Restore to inbox/ })).toBeNull()
+      expect(screen.getByRole('link', { name: 'View saved' })).toHaveAttribute('href', '/inbox?view=saved')
+    })
+
+    it('Save for later sets state in place, then closes onto the Saved view', async () => {
+      mockSetInboxState.mockResolvedValue({ status: 'ok', timestamp: '', entry: {} })
+      const { user, onClose } = await importAndWait(alreadyInInbox('read'))
+
+      await user.click(screen.getByRole('button', { name: 'Save for later' }))
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(mockSetInboxState).toHaveBeenCalledWith('ep-1', 'saved')
+      expect(window.location.pathname + window.location.search).toBe('/inbox?view=saved')
+    })
+
+    it('Restore to inbox moves a dismissed row back to unread without navigating', async () => {
+      window.history.replaceState(null, '', '/inbox')
+      mockSetInboxState.mockResolvedValue({ status: 'ok', timestamp: '', entry: {} })
+      const { user, onClose } = await importAndWait(alreadyInInbox('dismissed'))
+
+      await user.click(screen.getByRole('button', { name: 'Restore to inbox' }))
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled())
+      expect(mockSetInboxState).toHaveBeenCalledWith('ep-1', 'unread')
+      expect(window.location.pathname + window.location.search).toBe('/inbox')
+    })
+
+    it('a failed state change stays open and shows the error', async () => {
+      mockSetInboxState.mockRejectedValue(new Error('Inbox entry not found'))
+      const { user, onClose } = await importAndWait(alreadyInInbox('read'))
+
+      await user.click(screen.getByRole('button', { name: 'Save for later' }))
+
+      expect(await screen.findByText('Inbox entry not found')).toBeInTheDocument()
+      expect(onClose).not.toHaveBeenCalled()
+    })
   })
 
   it('renders the API error message inline', async () => {

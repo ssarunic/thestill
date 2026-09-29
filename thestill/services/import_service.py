@@ -52,6 +52,7 @@ from ..utils.url_patterns import (
     is_youtube_url,
 )
 from ..utils.youtube_errors import describe_youtube_failure
+from .inbox_service import enqueue_pipeline_for
 
 logger = get_logger(__name__)
 
@@ -818,6 +819,21 @@ class ImportResult:
     parent_podcast_id: Optional[str] = None
     parent_title: Optional[str] = None
     parent_slug: Optional[str] = None
+    # Spec #88 — enough to link straight to the episode and describe it
+    # without a second request. ``podcast_slug`` is the episode's actual
+    # parent (including the synthetic ``audio-imports`` row), unlike
+    # ``parent_slug`` which is only set for a followable show.
+    episode_slug: str = ""
+    podcast_slug: str = ""
+    episode_state: str = "discovered"
+    episode_failed: bool = False
+
+    @property
+    def outcome(self) -> str:
+        """``new_episode`` | ``added_existing`` | ``already_in_inbox`` (spec #88)."""
+        if self.episode_created:
+            return "new_episode"
+        return "added_existing" if self.inbox_created else "already_in_inbox"
 
 
 class ImportService:
@@ -883,6 +899,12 @@ class ImportService:
             episode_id=episode_id,
             source="import",
         )
+        if not episode_created:
+            # Spec #88: the episode existed, so nothing above started it. Run
+            # the same guard publish fan-out uses — an untouched DISCOVERED
+            # orphan (feed-discovered, never processed) gets the pipeline;
+            # anything processed, in flight or failed is left alone.
+            self._ensure_pipeline_for_existing(episode_id)
         if episode_created:
             # The shared entry-stage rule, not a hard-coded TRANSCRIBE. Imports
             # used to assume the transcriber could always fetch `audio_url`
@@ -919,6 +941,7 @@ class ImportService:
             imports_in_24h=imports_in_window,
         )
         parent_id, parent_title, parent_slug = parent_summary if parent_summary else (None, None, None)
+        episode_slug, podcast_slug, episode_state, episode_failed = self._describe_episode(user_id, episode_id)
         return ImportResult(
             episode_id=episode_id,
             canonical_id=canonical.canonical_id,
@@ -931,11 +954,41 @@ class ImportService:
             parent_podcast_id=parent_id,
             parent_title=parent_title,
             parent_slug=parent_slug,
+            episode_slug=episode_slug,
+            podcast_slug=podcast_slug,
+            episode_state=episode_state,
+            episode_failed=episode_failed,
         )
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _ensure_pipeline_for_existing(self, episode_id: str) -> None:
+        try:
+            pending = self._repository.get_unqueued_unprocessed_episodes([episode_id])
+        except Exception:
+            logger.exception("import_pipeline_lookup_failed", episode_id=episode_id)
+            return
+        enqueue_pipeline_for(
+            self._queue, pending, transcription_provider=self._transcription_provider or "", source="import"
+        )
+
+    def _describe_episode(self, user_id: str, episode_id: str) -> Tuple[str, str, str, bool]:
+        """``(episode_slug, podcast_slug, state, is_failed)`` for the response.
+
+        Read through the inbox JOIN (the row always exists at this point),
+        which never builds a full ``Podcast`` and so also works for the
+        synthetic ``audio-imports`` parent. Falls back to ids on a miss; the
+        client can still build a link from them.
+        """
+        item = self._inbox_repo.get_item(user_id, episode_id)
+        if item is None:
+            logger.warning("import_episode_lookup_missed", episode_id=episode_id)
+            return episode_id, "", "discovered", False
+        episode = item.episode
+        state = episode.state.value if hasattr(episode.state, "value") else str(episode.state)
+        return episode.slug or episode.id, item.podcast.slug or item.podcast.id, state, episode.is_failed
 
     def _resolve(self, url: str) -> CanonicalSource:
         for resolver in self._resolvers:

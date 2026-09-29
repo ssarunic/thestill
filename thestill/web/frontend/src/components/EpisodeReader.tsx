@@ -22,6 +22,7 @@ const ACTIVE_TASK_STATUSES: ReadonlySet<EpisodeTask['status']> = new Set([
 ])
 import TheaterSurface from './TheaterSurface'
 import PipelineActionButton from './PipelineActionButton'
+import { InboxActionButton } from './InboxStatus'
 import FailureBanner from './FailureBanner'
 import Panel from './Panel'
 import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
@@ -538,6 +539,11 @@ export default function EpisodeReader({
               }}
             />
           )}
+
+          {/* Spec #88 — every reader's verb, admins included: put the episode
+              in your inbox (which starts the pipeline when needed) or see the
+              row you already have. Stage controls below stay admin-only. */}
+          <InboxActionButton episodeId={episode.id} />
 
           {!episode.is_failed && episode.state !== 'summarized' && (
             <PipelineActionButton
