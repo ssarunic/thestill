@@ -243,8 +243,8 @@ the three platforms):
 | Platform | Linked | By method |
 |----------|--------|-----------|
 | Apple | 4562 of ~4750 | almost all `guid`; `audio_url` for the Goalhanger shows (their GUIDs differ from Apple's), `title_date` for No Such Thing As A Fish and Shameless |
-| Spotify | 24 | `publisher` |
-| YouTube | 881 | 246 `publisher`, 344 `title_date`, 291 `title_duration` |
+| Spotify | 3 | `publisher` — 21 further description links turned out to be other episodes (a show's bite-size cuts linking their full episode) and were refused once claims were verified |
+| YouTube | 943 | 97 `publisher` (34 of them retitled uploads accepted on date + duration), 508 `title_date`, 338 `title_duration` |
 
 Apple's misses are episodes Apple does not list (the Ezra Klein Show
 window holds 4 entries; Football Daily's 5 Live reaction episodes are
@@ -252,11 +252,13 @@ absent). Three shows (Uncapped, Deep Learning with PolyAI, Latent Space)
 resolve only through the window-proven title rule because Apple lists them
 under another feed host. YouTube: 39 shows have no channel on record;
 of the shows with one, video-first feeds land well (Joe Rogan 33 of 47,
-Prof G Markets 119 of 189, Moonshots 50 of 86, Huberman 17 of 32) and the
-misses are retitled uploads ("How Meta Could Quietly Win The AI Race" vs
-"Meta Just Turned Your Data Into An AI Advantage") that no safe rule
-covers. Spot checks of the paired titles and durations found no wrong
-link.
+Prof G Markets 119 of 189, Moonshots 50 of 86, Dwarkesh 27 of 35,
+Huberman 17 of 32) and the misses are retitled uploads the publisher did
+not link ("How Meta Could Quietly Win The AI Race" vs "Meta Just Turned
+Your Data Into An AI Advantage") that no safe rule covers. Spot checks of
+the paired titles and durations found no wrong link; the rejected
+description claims inspected were a bite-size cut, a trailer and a
+guest's own video.
 
 ## Open questions
 
