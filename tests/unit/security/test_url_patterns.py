@@ -207,3 +207,35 @@ class TestSpotifyPatterns:
             assert not is_spotify_url(url), url
             assert extract_spotify_entity(url) is None, url
         assert not is_spotify_url("https://podcasts.apple.com/us/podcast/x/id1?i=2")
+
+
+class TestSpec87TextScanners:
+    """Spec #87 — link scanners over free text (descriptions, show notes)."""
+
+    def test_youtube_video_ids_in_text(self):
+        from thestill.utils.url_patterns import find_youtube_video_ids
+
+        text = (
+            'see <a href="https://www.youtube.com/watch?feature=share&v=s7d2d8FhevU">x</a>, '
+            "youtu.be/NYFGCESmikA?t=1, youtube.com/live/l6USUAIKJls and a 12-char run youtube.com/watch?v=s7d2d8FhevUX"
+        )
+        assert find_youtube_video_ids(text) == ["s7d2d8FhevU", "NYFGCESmikA", "l6USUAIKJls"]
+        assert find_youtube_video_ids("") == []
+
+    def test_youtube_channel_urls_in_text(self):
+        from thestill.utils.url_patterns import find_youtube_channel_urls
+
+        text = "https://www.youtube.com/@lexfridman/videos youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA youtube.com/watch?v=aaaaaaaaaaa"
+        assert find_youtube_channel_urls(text) == [
+            "https://www.youtube.com/@lexfridman",
+            "https://www.youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA",
+        ]
+
+    def test_spotify_entities_in_text(self):
+        from thestill.utils.url_patterns import find_spotify_entities
+
+        text = "https://open.spotify.com/episode/0tkEdaVIsQNGKUGUKTPqeH?si=x https://open.spotify.com/intl-de/show/2MAi0BvDc6GTFvKFPXnkCL"
+        assert find_spotify_entities(text) == [
+            ("episode", "0tkEdaVIsQNGKUGUKTPqeH"),
+            ("show", "2MAi0BvDc6GTFvKFPXnkCL"),
+        ]

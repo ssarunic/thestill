@@ -137,6 +137,56 @@ class AlternateEnclosure(BaseModel):
     created_at: Optional[datetime] = None  # When the entry was first observed
 
 
+PLATFORM_LINK_PLATFORMS = ("apple", "spotify", "youtube")
+PLATFORM_LINK_MATCH_METHODS = ("guid", "audio_url", "title_date", "title_duration", "publisher")
+
+
+class PlatformLink(BaseModel):
+    """
+    One episode's page on a listening platform (spec #87).
+
+    A row with ``url is None`` records "checked, not found" so the resolver
+    can throttle re-lookups per episode; readers only surface rows with a
+    URL. ``match_method`` / ``external_ref`` keep every link explainable:
+    a wrong fuzzy link can be found by method and cleared.
+    """
+
+    id: Optional[int] = None
+    episode_id: str
+    platform: str  # one of PLATFORM_LINK_PLATFORMS
+    url: Optional[str] = None  # None = checked, not found
+    external_ref: Optional[str] = None  # Apple trackId, Spotify episode id, YouTube video id
+    # One of PLATFORM_LINK_MATCH_METHODS, None when not found. ``publisher`` =
+    # the feed itself carried the link (item link, description, alternate
+    # enclosure, or the import that created the episode).
+    match_method: Optional[str] = None
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _validate_enums(self) -> "PlatformLink":
+        if self.platform not in PLATFORM_LINK_PLATFORMS:
+            raise ValueError(f"unknown platform: {self.platform!r}")
+        if self.match_method is not None and self.match_method not in PLATFORM_LINK_MATCH_METHODS:
+            raise ValueError(f"unknown match_method: {self.match_method!r}")
+        return self
+
+
+class PlatformLinkCandidate(BaseModel):
+    """The episode facts a platform resolver matches on (spec #87)."""
+
+    episode_id: str
+    external_id: str
+    audio_url: str
+    title: str
+    pub_date: Optional[datetime] = None
+    duration: Optional[int] = None  # seconds; YouTube matching compares it against the video length
+    # Publisher-provided signals (spec #87 "publisher" method).
+    description_html: str = ""
+    website_url: Optional[str] = None
+    canonical_id: Optional[str] = None
+
+
 class Episode(BaseModel):
     # Internal identifiers (auto-generated)
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))  # Internal UUID
@@ -384,6 +434,10 @@ class Podcast(BaseModel):
     # is the only writer.
     apple_url: Optional[str] = None  # Apple Podcasts show page
     youtube_url: Optional[str] = None  # YouTube channel/show page
+    # Spec #87 — never chart-sourced: set only from a Spotify show link the
+    # publisher put in the feed (podcast description / website, or the same
+    # show link in episode descriptions).
+    spotify_url: Optional[str] = None
 
     # THES-145: Feed management (itunes:complete, copyright)
     is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")

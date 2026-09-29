@@ -189,6 +189,8 @@ the scheduler are off by default.
 | `REFRESH_SCHEDULER_ENABLED` | Run the background tick that enqueues due feeds | `false` |
 | `REFRESH_SCHEDULER_TICK_SECONDS` | How often the scheduler scans for due feeds (granularity, not poll interval) | `60` |
 | `REFRESH_ON_OPEN_ENABLED` | Opening a podcast detail page enqueues one throttled `REFRESH_FEED` (spec #74); discovery only for feeds nobody follows. Set `false` on scratch/E2E servers | `true` |
+| `PLATFORM_LINKS_ENABLED` | Resolve per-episode Apple Podcasts, Spotify and YouTube links after each refresh and via `thestill link-platforms` (spec #87); at most one iTunes lookup and one flat yt-dlp channel listing per show, only while it has unlinked recent episodes | `true` |
+| `PLATFORM_LINKS_RECHECK_HOURS` | How long a "checked, not found" platform link suppresses another lookup for that episode | `24` |
 
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import type { EpisodeDetail, ImportKind } from '../../api/types'
+import type { EpisodeDetail, ImportKind, PlatformLink, PlatformLinkPlatform } from '../../api/types'
 import type { DefinitionRow } from '../DefinitionList'
 import { ExternalLink } from '../ExternalLink'
 import { episodeTypeLabel, formatLength, formatPublished, hostOf, languageName } from '../../utils/episodeFormat'
@@ -10,6 +10,30 @@ const IMPORT_KIND_LABEL: Record<ImportKind, string> = {
   apple_episode: 'Imported (Apple Podcasts)',
   spotify_episode: 'Imported (Spotify)',
   rss_episode: 'Imported (RSS episode)',
+}
+
+const PLATFORM_LABEL: Record<PlatformLinkPlatform, string> = {
+  apple: 'Apple Podcasts',
+  spotify: 'Spotify',
+  youtube: 'YouTube',
+}
+
+/**
+ * Spec #87 — one external link per platform the episode was resolved on.
+ * Unknown platforms (a newer backend) render nothing rather than a bare id.
+ */
+function listenOn(links: PlatformLink[] | undefined) {
+  const known = (links ?? []).filter((link) => link.platform in PLATFORM_LABEL && link.url)
+  if (known.length === 0) return null
+  return (
+    <span className="inline-flex flex-wrap gap-x-3 gap-y-1">
+      {known.map((link) => (
+        <ExternalLink key={link.platform} href={link.url} className="text-sm">
+          {PLATFORM_LABEL[link.platform]}
+        </ExternalLink>
+      ))}
+    </span>
+  )
 }
 
 function sourceLabel(episode: EpisodeDetail): string | null {
@@ -48,6 +72,7 @@ export function buildEpisodeInformationRows(episode: EpisodeDetail): DefinitionR
           </ExternalLink>
         ) : null,
     },
+    { label: 'Listen on', value: listenOn(episode.platform_links) },
     { label: 'Source', value: sourceLabel(episode) },
   ]
 }

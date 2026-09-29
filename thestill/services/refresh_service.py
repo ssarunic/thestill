@@ -27,6 +27,7 @@ from .podcast_service import PodcastService
 
 if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
+    from .platform_link_service import PlatformLinkService
 
 logger = get_logger(__name__)
 
@@ -64,6 +65,7 @@ class RefreshService:
         podcast_service: PodcastService,
         queue_manager: Optional["QueueManager"] = None,
         config: Any = None,
+        platform_link_service: Optional["PlatformLinkService"] = None,
     ) -> None:
         """
         Initialize refresh service.
@@ -78,11 +80,24 @@ class RefreshService:
                 which case refresh only discovers + persists (legacy behaviour).
             config: App config, required alongside ``queue_manager`` for the
                 provider-aware entry-stage choice and the backfill cap.
+            platform_link_service: Spec #87 — when wired, every refreshed
+                podcast gets a best-effort Apple episode-link pass (at most
+                one iTunes lookup per show). ``None`` skips it.
         """
         self.feed_manager: PodcastFeedManager = feed_manager
         self.podcast_service: PodcastService = podcast_service
         self.queue_manager: Optional["QueueManager"] = queue_manager
         self.config: Any = config
+        self.platform_link_service: Optional["PlatformLinkService"] = platform_link_service
+
+    def _refreshed_podcasts(self, podcast_id: Optional[Union[str, int]]) -> List[Podcast]:
+        """The podcasts a refresh targeted: the one asked for, else every
+        followed feed (the same lightweight loader the batch uses)."""
+        if podcast_id:
+            podcast = self.podcast_service.get_podcast(podcast_id)
+            return [podcast] if podcast else []
+        podcasts, _known = self.feed_manager.repository.get_podcasts_for_refresh()
+        return list(podcasts)
 
     def refresh(
         self,
@@ -128,6 +143,17 @@ class RefreshService:
             podcast = self.podcast_service.get_podcast(podcast_id)
             if podcast:
                 podcast_filter_name = podcast.title
+
+        # Spec #87 — best-effort platform links for every podcast this refresh
+        # covered, whether or not it had new episodes: a 304 still lets an
+        # expired not-found marker retry, and the pass costs nothing when a
+        # show has no candidates. Before the early return below on purpose.
+        if not dry_run and self.platform_link_service is not None:
+            for podcast in self._refreshed_podcasts(podcast_id):
+                try:
+                    self.platform_link_service.link_podcast(podcast)
+                except Exception:
+                    logger.warning("platform_link_resolution_failed", podcast_id=podcast.id, exc_info=True)
 
         if not new_episodes:
             logger.info("No new episodes found")

@@ -332,6 +332,78 @@ def list_podcasts(ctx):
     click.echo(output)
 
 
+def _make_platform_link_service(repository):
+    """Spec #87 — the shared Apple episode-link resolver, or None when disabled."""
+    from .services.platform_link_service import PlatformLinkService
+    from .utils.config import get_platform_links_recheck_hours, is_platform_links_enabled
+
+    if not is_platform_links_enabled():
+        return None
+    return PlatformLinkService(repository, recheck_hours=get_platform_links_recheck_hours())
+
+
+@main.command("link-platforms")
+@click.option("--podcast-id", help="Only this podcast (index or RSS URL)")
+@click.option("--dry-run", "-d", is_flag=True, help="Fetch and match, but write nothing")
+@click.option(
+    "--force", "-f", is_flag=True, help="Ignore the not-found recheck interval (re-query every unlinked episode)"
+)
+@click.pass_context
+@require_config
+@log_command
+def link_platforms(ctx, podcast_id, dry_run, force):
+    """Resolve per-episode Apple / Spotify / YouTube links (spec #87).
+
+    Per show: one iTunes lookup for Apple, the feed's own links for Spotify
+    and YouTube, then one flat channel listing for what YouTube is missing.
+    Only shows with unlinked episodes among their newest 200 cost a request.
+    Runs automatically after every refresh; this command is the backfill
+    and the debugging surface.
+    """
+    service = _make_platform_link_service(ctx.obj.repository)
+    if service is None:
+        click.echo("❌ PLATFORM_LINKS_ENABLED is false — nothing to do.", err=True)
+        ctx.exit(1)
+
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        targets = [podcast]
+    else:
+        targets = ctx.obj.repository.get_all()
+
+    if dry_run:
+        click.echo("🔍 Dry run — fetching and matching, writing nothing.")
+    click.echo(f"🔗 Resolving platform links for {len(targets)} podcast(s)...")
+
+    totals = {"candidates": 0, "linked": 0, "not_found": 0}
+    per_platform: dict = {}
+    for podcast in targets:
+        report = service.link_podcast(podcast, dry_run=dry_run, force=force)
+        totals["candidates"] += report.candidates
+        totals["linked"] += report.linked
+        totals["not_found"] += report.not_found
+        lines = []
+        for outcome in report.outcomes:
+            if outcome.skipped == "no_candidates":
+                continue
+            bucket = per_platform.setdefault(outcome.platform, {"linked": 0, "not_found": 0})
+            bucket["linked"] += outcome.linked
+            bucket["not_found"] += outcome.not_found
+            methods = ", ".join(f"{k}={v}" for k, v in sorted(outcome.matched_by.items())) or "-"
+            note = f" ({outcome.skipped})" if outcome.skipped else ""
+            lines.append(f"{outcome.platform} {outcome.linked}/{outcome.candidates} [{methods}]{note}")
+        if lines:
+            click.echo(f"   {podcast.title}: " + "; ".join(lines))
+    summary = ", ".join(f"{p}={b['linked']}" for p, b in sorted(per_platform.items())) or "-"
+    click.echo(
+        f"✓ Done: {totals['linked']} linked ({summary}), {totals['not_found']} not found, "
+        f"{totals['candidates']} candidate(s) checked."
+    )
+
+
 @main.command()
 @click.option("--podcast-id", help="Refresh specific podcast (index or RSS URL)")
 @click.option("--max-episodes", "-m", type=int, help="Maximum episodes to discover per podcast")
@@ -394,6 +466,7 @@ def refresh(ctx, podcast_id, max_episodes, dry_run, queue):
         ctx.obj.podcast_service,
         queue_manager=make_queue_manager(config),
         config=config,
+        platform_link_service=_make_platform_link_service(ctx.obj.repository),
     )
 
     # Use CLI option if provided, otherwise fall back to config

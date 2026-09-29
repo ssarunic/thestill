@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from ..services.legacy_claim_service import LegacyClaimService
     from ..services.mcp_token_service import McpTokenService
     from ..services.narration import NarrationRunner
+    from ..services.platform_link_service import PlatformLinkService
     from ..services.refresh_on_open import RefreshOnOpenService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -130,6 +131,8 @@ class AppState:
     pending_ops_repository: "Optional[PendingOperationsRepository]" = None
     # Spec #48 — background refresh scheduler (set at startup when enabled).
     refresh_scheduler: "Optional[RefreshScheduler]" = None
+    # Spec #87 — per-episode platform links; None disables the refresh hook.
+    platform_link_service: "Optional[PlatformLinkService]" = None
     # Spec #50 — briefing schedules. ``Optional`` only so legacy test
     # fixtures that construct AppState by hand don't have to update;
     # production wiring always passes the repository.

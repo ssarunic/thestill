@@ -119,6 +119,59 @@ def extract_youtube_video_id(url: str) -> str | None:
     return None
 
 
+# Spec #87 — find YouTube video / channel links inside free text (episode
+# descriptions, show notes). Each alternative is anchored on a literal host
+# token; the optional ``watch?<params>&`` run is bounded and excludes the
+# characters that end an attribute or a sentence, so it cannot back-track
+# across the whole text. The video id is the same fixed 11-char class as
+# ``YOUTUBE_VIDEO_ID_RE``; the trailing lookahead stops a 12-char run from
+# matching its 11-char prefix.
+YOUTUBE_VIDEO_LINK_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:[^\s\"'<>&]{0,200}&)?v=|live/|embed/|shorts/)|youtu\.be/)"
+    r"([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
+# Channel handles are ``@name`` (YouTube caps them at 30 chars; 50 is slack);
+# ``channel/UC…`` ids are 24 chars. ``/c/name`` and ``/user/name`` legacy
+# forms are accepted too. Bounded classes, no alternation over overlapping
+# groups.
+YOUTUBE_CHANNEL_RE: Final[re.Pattern[str]] = re.compile(
+    r"youtube\.com/(@[A-Za-z0-9_.\-]{1,50}|channel/[A-Za-z0-9_\-]{10,40}|c/[A-Za-z0-9_.\-]{1,60}|user/[A-Za-z0-9_.\-]{1,60})"
+    r"(?![A-Za-z0-9_.\-])",
+    re.IGNORECASE,
+)
+
+
+def find_youtube_video_ids(text: str) -> list[str]:
+    """Distinct, validated video ids linked anywhere in ``text``, first-seen order."""
+    seen: list[str] = []
+    for match in YOUTUBE_VIDEO_LINK_RE.finditer(text or ""):
+        video_id = match.group(1)
+        if YOUTUBE_VIDEO_ID_RE.fullmatch(video_id) and video_id not in seen:
+            seen.append(video_id)
+    return seen
+
+
+def find_youtube_channel_urls(text: str) -> list[str]:
+    """Distinct canonical channel URLs (``https://www.youtube.com/<handle|channel/id|c/…>``) in ``text``."""
+    seen: list[str] = []
+    for match in YOUTUBE_CHANNEL_RE.finditer(text or ""):
+        url = "https://www.youtube.com/" + match.group(1)
+        if url not in seen:
+            seen.append(url)
+    return seen
+
+
+def find_spotify_entities(text: str) -> list[tuple[str, str]]:
+    """Distinct ``(kind, id)`` pairs (``episode`` / ``show``) linked anywhere in ``text``, first-seen order."""
+    seen: list[tuple[str, str]] = []
+    for match in SPOTIFY_ENTITY_RE.finditer(text or ""):
+        pair = (match.group(1).lower(), match.group(2))
+        if pair not in seen:
+            seen.append(pair)
+    return seen
+
+
 # ---------------------------------------------------------------------------
 # RSS / Podcast feed shape hints
 # ---------------------------------------------------------------------------
@@ -263,4 +316,6 @@ ALL_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     SPOTIFY_ENTITY_RE,
     SPOTIFY_URI_RE,
     SPOTIFY_SHORT_LINK_RE,
+    YOUTUBE_VIDEO_LINK_RE,
+    YOUTUBE_CHANNEL_RE,
 )

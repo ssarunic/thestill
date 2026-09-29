@@ -332,6 +332,15 @@ export default function PodcastDetail() {
                   </ExternalLink>
                 ) : null,
               },
+              // Spec #87 — publisher-provided Spotify show link.
+              {
+                label: 'Spotify',
+                value: podcast.spotify_url ? (
+                  <ExternalLink href={podcast.spotify_url} className="text-sm">
+                    Listen on Spotify
+                  </ExternalLink>
+                ) : null,
+              },
               { label: 'Copyright', value: podcast.copyright },
             ]}
           />

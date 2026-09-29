@@ -40,7 +40,7 @@ describe('buildEpisodeInformationRows (spec #76 §3.6)', () => {
     const rows = buildEpisodeInformationRows(
       episode({ episode_type: 'bonus', explicit: true, website_url: 'https://www.profgmedia.com/x', origin: 'import', import_kind: 'bare_audio' }),
     )
-    expect(rows.map((r) => r.label)).toEqual(['Show', 'Author', 'Published', 'Length', 'Language', 'Type', 'Explicit', 'Show notes', 'Source'])
+    expect(rows.map((r) => r.label)).toEqual(['Show', 'Author', 'Published', 'Length', 'Language', 'Type', 'Explicit', 'Show notes', 'Listen on', 'Source'])
     const v = values(rows)
     expect(v.Author).toBe('Prof G Media')
     expect(v.Length).toBe('58 min 25 s')
@@ -60,7 +60,32 @@ describe('buildEpisodeInformationRows (spec #76 §3.6)', () => {
     expect(v.Type).toBeNull()
     expect(v.Explicit).toBeNull()
     expect(v['Show notes']).toBeNull()
+    expect(v['Listen on']).toBeNull()
     expect(v.Source).toBeNull()
+  })
+
+  it('renders one external link per resolved platform (spec #87)', () => {
+    const v = values(
+      buildEpisodeInformationRows(
+        episode({
+          platform_links: [
+            { platform: 'apple', url: 'https://podcasts.apple.com/us/podcast/x/id1?i=2' },
+            { platform: 'youtube', url: 'https://www.youtube.com/watch?v=abc' },
+          ],
+        }),
+      ),
+    )
+    const { container } = render(<MemoryRouter>{v['Listen on']}</MemoryRouter>)
+    const anchors = Array.from(container.querySelectorAll('a'))
+    expect(anchors.map((a) => a.textContent)).toEqual(['Apple Podcasts', 'YouTube'])
+    expect(anchors[0]).toHaveAttribute('href', 'https://podcasts.apple.com/us/podcast/x/id1?i=2')
+    expect(anchors[0]).toHaveAttribute('target', '_blank')
+  })
+
+  it('omits the Listen on row when no platform is resolved or the platform is unknown', () => {
+    expect(values(buildEpisodeInformationRows(episode({ platform_links: [] })))['Listen on']).toBeNull()
+    const unknown = [{ platform: 'mixcloud' as never, url: 'https://example.com' }]
+    expect(values(buildEpisodeInformationRows(episode({ platform_links: unknown })))['Listen on']).toBeNull()
   })
 
   it('labels imports without a known kind plainly', () => {

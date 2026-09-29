@@ -261,6 +261,8 @@ def get_podcast(
                 # the podcast is not on any Top Podcasts chart.
                 "apple_url": info.apple_url,
                 "youtube_url": info.youtube_url,
+                # Spec #87 — publisher-provided Spotify show link.
+                "spotify_url": info.spotify_url,
             },
         }
     )
@@ -333,6 +335,10 @@ def get_episode_by_slugs(
     podcast, episode = result
     alternate_enclosures = state.repository.get_alternate_enclosures(episode.id)
     origin, import_kind = derive_episode_origin(episode.canonical_id)
+    # Spec #87 — found platform links only (not-found markers never leave the repo).
+    platform_links = [
+        {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
+    ]
 
     return api_response(
         {
@@ -348,6 +354,7 @@ def get_episode_by_slugs(
                 "podcast_language": podcast.language,
                 "origin": origin,
                 "import_kind": import_kind,
+                "platform_links": platform_links,
                 "title": episode.title,
                 "description": episode.description,
                 "description_html": episode.description_html,

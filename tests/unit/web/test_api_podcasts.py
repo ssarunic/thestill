@@ -205,9 +205,12 @@ class TestGetEpisodeBySlugs:
         return podcast, episode
 
     def _get(self, client, mock_app_state, **kwargs):
+        links = kwargs.pop("links", [])
         podcast, episode = self._result(**kwargs)
+        kwargs["links"] = links
         mock_app_state.repository.get_episode_by_slug.return_value = (podcast, episode)
         mock_app_state.repository.get_alternate_enclosures.return_value = []
+        mock_app_state.repository.get_platform_links.return_value = kwargs.pop("links", [])
         response = client.get("/api/podcasts/prof-g-markets/episodes/why-nobody-trusts-the-news")
         assert response.status_code == 200
         return response.json()["episode"]
@@ -221,7 +224,25 @@ class TestGetEpisodeBySlugs:
         data = self._get(client, mock_app_state, author=None)
         assert data["podcast_author"] is None
 
-    def test_feed_episode_has_feed_origin(self, client, mock_app_state):
+    def test_platform_links_expose_platform_and_url_only(self, client, mock_app_state):
+        from thestill.models.podcast import PlatformLink
+
+        links = [
+            PlatformLink(
+                episode_id="e",
+                platform="apple",
+                url="https://podcasts.apple.com/x?i=1",
+                match_method="guid",
+                external_ref="1",
+            )
+        ]
+        data = self._get(client, mock_app_state, links=links)
+        assert data["platform_links"] == [{"platform": "apple", "url": "https://podcasts.apple.com/x?i=1"}]
+        mock_app_state.repository.get_platform_links.assert_called_once_with(data["id"])
+
+    def test_no_platform_links_is_an_empty_list(self, client, mock_app_state):
+        assert self._get(client, mock_app_state)["platform_links"] == []
+
         data = self._get(client, mock_app_state, canonical_id=None)
         assert data["origin"] == "feed"
         assert data["import_kind"] is None

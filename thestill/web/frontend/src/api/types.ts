@@ -142,6 +142,8 @@ export interface PodcastDetail {
   // was imported from / matched against a Top Podcasts chart entry.
   apple_url?: string | null
   youtube_url?: string | null
+  // Spec #87 — Spotify show link the publisher put in the feed; never chart-sourced.
+  spotify_url?: string | null
 }
 
 export interface PodcastDetailResponse {
@@ -238,6 +240,13 @@ export interface EpisodesResponse {
   next_offset: number | null
 }
 
+export type PlatformLinkPlatform = 'apple' | 'spotify' | 'youtube'
+
+export interface PlatformLink {
+  platform: PlatformLinkPlatform
+  url: string
+}
+
 export interface EpisodeDetail {
   id: string
   podcast_id: string
@@ -248,6 +257,8 @@ export interface EpisodeDetail {
   podcast_language: string | null
   origin: 'feed' | 'import'
   import_kind: ImportKind | null
+  // Spec #87 — this episode's page on other platforms (resolved links only).
+  platform_links?: PlatformLink[]
   title: string
   description: string  // Plain text description (for CLI, LLM prompts)
   description_html?: string  // HTML description with links (for web UI)

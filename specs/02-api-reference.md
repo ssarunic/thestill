@@ -458,6 +458,7 @@ Get a specific episode by podcast and episode slugs.
     "podcast_language": "en",
     "origin": "feed",
     "import_kind": null,
+    "platform_links": [{"platform": "apple", "url": "https://podcasts.apple.com/us/podcast/show/id123?i=456"}],
     "title": "Episode Title",
     "description": "Plain text description...",
     "description_html": "<p>HTML description with <a href=\"...\">links</a>...</p>",
@@ -486,6 +487,10 @@ Get a specific episode by podcast and episode slugs.
 - `podcast_author`, `podcast_language`: show facts read from the podcast row (no extra request).
 - `origin`: `feed` for episodes discovered from a followed feed, `import` for spec #31 imports.
 - `import_kind`: `bare_audio`, `youtube`, `apple_episode`, `spotify_episode` or `rss_episode` for imports; `null` for feed episodes or an unrecognised import source.
+
+**Platform Links (spec #87):**
+
+- `platform_links`: this episode's page on other listening platforms, `[{platform, url}]` with `platform` one of `apple`, `spotify`, `youtube`, ordered by platform. Only resolved links appear; an episode with none gets `[]`. Apple comes from the iTunes lookup window, Spotify only from links the publisher put in the feed, YouTube from publisher links or the show's channel listing.
 
 **Description Fields:**
 
