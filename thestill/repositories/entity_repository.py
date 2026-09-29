@@ -56,6 +56,13 @@ class EntityHit:
     role_episode_count: int = 0
 
 
+# ``search_entities_by_prefix`` gives each entity ONE role — host wins
+# over guest wins over recurring — and ``role_episode_count`` counts only
+# that role's episodes. Both backends emit these scores; this is the
+# shared decoder so the label can never drift between them.
+ROLE_BY_SCORE = {3: "host", 2: "guest", 1: "recurring"}
+
+
 @dataclass(frozen=True)
 class MentionContext:
     """A resolved ``EntityMention`` joined with its episode + podcast +

@@ -46,7 +46,7 @@ from structlog import get_logger
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 from ..utils.postgres_ext import as_str, connect
-from .entity_repository import AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
+from .entity_repository import ROLE_BY_SCORE, AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
 
 logger = get_logger(__name__)
 
@@ -1054,7 +1054,7 @@ class PostgresEntityRepository(EntityRepository):
         # mention aggregates (every jsonb array of every episode + a GROUP
         # BY over all resolved mentions) on every keystroke — at target
         # scale that is millions of mention rows per keypress. Ranking
-        # semantics are identical (MAX role, COUNT DISTINCT episodes,
+        # semantics match the SQLite twin (role, episodes in that role,
         # mention count, name length, name), with one bound: a degenerate
         # prefix matching more than _MATCH_CAP entities scores only the
         # cap's worth, pre-ranked by the ordering's own name-length
@@ -1092,23 +1092,28 @@ class PostgresEntityRepository(EntityRepository):
                       AND em.resolution_status = 'resolved'
                 ) ment ON true
                 LEFT JOIN LATERAL (
-                    SELECT MAX(role_score) AS role_score,
-                           COUNT(DISTINCT episode_id) AS role_episode_count
+                    SELECT
+                        CASE WHEN host_episodes > 0 THEN 3
+                             WHEN guest_episodes > 0 THEN 2
+                             WHEN recurring_episodes > 0 THEN 1
+                             ELSE 0 END AS role_score,
+                        CASE WHEN host_episodes > 0 THEN host_episodes
+                             WHEN guest_episodes > 0 THEN guest_episodes
+                             ELSE recurring_episodes END AS role_episode_count
                     FROM (
-                        SELECT 3 AS role_score, ge.id AS episode_id
-                          FROM episodes ge
-                         WHERE ge.guest_entity_ids @> to_jsonb(matched.id)
-                        UNION ALL
-                        SELECT 2, he.id
-                          FROM episodes he
-                          JOIN podcasts hp ON hp.id = he.podcast_id
-                         WHERE hp.host_entity_ids @> to_jsonb(matched.id)
-                        UNION ALL
-                        SELECT 1, re.id
-                          FROM episodes re
-                          JOIN podcasts rp ON rp.id = re.podcast_id
-                         WHERE rp.recurring_entity_ids @> to_jsonb(matched.id)
-                    ) roles
+                        SELECT
+                            (SELECT COUNT(*)
+                               FROM episodes he
+                               JOIN podcasts hp ON hp.id = he.podcast_id
+                              WHERE hp.host_entity_ids @> to_jsonb(matched.id)) AS host_episodes,
+                            (SELECT COUNT(*)
+                               FROM episodes ge
+                              WHERE ge.guest_entity_ids @> to_jsonb(matched.id)) AS guest_episodes,
+                            (SELECT COUNT(*)
+                               FROM episodes re
+                               JOIN podcasts rp ON rp.id = re.podcast_id
+                              WHERE rp.recurring_entity_ids @> to_jsonb(matched.id)) AS recurring_episodes
+                    ) per_role
                 ) r ON true
             )
             SELECT id, type, canonical_name, aliases, mention_count,
@@ -1139,14 +1144,7 @@ class PostgresEntityRepository(EntityRepository):
                     if prefix_lower in alias.lower():
                         matched_alias = alias
                         break
-            role_score = row["role_score"]
-            role: Optional[str] = None
-            if role_score == 3:
-                role = "guest"
-            elif role_score == 2:
-                role = "host"
-            elif role_score == 1:
-                role = "recurring"
+            role = ROLE_BY_SCORE.get(row["role_score"])
             hits.append(
                 EntityHit(
                     id=row["id"],
