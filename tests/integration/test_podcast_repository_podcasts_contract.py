@@ -1148,11 +1148,17 @@ def test_sync_podcast_chart_urls(repo):
     assert repo.get_by_id(on_chart.id).apple_url is None
     assert repo.get_podcast_row_by_slug(on_chart.slug)["youtube_url"] is None
 
-    assert repo.sync_podcast_chart_urls(on_chart.id) == {"apple_url": apple, "youtube_url": youtube}
-    assert repo.sync_podcast_chart_urls(off_chart.id) == {"apple_url": None, "youtube_url": None}
+    # Spec #87 adds ``spotify_url`` to the result; it is never chart-sourced.
+    assert repo.sync_podcast_chart_urls(on_chart.id) == {
+        "apple_url": apple,
+        "youtube_url": youtube,
+        "spotify_url": None,
+    }
+    assert repo.sync_podcast_chart_urls(off_chart.id) == {"apple_url": None, "youtube_url": None, "spotify_url": None}
     assert repo.sync_podcast_chart_urls("00000000-0000-0000-0000-000000000000") == {
         "apple_url": None,
         "youtube_url": None,
+        "spotify_url": None,
     }
 
     # Read paths see the stored links: hydrated model + detail-page row.
@@ -1170,4 +1176,8 @@ def test_sync_podcast_chart_urls(repo):
 
     # A chart scrape that lost the YouTube link keeps the one we already have.
     _exec(repo, "UPDATE top_podcasts SET youtube_url = NULL WHERE rss_url = ?", (str(on_chart.rss_url),))
-    assert repo.sync_podcast_chart_urls(on_chart.id) == {"apple_url": apple, "youtube_url": youtube}
+    assert repo.sync_podcast_chart_urls(on_chart.id) == {
+        "apple_url": apple,
+        "youtube_url": youtube,
+        "spotify_url": None,
+    }
