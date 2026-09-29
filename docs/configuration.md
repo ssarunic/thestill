@@ -467,6 +467,26 @@ while `chunks verify` says the index is fine.
 `thestill status` reports current chunk count and the embedding model
 in use.
 
+**Repair double-encoded text** when names read like `Max JungestÃ¥l`
+instead of `Max Jungestål`. Feed bodies used to be decoded with a guessed
+charset; a wrong guess double-encoded every accented character, and the
+damage was copied from episode descriptions into facts, speaker names,
+cleaned transcripts, summaries, entities and the search index. The fetch
+now decodes from bytes (strict UTF-8, then the XML declaration), and what
+was stored before that fix is repaired with:
+
+```bash
+thestill repair-mojibake                  # dry run: lists every affected row and file
+thestill repair-mojibake --apply          # write the repairs
+thestill repair-mojibake --podcast-id ID  # one podcast (corpus-global entities are skipped)
+```
+
+Rows and files are repaired in place. Episodes whose cleaned-transcript
+sidecar changed, or whose chunk rows are damaged, are re-indexed through
+the configured chunk writer, which re-embeds those episodes only. An
+episode with damaged chunks but no sidecar is listed for re-cleaning
+instead. The command is idempotent; a second run reports nothing.
+
 ## Entity Linking (spec #81)
 
 Which linker `resolve-entities` uses to turn a spoken name into a Wikidata

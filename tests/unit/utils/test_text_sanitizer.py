@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from thestill.core.segmented_transcript_cleaner import CleanupPatch
-from thestill.utils.text_sanitizer import sanitize_text
+from thestill.utils.text_sanitizer import repair_mojibake, sanitize_text
 
 
 class TestSanitizeText:
@@ -71,3 +73,38 @@ class TestCleanupPatchValidator:
         patch = CleanupPatch(id=1, cleaned_text="Sauté onions — 東京 🎧\nnew line", kind="content")
         assert patch.cleaned_text == "Sauté onions — 東京 🎧\nnew line"
         assert patch.sponsor is None
+
+
+class TestRepairMojibake:
+    """``repair_mojibake`` undoes double-encoded UTF-8 and nothing else."""
+
+    def test_repairs_cp1252_double_encoding(self):
+        assert repair_mojibake("Max JungestÃ¥l") == ("Max Jungestål", True)
+        assert repair_mojibake("MÃ¼ller said â€œhiâ€\u009d") == ("Müller said “hi”", True)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Max Jungestål",
+            "Žene i muškarci – tako je",
+            "naïve café — 100% ‘quoted’",
+            "Ελληνικά and 日本語 🎧",
+            "",
+        ],
+    )
+    def test_correct_text_is_untouched(self, text):
+        assert repair_mojibake(text) == (text, False)
+
+    def test_ascii_fast_path_returns_the_same_object(self):
+        text = "plain ascii transcript line"
+        fixed, changed = repair_mojibake(text)
+        assert fixed is text
+        assert changed is False
+
+    def test_one_unrecoverable_line_does_not_veto_the_rest(self):
+        """A lead byte whose continuation bytes were stripped (C1 controls) can't be
+        restored; ftfy then leaves its whole input alone, so repair runs per line."""
+        text = "Speaker: Max JungestÃ¥l talks.\nBad line âhiâ here.\nAnother MÃ¼ller line.\n"
+        fixed, changed = repair_mojibake(text)
+        assert changed is True
+        assert fixed == "Speaker: Max Jungestål talks.\nBad line âhiâ here.\nAnother Müller line.\n"

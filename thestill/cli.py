@@ -4857,6 +4857,68 @@ def chunks_verify(ctx, sample):
         ctx.exit(2)
 
 
+@main.command("repair-mojibake")
+@click.option("--podcast-id", default=None, help="Restrict to one podcast (corpus-global entities are then skipped).")
+@click.option("--apply", "apply_changes", is_flag=True, help="Write the repairs. Without it, only report.")
+@click.option("--examples", default=8, show_default=True, type=int, help="How many changed values to print.")
+@click.pass_context
+@require_config
+@log_command
+def repair_mojibake_cmd(ctx, podcast_id, apply_changes, examples):
+    """Undo double-encoded UTF-8 ("JungestÃ¥l" for "Jungestål") in stored text.
+
+    Scans podcast and episode metadata, entities and mentions, facts files,
+    cleaned transcripts and summaries. Episodes whose cleaned-transcript
+    sidecar changed, or whose search chunks are damaged, are re-indexed
+    through the configured chunk writer (re-embedding those episodes).
+    Dry run by default; pass --apply to write.
+    """
+    from .core.mojibake_repair import MojibakeRepairer
+
+    repairer = MojibakeRepairer(
+        ctx.obj.config,
+        ctx.obj.path_manager,
+        ctx.obj.repository,
+        ctx.obj.embedding_model,
+    )
+    try:
+        report = repairer.run(apply=apply_changes, podcast_id=podcast_id)
+    except ValueError as exc:
+        click.echo(f"❌ {exc}", err=True)
+        ctx.exit(1)
+
+    mode = "applied" if apply_changes else "dry run — pass --apply to write"
+    click.echo(f"Mojibake repair ({mode})")
+    if not report.found_anything:
+        click.echo("✓ no double-encoded text found")
+    for location, n in report.counts().items():
+        click.echo(f"  {location:<28} {n}")
+    for change in report.changes[:examples]:
+        click.echo(f"    {change.location} {change.key}: {change.before!r} → {change.after!r}")
+    if len(report.changes) > examples:
+        click.echo(f"    … (+{len(report.changes) - examples} more)")
+    if report.chunk_episodes:
+        if apply_changes:
+            click.echo(
+                f"  chunks: {len(report.chunk_episodes)} episode(s) re-indexed, {report.chunks_rewritten} rows written"
+            )
+        else:
+            click.echo(f"  chunks: {len(report.chunk_episodes)} episode(s) to re-index")
+    if report.chunks_without_sidecar:
+        click.echo(
+            f"  ! {len(report.chunks_without_sidecar)} episode(s) have damaged chunks but no cleaned-transcript "
+            "sidecar to rebuild from; re-run clean-transcript for them:"
+        )
+        for episode_id in report.chunks_without_sidecar[:examples]:
+            click.echo(f"      {episode_id}")
+    if report.unreadable_files:
+        click.echo(f"  ! {len(report.unreadable_files)} file(s) are not valid UTF-8 and were skipped:")
+        for rel in report.unreadable_files[:examples]:
+            click.echo(f"      {rel}")
+    if report.found_anything and not apply_changes:
+        click.echo("Re-run with --apply to write these repairs.")
+
+
 @main.group("related")
 def related_group():
     """Manage the precomputed "Related episodes" rail (spec #28 §5.2)."""

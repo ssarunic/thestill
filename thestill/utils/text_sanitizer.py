@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import re
 
+import ftfy
+
 # C0 controls minus \t \n \r, plus DEL and the C1 range. As *codepoints* —
 # this is unicode-aware (U+0085 NEL etc.), not byte munging.
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
@@ -46,3 +48,30 @@ def sanitize_text(text: str) -> tuple[str, int]:
     """
     clean, count = _CONTROL_CHARS_RE.subn("", text)
     return clean, count
+
+
+def repair_mojibake(text: str) -> tuple[str, bool]:
+    """Undo double-encoded UTF-8: ``"Max JungestÃ¥l"`` → ``"Max Jungestål"``.
+
+    The pattern is UTF-8 bytes that were decoded once as Latin-1 / cp1252
+    (or a sibling single-byte codec) and re-encoded as UTF-8. It entered
+    the corpus through ``requests.Response.text`` guessing the charset of
+    a feed body (fixed at the source in ``media_source.decode_feed_body``)
+    and then spread from episode descriptions into facts, speaker names,
+    cleaned transcripts, summaries and the search index.
+
+    Delegates to ``ftfy.fix_encoding`` — encoding repair only, no quote or
+    entity normalisation. Applied line by line: one unrecoverable fragment
+    (a lead byte whose continuation bytes were stripped as C1 controls by
+    ``sanitize_text``) makes ftfy leave its whole input alone, and that
+    must not veto the rest of a transcript. Text that is already correct
+    passes through unchanged; pure-ASCII input is the fast path.
+
+    Returns ``(repaired_text, changed)``.
+    """
+    if not text or text.isascii():
+        return text, False
+    lines = text.split("\n")
+    fixed = [line if line.isascii() else ftfy.fix_encoding(line) for line in lines]
+    changed = fixed != lines
+    return ("\n".join(fixed) if changed else text), changed
