@@ -366,3 +366,38 @@ describe('Inbox unread indicator', () => {
     expect(screen.getByText('Sample Episode')).toHaveClass('font-normal')
   })
 })
+
+describe('Inbox row timestamp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('shows the publish date, with the delivery time in the tooltip', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([
+        inboxItem(
+          { delivered_at: '2026-05-08T00:00:00Z' },
+          episodeWith('summarized', { pub_date: '2024-03-03T12:00:00Z' }),
+        ),
+      ]),
+      isLoading: false,
+      error: null,
+    })
+    const { container } = render(<Inbox />, { wrapper: createWrapper() })
+    const time = container.querySelector('time')!
+    expect(time.getAttribute('dateTime')).toBe('2024-03-03T12:00:00Z')
+    expect(time.getAttribute('title')).toMatch(/^Delivered .*2026/)
+  })
+
+  it('falls back to the delivery time when the episode has no publish date', () => {
+    mockUseInbox.mockReturnValue({
+      data: inboxResponse([
+        inboxItem({ delivered_at: '2026-05-08T00:00:00Z' }, episodeWith('summarized')),
+      ]),
+      isLoading: false,
+      error: null,
+    })
+    const { container } = render(<Inbox />, { wrapper: createWrapper() })
+    expect(container.querySelector('time')!.getAttribute('dateTime')).toBe('2026-05-08T00:00:00Z')
+  })
+})
