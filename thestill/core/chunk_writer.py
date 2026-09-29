@@ -30,11 +30,11 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.annotated_transcript import AnnotatedTranscript
+from ..models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript
 from ..utils.sqlite_ext import connect
 from ..utils.text_sanitizer import sanitize_text
 from .embedding_model import EmbeddingModel, centroid_blob
@@ -85,6 +85,14 @@ class ChunkWriter:
         Only the DELETE+INSERT phase opens a write connection.
         """
         content_segs = [s for s in transcript.segments if s.kind == "content" and s.text.strip()]
+        content_segs, skipped_short = drop_short_segments(content_segs)
+        if skipped_short:
+            logger.info(
+                "chunk_write_short_segments_skipped",
+                episode_id=episode_id,
+                skipped=skipped_short,
+                min_words=MIN_CHUNK_WORDS,
+            )
         if not content_segs:
             logger.info("chunk_write_no_content_segments", episode_id=episode_id)
             return 0
@@ -192,6 +200,29 @@ class ChunkWriter:
             """,
             (episode_id, model_name, len(embeddings), centroid),
         )
+
+
+# Minimum word count for a segment to be indexed at all. One- and two-word
+# segments ("Ew.", "Was", "Oh, okay.") are useless as search results, and the
+# multilingual MiniLM model maps them into a dense "hub" region of the
+# embedding space that is the nearest neighbour of any rare proper noun it
+# has never seen: on the 2026-09 corpus "Legora", "Lovable" and "Elon Musk"
+# each pulled 25-50 such fragments into the semantic top 50, and hybrid RRF
+# interleaved them with the real lexical hits. Counted on the bare segment
+# text, before the speaker prefix. Query-time guard for rows written before
+# this rule: ``_MIN_SEMANTIC_TEXT_CHARS`` in the search backends.
+MIN_CHUNK_WORDS = 4
+
+
+def is_indexable_segment_text(text: str) -> bool:
+    """True when ``text`` has enough words to be worth embedding."""
+    return len(text.split()) >= MIN_CHUNK_WORDS
+
+
+def drop_short_segments(segments: List[AnnotatedSegment]) -> Tuple[List[AnnotatedSegment], int]:
+    """Return (segments worth indexing, number dropped)."""
+    kept = [s for s in segments if is_indexable_segment_text(s.text)]
+    return kept, len(segments) - len(kept)
 
 
 def _segment_text(speaker: Optional[str], text: str) -> str:

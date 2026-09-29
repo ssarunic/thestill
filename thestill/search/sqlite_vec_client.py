@@ -65,23 +65,37 @@ _HYBRID_FETCH = 50
 _HYBRID_WEIGHT_LEX = 0.5
 _HYBRID_WEIGHT_SEM = 0.5
 
-# Over-fetch factor for filtered semantic queries. sqlite-vec's vec0
-# applies the ``k`` cap during the ANN scan, BEFORE any JOINed
-# filters run — so a tight filter on top of ``k=N`` can yield far
-# fewer than N rows. Over-fetching by 10× and post-filtering keeps
-# the result set close to the requested ``limit`` for filtered cases
-# while staying cheap for unfiltered ones.
+# Over-fetch factor for semantic queries. sqlite-vec's vec0 applies the
+# ``k`` cap during the ANN scan, BEFORE any JOINed filters run — so a
+# filter on top of ``k=N`` can yield far fewer than N rows. Over-fetching
+# by 10× and post-filtering keeps the result set close to the requested
+# ``limit``. Every semantic query is filtered now (the text-length floor
+# below), so this always applies.
 _SEMANTIC_FILTER_OVERFETCH = 10
 
-# Maximum cosine distance admitted as a real semantic match.
-# Calibration on the live corpus (May 2026): real-match queries
-# ("Elon Musk", "open source", "Sequoia Capital") top out at
-# d≈0.83. Out-of-corpus queries ("Sarah Palin") and gibberish bottom
-# out at d≈0.96. 0.85 is the natural break — keep good hits, drop
-# the model's phonetic hallucinations (e.g. "Sarah Palantir" for
-# "Sarah Palin"). Without this, hybrid mode renders pure noise as
-# legitimate matches when the corpus has nothing relevant.
-_SEMANTIC_MAX_DISTANCE = 0.85
+# Maximum cosine distance admitted as a real semantic match. Without
+# this, hybrid mode renders pure noise as legitimate matches when the
+# corpus has nothing relevant. The May 2026 calibration (0.85) predates
+# the multilingual MiniLM index; re-measured 2026-09-29 on it, genuine
+# hits sit at d≈0.11-0.35 at rank 1 and ≤0.54 at rank 50, gibberish
+# starts at d≈0.51. Same value as pgvector_client (lockstep).
+_SEMANTIC_MAX_DISTANCE = 0.55
+
+# A chunk the lexical leg did NOT find needs to be at least this close to
+# enter the hybrid fusion. RRF gives semantic rank n the same weight as
+# lexical rank n, so without this gate a query with 50 exact lexical hits
+# still interleaves them with the semantic leg's nearest "hub" fragments
+# (the Legora search of 2026-09-29: every even row was "Ew.", "Was",
+# "Comment."). Chunks both legs found are never gated — agreement is the
+# strongest signal we have.
+_HYBRID_SEMANTIC_ONLY_MAX_DISTANCE = 0.5
+
+# Query-time floor on chunk text length for the semantic leg. The chunk
+# writers now skip segments under ``MIN_CHUNK_WORDS`` words, but rows
+# written before that rule stay in the index until a ``chunks backfill
+# --force``; this keeps them out of k-NN results meanwhile. Measured on the
+# full text (speaker prefix included).
+_MIN_SEMANTIC_TEXT_CHARS = 30
 
 
 class SqliteVecBackend:
@@ -227,10 +241,10 @@ class SqliteVecBackend:
     def _semantic(self, query_embedding: bytes, *, limit: int, filters: Optional[SearchFilters]) -> List[sqlite3.Row]:
         filter_sql, filter_params = self._filter_clauses(filters)
         # vec0 applies ``k`` during the ANN scan, before the JOINed
-        # filters run. Over-fetch when filters are present so the
-        # post-filtered result set still fills ``limit``. Caller
-        # truncates back to ``limit``.
-        knn_k = limit * _SEMANTIC_FILTER_OVERFETCH if filter_sql else limit
+        # filters run. The text-length floor is always a filter now, so
+        # always over-fetch to keep the post-filtered result set close
+        # to ``limit``. Caller truncates back to ``limit``.
+        knn_k = limit * _SEMANTIC_FILTER_OVERFETCH
         sql = f"""
             SELECT c.id            AS chunk_id,
                    c.episode_id    AS episode_id,
@@ -251,10 +265,11 @@ class SqliteVecBackend:
             WHERE v.embedding MATCH ?
               AND k = ?
               AND +c.embedding_model = ?
+              AND length(c.text) >= ?
               {filter_sql}
             ORDER BY v.distance ASC
         """
-        params = [query_embedding, knn_k, self.embedding_model_name, *filter_params]
+        params = [query_embedding, knn_k, self.embedding_model_name, _MIN_SEMANTIC_TEXT_CHARS, *filter_params]
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         # Drop noise hits before returning. Filtering here (not in SQL
@@ -276,6 +291,13 @@ class SqliteVecBackend:
         # empty — semantic still has the cleaned text to work with.
         lex_rows = self._lexical(query, limit=_HYBRID_FETCH, filters=filters) if query else []
         sem_rows = self._semantic(query_embedding, limit=_HYBRID_FETCH, filters=filters)
+
+        lex_ids = {row["chunk_id"] for row in lex_rows}
+        sem_rows = [
+            row
+            for row in sem_rows
+            if row["chunk_id"] in lex_ids or float(row["score"]) <= _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE
+        ]
 
         scores: dict[int, float] = {}
         rows_by_id: dict[int, sqlite3.Row] = {}

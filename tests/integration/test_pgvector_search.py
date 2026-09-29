@@ -200,7 +200,7 @@ def test_semantic_search_orders_by_cosine(seeded):
     model, _ = seeded
     hits = _backend(model).search("tell me about computing", mode=SearchMode.SEMANTIC, limit=4, filters=None)
     # 'computing'-topic chunks embed identically to the query (distance ~0);
-    # the sourdough chunk is far and must be cut by the 0.85 threshold.
+    # the sourdough chunk is far and must be cut by the noise threshold.
     assert 1 <= len(hits) <= 3
     assert all("computing" in h.text for h in hits)
 
@@ -250,8 +250,39 @@ def test_writer_sanitizes_control_chars(seeded):
 
     model, writer = seeded
     # A NUL in segment text must be stripped (FM-7), not rejected by PG.
-    inserted = writer.write_episode(EPISODE_B, _Transcript([_Seg(9, "saut\x00 onions cooking")]), force=True)
+    inserted = writer.write_episode(EPISODE_B, _Transcript([_Seg(9, "saut\x00 onions in the cooking pan")]), force=True)
     assert inserted == 1
     with psycopg.connect(PG_DSN) as conn:
         txt = conn.execute("SELECT text FROM chunks WHERE episode_id = %s", (EPISODE_B,)).fetchone()[0]
     assert "\x00" not in txt and "saut onions" in txt
+
+
+def test_writer_skips_short_segments(seeded):
+    """One- and two-word segments are not embedded (same rule as the SQLite writer)."""
+    model, writer = seeded
+    inserted = writer.write_episode(
+        EPISODE_B,
+        _Transcript([_Seg(5, "Ew."), _Seg(6, "Was"), _Seg(7, "A proper sentence about quantum computing")]),
+        force=True,
+    )
+    assert inserted == 1
+
+
+def test_semantic_leg_skips_legacy_short_rows(seeded):
+    """Rows written before the writer's word minimum stay in the index until a
+    forced backfill; the semantic leg must not surface them even at distance 0."""
+    from thestill.search.base import SearchMode
+    from thestill.utils.postgres_ext import connect
+
+    model, _ = seeded
+    # FakeEmbeddingModel keys on the last word → identical vector to the query below.
+    vec = np.frombuffer(model.encode_one("Ew. computing"), dtype=np.float32)
+    with connect(PG_DSN, vector=True) as conn:
+        conn.execute(
+            """INSERT INTO chunks (episode_id, segment_id, start_ms, end_ms, speaker, text, embedding_model, embedding)
+               VALUES (%s, 99, 0, 1000, 'Host', 'Host: Ew.', %s, %s)""",
+            (EPISODE_A, model.model_name, vec),
+        )
+    hits = _backend(model).search("tell me about computing", mode=SearchMode.SEMANTIC, limit=10, filters=None)
+    assert hits
+    assert all(h.segment_id != 99 for h in hits)

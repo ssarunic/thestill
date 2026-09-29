@@ -60,7 +60,27 @@ _RRF_K = 60
 _HYBRID_FETCH = 50
 _HYBRID_WEIGHT_LEX = 0.5
 _HYBRID_WEIGHT_SEM = 0.5
-_SEMANTIC_MAX_DISTANCE = 0.85
+# Re-calibrated 2026-09-29 on the multilingual MiniLM index (the 0.85 of
+# the May 2026 calibration predates it): genuine hits sit at d≈0.11-0.35 at
+# rank 1 and ≤0.54 at rank 50, gibberish starts at d≈0.51. Same value as
+# sqlite_vec_client (lockstep).
+_SEMANTIC_MAX_DISTANCE = 0.55
+
+# A chunk the lexical leg did NOT find needs to be at least this close to
+# enter the hybrid fusion. RRF gives semantic rank n the same weight as
+# lexical rank n, so without this gate a query with 50 exact lexical hits
+# still interleaves them with the semantic leg's nearest "hub" fragments
+# (the Legora search of 2026-09-29: every even row was "Ew.", "Was",
+# "Comment."). Chunks both legs found are never gated — agreement is the
+# strongest signal we have.
+_HYBRID_SEMANTIC_ONLY_MAX_DISTANCE = 0.5
+
+# Query-time floor on chunk text length for the semantic leg. The chunk
+# writers now skip segments under ``MIN_CHUNK_WORDS`` words, but rows
+# written before that rule stay in the index until a ``chunks backfill
+# --force``; this keeps them out of k-NN results meanwhile. Measured on the
+# full text (speaker prefix included).
+_MIN_SEMANTIC_TEXT_CHARS = 30
 
 _SELECT = """
     SELECT c.id            AS chunk_id,
@@ -225,12 +245,13 @@ class PgVectorBackend:
             JOIN episodes e ON e.id = c.episode_id
             JOIN podcasts p ON p.id = e.podcast_id
             WHERE c.embedding_model = %s
+              AND length(c.text) >= %s
               {filter_sql}
             ORDER BY c.embedding <=> %s
             LIMIT %s
         """
         qvec = _to_vec(query_embedding)
-        params = [qvec, self.embedding_model_name, *filter_params, qvec, knn_k]
+        params = [qvec, self.embedding_model_name, _MIN_SEMANTIC_TEXT_CHARS, *filter_params, qvec, knn_k]
         with connect(self.dsn, vector=True) as conn:
             # Scoped to this transaction; no-op setting on pgvector < 0.8.
             conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
@@ -248,6 +269,13 @@ class PgVectorBackend:
     ) -> List[ResolvedHit]:
         lex_rows = self._lexical(query, limit=_HYBRID_FETCH, filters=filters) if query else []
         sem_rows = self._semantic(query_embedding, limit=_HYBRID_FETCH, filters=filters)
+
+        lex_ids = {row["chunk_id"] for row in lex_rows}
+        sem_rows = [
+            row
+            for row in sem_rows
+            if row["chunk_id"] in lex_ids or float(row["score"]) <= _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE
+        ]
 
         scores: dict[int, float] = {}
         rows_by_id: dict[int, dict] = {}
