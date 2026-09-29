@@ -525,6 +525,7 @@ export default function EpisodeReader({
             showWatchVideo={showWatchVideo}
             onWatchVideo={handleWatchVideo}
             shareUrl={window.location.href}
+            inboxAction={<InboxActionButton episodeId={episode.id} />}
           />
 
           {episode.is_failed && episode.failed_at_stage && (
@@ -539,11 +540,6 @@ export default function EpisodeReader({
               }}
             />
           )}
-
-          {/* Spec #88 — every reader's verb, admins included: put the episode
-              in your inbox (which starts the pipeline when needed) or see the
-              row you already have. Stage controls below stay admin-only. */}
-          <InboxActionButton episodeId={episode.id} />
 
           {!episode.is_failed && episode.state !== 'summarized' && (
             <PipelineActionButton

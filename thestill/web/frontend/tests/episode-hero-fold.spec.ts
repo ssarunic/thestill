@@ -166,13 +166,14 @@ test.describe('action row at the narrowest supported width', () => {
   test('all four slots are 44 px targets and nothing overflows', async ({ page }) => {
     await mockEpisodeApi(page)
     await page.goto(EPISODE_PATH)
-    // Primary + Watch video + Share + Show notes: the full slot set the
-    // deferred overflow menu (spec §3.2) would have to handle.
+    // Primary + Watch video + Share + Send to my inbox (spec #88; show notes
+    // live in the Information list): the full slot set the deferred overflow
+    // menu (spec §3.2) would have to handle.
     const controls = [
       page.getByRole('button', { name: 'Play episode, 58 min' }),
       page.getByRole('button', { name: 'Watch video' }),
       page.getByRole('button', { name: /^(share|copy link)$/i }),
-      page.getByRole('link', { name: 'Show notes' }),
+      page.getByRole('button', { name: 'Send to my inbox' }),
     ]
     for (const control of controls) {
       await expect(control).toBeVisible()

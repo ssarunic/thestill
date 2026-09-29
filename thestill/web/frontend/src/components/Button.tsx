@@ -122,6 +122,33 @@ export const MinusIcon = () => (
   </svg>
 )
 
+// Inbox tray (spec #88 "Send to my inbox"); the filled variant marks a
+// delivered episode.
+export const InboxIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M4 13h4l1.5 3h5L16 13h4M4 13l2.5-7h11L20 13M4 13v5a1 1 0 001 1h14a1 1 0 001-1v-5"
+    />
+  </svg>
+)
+
+export const InboxFilledIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
+    <path
+      fill="currentColor"
+      fillOpacity={0.15}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M4 13h4l1.5 3h5L16 13h4M4 13l2.5-7h11L20 13M4 13v5a1 1 0 001 1h14a1 1 0 001-1v-5"
+    />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9.5l2 2 4-4" />
+  </svg>
+)
+
 export const CheckIcon = () => (
   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
