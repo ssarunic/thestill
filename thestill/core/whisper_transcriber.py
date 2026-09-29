@@ -19,11 +19,14 @@ WhisperTranscriber: Standard OpenAI Whisper with hallucination filtering.
 WhisperXTranscriber: Enhanced Whisper with speaker diarization via pyannote.audio.
 """
 
+import importlib
+import inspect
 import shutil
 import threading
 import time
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydub import AudioSegment
 from pydub.effects import normalize
@@ -51,6 +54,122 @@ try:
     PYANNOTE_AVAILABLE = True
 except ImportError:
     PYANNOTE_AVAILABLE = False
+
+
+# pyannote 3.x loads its checkpoints through pytorch-lightning's
+# ``load_from_checkpoint``. Since torch 2.6 and pytorch-lightning 2.6 that path
+# defaults to ``torch.load(weights_only=True)``, and pyannote checkpoints pickle
+# their hyperparameters as omegaconf containers plus pyannote task descriptors,
+# none of which the restricted unpickler admits. Two loads broke: whisperx's
+# bundled VAD checkpoint (``whisperx/assets/pytorch_model.bin``, needs all 14
+# names below) raised ``Unsupported global: omegaconf.listconfig.ListConfig``
+# so ``WhisperXTranscriber`` silently fell back to plain Whisper, and the
+# ``pyannote/speaker-diarization-3.1`` segmentation + embedding models (need
+# the torch/pyannote subset) so diarization was skipped. Probed 2026-09-29
+# against whisperx 3.7.4 / pyannote.audio 3.4.0 / torch 2.8, one checkpoint per
+# process. The names are admitted only while those loads run; everything else
+# stays under torch's default policy.
+_PYANNOTE_CHECKPOINT_GLOBALS = (
+    "builtins.list",
+    "builtins.dict",
+    "builtins.int",
+    "typing.Any",
+    "collections.defaultdict",
+    "torch.torch_version.TorchVersion",
+    "omegaconf.base.ContainerMetadata",
+    "omegaconf.base.Metadata",
+    "omegaconf.listconfig.ListConfig",
+    "omegaconf.nodes.AnyNode",
+    "pyannote.audio.core.model.Introspection",
+    "pyannote.audio.core.task.Specifications",
+    "pyannote.audio.core.task.Problem",
+    "pyannote.audio.core.task.Resolution",
+)
+
+
+def _resolve_checkpoint_globals(
+    dotted_names: tuple = _PYANNOTE_CHECKPOINT_GLOBALS,
+) -> List[Any]:
+    """Import each dotted name, skipping any whose module or attribute is absent."""
+    resolved: List[Any] = []
+    for dotted in dotted_names:
+        module_name, _, attr = dotted.rpartition(".")
+        try:
+            resolved.append(getattr(importlib.import_module(module_name), attr))
+        except (ImportError, AttributeError):
+            continue
+    return resolved
+
+
+# pyannote.audio 3.x downloads pipeline configs and model checkpoints with
+# ``hf_hub_download(use_auth_token=...)``. huggingface-hub 1.0 removed that
+# keyword in favour of ``token``, and transformers 5 (which the transcription
+# stack moved to for GHSA-xrqw-3rrv-vx5w and friends) requires hub >= 1.5, so
+# every hub fetch inside ``Pipeline.from_pretrained`` raised ``TypeError``
+# and diarization was skipped. pyannote 4 fixes the call but needs whisperx
+# 3.8 (and torchvision/torchcodec), which this extra pins below on purpose.
+# Rewrite the keyword at pyannote's own call sites, and only when the
+# installed hub client no longer accepts it.
+_PYANNOTE_HUB_MODULES = (
+    "pyannote.audio.core.pipeline",
+    "pyannote.audio.core.model",
+    "pyannote.audio.pipelines.speaker_verification",
+)
+_PYANNOTE_HUB_PATCHED = False
+
+
+def _hub_download_accepts_use_auth_token() -> bool:
+    try:
+        from huggingface_hub import hf_hub_download  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return True
+    return "use_auth_token" in inspect.signature(hf_hub_download).parameters
+
+
+def _patch_pyannote_hub_token_kwarg(modules: tuple = _PYANNOTE_HUB_MODULES) -> int:
+    """Map ``use_auth_token`` to ``token`` where pyannote calls ``hf_hub_download``.
+
+    Idempotent. Returns how many modules were patched (0 when the installed
+    huggingface-hub still accepts ``use_auth_token`` or pyannote is absent).
+    """
+    global _PYANNOTE_HUB_PATCHED  # pylint: disable=global-statement
+    if _PYANNOTE_HUB_PATCHED or _hub_download_accepts_use_auth_token():
+        return 0
+
+    patched = 0
+    for module_name in modules:
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        original = getattr(module, "hf_hub_download", None)
+        if original is None:
+            continue
+
+        def compat_download(*args, _original=original, **kwargs):
+            if "use_auth_token" in kwargs:
+                kwargs.setdefault("token", kwargs.pop("use_auth_token"))
+            return _original(*args, **kwargs)
+
+        setattr(module, "hf_hub_download", compat_download)
+        patched += 1
+
+    _PYANNOTE_HUB_PATCHED = patched > 0
+    return patched
+
+
+def pyannote_checkpoint_safe_globals() -> AbstractContextManager:
+    """Context manager admitting pyannote checkpoint globals to ``torch.load``.
+
+    Returns a no-op context when torch is missing or predates
+    ``torch.serialization.safe_globals`` (2.5), where the default policy already
+    accepts the checkpoints.
+    """
+    try:
+        from torch.serialization import safe_globals  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return nullcontext()
+    return safe_globals(_resolve_checkpoint_globals())
 
 
 class DiarizationProgressMonitor:
@@ -608,11 +727,12 @@ class WhisperXTranscriber(Transcriber):
 
         self.console.info(f"Loading WhisperX model: {self.model_name} (device: {self.transcription_device})")
         try:
-            self._model = whisperx.load_model(
-                self.model_name,
-                device=self.transcription_device,
-                compute_type="float16" if self.transcription_device == "cuda" else "int8",
-            )
+            with pyannote_checkpoint_safe_globals():
+                self._model = whisperx.load_model(
+                    self.model_name,
+                    device=self.transcription_device,
+                    compute_type="float16" if self.transcription_device == "cuda" else "int8",
+                )
             self.console.success("WhisperX model loaded successfully")
         except Exception as e:
             self.console.error(f"Error loading WhisperX model: {e}")
@@ -836,7 +956,9 @@ class WhisperXTranscriber(Transcriber):
 
             import torch  # pylint: disable=import-outside-toplevel
 
-            diarize_model = Pipeline.from_pretrained(self.diarization_model, use_auth_token=self.hf_token)
+            _patch_pyannote_hub_token_kwarg()
+            with pyannote_checkpoint_safe_globals():
+                diarize_model = Pipeline.from_pretrained(self.diarization_model, use_auth_token=self.hf_token)
 
             if self.diarization_device != "cpu":
                 diarize_model.to(torch.device(self.diarization_device))
