@@ -17,8 +17,9 @@ Spec #31 — Import arbitrary episodes API.
 
 POST /api/imports {url} → 201 with the materialised episode + inbox row.
 
-Idempotent: re-posting the same URL by the same user returns 200 with
-``deduplicated=true`` and the existing row (no second pipeline task).
+Idempotent: re-posting the same URL by the same user returns the existing
+row with ``outcome="already_in_inbox"`` (spec #88) and no second pipeline
+task.
 """
 
 from fastapi import APIRouter, Depends
@@ -26,11 +27,8 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.import_service import (
-    ImportError as ImportServiceError,
-    ResolverError,
-    UnsupportedUrlError,
-)
+from ...services.import_service import ImportError as ImportServiceError
+from ...services.import_service import ResolverError, UnsupportedUrlError
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request
 
@@ -81,8 +79,12 @@ def create_import(
                 "title": result.title,
                 "kind": result.kind,
                 "source_handle": result.source_handle,
-                "deduplicated": not result.episode_created,
+                "outcome": result.outcome,
                 "inbox_created": result.inbox_created,
+                "episode_slug": result.episode_slug,
+                "podcast_slug": result.podcast_slug,
+                "episode_state": result.episode_state,
+                "episode_failed": result.episode_failed,
                 "inbox_entry": result.inbox_entry.model_dump(mode="json"),
                 "parent": parent,
             }

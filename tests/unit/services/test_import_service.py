@@ -262,3 +262,63 @@ def test_resolver_failure_wraps_in_resolver_error(repo, inbox_repo, queue, user_
     with pytest.raises(ResolverError) as exc_info:
         svc.import_url(user_id=alice.id, url="https://example.com/anything")
     assert "kaboom" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Spec #88 — import outcome and the dedup pipeline guard
+# ---------------------------------------------------------------------------
+def test_import_outcomes_cover_new_existing_and_already_in_inbox(service, user_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    url = "https://example.com/episodes/outcome.mp3"
+
+    first = service.import_url(user_id=alice.id, url=url)
+    again = service.import_url(user_id=alice.id, url=url)
+    other_user = service.import_url(user_id=bob.id, url=url)
+
+    assert first.outcome == "new_episode"
+    assert again.outcome == "already_in_inbox"
+    assert other_user.outcome == "added_existing"
+
+
+def test_import_result_describes_the_episode_for_a_direct_link(service, user_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+
+    result = service.import_url(user_id=alice.id, url="https://example.com/some/My_Talk.mp3")
+
+    assert result.episode_slug  # generated from the title
+    assert result.podcast_slug  # the synthetic audio-imports parent still has a slug or id
+    assert result.episode_state == "discovered"
+    assert result.episode_failed is False
+
+
+def test_dedup_import_of_unprocessed_episode_starts_pipeline(service, queue, user_repo, db_path):
+    """An episode that exists but was never processed (e.g. its first task was
+    dead-lettered and cleared) must not freeze on "Downloading…" when imported
+    again: the dedup path runs the same guard as publish fan-out."""
+    alice = _make_user(user_repo, "alice@example.com")
+    url = "https://example.com/episodes/orphan.mp3"
+    first = service.import_url(user_id=alice.id, url=url)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM tasks WHERE episode_id = ?", (first.episode_id,))
+        conn.commit()
+    assert queue.get_tasks_for_episode(first.episode_id) == []
+
+    again = service.import_url(user_id=alice.id, url=url)
+
+    assert again.outcome == "already_in_inbox"
+    assert [t.stage for t in queue.get_tasks_for_episode(first.episode_id)] == [TaskStage.TRANSCRIBE]
+
+
+def test_dedup_import_of_processed_episode_does_not_enqueue(service, queue, user_repo, db_path):
+    alice = _make_user(user_repo, "alice@example.com")
+    url = "https://example.com/episodes/done.mp3"
+    first = service.import_url(user_id=alice.id, url=url)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM tasks WHERE episode_id = ?", (first.episode_id,))
+        conn.execute("UPDATE episodes SET summary_path = 'x.md' WHERE id = ?", (first.episode_id,))
+        conn.commit()
+
+    service.import_url(user_id=alice.id, url=url)
+
+    assert queue.get_tasks_for_episode(first.episode_id) == []

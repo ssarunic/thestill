@@ -33,7 +33,7 @@ def test_post_imports_returns_201_shape_and_creates_row(client, app_state):
     assert payload["episode_id"]
     assert payload["canonical_id"].startswith("audio:")
     assert payload["kind"] == "bare_audio"
-    assert payload["deduplicated"] is False
+    assert payload["outcome"] == "new_episode"
     assert payload["inbox_created"] is True
     assert payload["inbox_entry"]["source"] == "import"
     # Bare-audio imports park under the synthetic parent — no follow target.
@@ -77,7 +77,7 @@ def test_post_imports_idempotent_for_same_url(client, app_state):
     e2 = r2.json()["import"]
 
     assert e1["episode_id"] == e2["episode_id"]
-    assert e2["deduplicated"] is True
+    assert e2["outcome"] == "already_in_inbox"
     assert e2["inbox_created"] is False
 
     # Pipeline only runs once.
@@ -195,4 +195,4 @@ def test_post_imports_youtube_dedup_still_returns_parent(client, app_state, fake
     p1 = r1.json()["import"]["parent"]
     p2 = r2.json()["import"]["parent"]
     assert p1 == p2
-    assert r2.json()["import"]["deduplicated"] is True
+    assert r2.json()["import"]["outcome"] == "already_in_inbox"

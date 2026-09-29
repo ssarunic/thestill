@@ -109,6 +109,9 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 |----------|--------|-------------|
 | `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`) |
 | `/api/inbox/unread-count` | GET | Lightweight unread count for badge rendering |
+| `/api/inbox/arriving` | GET | Spec #88 "Arriving soon": episodes of podcasts you follow that have an active pipeline task, no `published_at`, no failure, and no row in your inbox. Query: `limit` (1–20, default 5). Returns `items` (`episode` + `podcast`), `count` and `total`. Read-only; these are not inbox rows |
+| `/api/inbox/{episode_id}` | GET | Spec #88: your row for one episode, `{"entry": …}` or `{"entry": null}` when never delivered |
+| `/api/inbox/{episode_id}` | POST | Spec #88 "Send to my inbox": creates an `ad_hoc` row only when none exists and starts the pipeline if the episode is unprocessed. `201` with `{"entry", "created": true}`; `200` with the untouched existing row and `created: false`; `404` when the episode does not exist. Delivery is immutable: an existing row's `delivered_at`, `source` and `state` never change |
 | `/api/inbox/{episode_id}/state` | POST | Set row state explicitly. Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. 404 when no row exists |
 | `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available |
 
@@ -148,7 +151,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/imports` | POST | Import a single episode by URL `{url}` — 201 with the episode + inbox row |
+| `/api/imports` | POST | Import a single episode by URL `{url}`. Returns the episode + inbox row with `outcome` (`new_episode` / `added_existing` / `already_in_inbox`, spec #88), `episode_slug`, `podcast_slug`, `episode_state` and `episode_failed`; see [imports.md](imports.md) |
 
 ### Top Podcasts (`/api/top-podcasts`)
 

@@ -1,14 +1,16 @@
 import { useState, useMemo } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { useInboxInfinite } from '../hooks/useApi'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
+import { useArrivingSoon, useInboxInfinite } from '../hooks/useApi'
 import { useDebouncedSearchParam } from '../hooks/useDebouncedSearchParam'
-import type { Episode, InboxItem } from '../api/types'
+import type { InboxItem, InboxState } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
 import Button, { PlusIcon } from '../components/Button'
 import ImportEpisodeModal from '../components/ImportEpisodeModal'
 import ListGroup from '../components/ListGroup'
 import ListRow, { ListRowArtwork } from '../components/ListRow'
 import SearchBox from '../components/SearchBox'
+import { ProgressPill } from '../components/InboxProgress'
+import { deriveProgress } from '../utils/inbox'
 
 // Compact, single-token timestamp: today → "12:50", this year → "8 Aug",
 // older → "8 Aug 24". Never wraps, so the meta row stays one line on phones.
@@ -39,57 +41,6 @@ function SavedIcon() {
     >
       <path d="M5 3a2 2 0 0 0-2 2v12l7-4 7 4V5a2 2 0 0 0-2-2H5z" />
     </svg>
-  )
-}
-
-// Pipeline progress as the user perceives it. Derived from episode state +
-// failure flags so two users sharing an imported episode see consistent
-// progress without storing per-user pipeline state.
-type ProgressKind = 'failed' | 'processing' | 'ready'
-
-interface ProgressStatus {
-  kind: ProgressKind
-  label: string
-}
-
-function deriveProgress(episode: Episode): ProgressStatus {
-  if (episode.is_failed) {
-    return { kind: 'failed', label: 'Failed' }
-  }
-  switch (episode.state) {
-    case 'discovered':
-      return { kind: 'processing', label: 'Downloading…' }
-    case 'downloaded':
-    case 'downsampled':
-      return { kind: 'processing', label: 'Transcribing…' }
-    case 'transcribed':
-      return { kind: 'processing', label: 'Cleaning…' }
-    case 'cleaned':
-      return { kind: 'processing', label: 'Summarising…' }
-    case 'summarized':
-      return { kind: 'ready', label: 'Ready' }
-    default:
-      return { kind: 'processing', label: 'Processing…' }
-  }
-}
-
-function ProgressPill({ status }: { status: ProgressStatus }) {
-  const cls =
-    status.kind === 'failed'
-      ? 'bg-red-100 text-red-700'
-      : status.kind === 'ready'
-        ? 'bg-green-100 text-green-700'
-        : 'bg-amber-100 text-amber-800'
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${cls}`}>
-      {status.kind === 'processing' && (
-        <span
-          aria-hidden="true"
-          className="inline-block w-2 h-2 rounded-full bg-current animate-pulse"
-        />
-      )}
-      {status.label}
-    </span>
   )
 }
 
@@ -149,8 +100,98 @@ function InboxRow({ item }: { item: InboxItem }) {
   )
 }
 
+// Spec #88: mail-style views over the same immutable delivery log. ``All``
+// is the triage list (dismissed hidden); the others filter by row state.
+type InboxView = 'all' | 'unread' | 'saved'
+
+const VIEWS: { key: InboxView; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'unread', label: 'Unread' },
+  { key: 'saved', label: 'Saved' },
+]
+
+const VIEW_STATE: Record<InboxView, InboxState | undefined> = {
+  all: undefined,
+  unread: 'unread',
+  saved: 'saved',
+}
+
+function parseView(raw: string | null): InboxView {
+  return raw === 'unread' || raw === 'saved' ? raw : 'all'
+}
+
+function ViewSwitch({ view, onChange }: { view: InboxView; onChange: (view: InboxView) => void }) {
+  return (
+    <div role="group" aria-label="Inbox view" className="inline-flex rounded-lg bg-gray-100 p-0.5">
+      {VIEWS.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          aria-pressed={view === key}
+          onClick={() => onChange(key)}
+          className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+            view === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// Spec #88 "Arriving soon": followed podcasts' episodes still in the
+// pipeline. Read-only, not inbox rows; each leaves the strip when publish
+// fan-out delivers it. A failed request hides the strip rather than
+// pretending nothing is on its way.
+function ArrivingSoon() {
+  const { data, isError } = useArrivingSoon()
+  if (isError || !data || data.items.length === 0) return null
+  const more = data.total - data.items.length
+  return (
+    <section aria-labelledby="arriving-soon-heading" data-testid="arriving-soon">
+      <h2 id="arriving-soon-heading" className="text-sm font-medium text-gray-500 mb-2">
+        Arriving soon <span className="text-gray-400">· {data.total}</span>
+      </h2>
+      <ul className="space-y-1">
+        {data.items.map(({ episode, podcast }) => (
+          <li key={episode.id}>
+            <Link
+              to={`/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`}
+              className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50"
+            >
+              <ListRowArtwork sources={[episode.image_url, podcast.image_url]} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs text-gray-500">{podcast.title}</span>
+                <span className="block truncate text-sm text-gray-700">{episode.title}</span>
+              </span>
+              <ProgressPill status={deriveProgress(episode)} />
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && <p className="mt-1 px-2 text-xs text-gray-400">and {more} more</p>}
+    </section>
+  )
+}
+
 export default function Inbox() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
+
+  // Spec #88: the view lives in ``?view=`` beside ``?q=`` so Back restores
+  // both; switching views keeps the search, clearing the search keeps the view.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const view = parseView(searchParams.get('view'))
+  const setView = (next: InboxView) =>
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        if (next === 'all') params.delete('view')
+        else params.set('view', next)
+        return params
+      },
+      { replace: true },
+    )
 
   // Spec #85: the search filters the user's own deliveries server-side (the
   // list is paginated, so a client-side filter would miss unloaded pages).
@@ -171,6 +212,7 @@ export default function Inbox() {
   const POLL_INTERVAL_MS = 5_000
   const { data, isLoading, error, hasNextPage, fetchNextPage, isFetchingNextPage } =
     useInboxInfinite({
+      state: VIEW_STATE[view],
       q: isFiltering ? q : undefined,
       refetchInterval: isFiltering
         ? false
@@ -206,7 +248,9 @@ export default function Inbox() {
           <p className="text-gray-500 mt-1">
             {isLoading
               ? 'Loading…'
-              : `${items.length}${hasNextPage ? '+' : ''} ${isFiltering ? 'matching' : 'delivered'}`}
+              : `${items.length}${hasNextPage ? '+' : ''} ${
+                  isFiltering ? 'matching' : view === 'all' ? 'delivered' : view
+                }`}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -228,8 +272,12 @@ export default function Inbox() {
         <SearchBox {...searchBoxProps} inputClassName="py-2 w-full" />
       </div>
 
-      {/* The briefing is not a search result. */}
-      {!isFiltering && <BriefingCard />}
+      <ViewSwitch view={view} onChange={setView} />
+
+      {/* The briefing and the arriving strip belong to the whole inbox, not
+          to a search result or a state-filtered view. */}
+      {!isFiltering && view === 'all' && <BriefingCard />}
+      {!isFiltering && view === 'all' && <ArrivingSoon />}
 
       {isLoading ? (
         <ListGroup>
@@ -261,6 +309,17 @@ export default function Inbox() {
               Search everything →
             </Link>
           </div>
+        </div>
+      ) : items.length === 0 && view !== 'all' ? (
+        <div className="text-center py-12 bg-white rounded-lg border border-gray-200" data-testid="inbox-view-empty">
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            {view === 'unread' ? 'Nothing unread. Nice.' : 'Nothing saved yet'}
+          </h3>
+          {view === 'saved' && (
+            <p className="text-gray-500">
+              Save an episode from its page or the import dialog to find it here.
+            </p>
+          )}
         </div>
       ) : items.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200">

@@ -61,6 +61,9 @@ import type {
   InboxMarkReadResponse,
   InboxState,
   InboxStateResponse,
+  InboxEntryResponse,
+  SendToInboxResponse,
+  ArrivingResponse,
   InboxUnreadCountResponse,
   ImportRequest,
   ImportResponse,
@@ -715,6 +718,34 @@ export async function setInboxState(
   }
 
   return response.json()
+}
+
+// Spec #88 — the caller's row for one episode (null when never delivered).
+export async function getInboxEntry(episodeId: string): Promise<InboxEntryResponse> {
+  return fetchApi<InboxEntryResponse>(`/inbox/${episodeId}`)
+}
+
+// Spec #88 — "Send to my inbox". Creates an ad_hoc row only when none exists
+// and makes sure the episode's pipeline is running; an existing row comes
+// back untouched (delivery is immutable).
+export async function sendToInbox(episodeId: string): Promise<SendToInboxResponse> {
+  const response = await fetch(`${API_BASE}/inbox/${episodeId}`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    const message = typeof error.detail === 'string'
+      ? error.detail
+      : error.detail?.error || `API error: ${response.status}`
+    throw new Error(message)
+  }
+  return response.json()
+}
+
+// Spec #88 "Arriving soon".
+export async function getArriving(limit = 5): Promise<ArrivingResponse> {
+  return fetchApi<ArrivingResponse>(`/inbox/arriving?limit=${limit}`)
 }
 
 // Per-user briefings (spec #36). ``getLatestBriefing`` lazy-generates a

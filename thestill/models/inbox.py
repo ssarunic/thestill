@@ -84,6 +84,17 @@ class PodcastInboxSummary(BaseModel):
     image_url: Optional[str] = None
 
 
+class ArrivingItem(BaseModel):
+    """An episode on its way to the user's inbox (spec #88).
+
+    Not an inbox row: a followed podcast's episode that has an active
+    pipeline task and has not published yet. No read state, no briefing.
+    """
+
+    episode: Episode
+    podcast: PodcastInboxSummary
+
+
 class InboxItem(BaseModel):
     """Composed read view: an inbox row plus the episode + podcast it points to."""
 

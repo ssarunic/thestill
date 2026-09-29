@@ -22,7 +22,7 @@ rows. Read state, saved state, and dismissals live on the row.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from structlog import get_logger
 
@@ -126,3 +126,57 @@ def set_inbox_state(
         not_found("Inbox entry", episode_id)
 
     return api_response({"entry": entry.model_dump(mode="json")})
+
+
+@router.get("/arriving")
+def list_arriving(
+    limit: int = 5,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """Spec #88 "Arriving soon": followed podcasts' episodes still in the
+    pipeline and not yet in the caller's inbox. Read-only; not inbox rows.
+    """
+    items, total = app_state.inbox_service.arriving(user.id, limit=limit)
+    return api_response(
+        {
+            "items": [item.model_dump(mode="json") for item in items],
+            "count": len(items),
+            "total": total,
+        }
+    )
+
+
+@router.get("/{episode_id}")
+def get_inbox_entry(
+    episode_id: str,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """The caller's inbox row for ``episode_id``; ``entry: null`` when the
+    episode was never delivered to them. Drives the episode page's
+    "Send to my inbox" button (spec #88).
+    """
+    entry = app_state.inbox_service.get_entry(user.id, episode_id)
+    return api_response({"entry": entry.model_dump(mode="json") if entry else None})
+
+
+@router.post("/{episode_id}")
+def send_to_inbox(
+    episode_id: str,
+    response: Response,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """ "Send to my inbox" (spec #88): create the caller's row for an existing
+    episode with ``source='ad_hoc'`` and make sure its pipeline is running.
+
+    ``201`` when a row was created, ``200`` with the untouched existing row
+    otherwise (delivery is immutable: no re-dating, no state change).
+    ``404`` when the episode does not exist.
+    """
+    if not app_state.inbox_service.episode_exists(episode_id):
+        not_found("Episode", episode_id)
+    entry, created = app_state.inbox_service.deliver_to_user(user.id, episode_id, source="ad_hoc")
+    response.status_code = 201 if created else 200
+    return api_response({"entry": entry.model_dump(mode="json"), "created": created})

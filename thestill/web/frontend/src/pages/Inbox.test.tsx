@@ -8,6 +8,7 @@ import type { Episode, InboxItem, InboxListResponse } from '../api/types'
 
 vi.mock('../hooks/useApi', () => ({
   useInboxInfinite: vi.fn(),
+  useArrivingSoon: vi.fn(() => ({ data: undefined, isError: false })),
   // ``Inbox`` renders ``<BriefingCard />`` which calls ``useLatestBriefing``;
   // a 404 ("no briefing yet") is the no-op state so the component returns
   // null and stays out of the way of the inbox-list assertions below.

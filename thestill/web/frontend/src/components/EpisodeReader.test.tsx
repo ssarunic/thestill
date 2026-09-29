@@ -15,6 +15,9 @@ import type { EpisodeDetailResponse } from '../api/types'
 // stubbed so this stays a reader-shape test.
 
 vi.mock('../hooks/useApi', () => ({
+  useInboxEntry: vi.fn(() => ({ data: { entry: null }, isLoading: false, isError: false })),
+  useSendToInbox: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+  useSetInboxState: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useEpisode: vi.fn(),
   useEpisodeTranscript: vi.fn(() => ({ data: undefined, isLoading: false })),
   useEpisodeSummary: vi.fn(),
@@ -186,6 +189,14 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     mockLiveRefresh.mockClear()
     renderAtEpisodeRoute(<EpisodeDetail />)
     expect(mockLiveRefresh).toHaveBeenCalledWith(expect.objectContaining(expected))
+  })
+
+  it('offers Send to my inbox to every reader in both modes (spec #88)', async () => {
+    const { unmount } = renderAtEpisodeRoute(<EpisodeReader />)
+    expect(screen.getByRole('button', { name: 'Send to my inbox' })).toBeInTheDocument()
+    unmount()
+    renderAtEpisodeRoute(<EpisodeDetail />)
+    expect(screen.getByRole('button', { name: 'Send to my inbox' })).toBeInTheDocument()
   })
 
   it('renders the eyebrow, show row and show-notes action from the episode (spec #76 §3.1–3.2)', () => {

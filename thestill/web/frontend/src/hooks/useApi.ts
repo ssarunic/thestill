@@ -54,13 +54,17 @@ import {
   getEntitySummary,
   getInbox,
   markInboxRead,
+  getInboxEntry,
+  sendToInbox,
+  setInboxState,
+  getArriving,
   type GetInboxOptions,
   getLatestBriefing,
   getBriefing,
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTasksResponse , McpTokenScope } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -1070,6 +1074,58 @@ export function useMarkInboxRead() {
         queryClient.invalidateQueries({ queryKey: ['inbox'] })
       }
     },
+  })
+}
+
+// Spec #88 — the current user's row for one episode. Keyed under ``inbox``
+// so every inbox mutation (including read-on-view) refreshes it.
+export function useInboxEntry(episodeId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['inbox', 'entry', episodeId ?? null],
+    queryFn: () => getInboxEntry(episodeId!),
+    enabled: !!episodeId,
+    staleTime: 15_000,
+  })
+}
+
+function invalidateInbox(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['inbox'] })
+  queryClient.invalidateQueries({ queryKey: ['inbox', 'unread-count'] })
+}
+
+// Spec #88 — "Send to my inbox". The episode query is refreshed too: a send
+// can start the pipeline, and the page's live refresh keys off it.
+export function useSendToInbox() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (episodeId: string) => sendToInbox(episodeId),
+    onSuccess: () => {
+      invalidateInbox(queryClient)
+      queryClient.invalidateQueries({ queryKey: ['episodes'] })
+    },
+  })
+}
+
+// In-place state change (spec #88 "Save for later" / "Restore to inbox").
+// Never moves the row: ``delivered_at`` is not touched server-side.
+export function useSetInboxState() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ episodeId, state }: { episodeId: string; state: InboxState }) =>
+      setInboxState(episodeId, state),
+    onSuccess: () => invalidateInbox(queryClient),
+  })
+}
+
+// Spec #88 "Arriving soon". Polls while something is arriving so an episode
+// leaves the strip about when publish fan-out delivers its real row.
+export function useArrivingSoon({ enabled = true, limit = 5 }: { enabled?: boolean; limit?: number } = {}) {
+  return useQuery({
+    queryKey: ['inbox', 'arriving', limit],
+    queryFn: () => getArriving(limit),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: (query) => ((query.state.data?.items.length ?? 0) > 0 ? 30_000 : false),
   })
 }
 

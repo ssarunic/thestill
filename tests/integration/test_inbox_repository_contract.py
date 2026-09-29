@@ -139,6 +139,22 @@ class _SqliteEnv:
             )
             conn.commit()
 
+    def add_task(self, episode_id: str, status: str = "pending") -> None:
+        from thestill.core.queue_manager import QueueManager
+
+        QueueManager(self.db_path)  # owns the tasks DDL on SQLite
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO tasks (id, episode_id, stage, status) VALUES (?, ?, 'transcribe', ?)",
+                (str(uuid.uuid4()), episode_id, status),
+            )
+            conn.commit()
+
+    def mark_failed(self, episode_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE episodes SET failed_at_stage = 'transcribe' WHERE id = ?", (episode_id,))
+            conn.commit()
+
 
 class _PostgresEnv:
     """Postgres backend: typed schema bootstrap; parents seeded via direct SQL."""
@@ -212,6 +228,15 @@ class _PostgresEnv:
             "INSERT INTO podcast_followers (id, user_id, podcast_id) VALUES (%s, %s, %s)",
             (str(uuid.uuid4()), user_id, podcast_id),
         )
+
+    def add_task(self, episode_id: str, status: str = "pending") -> None:
+        self._execute(
+            "INSERT INTO tasks (id, episode_id, stage, status) VALUES (%s, %s, 'transcribe', %s)",
+            (str(uuid.uuid4()), episode_id, status),
+        )
+
+    def mark_failed(self, episode_id: str) -> None:
+        self._execute("UPDATE episodes SET failed_at_stage = 'transcribe' WHERE id = %s", (episode_id,))
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -989,3 +1014,127 @@ def test_list_items_query_does_not_leak_other_users_rows(env):
     bob = env.add_user("bob@example.com")
     assert env.repo.list_items(bob, query_tokens=["karpathy"]) == []
     assert len(env.repo.list_items(user, query_tokens=["karpathy"])) == 2
+
+
+# ---------------------------------------------------------------------------
+# list_arriving — spec #88 "Arriving soon"
+# ---------------------------------------------------------------------------
+def _seed_arriving(env):
+    """Alice follows p1. p1 has one episode per exclusion rule plus two that
+    qualify; p2 (not followed) has an in-flight episode that must not show."""
+    alice = env.add_user("alice@example.com")
+    p1 = env.add_podcast("p1")
+    p2 = env.add_podcast("p2")
+    env.add_follower(alice, p1)
+
+    older = env.add_episode(p1, "older in flight", pub_date=BASE)
+    newer = env.add_episode(p1, "newer in flight", pub_date=BASE + timedelta(days=1))
+    env.add_task(older, "processing")
+    env.add_task(newer, "retry_scheduled")
+
+    published = env.add_episode(p1, "published", published_at=BASE, pub_date=BASE + timedelta(days=2))
+    env.add_task(published, "pending")
+    failed = env.add_episode(p1, "failed", pub_date=BASE + timedelta(days=3))
+    env.add_task(failed, "pending")
+    env.mark_failed(failed)
+    orphan = env.add_episode(p1, "orphan no task", pub_date=BASE + timedelta(days=4))
+    done_task = env.add_episode(p1, "only finished task", pub_date=BASE + timedelta(days=5))
+    env.add_task(done_task, "completed")
+    already_mine = env.add_episode(p1, "already in inbox", pub_date=BASE + timedelta(days=6))
+    env.add_task(already_mine, "pending")
+    env.repo.find_or_create(user_id=alice, episode_id=already_mine, source="import")
+
+    unfollowed = env.add_episode(p2, "unfollowed in flight", pub_date=BASE + timedelta(days=7))
+    env.add_task(unfollowed, "pending")
+    return alice, orphan
+
+
+def test_list_arriving_returns_only_followed_unpublished_in_flight_episodes(env):
+    alice, _ = _seed_arriving(env)
+
+    items, total = env.repo.list_arriving(alice, limit=10)
+
+    assert [i.episode.title for i in items] == ["newer in flight", "older in flight"]
+    assert total == 2
+    assert items[0].podcast.slug == "p1"
+    assert items[0].podcast.title == "Podcast p1"
+
+
+def test_list_arriving_limit_caps_items_but_not_total(env):
+    alice, _ = _seed_arriving(env)
+
+    items, total = env.repo.list_arriving(alice, limit=1)
+
+    assert [i.episode.title for i in items] == ["newer in flight"]
+    assert total == 2
+
+
+def test_list_arriving_drops_episode_once_user_has_a_row(env):
+    alice, _ = _seed_arriving(env)
+    items, _ = env.repo.list_arriving(alice, limit=10)
+    env.repo.find_or_create(user_id=alice, episode_id=items[0].episode.id, source="ad_hoc")
+
+    remaining, total = env.repo.list_arriving(alice, limit=10)
+
+    assert [i.episode.title for i in remaining] == ["older in flight"]
+    assert total == 1
+
+
+def test_list_arriving_is_empty_for_a_user_who_follows_nothing(env):
+    _seed_arriving(env)
+    bob = env.add_user("bob@example.com")
+    assert env.repo.list_arriving(bob, limit=10) == ([], 0)
+
+
+def test_count_imports_counts_import_and_ad_hoc_only(env):
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+    eps = [env.add_episode(podcast, f"ep{i}") for i in range(3)]
+    env.repo.insert_many(
+        [
+            _entry(user, eps[0], source="follow_new"),
+            _entry(user, eps[1], source="import"),
+            _entry(user, eps[2], source="ad_hoc"),
+        ]
+    )
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    assert env.repo.count_imports_for_user_since(user, since) == 2
+
+
+# ---------------------------------------------------------------------------
+# get_item + episode_exists — spec #88
+# ---------------------------------------------------------------------------
+def test_get_item_composes_entry_episode_and_podcast(env):
+    user = env.add_user("alice@example.com")
+    podcast = env.add_podcast("p1")
+    ep = env.add_episode(podcast, "The episode")
+    env.repo.find_or_create(user_id=user, episode_id=ep, source="ad_hoc")
+
+    item = env.repo.get_item(user, ep)
+
+    assert item is not None
+    assert item.entry.source == "ad_hoc"
+    assert item.episode.id == ep
+    assert item.episode.title == "The episode"
+    assert item.podcast.slug == "p1"
+
+
+def test_get_item_is_none_for_missing_row_other_user_or_malformed_id(env):
+    user = env.add_user("alice@example.com")
+    bob = env.add_user("bob@example.com")
+    podcast = env.add_podcast("p1")
+    ep = env.add_episode(podcast, "ep")
+    env.repo.find_or_create(user_id=user, episode_id=ep, source="ad_hoc")
+
+    assert env.repo.get_item(user, MISSING_ID) is None
+    assert env.repo.get_item(bob, ep) is None
+    assert env.repo.get_item(user, "not-a-uuid") is None
+
+
+def test_episode_exists(env):
+    podcast = env.add_podcast("p1")
+    ep = env.add_episode(podcast, "ep")
+
+    assert env.repo.episode_exists(ep) is True
+    assert env.repo.episode_exists(MISSING_ID) is False
+    assert env.repo.episode_exists("not-a-uuid") is False

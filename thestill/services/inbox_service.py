@@ -26,11 +26,11 @@ Plus the read/state-mutation APIs used by the inbox view.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.inbox import INBOX_STATES, InboxEntry, InboxItem
+from ..models.inbox import INBOX_STATES, ArrivingItem, InboxEntry, InboxItem
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 
@@ -59,6 +59,42 @@ def tokenize_query(q: Optional[str]) -> List[str]:
     if len(trimmed) > MAX_QUERY_CHARS:
         raise InvalidInboxQueryError(f"q must be at most {MAX_QUERY_CHARS} characters")
     return trimmed.split()[:MAX_QUERY_TOKENS]
+
+
+# Spec #88 "Arriving soon" page cap. The strip shows a handful; the total
+# is returned separately so the UI can say "and N more".
+MAX_ARRIVING_LIMIT = 20
+
+
+def enqueue_pipeline_for(
+    queue: "QueueManager",
+    pending: List[Tuple[str, Optional[str]]],
+    *,
+    transcription_provider: str,
+    source: str,
+) -> int:
+    """Enqueue the URL-optimized full pipeline for ``(episode_id, audio_url)``
+    pairs. Best-effort and idempotent (``enqueue_full_pipeline`` coalesces
+    against in-flight tasks). Returns the number actually enqueued.
+
+    The single enqueue loop behind every "delivering implies processing"
+    path: publish fan-out, follow-seed, ad-hoc send and dedup import.
+    """
+    enqueued = 0
+    for episode_id, audio_url in pending:
+        try:
+            if queue.enqueue_full_pipeline(
+                episode_id=episode_id,
+                audio_url=audio_url,
+                transcription_provider=transcription_provider,
+                initiated_by=f"inbox-{source}",
+            ):
+                enqueued += 1
+        except Exception:
+            logger.exception("inbox_pipeline_enqueue_failed", episode_id=episode_id, source=source)
+    if enqueued:
+        logger.info("inbox_pipeline_enqueued", source=source, count=enqueued)
+    return enqueued
 
 
 class InboxServiceError(Exception):
@@ -284,25 +320,47 @@ class InboxService:
         return self._enqueue_pipeline(pending, source=source)
 
     def _enqueue_pipeline(self, pending: List, *, source: str) -> int:
-        """Enqueue the URL-optimized full pipeline for ``(episode_id, audio_url)``
-        pairs. Best-effort and idempotent (``enqueue_full_pipeline`` coalesces
-        against in-flight tasks). Returns the number actually enqueued.
+        return enqueue_pipeline_for(
+            self._queue, pending, transcription_provider=self._transcription_provider, source=source
+        )
+
+    # ------------------------------------------------------------------
+    # Spec #88 — ad-hoc delivery and "Arriving soon"
+    # ------------------------------------------------------------------
+
+    def get_entry(self, user_id: str, episode_id: str) -> Optional[InboxEntry]:
+        """The user's row for ``episode_id``, or ``None`` when never delivered."""
+        return self._repository.get(user_id, episode_id)
+
+    def episode_exists(self, episode_id: str) -> bool:
+        return self._repository.episode_exists(episode_id)
+
+    def deliver_to_user(self, user_id: str, episode_id: str, *, source: str = "ad_hoc") -> Tuple[InboxEntry, bool]:
+        """Put ``episode_id`` in ``user_id``'s inbox ("Send to my inbox").
+
+        Creates the row only when none exists: delivery is immutable, so an
+        existing row keeps its ``delivered_at``, ``source`` and ``state``
+        (spec #88). Either way the pipeline guard runs, so an unprocessed
+        episode starts processing and a finished or in-flight one is a no-op.
+
+        Returns ``(entry, created)``.
         """
-        enqueued = 0
-        for episode_id, audio_url in pending:
-            try:
-                if self._queue.enqueue_full_pipeline(
-                    episode_id=episode_id,
-                    audio_url=audio_url,
-                    transcription_provider=self._transcription_provider,
-                    initiated_by=f"inbox-{source}",
-                ):
-                    enqueued += 1
-            except Exception:
-                logger.exception("inbox_pipeline_enqueue_failed", episode_id=episode_id, source=source)
-        if enqueued:
-            logger.info("inbox_pipeline_enqueued", source=source, count=enqueued)
-        return enqueued
+        entry, created = self._repository.find_or_create(user_id=user_id, episode_id=episode_id, source=source)
+        self._ensure_pipeline(
+            lambda: self._podcasts.get_unqueued_unprocessed_episodes([episode_id]),
+            source=source,
+        )
+        logger.info("inbox_ad_hoc_delivery", user_id=user_id, episode_id=episode_id, created=created, source=source)
+        return entry, created
+
+    def arriving(self, user_id: str, *, limit: int = 5) -> Tuple[List[ArrivingItem], int]:
+        """Followed podcasts' in-flight episodes not yet in the user's inbox.
+
+        ``limit`` is clamped to ``[1, MAX_ARRIVING_LIMIT]``. Returns
+        ``(items, total)``.
+        """
+        limit = max(1, min(limit, MAX_ARRIVING_LIMIT))
+        return self._repository.list_arriving(user_id, limit=limit)
 
     def mark_state(self, user_id: str, episode_id: str, state: str) -> InboxEntry:
         """

@@ -1,9 +1,13 @@
 import { useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { importEpisode } from '../api/client'
 import type { ImportPayload } from '../api/types'
 import Button, { CloseIcon } from './Button'
+import { ProgressPill } from './InboxProgress'
+import { deriveProgress, SAVED_VIEW_HREF } from '../utils/inbox'
+import { InboxStatePanel } from './InboxStatus'
+import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
 
 interface ImportEpisodeModalProps {
   isOpen: boolean
@@ -128,10 +132,70 @@ interface ImportSuccessProps {
   onClose: () => void
 }
 
+const primaryLinkClass =
+  'inline-flex items-center px-4 py-2 rounded-md text-sm font-medium bg-primary-900 text-white hover:bg-primary-800'
+
+// Spec #88: one view per real outcome, each answering "what now". The dialog
+// lives on /inbox, so opening the episode uses the reader overlay above the
+// still-mounted list (spec #52), exactly as an inbox row does.
 function ImportSuccess({ result, onClose }: ImportSuccessProps) {
-  const heading = result.deduplicated
-    ? 'Already in your inbox'
-    : 'Importing — this may take a few minutes'
+  const navigate = useNavigate()
+  const episodeHref = result.podcast_slug
+    ? `/podcasts/${result.podcast_slug}/episodes/${result.episode_slug || result.episode_id}`
+    : null
+  const { state: linkState } = useEpisodeLinkState(episodeHref ?? '')
+  const progress = deriveProgress({ state: result.episode_state, is_failed: result.episode_failed })
+
+  const goToInbox = (
+    <Link to="/inbox" onClick={onClose} className={primaryLinkClass}>
+      Go to inbox
+    </Link>
+  )
+  const openLink = (label: string) =>
+    episodeHref ? (
+      <Link to={episodeHref} state={linkState} onClick={onClose} className={primaryLinkClass}>
+        {label}
+      </Link>
+    ) : (
+      goToInbox
+    )
+
+  let heading: string
+  let body: React.ReactNode = null
+  let primary: React.ReactNode = goToInbox
+
+  if (result.outcome === 'new_episode') {
+    heading = 'Importing — this may take a few minutes'
+  } else if (result.outcome === 'added_existing') {
+    heading = 'Added to your inbox'
+    if (progress.kind === 'ready') {
+      body = <p className="text-sm text-gray-700">It&apos;s already transcribed and summarised.</p>
+      primary = openLink('Read now')
+    } else if (progress.kind === 'failed') {
+      body = (
+        <p className="text-sm text-gray-700">
+          Processing failed earlier. You can retry it from the episode page.
+        </p>
+      )
+      primary = openLink('Open episode')
+    } else {
+      body = <ProgressPill status={progress} />
+    }
+  } else {
+    heading = 'Good news — this is already in your inbox'
+    body = (
+      <InboxStatePanel
+        entry={result.inbox_entry}
+        onChanged={(state) => {
+          onClose()
+          // Show where a saved row went; a restored row is back in the list
+          // behind the dialog, at its original date.
+          if (state === 'saved') navigate(SAVED_VIEW_HREF)
+        }}
+      />
+    )
+    primary = openLink('Open episode')
+  }
 
   return (
     <div>
@@ -143,7 +207,9 @@ function ImportSuccess({ result, onClose }: ImportSuccessProps) {
         )}
       </div>
 
-      {result.parent && !result.deduplicated && (
+      {body && <div className="mt-4">{body}</div>}
+
+      {result.parent && result.outcome === 'new_episode' && (
         <div className="mt-4 border border-gray-200 rounded-lg p-4">
           <p className="text-sm text-gray-700">
             This episode is from{' '}
@@ -166,13 +232,7 @@ function ImportSuccess({ result, onClose }: ImportSuccessProps) {
         <Button variant="ghost" onClick={onClose}>
           Close
         </Button>
-        <Link
-          to="/inbox"
-          onClick={onClose}
-          className="inline-flex items-center px-4 py-2 rounded-md text-sm font-medium bg-primary-900 text-white hover:bg-primary-800"
-        >
-          Go to inbox
-        </Link>
+        {primary}
       </div>
     </div>
   )

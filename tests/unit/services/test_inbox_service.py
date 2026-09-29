@@ -600,3 +600,91 @@ def test_list_over_long_q_raises_before_touching_repository():
         service.list("user-1", q="x" * (MAX_QUERY_CHARS + 1))
 
     repo.list_items.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec #88 — deliver_to_user ("Send to my inbox") and arriving()
+# ---------------------------------------------------------------------------
+def test_deliver_to_user_creates_ad_hoc_row_and_starts_pipeline(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager, inbox_repo
+):
+    from thestill.core.queue_manager import TaskStage
+
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "discovered", None)
+
+    entry, created = transcribing_service.deliver_to_user(alice.id, ep_id)
+
+    assert created is True
+    assert entry.source == "ad_hoc"
+    assert entry.state == "unread"
+    assert inbox_repo.get(alice.id, ep_id) is not None
+    assert _stages_for(queue_manager, ep_id) == [TaskStage.TRANSCRIBE]
+
+
+def test_deliver_to_user_on_processed_episode_does_not_enqueue(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager
+):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "done", datetime.now(timezone.utc))
+    _mark_episode_artifact(db_path, ep_id, "summary_path", "summaries/done.md")
+
+    _, created = transcribing_service.deliver_to_user(alice.id, ep_id)
+
+    assert created is True
+    assert queue_manager.get_tasks_for_episode(ep_id) == []
+
+
+def test_deliver_to_user_leaves_existing_row_untouched(
+    transcribing_service, db_path, user_repo, podcast_repo, inbox_repo
+):
+    """Delivery is immutable (spec #88): a second send never re-dates the row,
+    changes its source, or resets its state."""
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "old", datetime.now(timezone.utc))
+    delivered = datetime(2026, 5, 11, 9, 12, tzinfo=timezone.utc)
+    inbox_repo.insert_many(
+        [InboxEntry(user_id=alice.id, episode_id=ep_id, source="follow_new", state="unread", delivered_at=delivered)]
+    )
+    inbox_repo.update_state(alice.id, ep_id, "dismissed", datetime.now(timezone.utc))
+
+    entry, created = transcribing_service.deliver_to_user(alice.id, ep_id)
+
+    assert created is False
+    assert entry.source == "follow_new"
+    assert entry.state == "dismissed"
+    assert entry.delivered_at == delivered
+
+
+def test_deliver_to_user_is_idempotent_on_the_queue(
+    transcribing_service, db_path, user_repo, podcast_repo, queue_manager
+):
+    alice = _make_user(user_repo, "alice@example.com")
+    bob = _make_user(user_repo, "bob@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "discovered", None)
+
+    transcribing_service.deliver_to_user(alice.id, ep_id)
+    transcribing_service.deliver_to_user(bob.id, ep_id)
+
+    assert len(queue_manager.get_tasks_for_episode(ep_id)) == 1
+
+
+def test_get_entry_returns_none_for_undelivered_episode(service, db_path, user_repo, podcast_repo):
+    alice = _make_user(user_repo, "alice@example.com")
+    podcast = _make_podcast(podcast_repo, slug="p1")
+    ep_id = _make_published_episode(db_path, podcast.id, "ep", None)
+    assert service.get_entry(alice.id, ep_id) is None
+
+
+@pytest.mark.parametrize("requested,expected", [(0, 1), (-3, 1), (5, 5), (500, 20)])
+def test_arriving_clamps_limit(requested, expected):
+    repo = MagicMock()
+    repo.list_arriving.return_value = ([], 0)
+    svc = InboxService(repo, MagicMock())
+
+    assert svc.arriving("u", limit=requested) == ([], 0)
+    repo.list_arriving.assert_called_once_with("u", limit=expected)
