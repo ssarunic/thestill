@@ -10,26 +10,42 @@
  * - Entities tab hits /api/search/quick with limit_per_group=10
  *   and renders only the entity groups.
  *
- * Each row plays inline through the existing PlayerProvider (the
+ * Quotes are grouped by episode: one card per episode with its best
+ * moments (`per_episode` caps them server-side, so an episode that says
+ * the term thirty times can't flood the page or push the others out of
+ * the result set) and "Show all N mentions", which loads that episode's
+ * literal matches in time order.
+ *
+ * Each moment plays inline through the existing PlayerProvider (the
  * spec calls it the "FloatingPlayer" — same thing as MiniPlayer
- * here). Quote rows navigate to the episode page with `?t=<sec>`,
- * which already handles seek-on-load.
+ * here). Without an audio URL a moment navigates to the episode page
+ * with `?t=<sec>`, which already handles seek-on-load.
  */
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useCorpusSearch, useQuickSearch } from '../hooks/useApi'
 import type {
+  CorpusSearchOptions,
   EntityType,
   QuickEntityItem,
   SearchResult,
 } from '../api/types'
+import SmartImage from '../components/SmartImage'
+import { formatEyebrowDate } from '../utils/episodeFormat'
+import { formatClock } from '../utils/formatClock'
 import { parseQuery } from '../utils/searchOperators'
 import { useDebouncedSearchParam } from '../hooks/useDebouncedSearchParam'
 import { entityHref, entityStyle } from '../utils/entityColors'
 import { usePlayer } from '../contexts/PlayerContext'
 
 type Tab = 'all' | 'quotes' | 'entities'
+
+// Moments shown per episode card before "Show all N mentions". With the
+// 50-hit limit this leaves room for at least 25 episodes.
+const MOMENTS_PER_EPISODE = 2
+// An expanded card loads at most this many of the episode's matches.
+const EPISODE_MOMENTS_LIMIT = 50
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'all', label: 'All' },
@@ -66,7 +82,8 @@ export default function SearchResults() {
   const corpusOptions = useMemo(
     () => ({
       mode: 'hybrid' as const,
-      limit: 30,
+      limit: 50,
+      per_episode: MOMENTS_PER_EPISODE,
       date_from: parsed.filters.date_from,
       date_to: parsed.filters.date_to,
     }),
@@ -95,7 +112,8 @@ export default function SearchResults() {
     return quick.data.groups.filter((g) => g.type === 'person' || g.type === 'company' || g.type === 'topic')
   }, [quick.data])
 
-  const corpusResults = corpus.data?.results ?? []
+  const episodeGroups = useMemo(() => groupByEpisode(corpus.data?.results ?? []), [corpus.data])
+  const matchCounts = corpus.data?.match_counts ?? {}
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -169,11 +187,21 @@ export default function SearchResults() {
             </Section>
           )}
           {showCorpus && (
-            <Section title={tab === 'quotes' ? undefined : 'Quotes'}>
-              {corpusResults.length === 0 && !isLoading && <EmptySection label="quotes" query={parsed.text} />}
+            <Section
+              title={tab === 'quotes' ? undefined : 'Quotes'}
+              aside={episodeGroups.length > 0 ? pluralize(episodeGroups.length, 'episode') : undefined}
+            >
+              {episodeGroups.length === 0 && !isLoading && <EmptySection label="quotes" query={parsed.text} />}
               <ul className="space-y-3">
-                {corpusResults.map((r, i) => (
-                  <QuoteResultRow key={`${r.episode_id}-${r.start_ms}-${i}`} result={r} />
+                {episodeGroups.map((moments) => (
+                  <EpisodeResultCard
+                    key={moments[0].episode_id}
+                    moments={moments}
+                    matchCount={matchCounts[moments[0].episode_id] ?? 0}
+                    query={parsed.text}
+                    dateFrom={parsed.filters.date_from}
+                    dateTo={parsed.filters.date_to}
+                  />
                 ))}
               </ul>
             </Section>
@@ -185,23 +213,143 @@ export default function SearchResults() {
   )
 }
 
-function Section({ title, children }: { title?: string; children: React.ReactNode }) {
+function Section({ title, aside, children }: { title?: string; aside?: string; children: React.ReactNode }) {
   return (
     <section className="mb-8">
-      {title && <h2 className="mb-3 text-lg font-semibold text-gray-900">{title}</h2>}
+      {title && (
+        <h2 className="mb-3 flex items-baseline gap-2 text-lg font-semibold text-gray-900">
+          {title}
+          {aside && <span className="text-sm font-normal text-gray-500">{aside}</span>}
+        </h2>
+      )}
+      {!title && aside && <p className="mb-3 text-sm text-gray-500">{aside}</p>}
       {children}
     </section>
   )
 }
 
-function QuoteResultRow({ result }: { result: SearchResult }) {
+/** Hits grouped by episode, episodes in the order of their best hit. */
+function groupByEpisode(results: SearchResult[]): SearchResult[][] {
+  const groups = new Map<string, SearchResult[]>()
+  for (const r of results) {
+    const group = groups.get(r.episode_id)
+    if (group) group.push(r)
+    else groups.set(r.episode_id, [r])
+  }
+  return [...groups.values()]
+}
+
+/** The quote without the "Speaker: " prefix the chunk writer indexes it with. */
+function quoteBody(result: SearchResult): string {
+  const prefix = result.speaker ? `${result.speaker}: ` : null
+  return prefix && result.quote.startsWith(prefix) ? result.quote.slice(prefix.length) : result.quote
+}
+
+function pluralize(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`
+}
+
+function EpisodeResultCard({
+  moments,
+  matchCount,
+  query,
+  dateFrom,
+  dateTo,
+}: {
+  moments: SearchResult[]
+  matchCount: number
+  query: string
+  dateFrom?: string
+  dateTo?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lead = moments[0]
+  const episodeHref =
+    lead.podcast_slug && lead.episode_slug ? `/podcasts/${lead.podcast_slug}/episodes/${lead.episode_slug}` : null
+  const date = formatEyebrowDate(lead.published_at)
+
+  // "All mentions" is the literal matches — the same set match_count
+  // counts — in the order they were said.
+  const allOptions = useMemo<CorpusSearchOptions>(
+    () => ({
+      mode: 'lexical',
+      limit: EPISODE_MOMENTS_LIMIT,
+      episode_id: lead.episode_id,
+      date_from: dateFrom,
+      date_to: dateTo,
+    }),
+    [lead.episode_id, dateFrom, dateTo],
+  )
+  const all = useCorpusSearch(expanded ? query : '', allOptions)
+  const allMoments = useMemo(
+    () => (all.data ? [...all.data.results].sort((a, b) => a.start_ms - b.start_ms) : null),
+    [all.data],
+  )
+  const shown = expanded && allMoments ? allMoments : moments
+  const canExpand = matchCount > moments.length
+
+  return (
+    <li className="rounded-lg border border-gray-200 p-4" data-testid="search-episode-group">
+      <div className="flex items-start gap-3">
+        <SmartImage
+          sources={[lead.image_url]}
+          alt=""
+          width={40}
+          height={40}
+          loading="lazy"
+          className="h-10 w-10 flex-shrink-0 rounded object-cover"
+          fallback={<div className="h-10 w-10 flex-shrink-0 rounded bg-gradient-to-br from-primary-100 to-secondary-100" />}
+        />
+        <div className="min-w-0 flex-1">
+          {episodeHref ? (
+            <Link to={episodeHref} className="line-clamp-2 font-semibold text-gray-900 hover:text-primary-700">
+              {lead.episode_title}
+            </Link>
+          ) : (
+            <span className="line-clamp-2 font-semibold text-gray-900">{lead.episode_title}</span>
+          )}
+          <p className="mt-0.5 text-xs text-gray-500">
+            {lead.podcast_title}
+            {date && ` · ${date}`}
+            {matchCount > 0 && (
+              <span data-testid="search-episode-match-count"> · {pluralize(matchCount, 'mention')}</span>
+            )}
+          </p>
+        </div>
+      </div>
+      <ul className="mt-3 space-y-1">
+        {shown.map((m, i) => (
+          <MomentRow key={`${m.start_ms}-${i}`} result={m} />
+        ))}
+      </ul>
+      {expanded && all.isFetching && !allMoments && <p className="mt-2 text-xs text-gray-500">Loading mentions…</p>}
+      {expanded && allMoments && matchCount > allMoments.length && (
+        <p className="mt-2 text-xs text-gray-500">
+          Showing the {allMoments.length} best matches of {matchCount}, in episode order.
+        </p>
+      )}
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 text-sm font-medium text-primary-600 hover:text-primary-800"
+          data-testid="search-episode-expand"
+        >
+          {expanded ? 'Show fewer' : `Show all ${pluralize(matchCount, 'mention')}`}
+        </button>
+      )}
+    </li>
+  )
+}
+
+function MomentRow({ result }: { result: SearchResult }) {
   const navigate = useNavigate()
   const player = usePlayer()
   const seconds = Math.floor(result.start_ms / 1000)
   const hasSlugs = !!result.podcast_slug && !!result.episode_slug
   const canPlayInline = hasSlugs && !!result.audio_url
 
-  // Spec #28 §4.2 — clicking a quote row plays it inline through the
+  // Spec #28 §4.2 — clicking a moment plays it inline through the
   // FloatingPlayer when we have the audio URL on hand; only fall back
   // to a full navigation when the API response is missing audio_url
   // (older episodes or pre-audio_url backend versions). The fallback
@@ -237,24 +385,23 @@ function QuoteResultRow({ result }: { result: SearchResult }) {
 
   return (
     <li
-      className={`rounded-lg border border-gray-200 p-4 ${
-        hasSlugs
-          ? 'cursor-pointer hover:border-primary-200 hover:bg-primary-50/50'
-          : 'cursor-not-allowed opacity-70'
+      className={`-mx-2 flex gap-3 rounded-md px-2 py-1.5 ${
+        hasSlugs ? 'cursor-pointer hover:bg-primary-50/60' : 'cursor-not-allowed opacity-70'
       }`}
       onClick={hasSlugs ? handleOpen : undefined}
       data-testid="search-quote-row"
     >
-      <p className="text-sm text-gray-900">"{result.quote}"</p>
-      <p className="mt-2 text-xs text-gray-500">
-        {result.speaker ? `${result.speaker} · ` : ''}
-        {result.episode_title} · {result.podcast_title}
-        {' · '}
-        {hasSlugs ? (
-          <span className="text-primary-600">▶ play at {formatSeconds(seconds)}</span>
-        ) : (
-          <span className="text-gray-400">deep link unavailable for legacy episode</span>
-        )}
+      <span
+        className={`w-14 flex-shrink-0 pt-0.5 text-right text-xs tabular-nums ${
+          hasSlugs ? 'text-primary-600' : 'text-gray-400'
+        }`}
+        title={hasSlugs ? `Play at ${formatClock(seconds)}` : 'Deep link unavailable for legacy episode'}
+      >
+        {hasSlugs ? '▶ ' : ''}
+        {formatClock(seconds)}
+      </span>
+      <p className="min-w-0 flex-1 text-sm text-gray-900">
+        {result.speaker && <span className="font-medium text-gray-600">{result.speaker}: </span>}"{quoteBody(result)}"
       </p>
     </li>
   )
@@ -358,10 +505,4 @@ function Loader() {
       <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-primary-600" />
     </div>
   )
-}
-
-function formatSeconds(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
 }

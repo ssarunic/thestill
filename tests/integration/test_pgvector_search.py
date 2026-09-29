@@ -311,3 +311,21 @@ def test_entity_leg_matches_canonical_name_and_surface_form(seeded):
     assert [r["segment_id"] for r in backend._entity_rows("acme QUANTUM", limit=10, filters=None)] == [0]
     assert [r["segment_id"] for r in backend._entity_rows("sourdough", limit=10, filters=None)] == [1]
     assert backend._entity_rows("nothing here", limit=10, filters=None) == []
+
+
+def test_per_episode_cap_episode_filter_and_match_counts(seeded):
+    from thestill.search.base import SearchFilters, SearchMode
+
+    model, _ = seeded
+    be = _backend(model)
+    # "computing" matches one chunk of A and both chunks of B.
+    assert len(be.search("computing", mode=SearchMode.LEXICAL, limit=10, filters=None)) == 3
+    capped = SearchFilters(max_per_episode=1)
+    for mode in (SearchMode.LEXICAL, SearchMode.HYBRID):
+        hits = be.search("computing", mode=mode, limit=10, filters=capped)
+        assert sorted(h.episode_id for h in hits) == sorted([EPISODE_A, EPISODE_B]), mode
+    hits = be.search("computing", mode=SearchMode.HYBRID, limit=10, filters=SearchFilters(episode_id=EPISODE_B))
+    assert hits and {h.episode_id for h in hits} == {EPISODE_B}
+    counts = be.count_lexical_matches("computing", [EPISODE_A, EPISODE_B, str(uuid.uuid4())], capped)
+    assert counts == {EPISODE_A: 1, EPISODE_B: 2}
+    assert be.count_lexical_matches("computing -quantum", [EPISODE_A, EPISODE_B], None) == {EPISODE_B: 1}

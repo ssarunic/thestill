@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Protocol, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from ..models.entities import MatchType
 
@@ -90,6 +90,34 @@ class SearchFilters:
     # on the wire as its own param because the typing UX always goes
     # via the operator syntax.
     speaker: Optional[str] = None
+    # Only chunks of this one episode (the results page's "Show all
+    # mentions" for an episode card).
+    episode_id: Optional[str] = None
+    # At most this many hits per episode, applied to every candidate leg
+    # before the limit, so one episode that says the term forty times can't
+    # fill the result set and push every other episode out of it. ``None``
+    # keeps the ungrouped ranking (MCP, CLI, evals).
+    max_per_episode: Optional[int] = None
+
+
+_T = TypeVar("_T")
+
+
+def cap_per_episode(items: Iterable[_T], max_per_episode: Optional[int], episode_of: Callable[[_T], str]) -> List[_T]:
+    """Keep the first ``max_per_episode`` items of each episode, order preserved.
+
+    ``items`` must already be ranked best-first; ``None`` returns them unchanged.
+    """
+    if max_per_episode is None:
+        return list(items)
+    seen: Dict[str, int] = {}
+    kept: List[_T] = []
+    for item in items:
+        episode_id = episode_of(item)
+        if seen.get(episode_id, 0) < max_per_episode:
+            seen[episode_id] = seen.get(episode_id, 0) + 1
+            kept.append(item)
+    return kept
 
 
 @dataclass(frozen=True)
@@ -168,3 +196,13 @@ class SearchBackend(Protocol):
         limit: int,
         filters: Optional[SearchFilters],
     ) -> List[ResolvedHit]: ...
+
+    def count_lexical_matches(
+        self,
+        query: str,
+        episode_ids: Sequence[str],
+        filters: Optional[SearchFilters],
+    ) -> Dict[str, int]:
+        """Chunks per episode that match ``query`` literally (the keyword leg),
+        for ``episode_ids`` only. Episodes with no literal match are absent."""
+        ...

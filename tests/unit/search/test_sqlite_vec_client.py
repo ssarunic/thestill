@@ -414,3 +414,54 @@ class TestEntityLeg:
         assert [r["segment_id"] for r in backend._entity_rows("sourdough", limit=10, filters=None)] == [1]
         assert backend._entity_rows("nothing here", limit=10, filters=None) == []
         assert backend._entity_rows("   ", limit=10, filters=None) == []
+
+
+class TestPerEpisodeCap:
+    """One episode that says the term many times can't fill the result set:
+    ``max_per_episode`` caps every leg before the limit, so the other episodes
+    that mention it still make the page."""
+
+    def _seed_flood(self, tmp_path):
+        db_path, fixtures = _seed_db(tmp_path)
+        e1 = fixtures["episodes"]["e1"]["id"]
+        e3 = fixtures["episodes"]["e3"]["id"]
+        # e1 repeats the term in every segment, so BM25 ranks all of it above e3.
+        _populate_chunks(
+            db_path,
+            e1,
+            [(i, float(i), float(i) + 1, f"legora legora legora again in part {i}", "Host") for i in range(6)],
+        )
+        _populate_chunks(db_path, e3, [(0, 1.0, 5.0, "they also mentioned legora once in passing today", "Guest")])
+        return db_path, e1, e3
+
+    @pytest.mark.parametrize("mode", [SearchMode.LEXICAL, SearchMode.HYBRID])
+    def test_uncapped_flood_pushes_the_other_episode_out(self, tmp_path, mode):
+        db_path, e1, _ = self._seed_flood(tmp_path)
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        hits = backend.search("legora", mode=mode, limit=3, filters=None)
+        assert {h.episode_id for h in hits} == {e1}
+
+    @pytest.mark.parametrize("mode", [SearchMode.LEXICAL, SearchMode.HYBRID])
+    def test_cap_keeps_the_best_hits_of_each_episode(self, tmp_path, mode):
+        db_path, e1, e3 = self._seed_flood(tmp_path)
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        hits = backend.search("legora", mode=mode, limit=3, filters=SearchFilters(max_per_episode=2))
+        assert [h.episode_id for h in hits].count(e1) == 2
+        assert e3 in {h.episode_id for h in hits}
+        # Ranking is still best-first across episodes.
+        assert hits[0].episode_id == e1
+
+    def test_episode_filter_returns_only_that_episode(self, tmp_path):
+        db_path, e1, e3 = self._seed_flood(tmp_path)
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        hits = backend.search("legora", mode=SearchMode.HYBRID, limit=50, filters=SearchFilters(episode_id=e3))
+        assert [h.episode_id for h in hits] == [e3]
+
+    def test_count_lexical_matches_counts_every_literal_chunk(self, tmp_path):
+        db_path, e1, e3 = self._seed_flood(tmp_path)
+        backend = SqliteVecBackend(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        other = "22222222-3333-4444-5555-666666666666"
+        counts = backend.count_lexical_matches("legora", [e1, e3, other], SearchFilters(max_per_episode=1))
+        assert counts == {e1: 6, e3: 1}
+        assert backend.count_lexical_matches("legora", [], None) == {}
+        assert backend.count_lexical_matches("speaker:guest legora", [e1, e3], None) == {e3: 1}
