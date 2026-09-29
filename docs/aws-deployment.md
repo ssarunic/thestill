@@ -229,6 +229,21 @@ Rollback is the same command with the previous sha tag — migrations are
 forward-only, so verify a revision is backward-compatible before shipping
 schema changes you may want to roll back across.
 
+**Disk.** Each app image is about 2 GB and a pull leaves the previous one
+behind, so eight releases in a day filled the 40 GB root and the pull failed
+with "no space left on device" (2026-09-29). The bootstrap that `reconcile`
+and the tag deploy run now removes every app image except the running one
+and the tag being deployed before it pulls, so at most three are ever on
+disk. The manual path above does not, so after a few hand upgrades run:
+
+```bash
+docker image prune -f                                # dangling layers
+docker images ghcr.io/ssarunic/thestill               # then `docker rmi` the old tags
+```
+
+If a deploy fails on disk space, free it the same way over SSM and
+`gh run rerun <run-id> --failed`; the reconcile is convergent.
+
 ### Deploy on tag (CI)
 
 Merging to `main` publishes an image but ships nothing. Pushing a version
