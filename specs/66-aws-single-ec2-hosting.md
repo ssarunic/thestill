@@ -307,7 +307,9 @@ acceptable minimum for self-hosters.
 
 - **Nightly cron:** `pg_dump | gzip` to `s3://<backup-bucket>/pg/` and
   `aws s3 sync /data s3://<backup-bucket>/data/` (excluding audio scratch).
-  Lifecycle: expire noncurrent versions after ~30 days. Cost: well under
+  Lifecycle: expire noncurrent versions after ~30 days and `pg/` dumps
+  after 60 days (each dump has a unique date key, so it never becomes
+  noncurrent and would otherwise accumulate forever). Cost: well under
   $1/mo.
 - **Restore runbook:** new instance from the same bootstrap → restore latest
   dump → sync `/data` down → start compose → repoint DNS. Target: under an

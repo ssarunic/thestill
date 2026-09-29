@@ -108,7 +108,8 @@ recovering when something needs doing by hand.
    - `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` on the backup bucket
    - `AmazonSSMManagedInstanceCore` for Session Manager
 5. **Backup bucket**: Block Public Access on, SSE-S3, versioning on,
-   lifecycle rule expiring noncurrent versions after 30 days.
+   lifecycle rules expiring noncurrent versions after 30 days and `pg/`
+   dumps after 60 days (dumps have unique keys and never become noncurrent).
 6. **EC2 auto-recovery alarm** (free): recover the instance on failed system
    status checks.
 

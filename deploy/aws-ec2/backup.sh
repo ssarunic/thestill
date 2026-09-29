@@ -5,9 +5,10 @@
 # - aws s3 sync ./data (transcripts, summaries, facts, briefings) to
 #   s3://$BACKUP_BUCKET/data/, excluding audio scratch and debug output.
 #
-# The bucket must have versioning on (fat-finger/ransomware protection) and
-# a lifecycle rule expiring noncurrent versions (~30 days). Credentials come
-# from the instance profile. Schedule from cron, e.g.:
+# The bucket must have versioning on (fat-finger/ransomware protection), a
+# lifecycle rule expiring noncurrent versions (~30 days), and one expiring
+# pg/ dumps after 60 days (each dump has a unique key, so it never becomes
+# noncurrent). Credentials come from the instance profile. Schedule from cron, e.g.:
 #   0 3 * * * BACKUP_BUCKET=my-thestill-backups /srv/thestill/backup.sh >> /var/log/thestill-backup.log 2>&1
 set -euo pipefail
 
