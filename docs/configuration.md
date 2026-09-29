@@ -456,6 +456,14 @@ the rows were embedded by a different model or runtime than the one
 answering queries, and the verdict line says whether a forced backfill
 fixes it. Exit code 2 on disagreement, so it can gate a deploy check.
 
+The running server guards the other side: every forward pass on the shared
+embedding model is serialised, and a fixed probe sentence is re-embedded at
+most once a minute and compared with the vector taken at load. Drift logs
+`embedding_model_drift_detected` (with the distance and the model's age)
+and the model is reloaded; a healthy instance reproduces the probe to
+~1e-6. Grep the logs for that event when semantic results turn to noise
+while `chunks verify` says the index is fine.
+
 `thestill status` reports current chunk count and the embedding model
 in use.
 
