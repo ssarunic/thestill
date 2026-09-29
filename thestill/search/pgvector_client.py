@@ -37,14 +37,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from structlog import get_logger
 
 from ..models.entities import MatchType
 from ..utils.postgres_ext import as_str, connect
-from .base import ResolvedHit, SearchFilters, SearchMode
+from .base import ResolvedHit, SearchFilters, SearchMode, cap_per_episode
 from .query_translator import translate_lexical_query
 
 if False:  # TYPE_CHECKING
@@ -142,6 +142,29 @@ def _to_vec(embedding: bytes) -> np.ndarray:
     return np.frombuffer(embedding, dtype=np.float32)
 
 
+def _cap(items, filters: Optional[SearchFilters], *, episode_of=lambda row: as_str(row["episode_id"])):
+    """``cap_per_episode`` with the cap read off ``filters``."""
+    return cap_per_episode(items, filters.max_per_episode if filters else None, episode_of)
+
+
+def _ranked_with_episode_cap(sql: str, params: list, filters: Optional[SearchFilters], limit: int) -> Tuple[str, list]:
+    """Twin of sqlite_vec_client's: best-first + LIMIT, at most
+    ``filters.max_per_episode`` rows per episode when that's set."""
+    cap = filters.max_per_episode if filters else None
+    if cap is None:
+        return f"{sql} ORDER BY score DESC LIMIT %s", [*params, limit]
+    wrapped = f"""
+        SELECT * FROM (
+            SELECT hit.*, ROW_NUMBER() OVER (PARTITION BY episode_id ORDER BY score DESC) AS episode_rank
+            FROM ({sql}) AS hit
+        ) AS ranked
+        WHERE episode_rank <= %s
+        ORDER BY score DESC
+        LIMIT %s
+    """
+    return wrapped, [*params, cap, limit]
+
+
 class PgVectorBackend:
     """In-process SearchBackend over the Postgres ``chunks`` index."""
 
@@ -195,7 +218,7 @@ class PgVectorBackend:
             return [self._row_to_hit(r, MatchType.LEXICAL) for r in rows]
         if mode == SearchMode.SEMANTIC:
             query_embedding = self.embedding_model.encode_one(translated.embedding_text)
-            rows = self._semantic(query_embedding, limit=limit, filters=effective_filters)
+            rows = _cap(self._semantic(query_embedding, limit=limit, filters=effective_filters), effective_filters)
             return [self._row_to_hit(r, MatchType.SEMANTIC) for r in rows][:limit]
         if mode == SearchMode.HYBRID:
             query_embedding = self.embedding_model.encode_one(translated.embedding_text)
@@ -210,6 +233,35 @@ class PgVectorBackend:
             )
         raise ValueError(f"unknown SearchMode: {mode!r}")
 
+    def count_lexical_matches(
+        self,
+        query: str,
+        episode_ids: Sequence[str],
+        filters: Optional[SearchFilters],
+    ) -> Dict[str, int]:
+        translated = translate_lexical_query(query)
+        websearch = _fts5_to_websearch(translated.fts_match) if translated.fts_match else ""
+        if not websearch.strip() or not episode_ids:
+            return {}
+        effective_filters = filters or SearchFilters()
+        if translated.speaker:
+            effective_filters = replace(effective_filters, speaker=translated.speaker)
+        filter_sql, filter_params = self._filter_clauses(replace(effective_filters, max_per_episode=None))
+        sql = f"""
+            SELECT c.episode_id AS episode_id, COUNT(*) AS n
+            FROM chunks c
+            JOIN episodes e ON e.id = c.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            WHERE c.text_tsv @@ websearch_to_tsquery('english', %s)
+              AND c.embedding_model = %s
+              AND c.episode_id = ANY(%s::uuid[])
+              {filter_sql}
+            GROUP BY c.episode_id
+        """
+        params = [websearch, self.embedding_model_name, list(episode_ids), *filter_params]
+        with connect(self.dsn) as conn:
+            return {as_str(row["episode_id"]): int(row["n"]) for row in conn.execute(sql, params).fetchall()}
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
@@ -223,6 +275,9 @@ class PgVectorBackend:
         if filters.podcast_id:
             parts.append("p.id = %s")
             params.append(filters.podcast_id)
+        if filters.episode_id:
+            parts.append("c.episode_id = %s")
+            params.append(filters.episode_id)
         if filters.date_from:
             parts.append("e.pub_date >= %s")
             params.append(filters.date_from)
@@ -256,10 +311,9 @@ class PgVectorBackend:
             WHERE c.text_tsv @@ websearch_to_tsquery('english', %s)
               AND c.embedding_model = %s
               {filter_sql}
-            ORDER BY score DESC
-            LIMIT %s
         """
-        params = [websearch, websearch, self.embedding_model_name, *filter_params, limit]
+        params = [websearch, websearch, self.embedding_model_name, *filter_params]
+        sql, params = _ranked_with_episode_cap(sql, params, filters, limit)
         with connect(self.dsn) as conn:
             return conn.execute(sql, params).fetchall()
 
@@ -313,6 +367,7 @@ class PgVectorBackend:
             if row["chunk_id"] in lex_ids
             or (semantic_only_allowed and float(row["score"]) <= _HYBRID_SEMANTIC_ONLY_MAX_DISTANCE)
         ]
+        sem_rows = _cap(sem_rows, filters)
 
         scores: dict[int, float] = {}
         rows_by_id: dict[int, dict] = {}
@@ -325,7 +380,8 @@ class PgVectorBackend:
             scores[cid] = scores.get(cid, 0.0) + _HYBRID_WEIGHT_SEM / (_RRF_K + rank + 1)
             rows_by_id.setdefault(cid, row)
 
-        ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)[:limit]
+        ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)
+        ranked_ids = _cap(ranked_ids, filters, episode_of=lambda cid: rows_by_id[cid]["episode_id"])[:limit]
         return [self._row_to_hit(rows_by_id[cid], MatchType.HYBRID, override_score=scores[cid]) for cid in ranked_ids]
 
     def _reranked(self, translated, query_embedding: bytes, *, limit: int, filters) -> List[ResolvedHit]:
@@ -334,16 +390,17 @@ class PgVectorBackend:
         pool = self.rerank_pool
         lex = self._lexical(translated.fts_match, limit=pool, filters=filters) if translated.fts_match else []
         ent = self._entity_rows(translated.embedding_text, limit=pool, filters=filters) if self.entity_leg else []
-        sem = self._semantic(query_embedding, limit=pool, filters=filters)
-        candidates = pool_candidates([("lexical", lex), ("entity", ent), ("semantic", sem)])
+        sem = _cap(self._semantic(query_embedding, limit=pool, filters=filters), filters)
+        candidates = pool_candidates([("lexical", lex), ("entity", _cap(ent, filters)), ("semantic", sem)])
         ranked = rerank(
             self.reranker,
             translated.embedding_text,
             candidates,
-            limit=limit,
+            limit=len(candidates),
             min_score=self.rerank_min_score,
             semantic_min_score=self.rerank_semantic_min_score,
         )
+        ranked = _cap(ranked, filters, episode_of=lambda t: t[0]["episode_id"])[:limit]
         return [
             replace(self._row_to_hit(row, MatchType.HYBRID, override_score=score), origin=origin)
             for row, score, origin in ranked

@@ -969,6 +969,10 @@ export interface SearchResponse {
   mode: SearchMode
   total: number
   results: SearchResult[]
+  // Only when the request set `per_episode`: episode_id → chunks in that
+  // episode that match the query literally. Episodes found only
+  // semantically are absent.
+  match_counts?: Record<string, number> | null
 }
 
 export interface CorpusSearchOptions {
@@ -978,6 +982,11 @@ export interface CorpusSearchOptions {
   date_from?: string
   date_to?: string
   has_entity?: string[]
+  // Only this episode's moments (an expanded result card).
+  episode_id?: string
+  // At most this many hits per episode, so one episode can't flood the
+  // results; also asks for `match_counts`.
+  per_episode?: number
 }
 
 // Spec #28 §5.2 — "Related episodes" rail. The backend averages the

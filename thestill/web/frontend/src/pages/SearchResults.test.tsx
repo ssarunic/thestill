@@ -202,3 +202,69 @@ describe('SearchResults — typing is debounced (spec #89)', () => {
     expect(queries).toEqual(['legora'])
   })
 })
+
+describe('SearchResults — quotes are grouped by episode', () => {
+  beforeEach(() => {
+    mockCorpusSearch.mockReset()
+    mockQuickSearch.mockReset()
+    mockQuickSearch.mockResolvedValue(emptyQuick())
+  })
+
+  const flood = [
+    row({ start_ms: 60_000, quote: 'Harry Stebbings: first Legora moment' }),
+    row({ start_ms: 10_000, quote: 'Harry Stebbings: second Legora moment' }),
+  ]
+  const other = row({
+    episode_id: 'ep-2',
+    episode_slug: 'other-episode',
+    episode_title: 'Other Episode',
+    start_ms: 5_000,
+    speaker: null,
+    quote: 'Legora came up once here',
+  })
+
+  it('asks for a per-episode cap and renders one card per episode with its mention count', async () => {
+    mockCorpusSearch.mockResolvedValue({
+      ...corpusResponse([flood[0], other, flood[1]]),
+      match_counts: { 'ep-1': 27, 'ep-2': 1 },
+    })
+    renderPage('legora')
+
+    const cards = await screen.findAllByTestId('search-episode-group')
+    expect(cards).toHaveLength(2)
+    expect(mockCorpusSearch.mock.calls[0][1]).toMatchObject({ per_episode: 2, limit: 50 })
+    // Episodes keep the order of their best hit; each card holds its own moments.
+    expect(cards[0]).toHaveTextContent('Cliff Weitzman on Speechify')
+    expect(cards[0]).toHaveTextContent('27 mentions')
+    expect(cards[0].querySelectorAll('[data-testid="search-quote-row"]')).toHaveLength(2)
+    expect(cards[1]).toHaveTextContent('Other Episode')
+    expect(cards[1]).toHaveTextContent('1 mention')
+    // The speaker prefix the index stores isn't repeated inside the quote.
+    expect(cards[0]).toHaveTextContent('Harry Stebbings: "first Legora moment"')
+    expect(screen.getByText('2 episodes')).toBeInTheDocument()
+    // Nothing more to show for an episode whose moments are all on the card.
+    expect(cards[1].querySelector('[data-testid="search-episode-expand"]')).toBeNull()
+  })
+
+  it('"Show all" loads the episode\'s literal matches in episode order', async () => {
+    mockCorpusSearch.mockImplementation(async (_q: string, opts: { episode_id?: string }) =>
+      opts.episode_id
+        ? corpusResponse([
+            row({ start_ms: 90_000, quote: 'late mention' }),
+            row({ start_ms: 1_000, quote: 'early mention' }),
+            row({ start_ms: 45_000, quote: 'middle mention' }),
+          ])
+        : { ...corpusResponse(flood), match_counts: { 'ep-1': 3 } },
+    )
+    renderPage('legora')
+
+    fireEvent.click(await screen.findByText('Show all 3 mentions'))
+
+    await waitFor(() => expect(screen.getByText(/early mention/)).toBeInTheDocument())
+    const expandCall = mockCorpusSearch.mock.calls.find((c) => c[1].episode_id)
+    expect(expandCall?.[1]).toMatchObject({ episode_id: 'ep-1', mode: 'lexical' })
+    const quotes = screen.getAllByTestId('search-quote-row').map((el) => el.textContent)
+    expect(quotes.map((q) => q?.match(/(early|middle|late) mention/)?.[1])).toEqual(['early', 'middle', 'late'])
+    expect(screen.getByText('Show fewer')).toBeInTheDocument()
+  })
+})

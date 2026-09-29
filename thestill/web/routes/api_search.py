@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from typing import List, Literal, Optional
+import uuid
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -103,6 +104,10 @@ class SearchResponse(BaseModel):
     mode: str
     total: int
     results: List[SearchResult]
+    # Only with ``per_episode``: episode_id → chunks in that episode that
+    # match the query literally, so a card showing its best moment or three
+    # can say "27 mentions". Episodes found only semantically are absent.
+    match_counts: Optional[Dict[str, int]] = None
 
 
 class RelatedEpisode(BaseModel):
@@ -204,17 +209,32 @@ def search_corpus(
     date_from: Optional[str] = Query(None, description="ISO-8601 date."),
     date_to: Optional[str] = Query(None, description="ISO-8601 date."),
     has_entity: Optional[List[str]] = Query(None),
+    episode_id: Optional[str] = Query(None, description="Only this episode's moments."),
+    per_episode: Optional[int] = Query(
+        None,
+        ge=1,
+        le=10,
+        description="At most this many hits per episode, so one episode can't flood the results; "
+        "also returns per-episode literal match counts.",
+    ),
     state: AppState = Depends(get_app_state),
 ):
     backend = state.search_backend
     if backend is None:
         raise HTTPException(status_code=503, detail="search backend not initialised")
+    if episode_id is not None:
+        try:
+            uuid.UUID(episode_id)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="episode_id must be a UUID") from None
 
     filters = SearchFilters(
         podcast_id=podcast_id,
         date_from=date_from,
         date_to=date_to,
         has_entity=tuple(has_entity or ()),
+        episode_id=episode_id,
+        max_per_episode=per_episode,
     )
     requested_mode = SearchMode(mode)
     effective_mode = requested_mode
@@ -252,11 +272,15 @@ def search_corpus(
             row.image_url = payload.image_url
             row.duration = payload.duration
         results.append(row)
+    match_counts = None
+    if per_episode is not None:
+        match_counts = backend.count_lexical_matches(q, list(dict.fromkeys(h.episode_id for h in hits)), filters)
     return SearchResponse(
         query=q,
         mode=effective_mode.value,
         total=len(results),
         results=results,
+        match_counts=match_counts,
     )
 
 

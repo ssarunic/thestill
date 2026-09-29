@@ -606,6 +606,8 @@ export async function corpusSearch(
   if (opts.has_entity) {
     for (const id of opts.has_entity) params.append('has_entity', id)
   }
+  if (opts.episode_id) params.set('episode_id', opts.episode_id)
+  if (opts.per_episode !== undefined) params.set('per_episode', String(opts.per_episode))
   const response = await fetch(`${API_BASE}/search/corpus?${params.toString()}`, {
     credentials: 'include',
     signal,

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import pytest
 
 from thestill.search import pgvector_client
-from thestill.search.base import SearchMode
+from thestill.search.base import SearchFilters, SearchMode
 from thestill.search.pgvector_client import PgVectorBackend
 from thestill.search.reranker import Reranker, pool_candidates, rerank
 
@@ -189,6 +189,17 @@ class TestRerankedHybrid:
         )
         assert [h.segment_id for h in hits] == [1]
         assert hits[0].origin is None
+
+    def test_per_episode_cap_applies_after_the_reranker_scores(self, monkeypatch):
+        # The flooding episode's semantic rows outscore the other episode's
+        # literal hit; the cap still leaves room for it inside the limit.
+        flood = [dict(_row(i, f"we talked about Legora for the {i}th time"), episode_id="flood") for i in range(1, 5)]
+        other = dict(_row(9, "Legora came up once on this other show"), episode_id="other")
+        rr = _FixedReranker({**{r["text"]: 0.9 for r in flood}, other["text"]: 0.2})
+        hits = _backend(monkeypatch, lex=[other], sem=flood, reranker=rr).search(
+            "legora", mode=SearchMode.HYBRID, limit=3, filters=SearchFilters(max_per_episode=2)
+        )
+        assert [h.episode_id for h in hits] == ["flood", "flood", "other"]
 
 
 def test_factory_builds_reranker_only_when_a_model_is_named():
