@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phases 1–2 implemented 2026-09-28 (Apple; publisher-provided Spotify + YouTube; YouTube channel scan); PR pending
+> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule + Spotify latest-episode probe implemented, curation + verified channel discovery open
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -138,15 +138,24 @@ scan below share it.
 
 ### Spotify
 
-Publisher-provided only. Verified 2026-09-28: Spotify's Web API is not
-retired but Development Mode now needs Premium, is capped at 5 users and
-extended quota requires a registered business with 250k monthly actives;
-the show page serves only Open Graph tags, the embed page's data carries
-just the latest episode, and Spotify for Podcasters links redirect to a
-client-rendered page with no episode id. There is no public path from a
-feed episode to a Spotify id, so coverage is whatever feeds carry (25 of
-6807 local episodes link their own Spotify page) and the row simply does
-not show otherwise.
+Publisher-provided links, plus a **latest-episode probe** (Phase 3).
+Verified 2026-09-28: Spotify's Web API is not retired but Development Mode
+now needs Premium, is capped at 5 users and extended quota requires a
+registered business with 250k monthly actives; the show page serves only
+Open Graph tags, and Spotify for Podcasters links redirect to a
+client-rendered page with no episode id. There is no public listing of a
+show's episodes.
+
+What the show's **embed** page still ships is its newest episode: Spotify
+id, exact title, release date and duration, served to non-browser user
+agents ([spotify_show_probe.py](../thestill/core/spotify_show_probe.py)).
+With the show id on `podcasts.spotify_url` (publisher-stated or curated,
+below) each pass makes one request and links the one unresolved candidate
+the probe describes, through the same title / date / duration rules as
+YouTube. Going forward that links nearly every new episode at
+publication; the limits are no backfill of older episodes and shows that
+publish faster than the refresh cadence polls. Older episodes stay on the
+feed's own links, and the row simply does not show otherwise.
 
 ### YouTube resolver (Phase 2)
 
@@ -160,7 +169,12 @@ not show otherwise.
    widens with age: 3 days inside three weeks, 14 days inside eight weeks,
    45 days beyond. The exact duration carries the precision the date loses.
 3. **Match**, unique-or-nothing per candidate, each upload links once:
-   - `title_date`: normalised titles equal, date within tolerance; when both
+   - `title_date`: normalised titles equal — or their **cores** equal, the
+     title with each side's decoration removed: `#NNN` / `Ep NNN` tags and
+     the show's own name (with and without a leading "The"). "#502 –
+     Psychiatry, Insane Asylums" and "Psychiatry, Insane Asylums | Lex
+     Fridman Podcast #502" share a core, so they link even when the feed
+     omits the duration (Phase 3). Date within tolerance; when both
      durations are known they must agree (20 %, floor 180 s) — the same
      title at a clearly different length is a clip.
    - `title_duration`: date within tolerance, durations known and agreeing,
@@ -212,7 +226,11 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | 1 | Table, Apple resolver, refresh hooks, CLI, API field, "Listen on" row | ✅ 2026-09-28 |
 | 2 | Publisher-provided Spotify + YouTube links, `podcasts.spotify_url`, YouTube channel scan (`title_date` / `title_duration`) | ✅ 2026-09-28 |
 | — | Spotify Web API resolver | Dropped: developer program closed to small apps (see "Spotify") |
-| 3 | YouTube channel discovery for the 39 shows without one (manual field or a verified search); feed the #62 playback rendition from links | Open |
+| 3a | Core-title rule (show name + episode tag stripped) in the YouTube matcher and the single-item rule used for claims and the probe | ✅ 2026-09-29 |
+| 3b | Spotify latest-episode probe from the show's embed page, driven by `podcasts.spotify_url` | ✅ 2026-09-29 |
+| 3c | Curated show links: a `source` beside `youtube_url` / `spotify_url` (`chart`, `publisher`, `resolver`, `curated`) so a curated value is never overwritten by a chart scrape or a resolver guess; an edit field on the podcast page; ordered by follows, not chart rank (the 39 followed shows without a channel first) | Open |
+| 3d | Verified YouTube channel discovery: search by show title, accept a channel only when several of the show's episodes match its uploads on core title and duration — the namesake guard the linker already uses. The chart already carries a channel for 5254 of 7702 charted shows; discovery is for the rest and for off-chart shows | Open |
+| 3e | Feed the #62 playback rendition from `youtube` links once they have been eyeballed in production | Open |
 
 ## Configuration
 
@@ -265,10 +283,10 @@ guest's own video.
 - Episodes older than the newest 200 stay unlinked on Apple. The import
   path's page-scrape fallback (#65 Tier 3) works per episode and is not
   worth one request per old episode here.
-- 39 shows have no YouTube channel on record. A manual `youtube_url` field
-  on the podcast page, or a search accepted only when the channel's
-  uploads match several episodes by exact title and duration, would cover
-  most of them.
+- 39 shows have no YouTube channel on record: Phase 3c/3d above.
+- Spotify show ids have no discovery shortcut (no directory carries them),
+  so 3c's curation is the only way to reach the probe at scale; a public
+  dataset would be worth a look before hand-curating 500 rows.
 - YouTube's approximate dates make the 45-day band the weak point; exact
   per-video dates cost one request per video and are not worth it.
 - Whether the list endpoint should carry the links too (a per-row "Listen

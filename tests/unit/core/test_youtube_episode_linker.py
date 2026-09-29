@@ -20,6 +20,7 @@ from thestill.core.youtube_episode_linker import (
     YouTubeVideoEntry,
     channel_videos_url,
     claim_corroborated,
+    core_title,
     date_tolerance,
     episode_number,
 )
@@ -174,3 +175,52 @@ class TestMatchRule:
         assert not claim_corroborated(c, released=T0, duration=None, now=NOW)  # unknown length is no proof
         assert not claim_corroborated(c, released=T0 - timedelta(days=10), duration=4808, now=NOW)
         assert not claim_corroborated(_cand(duration=None), released=T0, duration=4808, now=NOW)
+
+
+class TestCoreTitle:
+    """Spec #87 Phase 3 — each side's own decoration is not part of the title."""
+
+    def test_strips_episode_tag_and_show_name(self):
+        feed = "#502 – Psychiatry, Insane Asylums, Mental Illness, ECT, Lobotomies, Freud & Jung"
+        upload = "Psychiatry, Insane Asylums, Mental Illness, ECT, Lobotomies, Freud & Jung | Lex Fridman Podcast #502"
+        assert core_title(feed, "Lex Fridman Podcast") == core_title(upload, "Lex Fridman Podcast")
+        assert core_title("Ep 12: The Big One", "Show") == "the big one"
+        assert core_title("Episode 12. The Big One | Show", "Show") == "the big one"
+        assert core_title("Joe Rogan Experience #2519 - Scott Eastwood", "The Joe Rogan Experience") == "scott eastwood"
+
+    def test_show_name_only_gives_an_empty_core_that_never_matches(self):
+        assert core_title("Lex Fridman Podcast", "Lex Fridman Podcast") == ""
+        c = _cand(title="Lex Fridman Podcast", duration=None)
+        assert (
+            _match(
+                [c], [_video(title="Lex Fridman Podcast #1", duration=None)], now=NOW, show_name="Lex Fridman Podcast"
+            )
+            == []
+        )
+        # No show name given: cores are just tag-stripped titles.
+        assert core_title("#5 Hello", None) == "hello"
+
+    def test_lex_case_links_without_a_feed_duration(self):
+        feed = _cand(
+            "lex",
+            title="#502 – Psychiatry, Insane Asylums, Mental Illness, ECT, Lobotomies, Freud & Jung",
+            duration=None,
+        )
+        upload = _video(
+            "aaaaaaaaaaa",
+            "Psychiatry, Insane Asylums, Mental Illness, ECT, Lobotomies, Freud & Jung | Lex Fridman Podcast #502",
+            duration=13016,
+        )
+        assert _match([feed], [upload], now=NOW) == []
+        with_show = _match([feed], [upload], now=NOW, show_name="Lex Fridman Podcast")
+        assert [(m.episode_id, m.match_method) for m in with_show] == [("lex", "title_date")]
+        # The same through the single-item form used for claims and the Spotify probe.
+        assert (
+            match_rule(feed, title=upload.title, released=T0, duration=13016, now=NOW, show_name="Lex Fridman Podcast")
+            == "title_date"
+        )
+
+    def test_core_equality_still_refuses_a_clearly_different_length(self):
+        feed = _cand("lex", title="#502 – Psychiatry", duration=13000)
+        clip = _video("aaaaaaaaaaa", "Psychiatry | Lex Fridman Podcast #502", duration=400)
+        assert _match([feed], [clip], now=NOW, show_name="Lex Fridman Podcast") == []

@@ -54,6 +54,7 @@ from ..core.publisher_links import (
     spotify_episode_url,
 )
 from ..core.spotify_resolver import SpotifyEpisodeMetadata, default_episode_metadata, itunes_lookup, itunes_search
+from ..core.spotify_show_probe import SpotifyLatestEpisode, fetch_latest_episode, show_id_from_url
 from ..models.podcast import PlatformLink, PlatformLinkCandidate, Podcast
 from ..utils.datetime_utils import now_utc
 
@@ -133,6 +134,7 @@ class PlatformLinkService:
         fetch_spotify_episode: Callable[[str], SpotifyEpisodeMetadata] = lambda episode_id: default_episode_metadata(
             episode_id, spotify_episode_url(episode_id)
         ),
+        fetch_spotify_latest: Callable[[str], Optional[SpotifyLatestEpisode]] = fetch_latest_episode,
         clock: Callable[[], datetime] = now_utc,
     ) -> None:
         self.repository = repository
@@ -144,6 +146,7 @@ class PlatformLinkService:
         self._list_videos = list_videos
         self._fetch_video = fetch_video
         self._fetch_spotify_episode = fetch_spotify_episode
+        self._fetch_spotify_latest = fetch_spotify_latest
         self._clock = clock
 
     # ------------------------------------------------------------------
@@ -418,26 +421,47 @@ class PlatformLinkService:
             self._store_show_url(podcast, PLATFORM_YOUTUBE, show.youtube_url, verified_by="publisher", dry_run=dry_run)
             channel_url = show.youtube_url
 
-        # 3. Spotify: the feed is the only source (spec #87 "Spotify"), so a
-        #    description claim is checked against the episode page's own
-        #    title / date / duration and that is the end of the road.
+        # 3. Spotify: description claims checked against the episode page's
+        #    own title / date / duration, then — when the show's Spotify id
+        #    is known — one probe of the show's embed page for its newest
+        #    episode (spec #87 Phase 3). Nothing else is reachable.
+        spotify_matched_by: Dict[str, int] = {}
         for candidate, link in claims[PLATFORM_SPOTIFY]:
             if candidate.episode_id in linked_ids[PLATFORM_SPOTIFY]:
                 continue
-            if self._verify_spotify_claim(candidate, link, now):
+            if self._verify_spotify_claim(candidate, link, now, podcast_title=podcast.title):
                 publisher_found[PLATFORM_SPOTIFY].append(link)
                 rows.append(self._publisher_row(candidate, link, now))
                 linked_ids[PLATFORM_SPOTIFY].add(candidate.episode_id)
+        if linked_ids[PLATFORM_SPOTIFY]:
+            spotify_matched_by["publisher"] = len(linked_ids[PLATFORM_SPOTIFY])
         spotify_rest = [c for c in spotify_cands if c.episode_id not in linked_ids[PLATFORM_SPOTIFY]]
-        rows.extend(self._not_found_rows(PLATFORM_SPOTIFY, spotify_rest, now))
+        spotify_show_id = show_id_from_url(urls.get("spotify_url") or show.spotify_url)
+        spotify_skipped: Optional[str] = None if spotify_cands else "no_candidates"
+        if spotify_rest and spotify_show_id:
+            probed = self._probe_spotify_latest(podcast, spotify_show_id, spotify_rest, now)
+            if probed is None:
+                spotify_skipped = "lookup_failed"
+            else:
+                for row in probed:
+                    rows.append(row)
+                    linked_ids[PLATFORM_SPOTIFY].add(row.episode_id)
+                    spotify_matched_by[row.match_method or "probe"] = (
+                        spotify_matched_by.get(row.match_method or "probe", 0) + 1
+                    )
+                spotify_rest = [c for c in spotify_rest if c.episode_id not in linked_ids[PLATFORM_SPOTIFY]]
+        elif spotify_rest:
+            spotify_skipped = spotify_skipped or "no_show_id"
+        if spotify_skipped != "lookup_failed":
+            rows.extend(self._not_found_rows(PLATFORM_SPOTIFY, spotify_rest, now))
         spotify_outcome = PodcastLinkOutcome(
             podcast.id,
             PLATFORM_SPOTIFY,
             candidates=len(spotify_cands),
             linked=len(linked_ids[PLATFORM_SPOTIFY]),
-            not_found=len(spotify_rest),
-            skipped=None if spotify_cands else "no_candidates",
-            matched_by={"publisher": len(linked_ids[PLATFORM_SPOTIFY])} if linked_ids[PLATFORM_SPOTIFY] else {},
+            not_found=len(spotify_rest) if spotify_skipped != "lookup_failed" else 0,
+            skipped=spotify_skipped,
+            matched_by=spotify_matched_by,
         )
 
         # 4. YouTube: the channel listing for what the feed did not carry,
@@ -466,7 +490,7 @@ class PlatformLinkService:
                 youtube_rest = []  # nothing written for them: retried next refresh
             else:
                 listing_shape = youtube.describe(entries)
-                matches = youtube.match_candidates(youtube_rest, entries, now=now)
+                matches = youtube.match_candidates(youtube_rest, entries, now=now, show_name=podcast.title)
                 matched = {m.episode_id for m in matches}
                 channel_linked = len(matches)
                 for m in matches:
@@ -490,7 +514,9 @@ class PlatformLinkService:
             for candidate, link in claims[PLATFORM_YOUTUBE]:
                 if candidate.episode_id not in pending:
                     continue
-                if self._verify_youtube_claim(candidate, link, listed.get(link.external_ref), now):
+                if self._verify_youtube_claim(
+                    candidate, link, listed.get(link.external_ref), now, podcast_title=podcast.title
+                ):
                     publisher_found[PLATFORM_YOUTUBE].append(link)
                     rows.append(self._publisher_row(candidate, link, now))
                     matched_by["publisher"] = matched_by.get("publisher", 0) + 1
@@ -538,7 +564,9 @@ class PlatformLinkService:
             checked_at=now,
         )
 
-    def _verify_spotify_claim(self, candidate: PlatformLinkCandidate, link: PublisherLink, now: datetime) -> bool:
+    def _verify_spotify_claim(
+        self, candidate: PlatformLinkCandidate, link: PublisherLink, now: datetime, *, podcast_title: Optional[str]
+    ) -> bool:
         """A description's Spotify link is this episode only if the linked
         page's title / release date / duration say so (the channel rules)."""
         try:
@@ -552,7 +580,9 @@ class PlatformLinkService:
                 error=str(exc),
             )
             return False
-        method = self._claim_method(candidate, meta.title, meta.release_date, meta.duration_seconds, now)
+        method = self._claim_method(
+            candidate, meta.title, meta.release_date, meta.duration_seconds, now, podcast_title=podcast_title
+        )
         self._log_claim(candidate, link, method)
         return method is not None
 
@@ -562,6 +592,8 @@ class PlatformLinkService:
         link: PublisherLink,
         listed: Optional[youtube.YouTubeVideoEntry],
         now: datetime,
+        *,
+        podcast_title: Optional[str],
     ) -> bool:
         """Same for a description's YouTube link: the listing entry when the
         video is on the show's channel, else the video's own metadata."""
@@ -581,7 +613,9 @@ class PlatformLinkService:
         if entry is None:
             self._log_claim(candidate, link, None)
             return False
-        method = self._claim_method(candidate, entry.title, entry.uploaded, entry.duration, now)
+        method = self._claim_method(
+            candidate, entry.title, entry.uploaded, entry.duration, now, podcast_title=podcast_title
+        )
         self._log_claim(candidate, link, method)
         return method is not None
 
@@ -592,13 +626,79 @@ class PlatformLinkService:
         released: Optional[datetime],
         duration: Optional[int],
         now: datetime,
+        *,
+        podcast_title: Optional[str],
     ) -> Optional[str]:
         """The channel rules first; else the publisher's own link is enough
         when the item's date and length agree (a retitled upload)."""
-        method = youtube.match_rule(candidate, title=title, released=released, duration=duration, now=now)
+        method = youtube.match_rule(
+            candidate, title=title, released=released, duration=duration, now=now, show_name=podcast_title
+        )
         if method is None and youtube.claim_corroborated(candidate, released=released, duration=duration, now=now):
             method = "date_duration"
         return method
+
+    def _probe_spotify_latest(
+        self,
+        podcast: Podcast,
+        show_id: str,
+        candidates: List[PlatformLinkCandidate],
+        now: datetime,
+    ) -> Optional[List[PlatformLink]]:
+        """
+        Spec #87 Phase 3: the show's embed page names its newest episode;
+        link the one candidate it is (title / date / duration rules), if
+        any. ``None`` when the page could not be fetched — the caller then
+        writes nothing so the next pass retries.
+        """
+        try:
+            latest = self._fetch_spotify_latest(show_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "platform_links_lookup_failed",
+                podcast_id=podcast.id,
+                platform=PLATFORM_SPOTIFY,
+                spotify_show_id=show_id,
+                error=str(exc),
+            )
+            return None
+        if latest is None:
+            return []
+        for candidate in candidates:  # newest first: the probe describes the newest episode
+            method = youtube.match_rule(
+                candidate,
+                title=latest.title,
+                released=latest.released,
+                duration=latest.duration,
+                now=now,
+                show_name=podcast.title,
+            )
+            if method is None:
+                continue
+            logger.info(
+                "platform_links_spotify_latest_linked",
+                podcast_id=podcast.id,
+                episode_id=candidate.episode_id,
+                spotify_episode_id=latest.episode_id,
+                verified_by=method,
+            )
+            return [
+                PlatformLink(
+                    episode_id=candidate.episode_id,
+                    platform=PLATFORM_SPOTIFY,
+                    url=spotify_episode_url(latest.episode_id),
+                    external_ref=latest.episode_id,
+                    match_method=method,
+                    checked_at=now,
+                )
+            ]
+        logger.info(
+            "platform_links_spotify_latest_unmatched",
+            podcast_id=podcast.id,
+            spotify_episode_id=latest.episode_id,
+            latest_title=latest.title,
+        )
+        return []
 
     @staticmethod
     def _log_claim(candidate: PlatformLinkCandidate, link: PublisherLink, method: Optional[str]) -> None:
