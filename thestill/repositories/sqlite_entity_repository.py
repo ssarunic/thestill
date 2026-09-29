@@ -40,7 +40,7 @@ from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRo
 # ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
 # spec #44; re-exported here so existing call sites keep importing them
 # from this module.
-from .entity_repository import AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
+from .entity_repository import ROLE_BY_SCORE, AliasEvidence, EntityEpisode, EntityHit, EntityRepository, MentionContext
 
 __all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
 
@@ -1214,37 +1214,53 @@ class SqliteEntityRepository(EntityRepository):
         # is conceptually the most important entity for that show — the
         # entire episode is *about* them — but they often don't say
         # their own name, so mention_count alone ranks them at zero.
-        # We compute role_score = max(3 if guest, 2 if host, 1 if
-        # recurring, 0 otherwise) and order by that *before*
-        # mention_count, so anchor entities float to the top regardless
-        # of how often the transcript names them.
+        # Each entity gets ONE role — host if it hosts any podcast, else
+        # guest, else recurring (3/2/1, 0 for none) — and
+        # role_episode_count counts only that role's episodes. Host
+        # wins because a host is that person's identity in the corpus;
+        # a single guest spot elsewhere must not relabel the host of a
+        # 50-episode show as "Guest on 51 episodes". We order by role
+        # *before* mention_count, so anchor entities float to the top
+        # regardless of how often the transcript names them.
         sql = f"""
             WITH role_index AS (
                 SELECT json_each.value AS entity_id,
-                       3 AS role_score, 'guest' AS role, episodes.id AS episode_id
+                       'guest' AS role, episodes.id AS episode_id
                 FROM episodes, json_each(episodes.guest_entity_ids)
                 WHERE episodes.guest_entity_ids != '[]'
                 UNION ALL
                 SELECT json_each.value AS entity_id,
-                       2 AS role_score, 'host' AS role, episodes.id AS episode_id
+                       'host' AS role, episodes.id AS episode_id
                 FROM episodes
                 JOIN podcasts ON podcasts.id = episodes.podcast_id,
                      json_each(podcasts.host_entity_ids)
                 WHERE podcasts.host_entity_ids != '[]'
                 UNION ALL
                 SELECT json_each.value AS entity_id,
-                       1 AS role_score, 'recurring' AS role, episodes.id AS episode_id
+                       'recurring' AS role, episodes.id AS episode_id
                 FROM episodes
                 JOIN podcasts ON podcasts.id = episodes.podcast_id,
                      json_each(podcasts.recurring_entity_ids)
                 WHERE podcasts.recurring_entity_ids != '[]'
             ),
-            role_agg AS (
+            per_role AS (
                 SELECT entity_id,
-                       MAX(role_score) AS role_score,
-                       COUNT(DISTINCT episode_id) AS role_episode_count
+                       COUNT(DISTINCT CASE WHEN role = 'host' THEN episode_id END)      AS host_episodes,
+                       COUNT(DISTINCT CASE WHEN role = 'guest' THEN episode_id END)     AS guest_episodes,
+                       COUNT(DISTINCT CASE WHEN role = 'recurring' THEN episode_id END) AS recurring_episodes
                 FROM role_index
                 GROUP BY entity_id
+            ),
+            role_agg AS (
+                SELECT entity_id,
+                       CASE WHEN host_episodes > 0 THEN 3
+                            WHEN guest_episodes > 0 THEN 2
+                            WHEN recurring_episodes > 0 THEN 1
+                            ELSE 0 END AS role_score,
+                       CASE WHEN host_episodes > 0 THEN host_episodes
+                            WHEN guest_episodes > 0 THEN guest_episodes
+                            ELSE recurring_episodes END AS role_episode_count
+                FROM per_role
             ),
             mention_agg AS (
                 SELECT entity_id, COUNT(*) AS mention_count
@@ -1299,14 +1315,7 @@ class SqliteEntityRepository(EntityRepository):
                     if prefix_lower in alias.lower():
                         matched_alias = alias
                         break
-            role_score = row["role_score"]
-            role: Optional[str] = None
-            if role_score == 3:
-                role = "guest"
-            elif role_score == 2:
-                role = "host"
-            elif role_score == 1:
-                role = "recurring"
+            role = ROLE_BY_SCORE.get(row["role_score"])
             hits.append(
                 EntityHit(
                     id=row["id"],

@@ -878,6 +878,54 @@ def test_search_entities_by_prefix_role_boost(repo):
     assert musk.mention_count == 3
 
 
+def test_search_entities_by_prefix_host_label_survives_a_guest_spot(repo):
+    """A podcast host who also guests on another show is labelled
+    ``host`` and counted only across the episodes they host — one guest
+    appearance must not relabel them "Guest on N+1 episodes" (the
+    Huberman case: host of 50 episodes, guest once on Diary of a CEO)."""
+    _seed_resolved_corpus(repo)
+    repo.upsert_entity(_entity(id="person:elona-host", name="Elona Host", qid=None, aliases=[]))
+    repo.set_podcast_hosts(POD_1, ["person:elona-host"])  # EP_1 + EP_2
+    repo.set_episode_guests(EP_3, ["person:elona-host"])  # guest on pod 2
+    hits = repo.search_entities_by_prefix("elona")
+    assert [h.id for h in hits] == ["person:elona-host"]
+    assert hits[0].role == "host"
+    assert hits[0].role_episode_count == 2
+
+
+def test_search_entities_by_prefix_role_precedence_and_per_role_counts(repo):
+    """host > guest > recurring for the label; each count is per role;
+    every role still outranks a role-less entity, and within roles the
+    ranking is host, guest, recurring."""
+    _seed_resolved_corpus(repo)
+    for eid, name in (
+        ("person:zed-host", "Zed Host"),
+        ("person:zed-guest", "Zed Guest"),
+        ("person:zed-regular", "Zed Regular"),
+        ("person:zed-nobody", "Zed Nobody"),
+    ):
+        repo.upsert_entity(_entity(id=eid, name=name, qid=None, aliases=[]))
+    repo.set_podcast_hosts(POD_2, ["person:zed-host"])  # 1 episode hosted
+    repo.set_episode_guests(EP_1, ["person:zed-guest"])
+    repo.set_episode_guests(EP_2, ["person:zed-guest"])  # 2 guest spots
+    repo.set_podcast_recurring(POD_1, ["person:zed-regular", "person:zed-host"])
+    repo.set_episode_guests(EP_3, ["person:zed-regular"])  # recurring AND guest
+    hits = repo.search_entities_by_prefix("zed")
+    by_id = {h.id: h for h in hits}
+    assert [h.id for h in hits] == [
+        "person:zed-host",
+        "person:zed-guest",
+        "person:zed-regular",
+        "person:zed-nobody",
+    ]
+    # Host: 1 hosted episode, recurring rows on pod 1 do not inflate it.
+    assert (by_id["person:zed-host"].role, by_id["person:zed-host"].role_episode_count) == ("host", 1)
+    assert (by_id["person:zed-guest"].role, by_id["person:zed-guest"].role_episode_count) == ("guest", 2)
+    # Guest beats recurring; only the one guest episode is counted.
+    assert (by_id["person:zed-regular"].role, by_id["person:zed-regular"].role_episode_count) == ("guest", 1)
+    assert (by_id["person:zed-nobody"].role, by_id["person:zed-nobody"].role_episode_count) == (None, 0)
+
+
 # ---------------------------------------------------------------------------
 # Overrides + blacklist
 # ---------------------------------------------------------------------------
