@@ -101,7 +101,8 @@ class ResolvedHit:
     - ``LEXICAL`` — ``-bm25(...)`` so higher is better (FTS5's bm25
       returns a negative ranking).
     - ``SEMANTIC`` — cosine distance, lower is better.
-    - ``HYBRID`` — reciprocal-rank-fusion score, higher is better.
+    - ``HYBRID`` — reciprocal-rank-fusion score, higher is better; with the
+      spec #89 reranker, the cross-encoder's sigmoid score (0-1).
 
     Don't compare scores across match types.
     """
@@ -118,6 +119,9 @@ class ResolvedHit:
     text: str
     score: float
     match_type: MatchType
+    # Spec #89: which leg put a reranked hit in the pool (lexical | entity |
+    # semantic). Diagnostics and evals only; not part of the citation.
+    origin: Optional[str] = None
 
     def as_citation(self, *, quote_max: int = 600) -> dict:
         """Serialize to the citation-shaped wire dict used by MCP + REST.

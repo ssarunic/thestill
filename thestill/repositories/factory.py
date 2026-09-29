@@ -218,15 +218,33 @@ def make_user_repository(config: "Config") -> UserRepository:
 
 def make_search_backend(config: "Config", embedding_model: Any) -> Any:
     """Return the configured SearchBackend (pgvector or sqlite-vec)."""
+    options = _rerank_options(config)
     if uses_postgres(config):
         _ensure_pg_schema(config.database_url, config)
         from ..search.pgvector_client import PgVectorBackend
 
-        return PgVectorBackend(dsn=config.database_url, embedding_model=embedding_model)
+        return PgVectorBackend(dsn=config.database_url, embedding_model=embedding_model, **options)
 
     from ..search.sqlite_vec_client import SqliteVecBackend
 
-    return SqliteVecBackend(db_path=str(config.database_path), embedding_model=embedding_model)
+    return SqliteVecBackend(db_path=str(config.database_path), embedding_model=embedding_model, **options)
+
+
+def _rerank_options(config: "Config") -> dict:
+    """Spec #89 reranker + entity-leg options; empty model name = reranker off."""
+    model_name = (getattr(config, "search_reranker_model", "") or "").strip()
+    reranker = None
+    if model_name:
+        from ..search.reranker import Reranker
+
+        reranker = Reranker(model_name)
+    return {
+        "reranker": reranker,
+        "rerank_pool": int(getattr(config, "search_rerank_pool", 20)),
+        "rerank_min_score": float(getattr(config, "search_rerank_min_score", 0.01)),
+        "rerank_semantic_min_score": float(getattr(config, "search_rerank_semantic_min_score", 0.3)),
+        "entity_leg": bool(getattr(config, "search_entity_leg", False)),
+    }
 
 
 def make_chunk_writer(config: "Config", embedding_model: Any) -> Any:

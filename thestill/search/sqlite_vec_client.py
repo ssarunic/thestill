@@ -46,6 +46,7 @@ from .query_translator import translate_lexical_query
 
 if False:  # TYPE_CHECKING
     from ..core.embedding_model import EmbeddingModel
+    from .reranker import Reranker
 
 logger = get_logger(__name__)
 
@@ -119,9 +120,25 @@ class SqliteVecBackend:
     never pay the model load cost even though the wrapper is held.
     """
 
-    def __init__(self, *, db_path: str, embedding_model: "EmbeddingModel"):
+    def __init__(
+        self,
+        *,
+        db_path: str,
+        embedding_model: "EmbeddingModel",
+        reranker: Optional["Reranker"] = None,
+        rerank_pool: int = 20,
+        rerank_min_score: float = 0.01,
+        rerank_semantic_min_score: float = 0.3,
+        entity_leg: bool = False,
+    ):
         self.db_path = Path(db_path)
         self.embedding_model = embedding_model
+        # Spec #89 — same contract as PgVectorBackend (lockstep).
+        self.reranker = reranker
+        self.rerank_pool = rerank_pool
+        self.rerank_min_score = rerank_min_score
+        self.rerank_semantic_min_score = rerank_semantic_min_score
+        self.entity_leg = entity_leg
 
     @property
     def embedding_model_name(self) -> str:
@@ -161,6 +178,8 @@ class SqliteVecBackend:
             return [self._row_to_hit(r, MatchType.SEMANTIC) for r in rows][:limit]
         if mode == SearchMode.HYBRID:
             query_embedding = self.embedding_model.encode_one(translated.embedding_text)
+            if self.reranker is not None:
+                return self._reranked(translated, query_embedding, limit=limit, filters=effective_filters)
             return self._hybrid(
                 translated.fts_match,
                 query_embedding,
@@ -328,6 +347,65 @@ class SqliteVecBackend:
 
         ranked_ids = sorted(scores, key=scores.__getitem__, reverse=True)[:limit]
         return [self._row_to_hit(rows_by_id[cid], MatchType.HYBRID, override_score=scores[cid]) for cid in ranked_ids]
+
+    def _reranked(self, translated, query_embedding: bytes, *, limit: int, filters) -> List[ResolvedHit]:
+        from .reranker import pool_candidates, rerank
+
+        pool = self.rerank_pool
+        lex = self._lexical(translated.fts_match, limit=pool, filters=filters) if translated.fts_match else []
+        ent = self._entity_rows(translated.embedding_text, limit=pool, filters=filters) if self.entity_leg else []
+        sem = self._semantic(query_embedding, limit=pool, filters=filters)[:pool]
+        candidates = pool_candidates([("lexical", lex), ("entity", ent), ("semantic", sem)])
+        ranked = rerank(
+            self.reranker,
+            translated.embedding_text,
+            candidates,
+            limit=limit,
+            min_score=self.rerank_min_score,
+            semantic_min_score=self.rerank_semantic_min_score,
+        )
+        return [
+            replace(self._row_to_hit(row, MatchType.HYBRID, override_score=score), origin=origin)
+            for row, score, origin in ranked
+        ]
+
+    def _entity_rows(self, name: str, *, limit: int, filters: Optional[SearchFilters]) -> List[sqlite3.Row]:
+        """Same contract as PgVectorBackend._entity_rows."""
+        name = name.strip()
+        if not name:
+            return []
+        filter_sql, filter_params = self._filter_clauses(filters)
+        sql = f"""
+            WITH hit AS (
+                SELECT episode_id, segment_id FROM entity_mentions WHERE lower(surface_form) = lower(?)
+                UNION
+                SELECT m.episode_id, m.segment_id FROM entity_mentions m
+                WHERE m.entity_id IN (SELECT id FROM entities WHERE lower(canonical_name) = lower(?))
+            )
+            SELECT c.id            AS chunk_id,
+                   c.episode_id    AS episode_id,
+                   c.segment_id    AS segment_id,
+                   c.start_ms      AS start_ms,
+                   c.end_ms        AS end_ms,
+                   c.speaker       AS speaker,
+                   c.text          AS text,
+                   e.title         AS episode_title,
+                   e.pub_date      AS pub_date,
+                   p.id            AS podcast_id,
+                   p.title         AS podcast_title,
+                   0.0             AS score
+            FROM hit
+            JOIN chunks   c ON c.episode_id = hit.episode_id AND c.segment_id = hit.segment_id
+            JOIN episodes e ON e.id = c.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            WHERE c.embedding_model = ?
+              {filter_sql}
+            ORDER BY e.pub_date DESC
+            LIMIT ?
+        """
+        params = [name, name, self.embedding_model_name, *filter_params, limit]
+        with self._get_connection() as conn:
+            return list(conn.execute(sql, params).fetchall())
 
     def _row_to_hit(
         self,

@@ -604,6 +604,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         ).start()
         logger.info("embedding_model_warmup_scheduled", model=embedding_model.model_name)
 
+        # Spec #89 — same for the cross-encoder when hybrid search reranks.
+        reranker = getattr(search_backend, "reranker", None)
+        if reranker is not None:
+            _threading.Thread(target=reranker.warmup, name="reranker-warmup", daemon=True).start()
+            logger.info("reranker_warmup_scheduled", model=reranker.model_name)
+
         # Spec #78 — the Streamable HTTP session manager's task group must
         # outlive every in-flight MCP request. Entering it via an exit
         # stack around the yield means it starts last and stops first on
