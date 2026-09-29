@@ -144,6 +144,18 @@ class TestUserData:
 class TestUserDataIdempotency:
     """The same script runs at first boot AND on every `reconcile`."""
 
+    def test_old_app_images_are_pruned_before_the_pull(self, user_data):
+        # 2026-09-29: eight 2 GB images filled the root disk and the pull failed.
+        # The prune keeps the running image (rollback) and the tag being deployed.
+        pull = user_data.index("docker compose -f docker-compose.prod.yml pull")
+        assert user_data.index("docker inspect thestill --format '{{.Config.Image}}'") < pull
+        assert user_data.index("docker rmi") < pull
+        assert user_data.index("docker image prune -f") < pull
+        assert '"$running_image" | "$app_repo:$IMAGE_TAG") ;;' in user_data  # the two survivors
+        # Base images are out of scope: only the app repository is listed.
+        assert 'docker images "$app_repo"' in user_data
+        assert "docker image prune -a" not in user_data and "docker system prune" not in user_data
+
     def test_image_tag_is_replaced_not_appended(self, user_data):
         # A bare `>>` would accumulate duplicate assignments on re-run.
         assert 'sed -i "/^THESTILL_IMAGE_TAG=/d" .env' in user_data

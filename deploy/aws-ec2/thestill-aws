@@ -950,6 +950,24 @@ sed -i "/^THESTILL_IMAGE_TAG=/d" .env
 printf "THESTILL_IMAGE_TAG='%s'\n" "$IMAGE_TAG" >> .env
 chmod 600 .env
 
+# Every deploy leaves the previous app image behind (~2 GB each); eight of
+# them filled the 40 GB root on 2026-09-29 and the pull died with "no space
+# left on device". Keep only the running image (the rollback target) and
+# the tag being deployed, drop the rest of OUR images before pulling. Base
+# images (postgres, caddy) and anything in use are never touched. A fresh
+# box has no app container and nothing to prune.
+running_image="$(docker inspect thestill --format '{{.Config.Image}}' 2>/dev/null || true)"
+if [ -n "$running_image" ]; then
+    app_repo="${running_image%%:*}"
+    docker images "$app_repo" --format '{{.Repository}}:{{.Tag}}' | while read -r img; do
+        case "$img" in
+            "$running_image" | "$app_repo:$IMAGE_TAG") ;;
+            *) docker rmi "$img" >/dev/null 2>&1 && echo "pruned old image $img" || true ;;
+        esac
+    done
+fi
+docker image prune -f >/dev/null
+
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
