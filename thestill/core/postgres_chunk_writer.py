@@ -35,7 +35,7 @@ from structlog import get_logger
 from ..models.annotated_transcript import AnnotatedTranscript
 from ..utils.postgres_ext import connect
 from ..utils.text_sanitizer import sanitize_text
-from .chunk_writer import _segment_text
+from .chunk_writer import MIN_CHUNK_WORDS, _segment_text, drop_short_segments
 from .embedding_model import EmbeddingModel, centroid_blob
 
 logger = get_logger(__name__)
@@ -57,6 +57,14 @@ class PostgresChunkWriter:
     ) -> int:
         """Embed and insert chunks for one episode. Same contract as ChunkWriter."""
         content_segs = [s for s in transcript.segments if s.kind == "content" and s.text.strip()]
+        content_segs, skipped_short = drop_short_segments(content_segs)
+        if skipped_short:
+            logger.info(
+                "chunk_write_short_segments_skipped",
+                episode_id=episode_id,
+                skipped=skipped_short,
+                min_words=MIN_CHUNK_WORDS,
+            )
         if not content_segs:
             logger.info("chunk_write_no_content_segments", episode_id=episode_id)
             return 0

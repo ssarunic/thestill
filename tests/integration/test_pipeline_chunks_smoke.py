@@ -96,7 +96,7 @@ def test_chunks_write_then_search_end_to_end(tmp_path):
     writer = ChunkWriter(db_path=db_path, embedding_model=embedding)
     transcript = _transcript(
         (0, 1.0, 5.0, "agentic engineering at scale", "Host"),
-        (1, 5.0, 10.0, "cooking pasta sauce", "Host"),
+        (1, 5.0, 10.0, "cooking a pasta sauce tonight", "Host"),
         (2, 10.0, 15.0, "more on agentic systems", "Host"),
     )
     inserted = writer.write_episode(episode_id, transcript)

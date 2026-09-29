@@ -85,8 +85,8 @@ class TestChunkWriter:
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
         transcript = _transcript(
-            (0, 1.0, 5.0, "Hello world.", "Host"),
-            (1, 5.0, 10.0, "Second segment.", "Guest"),
+            (0, 1.0, 5.0, "Hello world, welcome to the show.", "Host"),
+            (1, 5.0, 10.0, "Second segment of the show.", "Guest"),
         )
         inserted = writer.write_episode(episode_id, transcript)
         assert inserted == 2
@@ -98,14 +98,14 @@ class TestChunkWriter:
                 (episode_id,),
             ).fetchall()
         assert rows == [
-            (0, 1000, 5000, "Host", "Host: Hello world."),
-            (1, 5000, 10000, "Guest", "Guest: Second segment."),
+            (0, 1000, 5000, "Host", "Host: Hello world, welcome to the show."),
+            (1, 5000, 10000, "Guest", "Guest: Second segment of the show."),
         ]
 
     def test_idempotent_skip_by_default(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
-        transcript = _transcript((0, 1.0, 5.0, "Same.", "Host"))
+        transcript = _transcript((0, 1.0, 5.0, "Same text as before here.", "Host"))
         first = writer.write_episode(episode_id, transcript)
         assert first == 1
         second = writer.write_episode(episode_id, transcript)
@@ -119,17 +119,17 @@ class TestChunkWriter:
     def test_force_re_embeds(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
-        transcript = _transcript((0, 1.0, 5.0, "Initial.", "Host"))
+        transcript = _transcript((0, 1.0, 5.0, "Initial text of the segment.", "Host"))
         writer.write_episode(episode_id, transcript)
 
-        new_transcript = _transcript((0, 1.0, 5.0, "Replaced.", "Host"))
+        new_transcript = _transcript((0, 1.0, 5.0, "Replaced text of the segment.", "Host"))
         inserted = writer.write_episode(episode_id, new_transcript, force=True)
         assert inserted == 1
 
         with sqlite3.connect(db_path) as conn:
             maybe_load_vec_extension(conn)
             text = conn.execute("SELECT text FROM chunks WHERE episode_id = ?", (episode_id,)).fetchone()[0]
-        assert text == "Host: Replaced."
+        assert text == "Host: Replaced text of the segment."
 
     def test_skips_non_content_segments(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
@@ -138,7 +138,7 @@ class TestChunkWriter:
             episode_id="ep-1",
             segments=[
                 AnnotatedSegment(id=0, start=0.0, end=5.0, text="Ad copy.", kind="ad_break"),
-                AnnotatedSegment(id=1, start=5.0, end=10.0, text="Real talk.", kind="content"),
+                AnnotatedSegment(id=1, start=5.0, end=10.0, text="Real talk about real things.", kind="content"),
             ],
         )
         inserted = writer.write_episode(episode_id, transcript)
@@ -154,8 +154,8 @@ class TestChunkWriter:
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
         transcript = _transcript(
-            (0, 1.0, 5.0, "No speaker here.", None),
-            (1, 5.0, 10.0, "Has speaker.", "Karpathy"),
+            (0, 1.0, 5.0, "No speaker is set here.", None),
+            (1, 5.0, 10.0, "Has a speaker set here.", "Karpathy"),
         )
         writer.write_episode(episode_id, transcript)
         with sqlite3.connect(db_path) as conn:
@@ -163,13 +163,13 @@ class TestChunkWriter:
             rows = conn.execute(
                 "SELECT text FROM chunks WHERE episode_id = ? ORDER BY segment_id", (episode_id,)
             ).fetchall()
-        assert rows[0][0] == "No speaker here."
-        assert rows[1][0] == "Karpathy: Has speaker."
+        assert rows[0][0] == "No speaker is set here."
+        assert rows[1][0] == "Karpathy: Has a speaker set here."
 
     def test_triggers_populate_chunks_vec_and_chunks_fts(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
-        transcript = _transcript((0, 1.0, 5.0, "Trigger payload.", "Host"))
+        transcript = _transcript((0, 1.0, 5.0, "Trigger payload for the mirror tables.", "Host"))
         writer.write_episode(episode_id, transcript)
 
         with sqlite3.connect(db_path) as conn:
@@ -203,7 +203,10 @@ class TestEpisodeCentroid:
     def test_writes_centroid_row_with_chunk_count(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_BasisStub())
-        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "a", "H"), (1, 5.0, 9.0, "b", "H")))
+        writer.write_episode(
+            episode_id,
+            _transcript((0, 1.0, 5.0, "alpha segment text here", "H"), (1, 5.0, 9.0, "beta segment text here", "H")),
+        )
 
         with sqlite3.connect(db_path) as conn:
             row = conn.execute(
@@ -222,8 +225,11 @@ class TestEpisodeCentroid:
     def test_force_reembed_updates_centroid_count(self, tmp_path):
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_BasisStub())
-        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "a", "H"), (1, 5.0, 9.0, "b", "H")))
-        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "only one", "H")), force=True)
+        writer.write_episode(
+            episode_id,
+            _transcript((0, 1.0, 5.0, "alpha segment text here", "H"), (1, 5.0, 9.0, "beta segment text here", "H")),
+        )
+        writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "only one segment remains here", "H")), force=True)
 
         with sqlite3.connect(db_path) as conn:
             count = conn.execute(
@@ -236,7 +242,55 @@ class TestEpisodeCentroid:
         # and the chunk write must still succeed.
         db_path, episode_id = _seed_db(tmp_path)
         writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
-        assert writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "x", "H"))) == 1
+        assert writer.write_episode(episode_id, _transcript((0, 1.0, 5.0, "x marks the spot here", "H"))) == 1
         with sqlite3.connect(db_path) as conn:
             n = conn.execute("SELECT COUNT(*) FROM episode_vectors WHERE episode_id = ?", (episode_id,)).fetchone()[0]
         assert n == 0
+
+
+class TestShortSegments:
+    """Segments under ``MIN_CHUNK_WORDS`` words are never embedded or indexed.
+
+    One-word rows ("Ew.", "Was") are useless as quotes and form the "hub"
+    that rare proper-noun queries fall into (the 2026-09-29 Legora search).
+    """
+
+    def test_skips_segments_under_min_words(self, tmp_path):
+        db_path, episode_id = _seed_db(tmp_path)
+        model = _StubEmbeddingModel()
+        writer = ChunkWriter(db_path=db_path, embedding_model=model)
+        transcript = _transcript(
+            (0, 1.0, 2.0, "Ew.", "Host"),
+            (1, 2.0, 3.0, "Oh, okay.", "Host"),
+            (2, 3.0, 4.0, "You interview", "Guest"),
+            (3, 4.0, 9.0, "This one has enough words to index.", "Guest"),
+        )
+        assert writer.write_episode(episode_id, transcript) == 1
+        assert model._calls == 1  # short segments never reach the embedding model
+        with sqlite3.connect(db_path) as conn:
+            maybe_load_vec_extension(conn)
+            rows = conn.execute("SELECT segment_id FROM chunks WHERE episode_id = ?", (episode_id,)).fetchall()
+        assert rows == [(3,)]
+
+    def test_all_short_writes_nothing(self, tmp_path):
+        db_path, episode_id = _seed_db(tmp_path)
+        writer = ChunkWriter(db_path=db_path, embedding_model=_StubEmbeddingModel())
+        assert (
+            writer.write_episode(
+                episode_id, _transcript((0, 1.0, 2.0, "Was", "Host"), (1, 2.0, 3.0, "Comment.", "Host"))
+            )
+            == 0
+        )
+        with sqlite3.connect(db_path) as conn:
+            maybe_load_vec_extension(conn)
+            n = conn.execute("SELECT COUNT(*) FROM chunks WHERE episode_id = ?", (episode_id,)).fetchone()[0]
+        assert n == 0
+
+    def test_min_words_helper(self):
+        from thestill.core.chunk_writer import MIN_CHUNK_WORDS, is_indexable_segment_text
+
+        assert MIN_CHUNK_WORDS == 4
+        assert not is_indexable_segment_text("Was")
+        assert not is_indexable_segment_text("  Oh, okay.  ")
+        assert not is_indexable_segment_text("Gary Stevenson: Okay.")  # bare text is what is measured; this is 3 words
+        assert is_indexable_segment_text("Legora can do it.")
