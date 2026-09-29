@@ -368,5 +368,9 @@ class TestShortChunkGuards:
         hits = backend.search("Legora", mode=SearchMode.HYBRID, limit=5, filters=None)
         assert [h.segment_id for h in hits] == [0]
         fake["score"] = 0.35
-        hits = backend.search("Legora", mode=SearchMode.HYBRID, limit=5, filters=None)
+        # A multi-word query: close semantic-only rows are admitted. (A one-word
+        # query with lexical hits admits none — see TestKeywordQueries.)
+        hits = backend.search("Legora platform lawyers use", mode=SearchMode.HYBRID, limit=5, filters=None)
         assert {h.segment_id for h in hits} == {0, 1}
+        hits = backend.search("Legora", mode=SearchMode.HYBRID, limit=5, filters=None)
+        assert [h.segment_id for h in hits] == [0]

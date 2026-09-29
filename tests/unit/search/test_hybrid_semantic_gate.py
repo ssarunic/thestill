@@ -67,7 +67,9 @@ def test_far_semantic_only_rows_never_enter_the_fusion(monkeypatch):
 def test_close_semantic_only_rows_are_kept(monkeypatch):
     lex = [_row(1, "Host: Legora is the platform where lawyers do the work", 0.3)]
     sem = [_row(20, "Guest: the legal AI vendor the firms all adopted last year", 0.35)]
-    hits = _backend(monkeypatch, lex, sem).search("Legora", mode=SearchMode.HYBRID, limit=10, filters=None)
+    hits = _backend(monkeypatch, lex, sem).search(
+        "which legal AI vendor do firms adopt", mode=SearchMode.HYBRID, limit=10, filters=None
+    )
     assert {h.segment_id for h in hits} == {1, 20}
 
 
@@ -83,5 +85,54 @@ def test_backends_share_ranking_constants():
         "_SEMANTIC_MAX_DISTANCE",
         "_HYBRID_SEMANTIC_ONLY_MAX_DISTANCE",
         "_MIN_SEMANTIC_TEXT_CHARS",
+        "_SHORT_QUERY_MAX_WORDS",
     ):
         assert getattr(pgvector_client, name) == getattr(sqlite_vec_client, name), name
+
+
+class TestKeywordQueries:
+    """2026-09-29: lowercase "legora" tokenises as "le"+"gora" (Croatian for
+    mountain) and embeds 0.37 from Croatian filler, inside every distance
+    gate. A one- or two-word query the lexical leg matched is a name lookup:
+    semantic may re-rank those hits but may not add rows of its own."""
+
+    LEX = [
+        _row(1, "Host: Legora is the platform where lawyers do the work", 0.3),
+        _row(2, "Guest: we compete with Legora on quality, not price", 0.2),
+    ]
+    # Close enough to pass the 0.5 gate, and exactly as wrong as prod's rows.
+    CROATIAN = [
+        _row(30, "Mia Biberović: Ovaj je s kraćom kosom.", 0.37),
+        _row(31, "Ema Menđušić Škugor: Nikolina.", 0.38),
+    ]
+
+    def test_one_word_query_with_lexical_hits_gets_no_semantic_only_rows(self, monkeypatch):
+        hits = _backend(monkeypatch, self.LEX, self.CROATIAN).search(
+            "legora", mode=SearchMode.HYBRID, limit=10, filters=None
+        )
+        assert {h.segment_id for h in hits} == {1, 2}
+
+    def test_two_word_query_is_still_a_keyword_query(self, monkeypatch):
+        hits = _backend(monkeypatch, self.LEX, self.CROATIAN).search(
+            "legora harvey", mode=SearchMode.HYBRID, limit=10, filters=None
+        )
+        assert {h.segment_id for h in hits} == {1, 2}
+
+    def test_semantic_still_reranks_rows_both_legs_found(self, monkeypatch):
+        sem = [_row(2, "Guest: we compete with Legora on quality, not price", 0.2)]
+        hits = _backend(monkeypatch, self.LEX, sem).search("legora", mode=SearchMode.HYBRID, limit=10, filters=None)
+        assert [h.segment_id for h in hits] == [2, 1]  # agreement lifts row 2 above lexical #1
+
+    def test_keyword_that_matches_nothing_literally_returns_nothing(self, monkeypatch):
+        # "legoraaaa": no lexical hits, and its embedding is tokenizer noise.
+        hits = _backend(monkeypatch, [], self.CROATIAN).search(
+            "legoraaaa", mode=SearchMode.HYBRID, limit=10, filters=None
+        )
+        assert hits == []
+
+    def test_longer_query_keeps_close_semantic_only_rows(self, monkeypatch):
+        sem = [_row(20, "Guest: the legal AI vendor the firms all adopted last year", 0.35)]
+        hits = _backend(monkeypatch, self.LEX, sem).search(
+            "how does legora compete with harvey", mode=SearchMode.HYBRID, limit=10, filters=None
+        )
+        assert {h.segment_id for h in hits} == {1, 2, 20}
