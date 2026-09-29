@@ -29,9 +29,12 @@ No network. For an episode, in order of trust:
    date and duration against the episode before it becomes a link.
 
 For a show: a Spotify show link or a YouTube channel link in the podcast's
-own description / website is taken as-is when unique; the same link
-appearing in at least :data:`MIN_EPISODE_VOTES` episode descriptions is
-accepted when no other show / channel competes with it.
+own description / website URL is taken as-is when unique; then the
+podcast's website page (its "listen on" buttons — same trust, it is the
+publisher's own site); then the same link appearing in at least
+:data:`MIN_EPISODE_VOTES` episode descriptions when no other show /
+channel competes with it. Generic channels that hosting platforms stamp
+on every site (:data:`GENERIC_YOUTUBE_CHANNELS`) never count.
 """
 
 from __future__ import annotations
@@ -50,6 +53,30 @@ from ..utils.url_patterns import (
 )
 
 MIN_EPISODE_VOTES = 3
+
+# Channels that a hosting platform's page template links on every show's
+# site — Anchor pages link Spotify's own "for creators" channel — so their
+# presence says nothing about the show. Compared case-insensitively on the
+# path after ``youtube.com/``.
+GENERIC_YOUTUBE_CHANNELS = frozenset(
+    {
+        "c/spotifyforcreators",
+        "@spotifyforcreators",
+        "c/spotifyforpodcasters",
+        "@spotifyforpodcasters",
+        "@spotify",
+        "c/spotify",
+        "user/spotify",
+        "@youtube",
+        "c/youtube",
+        "user/youtube",
+        "@anchor",
+        "c/anchor",
+        "user/anchorfm",
+        "@applepodcasts",
+        "@apple",
+    }
+)
 
 _YOUTUBE_MIME = "video/youtube"
 
@@ -137,17 +164,26 @@ def _youtube_for(
 def show_links_from_sources(
     podcast_texts: Iterable[Optional[str]],
     episode_texts: Iterable[Optional[str]],
+    website_html: Optional[str] = None,
 ) -> ShowLinks:
     """
     The show's own Spotify page / YouTube channel as the publisher states it.
 
-    Podcast-level text wins when it names exactly one show / channel.
-    Otherwise a show / channel named in at least :data:`MIN_EPISODE_VOTES`
-    episode descriptions is accepted if it is the only one named at all.
+    Podcast-level text wins when it names exactly one show / channel; then
+    the website page, on the same terms; then a show / channel named in at
+    least :data:`MIN_EPISODE_VOTES` episode descriptions when it is the
+    only one named at all. Two different shows / channels in one source
+    (a network site listing all its shows) are left for a human.
     """
     podcast_blob = " ".join(t for t in podcast_texts if t)
     spotify = _unique(sid for kind, sid in find_spotify_entities(podcast_blob) if kind == "show")
-    youtube = _unique(find_youtube_channel_urls(podcast_blob))
+    youtube = _unique(_real_channels(find_youtube_channel_urls(podcast_blob)))
+
+    if website_html and (spotify is None or youtube is None):
+        if spotify is None:
+            spotify = _unique(sid for kind, sid in find_spotify_entities(website_html) if kind == "show")
+        if youtube is None:
+            youtube = _unique(_real_channels(find_youtube_channel_urls(website_html)))
 
     if spotify is None or youtube is None:
         spotify_votes: Counter = Counter()
@@ -157,7 +193,7 @@ def show_links_from_sources(
                 continue
             for sid in {sid for kind, sid in find_spotify_entities(text) if kind == "show"}:
                 spotify_votes[sid] += 1
-            for url in set(find_youtube_channel_urls(text)):
+            for url in set(_real_channels(find_youtube_channel_urls(text))):
                 youtube_votes[url] += 1
         if spotify is None:
             spotify = _voted(spotify_votes)
@@ -168,6 +204,11 @@ def show_links_from_sources(
         spotify_url=spotify_show_url(spotify) if spotify else None,
         youtube_url=youtube,
     )
+
+
+def _real_channels(urls: Iterable[str]) -> List[str]:
+    """Drop the generic channels a hosting platform stamps on every site."""
+    return [u for u in urls if u.split("youtube.com/", 1)[-1].casefold() not in GENERIC_YOUTUBE_CHANNELS]
 
 
 def _unique(values: Iterable[str]) -> Optional[str]:
@@ -192,6 +233,7 @@ def describe_sources(links: Iterable[PublisherLink]) -> Dict[str, int]:
 
 __all__: List[str] = [
     "MIN_EPISODE_VOTES",
+    "GENERIC_YOUTUBE_CHANNELS",
     "PublisherLink",
     "ShowLinks",
     "publisher_links_for_candidate",

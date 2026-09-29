@@ -100,3 +100,40 @@ class TestShowLinks:
 
     def test_nothing(self):
         assert show_links_from_sources([None, ""], [None]) == show_links_from_sources([], [])
+
+
+class TestWebsiteScan:
+    """Spec #87 Phase 3c — the publisher's own site, on the same terms as the feed."""
+
+    def test_website_fills_what_the_feed_did_not_say(self):
+        site = '<a href="https://open.spotify.com/show/7syF2ry9j6nqYc656WHBA7">Spotify</a> <a href="https://www.youtube.com/@ProfGMarkets">YouTube</a>'
+        show = show_links_from_sources(["Prof G Markets"], [], website_html=site)
+        assert show.spotify_url == "https://open.spotify.com/show/7syF2ry9j6nqYc656WHBA7"
+        assert show.youtube_url == "https://www.youtube.com/@ProfGMarkets"
+
+    def test_feed_text_beats_the_website(self):
+        site = "open.spotify.com/show/7syF2ry9j6nqYc656WHBA7"
+        show = show_links_from_sources([f"open.spotify.com/show/{SPOT}"], [], website_html=site)
+        assert show.spotify_url == f"https://open.spotify.com/show/{SPOT}"
+
+    def test_a_network_site_listing_two_shows_is_left_alone(self):
+        site = "open.spotify.com/show/7syF2ry9j6nqYc656WHBA7 open.spotify.com/show/4JH4tybY1zX6e5hjCwU6gF youtube.com/@a youtube.com/@b"
+        show = show_links_from_sources([], [], website_html=site)
+        assert show == show_links_from_sources([], [])
+
+    def test_generic_platform_channels_never_count(self):
+        # Anchor page templates link Spotify's own channel on every show's site.
+        site = "youtube.com/c/spotifyforcreators youtube.com/@SpotifyForCreators open.spotify.com/show/5jbe8ao7293ynYQgjivmg8"
+        show = show_links_from_sources([], [], website_html=site)
+        assert show.youtube_url is None
+        assert show.spotify_url == "https://open.spotify.com/show/5jbe8ao7293ynYQgjivmg8"
+        # … in feed text and episode votes too.
+        assert show_links_from_sources(["youtube.com/@spotify"], []).youtube_url is None
+        assert show_links_from_sources([], ["youtube.com/c/YouTube"] * 5).youtube_url is None
+        # A real channel beside a generic one is still unique.
+        assert (
+            show_links_from_sources(
+                [], [], website_html="youtube.com/c/spotifyforcreators youtube.com/@CoreMemorypodcast"
+            ).youtube_url
+            == "https://www.youtube.com/@CoreMemorypodcast"
+        )

@@ -57,6 +57,7 @@ from ..core.spotify_resolver import SpotifyEpisodeMetadata, default_episode_meta
 from ..core.spotify_show_probe import SpotifyLatestEpisode, fetch_latest_episode, show_id_from_url
 from ..models.podcast import PlatformLink, PlatformLinkCandidate, Podcast
 from ..utils.datetime_utils import now_utc
+from ..utils.url_guard import guarded_session
 
 logger = get_logger(__name__)
 
@@ -135,6 +136,7 @@ class PlatformLinkService:
             episode_id, spotify_episode_url(episode_id)
         ),
         fetch_spotify_latest: Callable[[str], Optional[SpotifyLatestEpisode]] = fetch_latest_episode,
+        fetch_website: Callable[[str], str] = lambda url: fetch_website_text(url),
         clock: Callable[[], datetime] = now_utc,
     ) -> None:
         self.repository = repository
@@ -147,6 +149,7 @@ class PlatformLinkService:
         self._fetch_video = fetch_video
         self._fetch_spotify_episode = fetch_spotify_episode
         self._fetch_spotify_latest = fetch_spotify_latest
+        self._fetch_website = fetch_website
         self._clock = clock
 
     # ------------------------------------------------------------------
@@ -205,16 +208,22 @@ class PlatformLinkService:
         if rows and not dry_run:
             self.repository.upsert_platform_links(rows)
 
-    def _store_show_url(self, podcast: Podcast, platform: str, url: str, *, verified_by: str, dry_run: bool) -> None:
+    def _store_show_url(
+        self, podcast: Podcast, platform: str, url: str, *, verified_by: str, source: str, dry_run: bool
+    ) -> None:
+        """``source`` is the row's provenance tag (spec #87 Phase 3c); a
+        curated value on the row is never overwritten, and that is logged."""
+        written = True
         if not dry_run:
-            self.repository.set_podcast_platform_url(podcast.id, platform, url)
+            written = bool(self.repository.set_podcast_platform_url(podcast.id, platform, url, source=source))
         logger.info(
-            "platform_links_show_resolved",
+            "platform_links_show_resolved" if written else "platform_links_show_kept_curated",
             podcast_id=podcast.id,
             podcast_title=podcast.title,
             platform=platform,
             url=url,
             verified_by=verified_by,
+            source=source,
         )
 
     # ------------------------------------------------------------------
@@ -268,7 +277,12 @@ class PlatformLinkService:
                 return self._no_apple_id(podcast, candidates, now, dry_run=dry_run)
             if show.view_url:
                 self._store_show_url(
-                    podcast, PLATFORM_APPLE, show.view_url, verified_by="episode_window", dry_run=dry_run
+                    podcast,
+                    PLATFORM_APPLE,
+                    show.view_url,
+                    verified_by="episode_window",
+                    source="resolver",
+                    dry_run=dry_run,
                 )
         matched_ids = {m.episode_id for m in matches}
         rows = [
@@ -332,7 +346,9 @@ class PlatformLinkService:
             feed_url = entry.get("feedUrl")
             if isinstance(feed_url, str) and _feed_key(feed_url) == wanted:
                 if view_url:
-                    self._store_show_url(podcast, PLATFORM_APPLE, view_url, verified_by="feed_url", dry_run=dry_run)
+                    self._store_show_url(
+                        podcast, PLATFORM_APPLE, view_url, verified_by="feed_url", source="resolver", dry_run=dry_run
+                    )
                 return _ShowMatch(found, view_url, verified=True)
             name = entry.get("collectionName")
             if isinstance(name, str) and title_key and normalize_title(name) == title_key:
@@ -409,16 +425,49 @@ class PlatformLinkService:
                 rows.append(self._publisher_row(candidate, link, now))
         linked_ids = {p: {r.episode_id for r in rows if r.platform == p} for p in (PLATFORM_SPOTIFY, PLATFORM_YOUTUBE)}
 
-        # 2. Show-level links the publisher states, stored once when missing.
-        show = show_links_from_sources(
-            [podcast.description, getattr(podcast, "description_html", None), podcast.website_url],
-            [c.description_html for c in by_id.values()],
-        )
+        # 2. Show-level links the publisher states, stored once when missing:
+        #    feed text first, then (Phase 3c) the publisher's own website,
+        #    fetched only while a platform is still missing.
+        podcast_texts = [podcast.description, getattr(podcast, "description_html", None), podcast.website_url]
+        episode_texts = [c.description_html for c in by_id.values()]
+        show = show_links_from_sources(podcast_texts, episode_texts)
+        missing = [
+            platform
+            for platform, key in ((PLATFORM_SPOTIFY, "spotify_url"), (PLATFORM_YOUTUBE, "youtube_url"))
+            if not urls.get(key) and not getattr(show, key)
+        ]
+        if missing and podcast.website_url:
+            html = self._website_text(podcast)
+            if html:
+                scanned = show_links_from_sources(podcast_texts, episode_texts, website_html=html)
+                logger.info(
+                    "platform_links_website_scanned",
+                    podcast_id=podcast.id,
+                    podcast_title=podcast.title,
+                    website_url=podcast.website_url,
+                    spotify_url=scanned.spotify_url if scanned.spotify_url != show.spotify_url else None,
+                    youtube_url=scanned.youtube_url if scanned.youtube_url != show.youtube_url else None,
+                )
+                show = scanned
         if show.spotify_url and not urls.get("spotify_url"):
-            self._store_show_url(podcast, PLATFORM_SPOTIFY, show.spotify_url, verified_by="publisher", dry_run=dry_run)
+            self._store_show_url(
+                podcast,
+                PLATFORM_SPOTIFY,
+                show.spotify_url,
+                verified_by="publisher",
+                source="publisher",
+                dry_run=dry_run,
+            )
         channel_url = urls.get("youtube_url")
         if not channel_url and show.youtube_url:
-            self._store_show_url(podcast, PLATFORM_YOUTUBE, show.youtube_url, verified_by="publisher", dry_run=dry_run)
+            self._store_show_url(
+                podcast,
+                PLATFORM_YOUTUBE,
+                show.youtube_url,
+                verified_by="publisher",
+                source="publisher",
+                dry_run=dry_run,
+            )
             channel_url = show.youtube_url
 
         # 3. Spotify: description claims checked against the episode page's
@@ -552,6 +601,19 @@ class PlatformLinkService:
                 **listing_shape,
             )
         return [spotify_outcome, youtube_outcome]
+
+    def _website_text(self, podcast: Podcast) -> str:
+        """The publisher's website page, or '' when it cannot be fetched (logged, never raised)."""
+        try:
+            return self._fetch_website(str(podcast.website_url)) or ""
+        except Exception as exc:  # noqa: BLE001 — SSRF guard, network, HTTP errors alike
+            logger.warning(
+                "platform_links_website_fetch_failed",
+                podcast_id=podcast.id,
+                website_url=podcast.website_url,
+                error=str(exc),
+            )
+            return ""
 
     @staticmethod
     def _publisher_row(candidate: PlatformLinkCandidate, link: PublisherLink, now: datetime) -> PlatformLink:
@@ -725,6 +787,36 @@ class PlatformLinkService:
             dry_run=dry_run,
             **extra,
         )
+
+
+# Enough of a show's home page to reach its "listen on" buttons; sites are
+# read for links only, never rendered, so the cap is generous but firm.
+_WEBSITE_MAX_BYTES = 600 * 1024
+_WEBSITE_TIMEOUT = 12
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+)
+
+
+def fetch_website_text(url: str) -> str:
+    """
+    The first :data:`_WEBSITE_MAX_BYTES` of the publisher's website (spec #87
+    Phase 3c), through the SSRF-guarded session with a browser user agent
+    (many sites serve a bot-wall to anything else). Raises on failure.
+    """
+    with guarded_session(user_agent=_BROWSER_USER_AGENT) as session:
+        with session.get(url, timeout=_WEBSITE_TIMEOUT, stream=True) as resp:
+            resp.raise_for_status()
+            chunks: List[bytes] = []
+            size = 0
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                chunks.append(chunk)
+                size += len(chunk)
+                if size >= _WEBSITE_MAX_BYTES:
+                    break
+            encoding = resp.encoding or "utf-8"
+    return b"".join(chunks).decode(encoding, errors="replace")
 
 
 def _show_url(value: Any) -> Optional[str]:

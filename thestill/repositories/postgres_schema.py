@@ -124,6 +124,11 @@ CREATE TABLE IF NOT EXISTS podcasts (
     apple_url text NULL,
     youtube_url text NULL,
     spotify_url text NULL,
+    -- Spec #87 Phase 3c: where each show link came from; a curated value is
+    -- never overwritten by a chart sync or a resolver (migration 0013).
+    apple_url_source text NULL CHECK (apple_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
+    youtube_url_source text NULL CHECK (youtube_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
+    spotify_url_source text NULL CHECK (spotify_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
     primary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     secondary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     host_entity_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
