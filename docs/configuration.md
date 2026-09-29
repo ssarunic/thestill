@@ -492,15 +492,15 @@ instead. The command is idempotent; a second run reports nothing.
 ### Reranking and search quality (spec #89)
 
 Hybrid search can rerank with a multilingual cross-encoder that reads the
-query and each passage together. Off by default:
+query and each passage together. Off by default.
 
-```bash
-SEARCH_RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1   # empty = off
-SEARCH_RERANK_POOL=20                # candidates per leg (lexical, entity, semantic)
-SEARCH_RERANK_MIN_SCORE=0.01         # floor for rows the lexical or entity leg found
-SEARCH_RERANK_SEMANTIC_MIN_SCORE=0.05  # floor for rows only the semantic leg found
-SEARCH_ENTITY_LEG=true               # add chunks where the name was said or linked
-```
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SEARCH_RERANKER_MODEL` | Cross-encoder for hybrid reranking; the measured choice is `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` | empty (reranker off) |
+| `SEARCH_RERANK_POOL` | Candidates per leg (lexical, entity, semantic) | `20` |
+| `SEARCH_RERANK_MIN_SCORE` | Floor for rows the lexical or entity leg found | `0.01` |
+| `SEARCH_RERANK_SEMANTIC_MIN_SCORE` | Floor for rows only the semantic leg found | `0.05` |
+| `SEARCH_ENTITY_LEG` | Add chunks where the query name was said or linked | `false` |
 
 Rows that literally contain the query only have to avoid being clearly
 unrelated; rows found only by vector similarity must earn a higher score.

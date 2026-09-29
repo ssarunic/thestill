@@ -103,6 +103,10 @@ class TestRerankerModel:
         fake = types.ModuleType("sentence_transformers")
         fake.CrossEncoder = _CE  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+        # torch is only needed for the activation object; CI has no torch.
+        fake_torch = types.ModuleType("torch")
+        fake_torch.nn = types.SimpleNamespace(Sigmoid=type("Sigmoid", (), {}))  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
         rr = Reranker("some/cross-encoder", max_length=128)
         assert rr._model is None
         assert rr.score("q", []) == []
