@@ -436,7 +436,25 @@ an empty `chunks` table.
 
 ```bash
 make corpus-backfill         # or: thestill chunks backfill
+thestill chunks backfill --force   # re-embed everything (after a model or writer change)
 ```
+
+The writer follows `DATABASE_URL`: pgvector on Postgres, sqlite-vec
+otherwise. Segments under four words are not indexed; a forced backfill is
+how rows written before that rule leave the index.
+
+**Verify the index** when semantic results look like noise (short generic
+fragments outranking exact matches):
+
+```bash
+thestill chunks verify --sample 50
+```
+
+It re-embeds a random sample and prints the cosine distance between the
+stored and the fresh vector. A healthy index reads ~0.0; a larger gap means
+the rows were embedded by a different model or runtime than the one
+answering queries, and the verdict line says whether a forced backfill
+fixes it. Exit code 2 on disagreement, so it can gate a deploy check.
 
 `thestill status` reports current chunk count and the embedding model
 in use.

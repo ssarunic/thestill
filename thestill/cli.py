@@ -4613,7 +4613,7 @@ def entity_alias_add(ctx, entity_id, alias):
 
 @main.group("chunks")
 def chunks_group():
-    """Manage the sqlite-vec chunk index that backs corpus search."""
+    """Manage the chunk index (pgvector or sqlite-vec) that backs corpus search."""
 
 
 @main.command("reindex")
@@ -4714,8 +4714,8 @@ def reindex(ctx, status, max_episodes, dry_run):
 @log_command
 def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
     """Embed and index every episode that has a cleaned-transcript JSON sidecar."""
-    from .core.chunk_writer import ChunkWriter
     from .models.annotated_transcript import AnnotatedTranscript
+    from .repositories.factory import make_chunk_writer
 
     podcast_repo = ctx.obj.repository
     path_manager = ctx.obj.path_manager
@@ -4745,7 +4745,11 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
             click.echo(f"  … (+{len(eligible) - 20} more)")
         return
 
-    writer = ChunkWriter(db_path=str(config.database_path), embedding_model=ctx.obj.embedding_model)
+    # Backend-resolved (pgvector on DATABASE_URL, sqlite-vec otherwise). The
+    # pipeline's index task goes through the same factory; constructing the
+    # SQLite writer here directly used to send a Postgres deployment's
+    # backfill into a stray podcasts.db.
+    writer = make_chunk_writer(config, ctx.obj.embedding_model)
 
     inserted_total = 0
     skipped_total = 0
@@ -4786,6 +4790,37 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
             embedding_model_name=ctx.obj.embedding_model.model_name,
         )
         click.echo(f"  ✓ related: {result['pairs']} pairs across {result['episodes']} episodes")
+
+
+@chunks_group.command("verify")
+@click.option("--sample", default=50, show_default=True, type=int, help="Rows to sample from the index.")
+@click.pass_context
+@require_config
+@log_command
+def chunks_verify(ctx, sample):
+    """Check that stored chunk vectors still match the configured embedding model.
+
+    Re-embeds a random sample and reports cosine distances. Exit code 2 when
+    the index or the embedding runtime disagrees with itself.
+    """
+    from .search.index_verify import verify_index
+
+    report = verify_index(ctx.obj.config, ctx.obj.embedding_model, sample=sample)
+    click.echo(f"Model:   {report.model}")
+    click.echo(f"Sampled: {report.sampled}")
+    if report.sampled:
+        click.echo(
+            f"stored vs fresh (query path):  mean {report.stored_vs_query_mean:.4f}  max {report.stored_vs_query_max:.4f}"
+        )
+        click.echo(
+            f"stored vs fresh (writer path): mean {report.stored_vs_batch_mean:.4f}  max {report.stored_vs_batch_max:.4f}"
+        )
+        click.echo(f"writer path vs query path:     max {report.batch_vs_query_max:.4f}")
+        for text, distance in report.worst:
+            click.echo(f"  worst {distance:.4f}  {text}")
+    click.echo(f"Verdict: {report.verdict}")
+    if report.sampled and not report.healthy:
+        ctx.exit(2)
 
 
 @main.group("related")
