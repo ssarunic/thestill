@@ -153,7 +153,7 @@ class PgVectorBackend:
         reranker: Optional["Reranker"] = None,
         rerank_pool: int = 20,
         rerank_min_score: float = 0.01,
-        rerank_semantic_min_score: float = 0.3,
+        rerank_semantic_min_score: float = 0.05,
         entity_leg: bool = False,
     ):
         self.dsn = dsn

@@ -242,7 +242,7 @@ def _rerank_options(config: "Config") -> dict:
         "reranker": reranker,
         "rerank_pool": int(getattr(config, "search_rerank_pool", 20)),
         "rerank_min_score": float(getattr(config, "search_rerank_min_score", 0.01)),
-        "rerank_semantic_min_score": float(getattr(config, "search_rerank_semantic_min_score", 0.3)),
+        "rerank_semantic_min_score": float(getattr(config, "search_rerank_semantic_min_score", 0.05)),
         "entity_leg": bool(getattr(config, "search_entity_leg", False)),
     }
 

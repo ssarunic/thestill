@@ -489,6 +489,25 @@ the configured chunk writer, which re-embeds those episodes only. An
 episode with damaged chunks but no sidecar is listed for re-cleaning
 instead. The command is idempotent; a second run reports nothing.
 
+### Reranking and search quality (spec #89)
+
+Hybrid search can rerank with a multilingual cross-encoder that reads the
+query and each passage together. Off by default:
+
+```bash
+SEARCH_RERANKER_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1   # empty = off
+SEARCH_RERANK_POOL=20                # candidates per leg (lexical, entity, semantic)
+SEARCH_RERANK_MIN_SCORE=0.01         # floor for rows the lexical or entity leg found
+SEARCH_RERANK_SEMANTIC_MIN_SCORE=0.05  # floor for rows only the semantic leg found
+SEARCH_ENTITY_LEG=true               # add chunks where the name was said or linked
+```
+
+Rows that literally contain the query only have to avoid being clearly
+unrelated; rows found only by vector similarity must earn a higher score.
+Latency grows roughly linearly with the pool (about 0.3-0.6 s on 2 CPU
+threads for a full pool); the server warms the model at startup. Measure any
+change with `thestill eval search` (see [evals.md](evals.md)).
+
 ## Entity Linking (spec #81)
 
 Which linker `resolve-entities` uses to turn a spoken name into a Wikidata

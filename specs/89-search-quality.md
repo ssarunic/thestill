@@ -1,6 +1,6 @@
 # 89 — Search quality: measured, reranked, entity-aware
 
-Status: in progress (2026-09-29)
+Status: Phases 1-3 built (2026-09-29, PR pending); Phase 4 paused
 
 ## Problem
 
@@ -73,3 +73,23 @@ pipeline; #286 (short queries are lexical-only in hybrid) is a stopgap.
 
 Reranker ships default-off behind `SEARCH_RERANKER_MODEL`, is turned on in
 prod after a latency check on the box, then the stopgap rules are removed.
+
+## Results (2026-09-29, prod snapshot of 2026-09-22, judge gemini-3-flash-preview)
+
+Pooled over all runs; nDCG@10 / junk@10 (unrelated results shown per query).
+
+| Variant | all | name | concept | croatian | nonsense junk |
+|---|---|---|---|---|---|
+| gated RRF, pre-#286 | 0.767 / 2.12 | 0.817 / 1.71 | 0.748 / 1.91 | 0.671 / 3.33 | 3.60 |
+| #286 short-query rule | 0.826 / 1.05 | 0.984 / 0.08 | 0.767 / 1.73 | 0.623 / 2.33 | 1.20 |
+| mmarco reranker + entity leg, floors 0.01 / 0.05 | 0.828 / 0.47 | 0.943 / 0.17 | 0.805 / 0.82 | 0.569 / 0.83 | 0.00 |
+| ms-marco (English) reranker, floors 0 / 0.1 | 0.832 / 0.46 | 0.959 / 0.17 | 0.832 / 0.59 | 0.447 / 1.50 | 0.00 |
+
+- bge-reranker-v2-m3: 5.4 s per 60 pairs on 2 threads — rejected on latency.
+- The reranker halves junk at equal nDCG and fixes typos and nonsense;
+  #286 is still better on name queries, the English model loses Croatian.
+- Remaining limit is candidate recall for concept and Croatian queries: the
+  semantic leg is a 2020 paraphrase model. Phase 4 (multilingual-e5-small,
+  ~27 min re-embed on the Mac GPU) stopped when the dev machine's disk filled;
+  resume with >= 5 GB free.
+- The results page searched once per keystroke; now debounced (300 ms).

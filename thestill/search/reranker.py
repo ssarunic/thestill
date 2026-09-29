@@ -85,7 +85,8 @@ class Reranker:
 # being clearly unrelated; one found only by vector similarity has to earn its
 # place. On the golden set the multilingual cross-encoder scores genuine name
 # mentions as low as 0.16 while semantic-only filler reached 0.20, so one
-# floor could not separate them.
+# floor could not separate them. Defaults (0.01 literal, 0.05 semantic-only)
+# are the golden-set optimum for cross-encoder/mmarco-mMiniLMv2-L12-H384-v1.
 LITERAL_ORIGINS = ("lexical", "entity")
 
 

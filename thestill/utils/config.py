@@ -401,7 +401,7 @@ class Config(BaseModel):
     search_reranker_model: str = ""
     search_rerank_pool: int = 20
     search_rerank_min_score: float = 0.01  # rows the lexical or entity leg found
-    search_rerank_semantic_min_score: float = 0.3  # rows only the semantic leg found
+    search_rerank_semantic_min_score: float = 0.05  # rows only the semantic leg found
     search_entity_leg: bool = False
 
     chunk_duration_minutes: int = 30
@@ -825,7 +825,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "search_reranker_model": os.getenv("SEARCH_RERANKER_MODEL", ""),
         "search_rerank_pool": int(os.getenv("SEARCH_RERANK_POOL", "20")),
         "search_rerank_min_score": float(os.getenv("SEARCH_RERANK_MIN_SCORE", "0.01")),
-        "search_rerank_semantic_min_score": float(os.getenv("SEARCH_RERANK_SEMANTIC_MIN_SCORE", "0.3")),
+        "search_rerank_semantic_min_score": float(os.getenv("SEARCH_RERANK_SEMANTIC_MIN_SCORE", "0.05")),
         "search_entity_leg": os.getenv("SEARCH_ENTITY_LEG", "false").lower() in ("1", "true", "yes"),
         "chunk_duration_minutes": int(os.getenv("CHUNK_DURATION_MINUTES", "30")),
         "max_episodes_per_podcast": (
