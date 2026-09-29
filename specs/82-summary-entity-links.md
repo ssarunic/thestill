@@ -1,6 +1,6 @@
 # Summary Entity Links Specification
 
-> **Status:** 📝 Draft — solution designed, not yet scheduled
+> **Status:** 🚧 Built on `feat/82-summary-entity-links` (2026-09-24), PR pending — all four phases; deviations from the draft are marked *Built:* below
 > **Created:** 2026-09-24
 > **Updated:** 2026-09-24
 > **Priority:** Medium — the transcript has entity peeks (#251, #252); the summary, which most readers see first, has none
@@ -79,8 +79,9 @@ is the pipeline-side follow-up for the cases this design cannot cover.
    summaries gain links on deploy.
 4. No false links: a word that is not the entity ("warp" the verb) is
    never wrapped.
-5. The `E` highlight toggle and the entity-type filter (spec #28 §5.2)
-   apply to the summary as they do to the transcript.
+5. The entity-type filter (spec #28 §5.2) applies to the summary as it
+   does to the transcript. (*Built:* the `E` highlight toggle does not —
+   see "Highlight toggle and type filter".)
 
 ## Non-goals
 
@@ -146,7 +147,11 @@ Rules:
   `(?![\p{L}\p{N}])`), so "Warp" never matches "Warped".
 - **Case**: multi-word terms match case-insensitively; single-token terms
   match case-sensitively. "Warp" links, "warp speed" does not. Acronyms
-  (`MCP`, `PR`) are single tokens and therefore exact-case only.
+  (`MCP`) are single tokens and therefore exact-case only; `PR` falls under
+  the three-character floor. *Built:* a single-token term must also
+  contain an uppercase letter, so a lowercase surface form ("warp") never
+  becomes a term at all. A phrase's spaces match any whitespace run, so a
+  name wrapped across a line still links.
 - One term maps to one entity. If two entities share a term (two people
   called "Alex"), the term is dropped — the summary has no context to
   pick, and a wrong link is worse than none.
@@ -157,7 +162,10 @@ few kilobytes, so a linear scan per text node is fine.
 ### Stage 2 — The rehype plugin
 
 `rehypeEntityMentions(terms)` visits every hast `text` node whose ancestor
-chain contains none of: `a`, `code`, `pre`, `h1`–`h6`. For each node it
+chain contains none of: `a`, `code`, `pre`, `h1`–`h6`. *Built:* the walk
+is block by block (`p`, `li`, `td`, `th`; a nested list inside a list item
+is its own set of blocks), because the nearest-citation rule below needs
+the block's citations and the match's position in the same pass. For each node it
 runs the term scan and, when there are matches, replaces the node with a
 sequence of `text` and `element{tagName:'span', properties:{'data-entity-id',
 'data-term'}}` nodes. Nothing else in the tree is touched, so the
@@ -177,14 +185,17 @@ match synthesises one:
 |---|---|
 | `id` | `0` (the serializer's own fallback; never used as a key) |
 | `entity_id` | from the term index |
-| `segment_id`, `start_ms` | from the **nearest citation in the same block**: the closest `?cite=` link at or before the match inside the enclosing `p`/`li`, resolved through the citations sidecar — `segment_id_hint` and `cited_playback_s` ([types.ts `SummaryCitation`](../thestill/web/frontend/src/api/types.ts)). Blocks without a citation fall back to the entity's `first_mention_ms` and the segment of its first transcript mention |
+| `segment_id`, `start_ms` | from the **nearest citation in the same block**: the closest `?cite=` link inside the enclosing `p`/`li` by character distance in *either* direction (real summaries lead with the citation in the timeline and end with it in the takeaways; ties go to the earlier one), resolved through the citations sidecar — `segment_id_hint` and `target_playback_s`/`cited_playback_s` ([types.ts `SummaryCitation`](../thestill/web/frontend/src/api/types.ts)). Blocks without a usable citation fall back to the segment and `start_ms` of the entity's first transcript mention |
 | `role` | `'summary'` — a frontend-only marker (never persisted) so the card can tell the context |
 | `surface_form` | the matched text |
 | `confidence` | `1` |
 
-The citation lookup happens in `SummaryEntityMention` (the renderer), not
-the plugin: the plugin stays a pure text transform, and the renderer has
-the citations map `SummaryViewer` already builds (`citationById`).
+*Built:* react-markdown hands a custom renderer only its own node, never
+its siblings, so the *proximity search* has to run in the plugin: it stamps
+the block's nearest `cite` id on the span as `data-cite-id` (a string it
+never interprets). The *lookup* — id → `SummaryCitation` → segment, and the
+first-mention fallback — stays in `SummaryEntityMention`, which has the
+citations map `SummaryViewer` already builds (`citationById`).
 
 ### Stage 4 — The peek in the summary
 
@@ -199,9 +210,9 @@ the citations map `SummaryViewer` already builds (`citationById`).
   entity colour rather than the prose link colour).
 - The card shows the badge, gloss, photo, name link and "Also mentioned
   on" as today. **Prev/next are replaced by "Show in transcript"**: it
-  calls `onShowInTranscript(segment_id, start_ms/1000)`, which
-  `EpisodeReader` implements with the citation path
-  ([EpisodeReader.tsx:474](../thestill/web/frontend/src/components/EpisodeReader.tsx#L474)):
+  calls `onShowInTranscript(segment_id)`, which `EpisodeReader` implements
+  with the People-chip path (`jumpToTranscriptSegment`, formerly
+  `handleSpeakerSelect`), not the citation handler — that one seeks first:
   switch to the transcript tab with a pushed history entry, scroll to the
   segment, no seek. The ▶ button seeks, as everywhere.
 - Hover on desktop, tap → bottom sheet on phones, Esc/scroll/outside-click
@@ -209,10 +220,13 @@ the citations map `SummaryViewer` already builds (`citationById`).
 
 ### Highlight toggle and type filter
 
-`SummaryViewer` receives `entityHighlightsEnabled` and `hiddenEntityTypes`
-(the reader already keeps both for the transcript). Disabled → the plugin
-is not registered and the markdown renders as today. Hidden types are
-dropped from the term index.
+*Built:* the type filter applies — `SummaryViewer` receives the reader's
+already-filtered `visibleEntities`, so hiding a type drops its terms (and
+can un-share a term two entities held). The `E` toggle does **not** apply
+to the summary (decision 2026-09-24): it is local to the transcript viewer
+(a persisted preference plus a key handler bound there), and lifting it
+into the reader was judged not worth the change for a first cut. The
+summary always links.
 
 ### Failure handling
 
@@ -260,6 +274,15 @@ One PR, frontend only:
 4. Check on the Warp episode (How I AI): "Claire Vo", "Zach Lloyd",
    "Warp", "Figma" link; "warp" in lower case does not; "Show in
    transcript" from the Drama section lands on the cited round.
+   *Built (2026-09-24, local):* 25 links; "Claire Vo", "Zach Lloyd",
+   "Zach", "Slack", "Figma MCP" link, lowercase "warp" and headings do
+   not, all 33 citation buttons intact. "Warp" did not link because the
+   local extraction has no Warp entity for the episode (a #83 case), and
+   "Figma" alone is a surface form of two entities ("Figma" and the
+   mislinked "Figma (toy)"), so the shared-term rule dropped it and only
+   "Figma MCP" links. "Show in transcript" from a cited bullet opens the
+   transcript at the cited 32:09 segment with the same scroll offset the
+   existing citation button produces; the phone sheet works.
 
 ## Alternatives considered
 
