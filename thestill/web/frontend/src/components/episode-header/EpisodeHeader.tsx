@@ -1,4 +1,4 @@
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { Link } from 'react-router-dom'
 import type { EpisodeDetail } from '../../api/types'
 import PageHero from '../PageHero'
@@ -6,8 +6,7 @@ import ActionRow from '../ActionRow'
 import Artwork from '../Artwork'
 import { artworkFrameClass } from '../artworkRoles'
 import MetaEyebrow from '../MetaEyebrow'
-import Button, { ChevronRightIcon, ExternalLinkIcon, PauseIcon, PlayIcon, YouTubeIcon } from '../Button'
-import { buttonClassName } from '../buttonStyles'
+import Button, { ChevronRightIcon, PauseIcon, PlayIcon, YouTubeIcon } from '../Button'
 import ShareButton from '../ShareButton'
 import ExpandableDescription from '../ExpandableDescription'
 import { episodeNumberLabel, episodeTypeLabel, formatEyebrowDate, formatMinutes } from '../../utils/episodeFormat'
@@ -30,6 +29,12 @@ interface EpisodeHeaderProps {
   showWatchVideo: boolean
   onWatchVideo: () => void
   shareUrl: string
+  /**
+   * Spec #88 — the reader's "Send to my inbox" icon. It takes the fourth
+   * action slot; "Show notes" stays in the Information list, so the row keeps
+   * its four slots at 320 px (spec #76 §3.2).
+   */
+  inboxAction?: ReactNode
 }
 
 /**
@@ -46,6 +51,7 @@ export default function EpisodeHeader({
   showWatchVideo,
   onWatchVideo,
   shareUrl,
+  inboxAction,
 }: EpisodeHeaderProps) {
   const { isCurrent, isPlaying, isLoading, onToggle } = playback
   const minutes = formatMinutes(episode.duration)
@@ -115,20 +121,7 @@ export default function EpisodeHeader({
               </Button>
             )}
             <ShareButton iconOnly title={`${episode.title} - ${episode.podcast_title}`} url={shareUrl} />
-            {episode.website_url && (
-              <a
-                href={episode.website_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Show notes"
-                className={buttonClassName({ variant: 'secondary', size: 'icon' })}
-              >
-                <span className="h-5 w-5">
-                  <ExternalLinkIcon />
-                </span>
-                <span className="sr-only">Show notes</span>
-              </a>
-            )}
+            {inboxAction}
           </>
         }
       />

@@ -199,7 +199,7 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     expect(screen.getByRole('button', { name: 'Send to my inbox' })).toBeInTheDocument()
   })
 
-  it('renders the eyebrow, show row and show-notes action from the episode (spec #76 §3.1–3.2)', () => {
+  it('renders the eyebrow, show row and action slots from the episode (spec #76 §3.1–3.2, #88)', () => {
     const response = episodeResponse()
     response.episode.season_number = 3
     response.episode.episode_number = 12
@@ -213,7 +213,10 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     const eyebrow = screen.getByText('S3 E12').closest('p')!
     expect(eyebrow).toHaveTextContent('Bonus')
     expect(eyebrow).toHaveTextContent('Explicit')
-    expect(screen.getByRole('link', { name: 'Show notes' })).toHaveAttribute('href', 'https://example.com/notes')
+    // Spec #88: the fourth action slot is the inbox icon; show notes live in
+    // the Information list (asserted below), not in the action row.
+    expect(screen.queryByRole('link', { name: 'Show notes' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Send to my inbox' })).toBeInTheDocument()
     // Watch video only under the spec #62 §6 condition — absent here.
     expect(screen.queryByRole('button', { name: 'Watch video' })).toBeNull()
   })
