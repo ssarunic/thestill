@@ -27,6 +27,7 @@ vi.mock('../hooks/useApi', () => ({
   useMarkInboxReadOnView: vi.fn(),
   useEpisodeLiveRefresh: vi.fn(() => ({ settled: false, contentTerminal: false })),
   useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
+  useEntityBranchRefresh: vi.fn(),
 }))
 
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))

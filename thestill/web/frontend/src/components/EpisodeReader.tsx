@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense, type RefObject } from 'react'
 import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer } from '../contexts/PlayerContext'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
@@ -283,6 +283,10 @@ export default function EpisodeReader({
     contentTerminal: live.contentTerminal,
   })
   const episodeTasks = useMemo(() => tasksData?.tasks ?? [], [tasksData])
+
+  // The entity branch runs after `summarized`, so no state change marks its
+  // results arriving; the task list does.
+  useEntityBranchRefresh(episode?.id, tasksData?.tasks)
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
