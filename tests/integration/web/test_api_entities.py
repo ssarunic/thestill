@@ -568,6 +568,31 @@ class TestEntityEpisodeMentionsEndpoint:
         summary = client.get("/api/entities/person/elon-musk").json()
         assert summary["recent_mention_counts"][episode_id] == len(body["mentions"])
 
+    def test_lists_mentions_of_entity_retyped_after_creation(self, client, app_state):
+        """The episode card's "Show all" uses the same type/slug URL as the
+        page, so a re-typed entity must resolve here too."""
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, _ = _seed_corpus(db_path)
+        SqliteEntityRepository(db_path=str(db_path)).upsert_entity(
+            EntityRecord(
+                id="company:abraham-pais",
+                type=EntityType.PERSON,
+                canonical_name="Abraham Pais",
+                wikidata_qid="Q330492",
+                aliases=[],
+            )
+        )
+        _insert_resolved(
+            db_path,
+            [_musk_mention(episode_id, segment_id=3, quote="Abraham Pais.", entity_id="company:abraham-pais")],
+        )
+
+        resp = client.get(f"/api/entities/person/abraham-pais/mentions?episode_id={episode_id}")
+
+        assert resp.status_code == 200
+        assert [m["quote"] for m in resp.json()["mentions"]] == ["Abraham Pais."]
+        assert client.get(f"/api/entities/topic/abraham-pais/mentions?episode_id={episode_id}").status_code == 404
+
     def test_rejects_non_uuid_episode_id(self, client, app_state):
         _seed_corpus(Path(app_state.repository.db_path))
         resp = client.get("/api/entities/person/elon-musk/mentions?episode_id=nope")

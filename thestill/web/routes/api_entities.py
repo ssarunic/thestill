@@ -442,14 +442,28 @@ _MOMENTS_PER_EPISODE = 2
 _EPISODE_MENTIONS_SCAN = 2000
 
 
-def _entity_id_from_path(entity_type: str, id_slug: str) -> str:
-    """``"{type}:{slug}"`` from the URL, which may carry either the bare slug
-    (``elon-musk``) or the full id (``person:elon-musk``)."""
+def _entity_id_from_path(entity_repository, entity_type: str, id_slug: str) -> str:
+    """The stored id of the entity the URL names, which may carry either the
+    bare slug (``elon-musk``) or the full id (``person:elon-musk``).
+
+    Wikidata P31 gating can re-type an entity after its row exists (a
+    physicist first extracted as a company), and resolution keeps the row's
+    id so its mentions stay attached. Links are built from the current type,
+    so ``person/abraham-pais`` has to find ``company:abraham-pais``. Raises
+    404 when no entity of ``entity_type`` has the slug.
+    """
     if entity_type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid entity type: {entity_type}")
     prefix = f"{entity_type}:"
     bare_slug = id_slug[len(prefix) :] if id_slug.startswith(prefix) else id_slug
-    return f"{entity_type}:{bare_slug}"
+    entity_id = f"{entity_type}:{bare_slug}"
+    if entity_repository.get_entity(entity_id) is not None:
+        return entity_id
+    retyped = [f"{other}:{bare_slug}" for other in sorted(_VALID_TYPES) if other != entity_type]
+    for entity in entity_repository.get_entities_by_ids(retyped):
+        if entity.type.value == entity_type:
+            return entity.id
+    raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
 
 
 def _citation_row(ctx: MentionContext) -> CitationRow:
@@ -491,22 +505,6 @@ def _segment_preference(ctx: MentionContext) -> tuple[bool, int]:
     return (ctx.mention.role is MentionRole.SPEAKING, ctx.mention.id or 0)
 
 
-def _retyped_entity_id(entity_repository, entity_type: str, slug: str) -> Optional[str]:
-    """The stored id of an entity that now has ``entity_type`` but was
-    created under another type's prefix.
-
-    Wikidata P31 gating can re-type an entity after its row exists (a
-    physicist first extracted as a company), and resolution keeps the row's
-    id so its mentions stay attached. Links are built from the current type,
-    so ``person/abraham-pais`` has to find ``company:abraham-pais``.
-    """
-    candidates = [f"{other}:{slug}" for other in sorted(_VALID_TYPES) if other != entity_type]
-    for entity in entity_repository.get_entities_by_ids(candidates):
-        if entity.type.value == entity_type:
-            return entity.id
-    return None
-
-
 @router.get(
     "/entities/{entity_type}/{id_slug}",
     response_model=EntitySummaryResponse,
@@ -526,17 +524,13 @@ def get_entity_summary(
     """
     # Accept both bare slug and full id forms so deeplinks survive
     # whichever shape the caller has on hand.
-    entity_id = _entity_id_from_path(entity_type, id_slug)
+    entity_id = _entity_id_from_path(state.entity_repository, entity_type, id_slug)
 
     summary = state.entity_repository.get_entity_summary(
         entity_id,
         recent_mentions_limit=_RECENT_EPISODES,
         recent_mentions_per_episode=_MOMENTS_PER_EPISODE,
     )
-    if summary is None:
-        retyped_id = _retyped_entity_id(state.entity_repository, entity_type, bare_slug)
-        if retyped_id is not None:
-            summary = state.entity_repository.get_entity_summary(retyped_id)
     if summary is None:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
 
@@ -654,13 +648,11 @@ def get_entity_episode_mentions(
     "Show all N mentions" for an episode card. One row per transcript
     segment, the same moments ``recent_mention_counts`` counts.
     """
-    entity_id = _entity_id_from_path(entity_type, id_slug)
     try:
         uuid.UUID(episode_id)
     except ValueError:
         raise HTTPException(status_code=422, detail="episode_id must be a UUID") from None
-    if state.entity_repository.get_entity(entity_id) is None:
-        raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
+    entity_id = _entity_id_from_path(state.entity_repository, entity_type, id_slug)
     contexts = state.entity_repository.find_mentions(
         entity_id=entity_id, episode_id=episode_id, limit=_EPISODE_MENTIONS_SCAN
     )
