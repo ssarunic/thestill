@@ -65,7 +65,7 @@ import {
   getBriefingScript,
   markBriefingListened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -709,6 +709,63 @@ export function useEpisodeTasks(
       return contentTerminal ? false : PROBE_TASK_POLL_MS
     },
   })
+}
+
+// Entity-branch stages whose completion changes what the reader renders, and
+// the per-episode query each one makes stale. The episode entities endpoint
+// returns resolved mentions only, so `extract-entities` alone changes nothing.
+const ENTITY_BRANCH_REFRESH_TARGETS: Partial<Record<PipelineStage, 'entities' | 'related'>> = {
+  'resolve-entities': 'entities',
+  'compute-related': 'related',
+}
+
+/**
+ * Refetch the entity strip/rail and the Related-episodes rail as the entity
+ * branch finishes.
+ *
+ * The branch runs after `summarize`, so the episode never changes state
+ * again: `useEpisodeLiveRefresh`'s state-diff invalidation fires at
+ * `summarized`, before a single mention is resolved, and the reader would
+ * keep that empty result until reload. The task list is the only signal
+ * the page has for the branch, and `useEpisodeTasks` already polls it at 2s
+ * while the branch is active.
+ *
+ * Diffs completed task *ids* rather than comparing server `completed_at` to
+ * the query's `dataUpdatedAt`: the latter mixes server and client clocks, and
+ * a client clock running behind would re-invalidate on every render. Ids also
+ * cover a manual re-run (new row) and a retried task completing (same row,
+ * newly completed).
+ *
+ * `tasks` is `undefined` until the task query first resolves. That first
+ * list is a baseline, not progress — the content queries were fetched
+ * alongside it — so a settled episode costs no extra requests on open.
+ */
+export function useEntityBranchRefresh(
+  episodeId: string | null | undefined,
+  tasks: EpisodeTask[] | undefined,
+) {
+  const queryClient = useQueryClient()
+  const seenRef = useRef<{ episodeId: string; completed: Set<string> } | null>(null)
+
+  useEffect(() => {
+    if (!episodeId || !tasks) return
+
+    const completed = tasks.filter(
+      (t) => t.status === 'completed' && ENTITY_BRANCH_REFRESH_TARGETS[t.stage] !== undefined,
+    )
+    const prev = seenRef.current
+    seenRef.current = { episodeId, completed: new Set(completed.map((t) => t.id)) }
+    if (!prev || prev.episodeId !== episodeId) return
+
+    const targets = new Set(
+      completed.filter((t) => !prev.completed.has(t.id)).map((t) => ENTITY_BRANCH_REFRESH_TARGETS[t.stage]),
+    )
+    for (const target of targets) {
+      // Prefix key — covers every minConfidence / limit variant, including
+      // the NowPlayingSheet's entities observer.
+      queryClient.invalidateQueries({ queryKey: ['episodes', episodeId, target] })
+    }
+  }, [episodeId, tasks, queryClient])
 }
 
 // Episode Browser hooks (cross-podcast)
