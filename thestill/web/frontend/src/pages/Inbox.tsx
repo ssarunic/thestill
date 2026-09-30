@@ -10,7 +10,7 @@ import ListGroup from '../components/ListGroup'
 import ListRow, { ListRowArtwork } from '../components/ListRow'
 import SearchBox from '../components/SearchBox'
 import { ProgressPill } from '../components/InboxProgress'
-import { deriveProgress } from '../utils/inbox'
+import { arrivingProgress, deriveProgress } from '../utils/inbox'
 
 // Compact, single-token timestamp: today → "12:50", this year → "8 Aug",
 // older → "8 Aug 24". Never wraps, so the meta row stays one line on phones.
@@ -169,7 +169,7 @@ function ArrivingSoon() {
         Arriving soon <span className="text-gray-400">· {data.total}</span>
       </h2>
       <ul className="space-y-1">
-        {data.items.map(({ episode, podcast }) => (
+        {data.items.map(({ episode, podcast, active_stage, active_status }) => (
           <li key={episode.id}>
             <Link
               to={`/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`}
@@ -180,7 +180,7 @@ function ArrivingSoon() {
                 <span className="block truncate text-xs text-gray-500">{podcast.title}</span>
                 <span className="block truncate text-sm text-gray-700">{episode.title}</span>
               </span>
-              <ProgressPill status={deriveProgress(episode)} />
+              <ProgressPill status={arrivingProgress(episode, active_stage, active_status)} />
             </Link>
           </li>
         ))}

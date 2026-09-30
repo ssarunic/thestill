@@ -39,7 +39,7 @@ from ..models.inbox import (
 )
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from ..utils.sqlite_ext import connect
-from .inbox_repository import ARRIVING_WHERE_SQL, InboxRepository
+from .inbox_repository import ARRIVING_TASK_COLUMNS_SQL, ARRIVING_WHERE_SQL, InboxRepository
 from .sqlite_podcast_repository import episode_from_row
 
 logger = get_logger(__name__)
@@ -314,7 +314,8 @@ class SqliteInboxRepository(InboxRepository):
             rows = conn.execute(
                 f"""
                 SELECT {episode_select},
-                       p.id AS p_id, p.title AS p_title, p.slug AS p_slug, p.image_url AS p_image_url
+                       p.id AS p_id, p.title AS p_title, p.slug AS p_slug, p.image_url AS p_image_url,
+                       {ARRIVING_TASK_COLUMNS_SQL}
                   FROM episodes e
                   JOIN podcasts p ON p.id = e.podcast_id
                   {where}
@@ -329,6 +330,8 @@ class SqliteInboxRepository(InboxRepository):
                 podcast=PodcastInboxSummary(
                     id=row["p_id"], title=row["p_title"], slug=row["p_slug"] or "", image_url=row["p_image_url"]
                 ),
+                active_stage=row["t_stage"],
+                active_status=row["t_status"],
             )
             for row in rows
         ]

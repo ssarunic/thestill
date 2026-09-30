@@ -43,7 +43,7 @@ from ..models.inbox import (
 from ..models.podcast import Episode, FailureType
 from ..utils.postgres_ext import as_str, connect
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
-from .inbox_repository import ARRIVING_WHERE_SQL, InboxRepository
+from .inbox_repository import ARRIVING_TASK_COLUMNS_SQL, ARRIVING_WHERE_SQL, InboxRepository
 
 logger = get_logger(__name__)
 
@@ -388,7 +388,8 @@ class PostgresInboxRepository(InboxRepository):
             rows = conn.execute(
                 f"""
                 SELECT {episode_select},
-                       p.id AS p_id, p.title AS p_title, p.slug AS p_slug, p.image_url AS p_image_url
+                       p.id AS p_id, p.title AS p_title, p.slug AS p_slug, p.image_url AS p_image_url,
+                       {ARRIVING_TASK_COLUMNS_SQL}
                   FROM episodes e
                   JOIN podcasts p ON p.id = e.podcast_id
                   {ARRIVING_WHERE_SQL}
@@ -403,6 +404,8 @@ class PostgresInboxRepository(InboxRepository):
                 podcast=PodcastInboxSummary(
                     id=as_str(row["p_id"]), title=row["p_title"], slug=row["p_slug"] or "", image_url=row["p_image_url"]
                 ),
+                active_stage=row["t_stage"],
+                active_status=row["t_status"],
             )
             for row in rows
         ]

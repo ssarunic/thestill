@@ -44,6 +44,25 @@ ARRIVING_WHERE_SQL = """
    )
 """
 
+# The episode's current user-chain task, so the strip says what is really
+# happening. Episode state is derived from artifact paths, and Dalston's
+# URL-fetch path never writes ``audio_path``, so an episode being transcribed
+# still reads as DISCOVERED ("Downloading…"). A running task wins over a
+# queued one; entity-branch stages are ignored (they run beside SUMMARIZE and
+# say nothing about when the episode arrives). No placeholders.
+_ARRIVING_TASK_PICK_SQL = """
+      FROM tasks t
+     WHERE t.episode_id = e.id
+       AND t.status IN ('pending', 'processing', 'retry_scheduled')
+       AND t.stage IN ('download', 'downsample', 'transcribe', 'clean', 'summarize')
+     ORDER BY CASE t.status WHEN 'processing' THEN 0 ELSE 1 END, t.created_at DESC, t.id
+     LIMIT 1
+"""
+ARRIVING_TASK_COLUMNS_SQL = f"""
+       (SELECT t.stage {_ARRIVING_TASK_PICK_SQL}) AS t_stage,
+       (SELECT t.status {_ARRIVING_TASK_PICK_SQL}) AS t_status
+"""
+
 
 class InboxRepository(ABC):
     """

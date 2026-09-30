@@ -89,10 +89,18 @@ class ArrivingItem(BaseModel):
 
     Not an inbox row: a followed podcast's episode that has an active
     pipeline task and has not published yet. No read state, no briefing.
+
+    ``active_stage`` / ``active_status`` come from the episode's current
+    download→summarize task. They are the truth about progress: ``episode.state``
+    is derived from artifact paths and lags when a stage is skipped (Dalston
+    fetches audio by URL, so no ``audio_path`` is ever written). ``None`` when
+    only an entity-branch task is active.
     """
 
     episode: Episode
     podcast: PodcastInboxSummary
+    active_stage: Optional[str] = None
+    active_status: Optional[str] = None
 
 
 class InboxItem(BaseModel):

@@ -1315,10 +1315,14 @@ export interface SendToInboxResponse {
 }
 
 // Spec #88 "Arriving soon": followed podcasts' in-flight episodes that are
-// not inbox rows yet. No read state; read-only.
+// not inbox rows yet. No read state; read-only. ``active_stage`` /
+// ``active_status`` are the current download→summarize task: the real
+// progress, since ``episode.state`` lags when Dalston skips the download.
 export interface ArrivingItem {
   episode: Episode
   podcast: InboxPodcastSummary
+  active_stage?: PipelineStage | null
+  active_status?: ExtendedPipelineTaskStatus | null
 }
 
 export interface ArrivingResponse {

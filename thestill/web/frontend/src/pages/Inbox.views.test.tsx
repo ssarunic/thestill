@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -190,6 +190,28 @@ describe('Arriving soon (spec #88)', () => {
       'href',
       '/podcasts/20vc/episodes/higgsfield-story',
     )
+  })
+
+  it('labels progress from the active task, not the lagging episode state', async () => {
+    // Dalston transcribes by URL, so the episode is still 'discovered'.
+    const onDalston = { ...episode('On Dalston', 'discovered'), id: 'ep-dalston' }
+    const waiting = { ...episode('Waiting', 'discovered'), id: 'ep-waiting' }
+    const podcast = { id: 'p1', title: '20VC', slug: '20vc', image_url: null }
+    mockGetArriving.mockResolvedValue({
+      ...arriving([]),
+      items: [
+        { episode: onDalston, podcast, active_stage: 'transcribe', active_status: 'processing' },
+        { episode: waiting, podcast, active_stage: 'download', active_status: 'pending' },
+      ],
+      count: 2,
+      total: 2,
+    })
+    renderPage()
+
+    const strip = await screen.findByTestId('arriving-soon')
+    expect(within(strip).getByRole('link', { name: /On Dalston/ })).toHaveTextContent('Transcribing…')
+    expect(within(strip).getByRole('link', { name: /Waiting/ })).toHaveTextContent('Queued')
+    expect(strip).not.toHaveTextContent('Downloading…')
   })
 
   it('is absent when nothing is arriving', async () => {
