@@ -26,10 +26,12 @@ server, and uses it in three places:
 2. **Restore on load.** Reloading the tab brings the mini player back on
    the same episode and position, and keeps playing when the browser
    allows it. A new tab or another device brings the bar back paused on
-   the most recent unfinished episode, one tap from continuing.
+   the most recent unfinished episode, one tap from continuing, however
+   long ago it was.
 3. **Show progress.** Inbox rows and the episode page show how much is
    left or that an episode was played, and an optional strip on `/inbox`
-   lists the episodes you are in the middle of.
+   lists the episodes you are in the middle of. Any episode can be marked
+   played or unplayed by hand.
 
 Browsers do not let a freshly loaded page start audio without a user
 gesture. Safari refuses almost always; Chrome allows it on sites with high
@@ -66,7 +68,7 @@ as a best-effort bonus, never as an error when refused.
   and, where the browser permits, playing state.
 - Carry the position across tabs and devices for the same user.
 - Record completion, so a finished episode restarts from the beginning
-  and surfaces can show it as played.
+  and surfaces can show it as played, and let the user correct it by hand.
 
 ## Non-Goals
 
@@ -119,8 +121,9 @@ CREATE INDEX IF NOT EXISTS idx_progress_user_updated
 - `duration_seconds` is the engine-reported duration at write time, so
   surfaces can render "32 min left" without trusting the feed's
   `episodes.duration`, which is often missing or rounded.
-- `completed_at` is set when the episode finishes (see
-  [Completion](#completion)) and cleared by the next non-completing write.
+- `completed_at` is set when the episode finishes or is marked played
+  (see [Completion](#completion)), and cleared by the next non-completing
+  write or by Mark as unplayed.
 - `stopped_at` records an explicit Stop; it keeps the position but removes
   the row from the restore candidates (see [Restore on load](#restore-on-load)).
 - `session_id` + `seq` order writes without trusting client clocks (see
@@ -156,7 +159,9 @@ single-user mode).
 }
 ```
 
-`event` is one of `tick`, `pause`, `seek`, `ended`, `stop`. The response is
+`event` is one of `tick`, `pause`, `seek`, `ended`, `stop`, `mark_played`,
+`mark_unplayed`. The two `mark_*` events come from the manual action (see
+[Mark as played](#mark-as-played)) and ignore `position_seconds`. The response is
 `{"accepted": true|false, "completed": bool}`; `accepted: false` means the
 write was older than the stored one and was ignored. The route returns 404
 for an unknown episode and 400 for a non-finite or negative position. A
@@ -170,8 +175,7 @@ cannot carry `listening` in their payload use it (see
 
 **`GET /api/me/listening/latest`** returns the restore candidate: the
 user's most recently updated row that is not completed and not stopped
-since its last update, updated within `LISTENING_RESTORE_DAYS` (default
-7), with enough episode data to build a `PlayerTrack` (ids, slugs, title,
+since its last update, however old, with enough episode data to build a `PlayerTrack` (ids, slugs, title,
 podcast title, artwork, `audio_url`, `playback` manifest, duration). It
 returns `{"item": null}` when there is none.
 
@@ -256,7 +260,10 @@ over best-effort as it does today.
 Stop is the "I'm done with the bar" gesture. It writes `event: "stop"`,
 which sets `stopped_at` and removes the row from `latest` until the next
 play of that episode. Without it, the bar would reappear on every load of
-every device for up to a week.
+every device indefinitely. There is deliberately no age limit on the
+restore candidate: Spotify brings back the last played item on any device
+however long ago it was, and an arbitrary cut-off would make the bar
+appear or not for reasons the user cannot see. Stop is the one control.
 
 ### Resume on play
 
@@ -298,16 +305,39 @@ is. Rows in `saved` or `dismissed` are untouched.
 Episodes with no known duration (streams, broken feeds) complete only on
 `ended`.
 
+The 45 s threshold is a fixed number, not a share of the duration. No
+major player documents its rule (Spotify's 30-second figure is its
+play-count definition for creator analytics, not completion), and the
+manual toggle below corrects the cases the rule gets wrong.
+
+### Mark as played
+
+Every episode can be marked played or unplayed by hand, as in Spotify and
+Apple Podcasts:
+
+- **Mark as played** sends `event: "mark_played"`. It has the same effect
+  as finishing: `completed_at` set, position reset to 0, inbox row marked
+  read if unread. If the episode is the current track, the player pauses
+  and rewinds the bar to 0 so a later tick cannot undo the mark.
+- **Mark as unplayed** sends `event: "mark_unplayed"`. It clears
+  `completed_at`, leaves the position at 0 and does not touch the inbox
+  row; reading state is the inbox's own control.
+
+The manual action writes with its own `session_id` per click, so it always
+wins over whatever was stored and is never rejected as out of order.
+
 ### Surfaces
 
 - **Mini player.** No new component: a restored session renders the
   existing bar ([#71](71-player-shell-layer.md)) paused at the position.
 - **Inbox rows.** A 2 px progress line along the bottom of the artwork and
   "32 min left" in the existing metadata line; "Played" with a check once
-  completed. No extra row height (spec #73 density rules).
+  completed. No extra row height (spec #73 density rules). Mark as played /
+  unplayed sits in the row's existing actions menu.
 - **Episode page.** The primary play button reads "Resume · 32 min left"
   when there is a position, with a quiet "Play from beginning" link next to
   it. A completed episode shows "Played" and the button plays from 0.
+  Mark as played / unplayed sits with the page's other episode actions.
 - **Continue listening strip (Phase 3).** Above the inbox list, up to three
   unfinished episodes from `GET /api/me/listening?state=in_progress`,
   styled like the Arriving soon strip ([#88](88-import-outcomes-and-arriving-soon.md)).
@@ -337,14 +367,15 @@ never log positions at info level, and no position is sent to analytics.
   `0014`; repository pair with a shared contract test run against both
   backends (Postgres via `TEST_DATABASE_URL`).
 - `ListeningProgressService`: write ordering, clamping, completion,
-  mark-read on completion.
+  mark played / unplayed, mark-read on completion.
 - Routes: `PUT /{episode_id}`, `GET /{episode_id}`, `GET /latest`, and
   the `GET ?state=in_progress` list.
 - `listening` on inbox items and the episode detail payload.
 - Legacy claim moves the table.
 - Tests: ordering (same session older `seq` rejected, other session
-  accepted), completion threshold, stop hides from `latest`, restore window,
-  cascade on user and episode delete.
+  accepted), completion threshold, mark played / unplayed (including over
+  a row with a higher stored `seq`), stop hides from `latest`, an old row
+  is still returned by `latest`, cascade on user and episode delete.
 
 ### Phase 2 — Player
 
@@ -355,6 +386,7 @@ never log positions at info level, and no position is sent to analytics.
   abandon on user action.
 - Resume on play from the cache, parallel fetch plus
   `NativeEngine.setPendingSeek` for surfaces without `listening`.
+- Marking the current track played pauses and rewinds it.
 - Tests in `PlayerContext.test.tsx` with fake timers: 15 s cadence,
   flush on `pagehide`, restore from snapshot without network, autoplay
   rejection leaves the bar paused with no error, explicit `startAt` beats
@@ -365,8 +397,9 @@ never log positions at info level, and no position is sent to analytics.
 
 ### Phase 3 — Surfaces
 
-- Inbox row progress line, time left and Played.
-- Episode page Resume / Play from beginning / Played.
+- Inbox row progress line, time left, Played, and Mark as played /
+  unplayed in the row actions.
+- Episode page Resume / Play from beginning / Played / Mark as played.
 - Continue listening strip on `/inbox`.
 
 ## Known Gaps
@@ -382,13 +415,10 @@ never log positions at info level, and no position is sent to analytics.
 
 ## Open Questions
 
-1. Is a 7-day restore window right for the cross-device bar, or should a
-   new device only ever show the Continue listening strip and never
-   restore the bar on its own?
-2. Should completion mark the inbox row read (proposed), or should
-   listening and reading stay separate signals?
-3. Is 45 s the right "remaining" threshold, or should it scale with
-   duration (for example 2%, capped at 90 s)?
+1. Should finishing an episode also be able to take it off the inbox,
+   like Spotify's "Remove played episodes" setting on Your Episodes
+   (never / after a chosen interval)? Out of scope here; it would be an
+   inbox setting on top of `completed_at`.
 
 ## Decision Log
 
@@ -399,4 +429,7 @@ never log positions at info level, and no position is sent to analytics.
 | 2026-09-30 | Order writes by `session_id` + `seq`, not client timestamps | Device clocks drift; the only reordering that matters happens within one tab |
 | 2026-09-30 | Automatic playback after reload is best-effort | Browser autoplay policy; paused at the right second is the guaranteed outcome |
 | 2026-09-30 | Restore always on the native engine | YouTube playback needs a visible surface and is opt-in per episode (spec #62) |
-| 2026-09-30 | Stop hides the episode from restore; pause does not | Otherwise the bar comes back on every load for a week after the user dismissed it |
+| 2026-09-30 | Stop hides the episode from restore; pause does not | Otherwise the bar comes back on every load after the user dismissed it |
+| 2026-09-30 | No age limit on the restore candidate | Spotify restores the last played item on every device with no expiry; Stop already covers "I don't want this back" |
+| 2026-09-30 | Finishing marks the inbox row read (unread only) | Listening to the end is consuming the episode; Spotify likewise ties finishing to list tidying (Remove played episodes), and the manual toggle covers mistakes |
+| 2026-09-30 | Fixed 45 s completion threshold plus a manual Mark as played / unplayed | No player publishes its rule; a manual correction matters more than tuning the number |
