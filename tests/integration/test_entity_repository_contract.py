@@ -1266,3 +1266,40 @@ def test_find_mistyped_entities_majority_rule(repo):
     assert repo.find_mistyped_entities(min_mentions=5) == []
     # Majority ratio not cleared → filtered out.
     assert repo.find_mistyped_entities(min_majority_ratio=0.9) == []
+
+
+def test_list_anchor_scan_overlaps_and_delete_by_ids(repo):
+    """The anchor scan's reads of part of a GLiNER name are listed per pair,
+    and deleting them by id leaves everything else."""
+    repo.upsert_entity(_entity())
+    scan = dict(extractor="anchor:scan", resolution_method="anchor")
+    quote = "… Elon Musk said so …"
+    repo.insert_mentions(
+        [
+            _resolved_mention("person:elon-musk", segment_id=1, surface="Elon Musk", quote_excerpt=quote),
+            _resolved_mention("person:elon-musk", segment_id=1, surface="Musk", quote_excerpt=quote, **scan),
+            _resolved_mention("person:elon-musk", segment_id=1, surface="Elon", quote_excerpt=quote, **scan),
+            # A speaking row's surface is the speaker label, not text in the segment.
+            _resolved_mention(
+                "person:elon-musk", segment_id=1, surface="Elon Musk Jr", role=MentionRole.SPEAKING, **scan
+            ),
+            # Another segment: a lone scan hit with nothing longer beside it.
+            _resolved_mention("person:elon-musk", segment_id=2, surface="Musk", **scan),
+        ]
+    )
+
+    overlaps = repo.list_anchor_scan_overlaps()
+
+    assert sorted((o.surface_form, o.other_surface_form) for o in overlaps) == [
+        ("Elon", "Elon Musk"),
+        ("Musk", "Elon Musk"),
+    ]
+    first = overlaps[0]
+    assert first.episode_id == EP_1 and first.segment_id == 1 and first.quote_excerpt == quote
+    assert first.entity_id == first.other_entity_id == "person:elon-musk"
+
+    assert repo.delete_mentions_by_ids([]) == 0
+    assert repo.delete_mentions_by_ids([o.mention_id for o in overlaps]) == 2
+    assert repo.list_anchor_scan_overlaps() == []
+    remaining = sorted(m.mention.surface_form for m in repo.find_mentions(entity_id="person:elon-musk"))
+    assert remaining == ["Elon Musk", "Elon Musk Jr", "Musk"]

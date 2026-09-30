@@ -44,8 +44,9 @@ process scope.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
@@ -221,17 +222,17 @@ class EntityExtractor:
         anchor_index = index_variants_by_surface(anchor_variants or [])
         predictions = self._collect_predictions(transcript.segments)
         mentions: List[EntityMention] = []
-        seen_spans: set = set()
+        gliner_spans: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
         for pred in predictions:
             mention = self._to_mention(pred, episode_id=episode_id, anchor_index=anchor_index)
             mentions.append(mention)
-            seen_spans.add((pred.segment.id, pred.char_start, pred.char_end))
+            gliner_spans[pred.segment.id].append((pred.char_start, pred.char_end))
 
         # Spec §1.13.4 — separate scan for anchor surfaces that GLiNER
         # missed entirely (e.g. last-name-only mentions in episodes with
-        # a clean guest signal). Skip spans GLiNER already covered.
+        # a clean guest signal). Skip text GLiNER already covered.
         if anchor_index:
-            for anchor_pred in self._scan_anchors(transcript.segments, anchor_index, exclude_spans=seen_spans):
+            for anchor_pred in self._scan_anchors(transcript.segments, anchor_index, taken_spans=gliner_spans):
                 mentions.append(
                     self._to_mention(
                         anchor_pred,
@@ -425,14 +426,16 @@ class EntityExtractor:
         segments: Iterable[AnnotatedSegment],
         anchor_index: Dict[str, List[AnchorVariant]],
         *,
-        exclude_spans: set,
+        taken_spans: Dict[int, List[Tuple[int, int]]],
     ) -> List[_SegmentPrediction]:
         """Scan body text for anchor surfaces GLiNER missed.
 
         Word-boundary regex per surface keeps "Karpathy" from matching
         inside "Karpathys" while still matching at sentence boundaries.
-        Skips spans GLiNER already produced (passed in
-        ``exclude_spans``).
+        Skips any match that overlaps a span GLiNER already produced
+        (``taken_spans``, segment id → spans): "Gary" inside GLiNER's
+        "Gary Neville" is Gary Neville, not the host Gary Lineker, and
+        "Dogus" inside "Dogus Cubuk" is the same person counted twice.
         """
         results: List[_SegmentPrediction] = []
         # Compile each surface once. We sort longest-first so longer
@@ -443,13 +446,11 @@ class EntityExtractor:
             if segment.kind != "content" or not segment.text.strip():
                 continue
             text = segment.text
-            consumed_spans: List = []
+            consumed_spans: List[Tuple[int, int]] = list(taken_spans.get(segment.id, ()))
             for surface in compiled:
                 pattern = re.compile(r"\b" + re.escape(surface) + r"\b", re.IGNORECASE)
                 for match in pattern.finditer(text):
                     span = (match.start(), match.end())
-                    if (segment.id, span[0], span[1]) in exclude_spans:
-                        continue
                     if any(_overlaps(span, c) for c in consumed_spans):
                         continue
                     consumed_spans.append(span)

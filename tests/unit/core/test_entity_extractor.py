@@ -235,3 +235,52 @@ class TestLazyModelLoad:
         import pytest
 
         pytest.skip("gliner is installed; cannot exercise the missing-import path")
+
+
+class _AnchorStub(StubGLiNER):
+    SURFACE_FORMS = (
+        ("Dogus Cubuk", "person", 0.9),
+        ("Gary Neville", "person", 0.9),
+    )
+
+
+class TestAnchorScan:
+    """Spec §1.13.4 — the anchor scan adds host/guest names GLiNER missed,
+    and never re-reads text GLiNER already took."""
+
+    def _extract(self, text: str):
+        from thestill.core.entity_anchor import expand_anchor_variants
+        from thestill.models.entities import EntityRecord, EntityType
+
+        anchors = [
+            EntityRecord(id="person:dogus-cubuk", type=EntityType.PERSON, canonical_name="Dogus Cubuk"),
+            EntityRecord(id="person:gary-lineker", type=EntityType.PERSON, canonical_name="Gary Lineker"),
+        ]
+        transcript = AnnotatedTranscript.model_validate(
+            {
+                "episode_id": "ep-1",
+                "segments": [{"id": 3, "start": 0.0, "end": 30.0, "speaker": None, "text": text, "kind": "content"}],
+            }
+        )
+        extractor = EntityExtractor(preloaded_model=_AnchorStub())
+        return extractor.extract(transcript, episode_id="ep-1", anchor_variants=expand_anchor_variants(anchors))
+
+    def test_does_not_rescan_parts_of_a_name_gliner_found(self):
+        mentions = self._extract("Liam Fedus and Dogus Cubuk are building a company to change that.")
+
+        # One row for the one name — not "Dogus Cubuk" + "Dogus" + "Cubuk".
+        assert [(m.surface_form, m.extractor.split(":")[0]) for m in mentions] == [("Dogus Cubuk", "gliner")]
+        assert mentions[0].entity_id == "person:dogus-cubuk"
+
+    def test_part_of_another_persons_name_is_not_the_anchor(self):
+        mentions = self._extract("You sounded like Gary Neville doing commentary work.")
+
+        # "Gary" inside GLiNER's "Gary Neville" must not become host Gary Lineker.
+        assert all(m.entity_id != "person:gary-lineker" for m in mentions)
+        assert [m.extractor for m in mentions if m.extractor == "anchor:scan"] == []
+
+    def test_still_finds_names_gliner_missed(self):
+        mentions = self._extract("Dogus Cubuk joined us. Later Cubuk explained the lab, and Gary laughed.")
+
+        scanned = sorted((m.surface_form, m.entity_id) for m in mentions if m.extractor == "anchor:scan")
+        assert scanned == [("Cubuk", "person:dogus-cubuk"), ("Gary", "person:gary-lineker")]

@@ -30,7 +30,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
@@ -41,9 +41,11 @@ from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRo
 # spec #44; re-exported here so existing call sites keep importing them
 # from this module.
 from .entity_repository import (
+    ANCHOR_SCAN_OVERLAPS_SQL,
     RECENT_MENTIONS_BY_EPISODE_SQL,
     ROLE_BY_SCORE,
     AliasEvidence,
+    AnchorScanOverlap,
     EntityEpisode,
     EntityHit,
     EntityRepository,
@@ -377,6 +379,26 @@ class SqliteEntityRepository(EntityRepository):
             )
         logger.info("entity_mentions_inserted", count=len(rows))
         return len(rows)
+
+    def list_anchor_scan_overlaps(self) -> List[AnchorScanOverlap]:
+        """Resolved ``anchor:scan`` mentions beside a longer mention in their segment."""
+        with self._get_connection() as conn:
+            rows = conn.execute(ANCHOR_SCAN_OVERLAPS_SQL).fetchall()
+        return [AnchorScanOverlap(**dict(r)) for r in rows]
+
+    def delete_mentions_by_ids(self, mention_ids: Sequence[int]) -> int:
+        """Delete these mention rows; rowcount."""
+        ids = list(mention_ids)
+        deleted = 0
+        with self._get_connection() as conn:
+            # SQLite caps bound parameters per statement; delete in chunks.
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                placeholders = ",".join("?" * len(chunk))
+                deleted += conn.execute(f"DELETE FROM entity_mentions WHERE id IN ({placeholders})", chunk).rowcount
+        if deleted:
+            logger.info("entity_mentions_deleted_by_id", count=deleted)
+        return deleted
 
     def delete_mentions_for_episode(self, episode_id: str) -> int:
         """Wipe all ``entity_mentions`` for one episode; return rowcount.

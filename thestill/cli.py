@@ -3818,6 +3818,82 @@ def clean_aliases(ctx, apply_changes, report_path, allowlist_path, reresolve):
         click.echo("  Not enqueued (--no-reresolve): reset mentions stay pending until resolved elsewhere.")
 
 
+@main.command("repair-anchor-mentions")
+@click.option("--apply", "apply_changes", is_flag=True, help="Delete the rows. Without it this is a dry run.")
+@click.option(
+    "--report",
+    "report_path",
+    type=click.Path(dir_okay=False, writable=True),
+    help="Write every row to be deleted to this TSV (review it before --apply).",
+)
+@click.option("--examples", default=10, show_default=True, type=int, help="How many rows of each kind to print.")
+@click.pass_context
+@require_config
+@log_command
+def repair_anchor_mentions(ctx, apply_changes, report_path, examples):
+    """Delete anchor-scan mentions that re-read part of a name GLiNER found.
+
+    Until 2026-09-30 the host/guest name scan matched inside names GLiNER
+    had already extracted: "Liam Fedus and Dogus Cubuk" gave three mentions
+    of one person ("Dogus Cubuk", "Dogus", "Cubuk"), and "Gary Neville" also
+    gave a "Gary" credited to the host Gary Lineker. The extractor no longer
+    does this; this removes the rows it already wrote. A scan row is deleted
+    only when, in its quote, its name occurs solely inside the longer one;
+    rows that may name the entity on their own are kept.
+
+    Dry run by default; --apply deletes and recounts co-occurrences for the
+    affected episodes. Safe to re-run: a second pass finds nothing.
+    """
+    import csv
+
+    from .core.anchor_scan_repair import apply_anchor_scan_repair, plan_anchor_scan_repair
+
+    repo = ctx.obj.entity_repository
+    click.echo("Scanning anchor-scan mentions...")
+    plan = plan_anchor_scan_repair(repo.list_anchor_scan_overlaps())
+    for key, value in plan.summary().items():
+        click.echo(f"  {key:<34} {value:,}")
+
+    if report_path:
+        with open(report_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh, delimiter="\t")
+            writer.writerow(
+                ["kind", "mention_id", "episode_id", "entity_id", "surface", "inside", "inside_entity", "quote"]
+            )
+            for d in plan.deletions:
+                kind = "misattributed" if d.misattributed else "duplicate"
+                writer.writerow(
+                    [kind, d.mention_id, d.episode_id, d.entity_id, d.surface_form, d.inside, d.inside_entity_id]
+                    + [d.quote_excerpt]
+                )
+        click.echo(f"Report written to {report_path}")
+
+    for label, rows in (
+        ("Credited to the wrong entity", [d for d in plan.deletions if d.misattributed]),
+        ("Same entity counted again", [d for d in plan.deletions if not d.misattributed]),
+    ):
+        if rows and examples > 0:
+            click.echo("")
+            click.echo(f"{label}:")
+            for d in rows[:examples]:
+                click.echo(f"  {d.surface_form!r} -> {d.entity_id}, inside {d.inside!r} ({d.inside_entity_id})")
+
+    if not plan.deletions:
+        click.echo("✓ nothing to repair")
+        return
+    if not apply_changes:
+        click.echo("")
+        click.echo("Dry run - nothing written. Re-run with --apply to delete these rows.")
+        return
+
+    result = apply_anchor_scan_repair(repo, plan)
+    click.echo("")
+    click.echo(f"✓ Deleted {result.deleted:,} mentions in {len(result.episodes):,} episodes")
+    if result.cooccurrence_pairs is not None:
+        click.echo(f"  Co-occurrence pairs rebuilt: {result.cooccurrence_pairs:,}")
+    click.echo("  Entity overlap feeds the Related episodes rail; refresh it with `thestill related build`.")
+
+
 @main.command("repair-entity-types")
 @click.option(
     "--min-mentions",
