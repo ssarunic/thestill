@@ -491,6 +491,22 @@ def _segment_preference(ctx: MentionContext) -> tuple[bool, int]:
     return (ctx.mention.role is MentionRole.SPEAKING, ctx.mention.id or 0)
 
 
+def _retyped_entity_id(entity_repository, entity_type: str, slug: str) -> Optional[str]:
+    """The stored id of an entity that now has ``entity_type`` but was
+    created under another type's prefix.
+
+    Wikidata P31 gating can re-type an entity after its row exists (a
+    physicist first extracted as a company), and resolution keeps the row's
+    id so its mentions stay attached. Links are built from the current type,
+    so ``person/abraham-pais`` has to find ``company:abraham-pais``.
+    """
+    candidates = [f"{other}:{slug}" for other in sorted(_VALID_TYPES) if other != entity_type]
+    for entity in entity_repository.get_entities_by_ids(candidates):
+        if entity.type.value == entity_type:
+            return entity.id
+    return None
+
+
 @router.get(
     "/entities/{entity_type}/{id_slug}",
     response_model=EntitySummaryResponse,
@@ -506,6 +522,7 @@ def get_entity_summary(
     reconstructed as ``"{type}:{slug}"``. Callers that already have the
     full id can use either ``person/elon-musk`` or
     ``person/person:elon-musk`` (we strip a leading ``"{type}:"`` prefix).
+    An entity re-typed after creation is found under its original prefix.
     """
     # Accept both bare slug and full id forms so deeplinks survive
     # whichever shape the caller has on hand.
@@ -516,6 +533,10 @@ def get_entity_summary(
         recent_mentions_limit=_RECENT_EPISODES,
         recent_mentions_per_episode=_MOMENTS_PER_EPISODE,
     )
+    if summary is None:
+        retyped_id = _retyped_entity_id(state.entity_repository, entity_type, bare_slug)
+        if retyped_id is not None:
+            summary = state.entity_repository.get_entity_summary(retyped_id)
     if summary is None:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
 

@@ -440,6 +440,30 @@ class TestEntitySummaryEndpoint:
         assert resp.status_code == 200
         assert resp.json()["entity"]["id"] == "person:elon-musk"
 
+    def test_resolves_entity_retyped_after_creation(self, client, app_state):
+        """P31 gating can re-type an entity whose row already exists; the
+        row keeps its first id. Links are built from the current type, so
+        ``person/abraham-pais`` must find ``company:abraham-pais``."""
+        _seed_corpus(Path(app_state.repository.db_path))
+        repo = SqliteEntityRepository(db_path=app_state.repository.db_path)
+        repo.upsert_entity(
+            EntityRecord(
+                id="company:abraham-pais",
+                type=EntityType.PERSON,
+                canonical_name="Abraham Pais",
+                wikidata_qid="Q330492",
+                aliases=["Pais"],
+            )
+        )
+
+        resp = client.get("/api/entities/person/abraham-pais")
+        assert resp.status_code == 200
+        assert resp.json()["entity"]["id"] == "company:abraham-pais"
+        assert resp.json()["entity"]["type"] == "person"
+
+        # Another type's page must not borrow it.
+        assert client.get("/api/entities/topic/abraham-pais").status_code == 404
+
     def test_rejects_invalid_entity_type(self, client):
         resp = client.get("/api/entities/celebrity/foo")
         assert resp.status_code == 400
