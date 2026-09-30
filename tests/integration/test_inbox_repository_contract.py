@@ -139,14 +139,14 @@ class _SqliteEnv:
             )
             conn.commit()
 
-    def add_task(self, episode_id: str, status: str = "pending") -> None:
+    def add_task(self, episode_id: str, status: str = "pending", stage: str = "transcribe") -> None:
         from thestill.core.queue_manager import QueueManager
 
         QueueManager(self.db_path)  # owns the tasks DDL on SQLite
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO tasks (id, episode_id, stage, status) VALUES (?, ?, 'transcribe', ?)",
-                (str(uuid.uuid4()), episode_id, status),
+                "INSERT INTO tasks (id, episode_id, stage, status) VALUES (?, ?, ?, ?)",
+                (str(uuid.uuid4()), episode_id, stage, status),
             )
             conn.commit()
 
@@ -229,10 +229,10 @@ class _PostgresEnv:
             (str(uuid.uuid4()), user_id, podcast_id),
         )
 
-    def add_task(self, episode_id: str, status: str = "pending") -> None:
+    def add_task(self, episode_id: str, status: str = "pending", stage: str = "transcribe") -> None:
         self._execute(
-            "INSERT INTO tasks (id, episode_id, stage, status) VALUES (%s, %s, 'transcribe', %s)",
-            (str(uuid.uuid4()), episode_id, status),
+            "INSERT INTO tasks (id, episode_id, stage, status) VALUES (%s, %s, %s, %s)",
+            (str(uuid.uuid4()), episode_id, stage, status),
         )
 
     def mark_failed(self, episode_id: str) -> None:
@@ -1078,6 +1078,35 @@ def test_list_arriving_drops_episode_once_user_has_a_row(env):
 
     assert [i.episode.title for i in remaining] == ["older in flight"]
     assert total == 1
+
+
+def test_list_arriving_reports_the_running_user_chain_task(env):
+    """Dalston transcribes by URL, so the episode has no audio_path and its
+    derived state is still DISCOVERED; the active task says what is really
+    happening. A running task beats a queued one, and entity-branch tasks
+    are not progress toward arrival."""
+    alice = env.add_user("alice@example.com")
+    p1 = env.add_podcast("p1")
+    env.add_follower(alice, p1)
+    transcribing = env.add_episode(p1, "transcribing", pub_date=BASE + timedelta(days=2))
+    env.add_task(transcribing, "pending", stage="clean")
+    env.add_task(transcribing, "processing", stage="transcribe")
+    env.add_task(transcribing, "processing", stage="extract-entities")
+    queued = env.add_episode(p1, "queued", pub_date=BASE + timedelta(days=1))
+    env.add_task(queued, "pending", stage="download")
+    entity_only = env.add_episode(p1, "entity only", pub_date=BASE)
+    env.add_task(entity_only, "processing", stage="extract-entities")
+
+    items, _ = env.repo.list_arriving(alice, limit=10)
+
+    by_title = {i.episode.title: i for i in items}
+    assert by_title["transcribing"].episode.state.value == "discovered"
+    assert (by_title["transcribing"].active_stage, by_title["transcribing"].active_status) == (
+        "transcribe",
+        "processing",
+    )
+    assert (by_title["queued"].active_stage, by_title["queued"].active_status) == ("download", "pending")
+    assert (by_title["entity only"].active_stage, by_title["entity only"].active_status) == (None, None)
 
 
 def test_list_arriving_is_empty_for_a_user_who_follows_nothing(env):
