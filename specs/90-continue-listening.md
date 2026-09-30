@@ -81,6 +81,10 @@ as a best-effort bonus, never as an error when refused.
 - **Restoring the YouTube engine.** A restored session always starts on
   the native engine (see [Restore on load](#restore-on-load)).
 - **MCP exposure.** No tool reads or writes listening progress yet.
+- **Removing played episodes from the inbox.** Finishing or marking an
+  episode played never removes, hides or dismisses its inbox row, now or
+  as a setting later (unlike Spotify's "Remove played episodes"). The
+  inbox only ever changes state; leaving it is the user's own action.
 - **Offline playback or a service worker.**
 
 ## Design
@@ -415,10 +419,7 @@ never log positions at info level, and no position is sent to analytics.
 
 ## Open Questions
 
-1. Should finishing an episode also be able to take it off the inbox,
-   like Spotify's "Remove played episodes" setting on Your Episodes
-   (never / after a chosen interval)? Out of scope here; it would be an
-   inbox setting on top of `completed_at`.
+None.
 
 ## Decision Log
 
@@ -432,4 +433,5 @@ never log positions at info level, and no position is sent to analytics.
 | 2026-09-30 | Stop hides the episode from restore; pause does not | Otherwise the bar comes back on every load after the user dismissed it |
 | 2026-09-30 | No age limit on the restore candidate | Spotify restores the last played item on every device with no expiry; Stop already covers "I don't want this back" |
 | 2026-09-30 | Finishing marks the inbox row read (unread only) | Listening to the end is consuming the episode; Spotify likewise ties finishing to list tidying (Remove played episodes), and the manual toggle covers mistakes |
+| 2026-09-30 | Played episodes are never removed from the inbox | Product rule: the inbox never drops a row on its own; completion only moves unread to read |
 | 2026-09-30 | Fixed 45 s completion threshold plus a manual Mark as played / unplayed | No player publishes its rule; a manual correction matters more than tuning the number |
