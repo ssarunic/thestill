@@ -38,7 +38,7 @@ The one deliberate contract quirk kept for fidelity:
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from psycopg.types.json import Jsonb
 from structlog import get_logger
@@ -47,9 +47,11 @@ from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnric
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 from ..utils.postgres_ext import as_str, connect
 from .entity_repository import (
+    ANCHOR_SCAN_OVERLAPS_SQL,
     RECENT_MENTIONS_BY_EPISODE_SQL,
     ROLE_BY_SCORE,
     AliasEvidence,
+    AnchorScanOverlap,
     EntityEpisode,
     EntityHit,
     EntityRepository,
@@ -360,6 +362,23 @@ class PostgresEntityRepository(EntityRepository):
                 )
         logger.info("entity_mentions_inserted", count=len(rows))
         return len(rows)
+
+    def list_anchor_scan_overlaps(self) -> List[AnchorScanOverlap]:
+        """Resolved ``anchor:scan`` mentions beside a longer mention in their segment."""
+        with connect(self.dsn) as conn:
+            rows = conn.execute(ANCHOR_SCAN_OVERLAPS_SQL).fetchall()
+        return [AnchorScanOverlap(**{**r, "episode_id": as_str(r["episode_id"])}) for r in rows]
+
+    def delete_mentions_by_ids(self, mention_ids: Sequence[int]) -> int:
+        """Delete these mention rows; rowcount."""
+        ids = list(mention_ids)
+        if not ids:
+            return 0
+        with connect(self.dsn) as conn:
+            deleted = conn.execute("DELETE FROM entity_mentions WHERE id = ANY(%s)", (ids,)).rowcount
+        if deleted:
+            logger.info("entity_mentions_deleted_by_id", count=deleted)
+        return deleted
 
     def delete_mentions_for_episode(self, episode_id: str) -> int:
         """Wipe all ``entity_mentions`` for one episode; return rowcount."""

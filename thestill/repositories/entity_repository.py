@@ -26,7 +26,7 @@ compatibility with existing call sites.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 from ..models.enrichment import EntityEnrichment
 from ..models.entities import EntityMention, EntityRecord
@@ -111,6 +111,43 @@ RECENT_MENTIONS_BY_EPISODE_SQL = """
     WHERE mo.episode_rank <= {p}
     ORDER BY e.pub_date IS NULL, e.pub_date DESC, mo.episode_id, mo.start_ms, mo.id
 """
+
+# ``anchor:scan`` mentions that sit in the same transcript segment as a
+# longer mention whose surface contains theirs ("Dogus" beside "Dogus Cubuk",
+# "Gary" beside "Gary Neville"). Before the anchor scan learned to skip text
+# GLiNER had already taken, it re-read parts of GLiNER's names: the same
+# person counted two or three times, or a host credited with a namesake's
+# mention. The LIKE is only a pre-filter; ``core.anchor_scan_repair`` decides
+# on whole words in the quote. Shared by both backends (no parameters).
+ANCHOR_SCAN_OVERLAPS_SQL = """
+    SELECT a.id AS mention_id, a.episode_id, a.segment_id, a.entity_id,
+           a.surface_form, a.quote_excerpt,
+           b.entity_id AS other_entity_id, b.surface_form AS other_surface_form
+    FROM entity_mentions a
+    JOIN entity_mentions b
+      ON b.episode_id = a.episode_id AND b.segment_id = a.segment_id AND b.id <> a.id
+    WHERE a.extractor = 'anchor:scan' AND a.resolution_status = 'resolved'
+      AND b.extractor <> 'anchor:scan' AND b.resolution_status = 'resolved'
+      AND (b.role IS NULL OR b.role <> 'speaking')
+      AND length(b.surface_form) > length(a.surface_form)
+      AND lower(b.surface_form) LIKE '%' || lower(a.surface_form) || '%'
+    ORDER BY a.id
+"""
+
+
+@dataclass(frozen=True)
+class AnchorScanOverlap:
+    """One ``anchor:scan`` mention beside a longer mention in its segment
+    whose surface contains its own (``ANCHOR_SCAN_OVERLAPS_SQL``)."""
+
+    mention_id: int
+    episode_id: str
+    segment_id: int
+    entity_id: str
+    surface_form: str
+    quote_excerpt: str
+    other_entity_id: str
+    other_surface_form: str
 
 
 @dataclass(frozen=True)
@@ -272,6 +309,17 @@ class EntityRepository(ABC):
         """Bulk-insert mention rows; return rowcount. Input ``id`` values
         are ignored (the DB assigns them). Empty input is a 0 no-op.
         """
+
+    @abstractmethod
+    def list_anchor_scan_overlaps(self) -> List[AnchorScanOverlap]:
+        """Resolved ``anchor:scan`` mentions beside a longer resolved mention
+        in the same segment whose surface contains theirs, one row per pair
+        (``ANCHOR_SCAN_OVERLAPS_SQL``).
+        """
+
+    @abstractmethod
+    def delete_mentions_by_ids(self, mention_ids: Sequence[int]) -> int:
+        """Delete these mention rows; rowcount. Empty input is a 0 no-op."""
 
     @abstractmethod
     def delete_mentions_for_episode(self, episode_id: str) -> int:
