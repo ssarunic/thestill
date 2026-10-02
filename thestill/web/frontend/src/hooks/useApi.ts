@@ -1227,6 +1227,16 @@ export function useLatestBriefing() {
     queryFn: () => getLatestBriefing(),
     staleTime: 60_000,
     retry: false,
+    // While episodes are still processing for the next edition, poll so
+    // the count drains (and a just-cut edition appears) without a reload.
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return false
+      const pending = 'briefing_pending' in data
+        ? data.briefing_pending.pending_count
+        : data.upcoming?.pending_count ?? 0
+      return pending > 0 ? 15_000 : false
+    },
   })
 }
 

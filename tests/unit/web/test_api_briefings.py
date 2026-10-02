@@ -25,7 +25,7 @@ from thestill.models.briefing import Briefing
 from thestill.models.briefing_schedule import BriefingFrequency
 from thestill.models.podcast import Episode, Podcast
 from thestill.models.user import User
-from thestill.services.briefing_service import BriefingNotFoundError, Deferred
+from thestill.services.briefing_service import BriefingNotFoundError, Deferred, Upcoming
 from thestill.web.routes import api_briefings
 
 
@@ -40,8 +40,9 @@ def _briefing(
     user_id: str = "user-1",
     script_path: str | None = None,
     listened_at: datetime | None = None,
+    day_offset: int = 0,
 ) -> Briefing:
-    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc) + timedelta(days=day_offset)
     return Briefing(
         id=briefing_id,
         user_id=user_id,
@@ -58,6 +59,8 @@ def _briefing(
 def mock_app_state():
     state = MagicMock()
     state.briefing_service = MagicMock()
+    state.briefing_service.recent_for_user.return_value = []
+    state.briefing_service.upcoming_for_user.return_value = Upcoming(new_episode_count=0, pending_count=0)
     state.briefing_repository = MagicMock()
     # Spec #84: the lazy path is the default only while no scheduler runs.
     # A bare MagicMock reads as "scheduler running + enabled schedule", so
@@ -138,6 +141,84 @@ class TestGetLatest:
         mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=True)
 
 
+class TestGetLatestTwoItems:
+    """The current edition never disappears before a newer one exists; the
+    next edition is previewed in ``upcoming`` and the prior one in
+    ``previous``."""
+
+    TODAY = "00000000-0000-0000-0000-000000000002"
+    YESTERDAY = "00000000-0000-0000-0000-000000000001"
+
+    def _recent(self):
+        return [_briefing(briefing_id=self.TODAY, day_offset=1), _briefing(briefing_id=self.YESTERDAY)]
+
+    def test_deferral_keeps_current_edition_and_reports_pending_in_upcoming(self, client, mock_app_state):
+        deadline = datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc)
+        mock_app_state.briefing_service.generate_for_user.return_value = Deferred(3, deadline)
+        mock_app_state.briefing_service.recent_for_user.return_value = self._recent()
+        mock_app_state.briefing_service.upcoming_for_user.return_value = Upcoming(new_episode_count=5, pending_count=1)
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == self.TODAY
+        assert data["upcoming"] == {
+            "next_run_at": None,
+            "new_episode_count": 5,
+            "pending_count": 3,
+            "deadline": deadline.isoformat(),
+        }
+
+    def test_empty_window_keeps_current_edition(self, client, mock_app_state):
+        mock_app_state.briefing_service.generate_for_user.return_value = None
+        mock_app_state.briefing_service.recent_for_user.return_value = self._recent()
+
+        response = client.get("/api/briefings/latest")
+
+        assert response.status_code == 200
+        assert response.json()["id"] == self.TODAY
+
+    def test_previous_edition_rides_along(self, client, mock_app_state):
+        mock_app_state.briefing_service.generate_for_user.return_value = self._recent()[0]
+        mock_app_state.briefing_service.recent_for_user.return_value = self._recent()
+
+        data = client.get("/api/briefings/latest").json()
+
+        assert data["previous"]["id"] == self.YESTERDAY
+        assert data["previous"]["episode_count"] == 3
+
+    def test_no_previous_for_first_edition(self, client, mock_app_state):
+        only = _briefing()
+        mock_app_state.briefing_service.generate_for_user.return_value = only
+        mock_app_state.briefing_service.recent_for_user.return_value = [only]
+
+        data = client.get("/api/briefings/latest").json()
+
+        assert data["previous"] is None
+        assert data["upcoming"]["deadline"] is None
+
+    def test_scheduled_upcoming_carries_next_run_and_counts(self, client, mock_app_state, mock_user):
+        next_run = datetime(2026, 5, 3, 7, 0, tzinfo=timezone.utc)
+        mock_app_state.briefing_scheduler = MagicMock()
+        mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=next_run)
+        recent = self._recent()
+        mock_app_state.briefing_service.recent_for_user.return_value = recent
+        mock_app_state.briefing_service.upcoming_for_user.return_value = Upcoming(new_episode_count=4, pending_count=2)
+
+        data = client.get("/api/briefings/latest").json()
+
+        assert data["id"] == self.TODAY
+        assert data["upcoming"] == {
+            "next_run_at": next_run.isoformat(),
+            "new_episode_count": 4,
+            "pending_count": 2,
+            "deadline": None,
+        }
+        mock_app_state.briefing_service.upcoming_for_user.assert_called_once_with(mock_user.id, latest=recent[0])
+        mock_app_state.briefing_service.generate_for_user.assert_not_called()
+
+
 class TestGetLatestScheduledOnly:
     """Spec #84: with the scheduler running, opening the inbox is a read."""
 
@@ -149,7 +230,7 @@ class TestGetLatestScheduledOnly:
 
     def test_enabled_schedule_returns_latest_without_generating(self, client, mock_app_state):
         mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
-        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+        mock_app_state.briefing_service.recent_for_user.return_value = [_briefing()]
 
         response = client.get("/api/briefings/latest")
 
@@ -160,7 +241,7 @@ class TestGetLatestScheduledOnly:
 
     def test_first_edition_is_still_generated_lazily(self, client, mock_app_state, mock_user):
         mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
-        mock_app_state.briefing_service.latest_for_user.return_value = None
+        mock_app_state.briefing_service.recent_for_user.return_value = []
         mock_app_state.briefing_service.generate_for_user.return_value = _briefing()
 
         response = client.get("/api/briefings/latest")
@@ -171,7 +252,7 @@ class TestGetLatestScheduledOnly:
 
     def test_force_still_generates(self, client, mock_app_state, mock_user):
         mock_app_state.briefing_schedule_repository.get.return_value = _schedule(next_run_at=self.NEXT)
-        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+        mock_app_state.briefing_service.recent_for_user.return_value = [_briefing()]
         mock_app_state.briefing_service.generate_for_user.return_value = _briefing(
             briefing_id="00000000-0000-0000-0000-000000000002"
         )
@@ -190,12 +271,11 @@ class TestGetLatestScheduledOnly:
 
         assert response.status_code == 200
         assert "next_run_at" not in response.json()
-        mock_app_state.briefing_service.latest_for_user.assert_not_called()
         mock_app_state.briefing_service.generate_for_user.assert_called_once_with(mock_user.id, force=False)
 
     def test_no_schedule_and_tz_seeds_daily_default(self, client, mock_app_state):
         mock_app_state.briefing_schedule_repository.get.return_value = None
-        mock_app_state.briefing_service.latest_for_user.return_value = _briefing()
+        mock_app_state.briefing_service.recent_for_user.return_value = [_briefing()]
 
         response = client.get("/api/briefings/latest?tz=Europe/London")
 

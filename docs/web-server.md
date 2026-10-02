@@ -92,7 +92,7 @@ Commands below).
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/briefings` | GET | Paginated briefing history for the current user, newest first |
-| `/api/briefings/latest` | GET | Latest briefing for the current user (lazy-generates when eligible) |
+| `/api/briefings/latest` | GET | Current briefing for the current user, plus `previous` (the edition before it) and `upcoming` (next slot, episodes collected so far, episodes still processing). Lazy-generates when no schedule owns generation; a pending cut never hides the current edition |
 | `/api/briefings/schedule` | GET | Current user's briefing schedule (spec #50) |
 | `/api/briefings/schedule` | PUT | Upsert schedule (frequency, hour, weekday, timezone, enabled) |
 | `/api/briefings/{briefing_id}` | GET | Briefing metadata + narration variants |

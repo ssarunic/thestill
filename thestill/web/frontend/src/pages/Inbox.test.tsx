@@ -300,11 +300,15 @@ describe('Scheduled briefing card (spec #84)', () => {
     mockUseInbox.mockReturnValue({ data: inboxResponse([]), isLoading: false, error: null })
   })
 
-  it('names the next edition and offers Generate now when the server schedules', async () => {
+  function upcoming(overrides: Record<string, unknown> = {}) {
+    return { next_run_at: null, new_episode_count: 0, pending_count: 0, deadline: null, ...overrides }
+  }
+
+  it('previews the next edition and offers Generate now when the server schedules', async () => {
     const mutate = vi.fn()
     const next = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString()
     mockUseLatestBriefing.mockReturnValue({
-      data: briefing({ next_run_at: next }),
+      data: briefing({ next_run_at: next, upcoming: upcoming({ next_run_at: next, new_episode_count: 5 }) }),
       isLoading: false,
       error: null,
     })
@@ -312,18 +316,67 @@ describe('Scheduled briefing card (spec #84)', () => {
 
     render(<Inbox />, { wrapper: createWrapper() })
 
-    expect(screen.getByText(/next (at|tomorrow|\w{3}) /)).toBeInTheDocument()
+    const upNext = screen.getByText('Up next').closest('p')!
+    expect(upNext).toHaveTextContent(/(today|tomorrow|\w{3}) \d/)
+    expect(upNext).toHaveTextContent('5 new episodes so far')
     await userEvent.click(screen.getByRole('button', { name: 'Generate now' }))
     expect(mutate).toHaveBeenCalledOnce()
   })
 
-  it('keeps the lazy card unchanged when no schedule owns generation', () => {
-    mockUseLatestBriefing.mockReturnValue({ data: briefing(), isLoading: false, error: null })
+  it('keeps the current edition while the next one is still processing', () => {
+    mockUseLatestBriefing.mockReturnValue({
+      data: briefing({ upcoming: upcoming({ new_episode_count: 2, pending_count: 3, deadline: '2026-09-24T09:00:00Z' }) }),
+      isLoading: false,
+      error: null,
+    })
     mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
 
     render(<Inbox />, { wrapper: createWrapper() })
 
-    expect(screen.queryByText(/next (at|tomorrow|\w{3}) /)).toBeNull()
+    expect(screen.getByRole('link', { name: /4 episodes/ })).toHaveAttribute('href', '/briefings/b-1')
+    expect(screen.getByText('Up next').closest('p')).toHaveTextContent('3 still processing')
+    expect(screen.queryByText('Your briefing is catching up')).toBeNull()
+  })
+
+  it('links the previous edition', () => {
+    mockUseLatestBriefing.mockReturnValue({
+      data: briefing({
+        previous: { ...briefing({ id: 'b-0', episode_count: 9, created_at: '2026-09-23T07:00:00Z' }) },
+        upcoming: upcoming(),
+      }),
+      isLoading: false,
+      error: null,
+    })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByRole('link', { name: /Earlier: .*9 episodes/ })).toHaveAttribute('href', '/briefings/b-0')
+  })
+
+  it('collapses a listened edition to one line', () => {
+    mockUseLatestBriefing.mockReturnValue({
+      data: briefing({ listened_at: '2026-09-24T08:30:00Z', upcoming: upcoming() }),
+      isLoading: false,
+      error: null,
+    })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.getByRole('link', { name: /4 episodes • listened/ })).toBeInTheDocument()
+    expect(screen.queryByText('Read →')).toBeNull()
+    // Nothing collected, nothing processing, no slot: no Up next line.
+    expect(screen.queryByText('Up next')).toBeNull()
+  })
+
+  it('offers no Generate now when nothing is waiting and no schedule owns generation', () => {
+    mockUseLatestBriefing.mockReturnValue({ data: briefing({ upcoming: upcoming() }), isLoading: false, error: null })
+    mockUseGenerateBriefingNow.mockReturnValue({ mutate: vi.fn(), isPending: false, isError: false, error: null })
+
+    render(<Inbox />, { wrapper: createWrapper() })
+
+    expect(screen.queryByText('Up next')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Generate now' })).toBeNull()
   })
 })
