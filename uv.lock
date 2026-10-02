@@ -2571,15 +2571,6 @@ wheels = [
 ]
 
 [[package]]
-name = "invoke"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/bd/b461d3424a24c80490313fd77feeb666ca4f6a28c7e72713e3d9095719b4/invoke-2.2.1.tar.gz", hash = "sha256:515bf49b4a48932b79b024590348da22f39c4942dff991ad1fb8b8baea1be707", size = 304762, upload-time = "2025-10-11T00:36:35.172Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/32/4b/b99e37f88336009971405cbb7630610322ed6fbfa31e1d7ab3fbf3049a2d/invoke-2.2.1-py3-none-any.whl", hash = "sha256:2413bc441b376e5cd3f55bb5d364f973ad8bdd7bf87e53c79de3c11bf3feecc8", size = 160287, upload-time = "2025-10-11T00:36:33.703Z" },
-]
-
-[[package]]
 name = "isort"
 version = "8.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2744,6 +2735,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/44/90/25cb27518750218e4f850be63d8bbb2343efaad1c01c3571aaa4b3c33bd7/joserfc-1.7.1.tar.gz", hash = "sha256:77d0b76514879c68c6f433bc5b7357a4ab72008ff1e33d8379fd11d72bd8ca81", size = 233181, upload-time = "2026-06-08T07:21:33.412Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/00/fa62404c3e347f946faa13aa21085205f9cc06ad17671e37f81a51662ae8/joserfc-1.7.1-py3-none-any.whl", hash = "sha256:b3e3d655612e2e1ef67b2600f2f420e12e537b020208fab1761fad647319c164", size = 70423, upload-time = "2026-06-08T07:21:32.001Z" },
+]
+
+[[package]]
+name = "jsonpath-python"
+version = "1.1.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/18/4ca8742534a5993ff383f7602e325ce2d5d7cc93d72ac5e1cdedbea8a458/jsonpath_python-1.1.6.tar.gz", hash = "sha256:dded9932b4ec41fb8726e09c83afa4e6be618f938c2db287cc2a81723c639671", size = 88178, upload-time = "2026-05-07T01:26:34.482Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/55/8a/1270a6803bd821cbfcdda387eaa13cb41a7b1f7b9bd145979b3bfb9d6cb7/jsonpath_python-1.1.6-py3-none-any.whl", hash = "sha256:a1c50afd8d3fbbaf47a4873bc890dcb3c15da96f5c020327977d844d8731a2d4", size = 14453, upload-time = "2026-05-07T01:26:33.306Z" },
 ]
 
 [[package]]
@@ -3588,23 +3588,21 @@ wheels = [
 
 [[package]]
 name = "mistralai"
-version = "1.12.4"
+version = "2.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "eval-type-backport" },
     { name = "httpx" },
-    { name = "invoke" },
+    { name = "jsonpath-python" },
     { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-semantic-conventions" },
     { name = "pydantic" },
     { name = "python-dateutil" },
-    { name = "pyyaml" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/12/c3476c53e907255b5f485f085ba50dd9a84b40fe662e9a888d6ded26fa7b/mistralai-1.12.4.tar.gz", hash = "sha256:e52b53bab58025dcd208eeac13e3c3df5778d4112eeca1f08124096c7738929f", size = 243129, upload-time = "2026-02-20T17:55:13.73Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/db/a80c4ab96b1fec9529115dafaa3f14b28d0407fe1cb9b051ec2df9336fb7/mistralai-2.10.1.tar.gz", hash = "sha256:43b61643ba4f120463e5faf7305a6f40eb29f8e3a21321893969e56c20ed3fbc", size = 590127, upload-time = "2026-09-15T08:12:30.79Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/f9/98d825105c450b9c67c27026caa374112b7e466c18331601d02ca278a01b/mistralai-1.12.4-py3-none-any.whl", hash = "sha256:7b69fcbc306436491ad3377fbdead527c9f3a0ce145ec029bf04c6308ff2cca6", size = 509321, upload-time = "2026-02-20T17:55:15.27Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/98/f64b54166a607ece4e5c8494c843ac1f9c7c0af6f1014272cc420fe1d519/mistralai-2.10.1-py3-none-any.whl", hash = "sha256:443b306392ae1e86edaec39dbafcf79deb735799a00abef4611531004e22b1b2", size = 1392946, upload-time = "2026-09-15T08:12:28.704Z" },
 ]
 
 [[package]]
@@ -4734,62 +4732,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fa/fc/b7564cbef36601aef0d6c9bc01f7badb64be8e862c2e1c3c5c3b43b53e4f/opentelemetry_api-1.41.1.tar.gz", hash = "sha256:0ad1814d73b875f84494387dae86ce0b12c68556331ce6ce8fe789197c949621", size = 71416, upload-time = "2026-04-24T13:15:38.262Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/29/59/3e7118ed140f76b0982ba4321bdaed1997a0473f9720de2d10788a577033/opentelemetry_api-1.41.1-py3-none-any.whl", hash = "sha256:a22df900e75c76dc08440710e51f52f1aa6b451b429298896023e60db5b3139f", size = 69007, upload-time = "2026-04-24T13:15:15.662Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-common"
-version = "1.41.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-proto" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/fa/f9e3bd3c4d692b3ce9a2880a167d1f79681a1bea11f00d5bf76adc03e6ea/opentelemetry_exporter_otlp_proto_common-1.41.1.tar.gz", hash = "sha256:0e253156ea9c36b0bd3d2440c5c9ba7dd1f3fb64ba7a08fc85fbac536b56e1fb", size = 20409, upload-time = "2026-04-24T13:15:40.924Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/29/48/bce76d3ea772b609757e9bc844e02ab408a6446609bf74fb562062ba6b71/opentelemetry_exporter_otlp_proto_common-1.41.1-py3-none-any.whl", hash = "sha256:10da74dad6a49344b9b7b21b6182e3060373a235fde1528616d5f01f92e66aa9", size = 18366, upload-time = "2026-04-24T13:15:18.917Z" },
-]
-
-[[package]]
-name = "opentelemetry-exporter-otlp-proto-http"
-version = "1.41.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "googleapis-common-protos" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-common" },
-    { name = "opentelemetry-proto" },
-    { name = "opentelemetry-sdk" },
-    { name = "requests" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/33/5b/9d3c7f70cca10136ba82a81e738dee626c8e7fc61c6887ea9a58bf34c606/opentelemetry_exporter_otlp_proto_http-1.41.1.tar.gz", hash = "sha256:4747a9604c8550ab38c6fd6180e2fcb80de3267060bef2c306bad3cb443302bc", size = 24139, upload-time = "2026-04-24T13:15:42.977Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/4d/ef07ff2fc630849f2080ae0ae73a61f67257905b7ac79066640bfa0c5739/opentelemetry_exporter_otlp_proto_http-1.41.1-py3-none-any.whl", hash = "sha256:1a21e8f49c7a946d935551e90947d6c3eb39236723c6624401da0f33d68edcb4", size = 22673, upload-time = "2026-04-24T13:15:21.313Z" },
-]
-
-[[package]]
-name = "opentelemetry-proto"
-version = "1.41.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "protobuf" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/99/e8/633c6d8a9c8840338b105907e55c32d3da1983abab5e52f899f72a82c3d1/opentelemetry_proto-1.41.1.tar.gz", hash = "sha256:4b9d2eb631237ea43b80e16c073af438554e32bc7e9e3f8ca4a9582f900020e5", size = 45670, upload-time = "2026-04-24T13:15:49.768Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e4/1e/5cd77035e3e82070e2265a63a760f715aacd3cb16dddc7efee913f297fcc/opentelemetry_proto-1.41.1-py3-none-any.whl", hash = "sha256:0496713b804d127a4147e32849fbaf5683fac8ee98550e8e7679cd706c289720", size = 72076, upload-time = "2026-04-24T13:15:32.542Z" },
-]
-
-[[package]]
-name = "opentelemetry-sdk"
-version = "1.41.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/58/d0/54ee30dab82fb0acda23d144502771ff76ef8728459c83c3e89ef9fb1825/opentelemetry_sdk-1.41.1.tar.gz", hash = "sha256:724b615e1215b5aeacda0abb8a6a8922c9a1853068948bd0bd225a56d0c792e6", size = 230180, upload-time = "2026-04-24T13:15:50.991Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/e7/a1420b698aad018e1cf60fdbaaccbe49021fb415e2a0d81c242f4c518f54/opentelemetry_sdk-1.41.1-py3-none-any.whl", hash = "sha256:edee379c126c1bce952b0c812b48fe8ff35b30df0eecf17e98afa4d598b7d85d", size = 180213, upload-time = "2026-04-24T13:15:33.767Z" },
 ]
 
 [[package]]
@@ -6617,8 +6559,8 @@ resolution-markers = [
 ]
 dependencies = [
     { name = "joblib", marker = "python_full_version >= '3.11'" },
-    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13') or (python_full_version < '3.11' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.11' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-search') or (python_full_version < '3.11' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.11' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "threadpoolctl", marker = "python_full_version >= '3.11'" },
 ]
@@ -6733,8 +6675,8 @@ resolution-markers = [
     "python_full_version == '3.11.*'",
 ]
 dependencies = [
-    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13') or (python_full_version < '3.11' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.11' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.11' and python_full_version < '3.13' and extra == 'extra-8-thestill-search') or (python_full_version < '3.11' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.11' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz", hash = "sha256:95d8e012d8cb8816c226aef832200b1d45109ed4464303e997c5b13122b297c0", size = 30573822, upload-time = "2026-02-23T00:26:24.851Z" }
 wheels = [
@@ -6815,12 +6757,12 @@ version = "5.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.13' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.13' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
     { name = "torch" },
     { name = "tqdm" },
     { name = "transformers" },
@@ -7480,8 +7422,8 @@ s3 = [
     { name = "boto3" },
 ]
 search = [
-    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra != 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra != 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (python_full_version < '3.11' and extra != 'extra-8-thestill-entities' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription')" },
     { name = "sentence-transformers" },
 ]
 ses = [
@@ -7520,7 +7462,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "librosa", marker = "extra == 'local-transcription'", specifier = ">=0.10.0" },
     { name = "mcp", specifier = ">=2.0.0,<3.0.0" },
-    { name = "mistralai", specifier = ">=1.0.0,<3.0.0" },
+    { name = "mistralai", specifier = ">=2.10.0,<3.0.0" },
     { name = "moto", extras = ["s3"], marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "nemo-toolkit", extras = ["asr"], marker = "extra == 'local-transcription'", specifier = ">=3.0.0" },
@@ -7750,8 +7692,8 @@ dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.11' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.11' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.11' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
     { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -7888,8 +7830,8 @@ version = "5.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13' or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version < '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version < '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.13' and extra == 'extra-8-thestill-entities') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-local-transcription') or (python_full_version >= '3.13' and extra == 'extra-8-thestill-search') or (extra == 'extra-8-thestill-entities' and extra == 'extra-8-thestill-local-transcription') or (extra == 'extra-8-thestill-local-transcription' and extra == 'extra-8-thestill-search')" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "regex" },
