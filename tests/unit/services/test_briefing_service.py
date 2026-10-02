@@ -29,7 +29,7 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.repositories.sqlite_user_repository import SqliteUserRepository
 from thestill.services.briefing_renderer import BriefingRenderer
 from thestill.services.briefing_script_generator import BriefingScriptGenerator
-from thestill.services.briefing_service import BriefingNotFoundError, BriefingService, Deferred
+from thestill.services.briefing_service import BriefingNotFoundError, BriefingService, Deferred, Upcoming
 from thestill.utils.path_manager import PathManager
 
 # Six hours: matches the production default. Tests opt out of the throttle
@@ -512,6 +512,50 @@ def test_latest_for_user_returns_most_recent_briefing(service, db_path, user_rep
     latest = service.latest_for_user(user.id)
     assert latest is not None
     assert latest.id == generated.id
+
+
+def test_recent_for_user_returns_newest_first(service, db_path, user_repo, inbox_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    podcast_id = str(uuid.uuid4())
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ep1 = _publish_episode(db_path, podcast_id, "ep-1")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep1, delivered_at=base)
+    first = service.generate_for_user(user.id, now=base + timedelta(hours=1))
+    ep2 = _publish_episode(db_path, podcast_id, "ep-2")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep2, delivered_at=base + timedelta(hours=8))
+    second = service.generate_for_user(user.id, now=base + timedelta(hours=10))
+
+    assert [b.id for b in service.recent_for_user(user.id)] == [second.id, first.id]
+
+
+def test_upcoming_counts_deliveries_past_latest_cursor(service, db_path, user_repo, inbox_repo):
+    """The preview covers only what the next edition would pick up."""
+    user = _make_user(user_repo, "alice@example.com")
+    podcast_id = str(uuid.uuid4())
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ep1 = _publish_episode(db_path, podcast_id, "ep-1")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep1, delivered_at=base)
+    latest = service.generate_for_user(user.id, now=base + timedelta(hours=1))
+    for i in range(2):
+        ep = _publish_episode(db_path, podcast_id, f"new-{i}")
+        _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep, delivered_at=base + timedelta(hours=2 + i))
+
+    upcoming = service.upcoming_for_user(user.id, latest=latest, now=base + timedelta(hours=5))
+
+    assert upcoming.new_episode_count == 2
+    assert upcoming.pending_count == 0
+
+
+def test_upcoming_fails_soft():
+    briefing_repo = MagicMock()
+    inbox_repo = MagicMock()
+    briefing_repo.count_pending_for_user.side_effect = RuntimeError("database unavailable")
+    inbox_repo.list_episode_ids_in_window.side_effect = RuntimeError("database unavailable")
+    service = BriefingService(briefing_repo, inbox_repo, min_interval_seconds=0)
+
+    upcoming = service.upcoming_for_user("user-1", latest=None)
+
+    assert upcoming == Upcoming(new_episode_count=0, pending_count=0)
 
 
 def test_latest_for_user_returns_none_when_user_has_no_briefings(service, user_repo):

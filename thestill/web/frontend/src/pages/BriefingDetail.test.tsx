@@ -72,7 +72,7 @@ describe('BriefingDetail header (spec #76 phase 3)', () => {
 
   it('renders the eyebrow, title and the Mark listened primary in the action row', async () => {
     renderPage()
-    expect(screen.getByRole('heading', { name: "Today's briefing" })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Briefing · Sep 6' })).toBeInTheDocument()
     const eyebrow = screen.getByText('3 episodes').closest('p')!
     expect(eyebrow).toHaveTextContent(/Generated/)
     expect(eyebrow).not.toHaveTextContent(/Listened/)

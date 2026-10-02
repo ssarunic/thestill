@@ -1375,6 +1375,19 @@ export interface BriefingResponse extends Briefing {
   // Spec #84: present when the scheduler owns generation — when the next
   // edition is due. Absent on the lazy path.
   next_run_at?: string | null
+  // ``/latest`` only: the edition before this one, and a preview of the
+  // next. Building the next edition reports here instead of replacing
+  // the current one.
+  previous?: Briefing | null
+  upcoming?: BriefingUpcoming
+}
+
+export interface BriefingUpcoming {
+  next_run_at: string | null
+  new_episode_count: number
+  pending_count: number
+  // Set while the readiness gate holds a cut for in-flight episodes.
+  deadline: string | null
 }
 
 // Spec #55: a lazy latest request can be accepted but deferred while the

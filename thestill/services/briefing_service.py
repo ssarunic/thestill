@@ -24,7 +24,7 @@ cursor logic stays free of file IO and tests can run row-only.
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
 
 from structlog import get_logger
 
@@ -52,6 +52,17 @@ class Deferred:
 
     pending_count: int
     deadline: datetime
+
+
+@dataclass(frozen=True)
+class Upcoming:
+    """What the next edition will hold so far: delivered episodes past the
+    latest cursor, and followed episodes still in the pipeline. Feeds the
+    inbox card's "Up next" line so building the next edition never hides
+    the current one."""
+
+    new_episode_count: int
+    pending_count: int
 
 
 # How long an existing briefing stays "today's briefing" once the throttle
@@ -311,6 +322,36 @@ class BriefingService:
     def latest_for_user(self, user_id: str) -> Optional[Briefing]:
         """Return the user's most recent briefing, or ``None``."""
         return self._briefings.latest_for_user(user_id)
+
+    def recent_for_user(self, user_id: str, *, limit: int = 2) -> List[Briefing]:
+        """Return the user's newest briefings, newest first."""
+        return self._briefings.list_for_user(user_id, limit=limit, offset=0)
+
+    def upcoming_for_user(
+        self,
+        user_id: str,
+        *,
+        latest: Optional[Briefing],
+        now: Optional[datetime] = None,
+    ) -> Upcoming:
+        """Preview the open window ``[latest.cursor_to, now)`` without cutting it.
+
+        Read-only and best effort: a failing count reads as zero so the
+        preview can never take the current edition down with it.
+        """
+        clock_now = now or datetime.now(timezone.utc)
+        cursor_from = latest.cursor_to if latest is not None else _EPOCH
+        try:
+            new_count = len(self._inbox.list_episode_ids_in_window(user_id, since=cursor_from, until=clock_now))
+        except Exception:
+            logger.exception("briefing_upcoming_count_failed", user_id=user_id)
+            new_count = 0
+        try:
+            pending = self._briefings.count_pending_for_user(user_id, since=cursor_from, cutoff=clock_now)
+        except Exception:
+            logger.exception("briefing_upcoming_pending_failed", user_id=user_id)
+            pending = 0
+        return Upcoming(new_episode_count=new_count, pending_count=pending)
 
     def mark_listened(
         self,

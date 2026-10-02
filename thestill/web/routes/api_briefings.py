@@ -18,7 +18,9 @@ Per-user briefing API endpoints (spec #36).
 ``GET /latest`` lazy-generates: if no briefing exists or the throttle has
 elapsed and new inbox items are eligible, a fresh briefing is created and
 returned. The throttle in ``BriefingService`` keeps generation cost
-bounded.
+bounded. The response always leads with the current edition and previews
+the next one (``upcoming``), so cutting a new edition never makes the
+current one disappear first.
 
 Spec #84: when the briefing scheduler is running and the user has an
 enabled schedule, opening the inbox is *not* a trigger. ``GET /latest``
@@ -232,6 +234,35 @@ def _ensure_default_schedule(app_state: AppState, user: User, tz: Optional[str])
     return schedule
 
 
+def _latest_payload(
+    app_state: AppState,
+    user: User,
+    latest: Briefing,
+    recent: List[Briefing],
+    *,
+    next_run_at: Optional[datetime],
+    pending: Optional[Deferred] = None,
+) -> dict:
+    """The inbox card's two items: the current edition plus what comes next.
+
+    ``previous`` is the edition before ``latest`` (so yesterday's stays one
+    tap away after today's lands). ``upcoming`` previews the open window;
+    a readiness deferral lands here rather than replacing the edition the
+    user may not have heard yet.
+    """
+    data = _serialize(latest, next_run_at=next_run_at)
+    previous = next((b for b in recent if b.id != latest.id and b.created_at < latest.created_at), None)
+    data["previous"] = _serialize(previous) if previous is not None else None
+    upcoming = app_state.briefing_service.upcoming_for_user(user.id, latest=latest)
+    data["upcoming"] = {
+        "next_run_at": next_run_at.isoformat() if next_run_at is not None else None,
+        "new_episode_count": upcoming.new_episode_count,
+        "pending_count": pending.pending_count if pending is not None else upcoming.pending_count,
+        "deadline": pending.deadline.isoformat() if pending is not None else None,
+    }
+    return data
+
+
 @router.get("/latest")
 def get_latest_briefing(
     response: Response,
@@ -240,42 +271,49 @@ def get_latest_briefing(
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
-    """Return the user's most recent briefing, generating one if eligible.
+    """Return the user's current briefing plus a preview of the next one.
 
-    Returns 202 while followed, pre-cutoff episodes are still processing,
-    unless ``force=true`` skips the readiness gate. Returns 404 when the inbox
-    has no eligible items in the open window.
+    The current edition stays put until a newer one exists: neither a
+    readiness deferral (spec #55) nor an empty window hides it. The
+    response carries ``previous`` (the edition before it) and ``upcoming``
+    (episodes collected since, followed episodes still processing, and
+    ``next_run_at`` when scheduled). Returns 202 ``briefing_pending`` only
+    when the user has no edition at all yet, and 404 when there is nothing
+    to brief about and never has been.
 
     Spec #84: with the scheduler running and an enabled schedule, this is a
-    read — the latest edition comes back untouched (plus ``next_run_at``)
-    and only the schedule slot or ``force=true`` cuts a new one. The one
-    exception is a user with no briefing at all, who gets a first edition
-    lazily rather than waiting for tomorrow's slot.
+    read — only the schedule slot or ``force=true`` cuts a new edition. The
+    one exception is a user with no briefing at all, who gets a first
+    edition lazily rather than waiting for tomorrow's slot.
     """
+    service = app_state.briefing_service
     next_run_at: Optional[datetime] = None
     if _scheduler_running(app_state):
         schedule = _ensure_default_schedule(app_state, user, tz)
         if schedule is not None and schedule.enabled:
             next_run_at = schedule.next_run_at
             if not force:
-                latest = app_state.briefing_service.latest_for_user(user.id)
-                if latest is not None:
-                    return api_response(_serialize(latest, next_run_at=next_run_at))
+                recent = service.recent_for_user(user.id)
+                if recent:
+                    return api_response(_latest_payload(app_state, user, recent[0], recent, next_run_at=next_run_at))
 
-    briefing = app_state.briefing_service.generate_for_user(user.id, force=force)
-    if isinstance(briefing, Deferred):
-        response.status_code = 202
-        return api_response(
-            {
-                "briefing_pending": {
-                    "pending_count": briefing.pending_count,
-                    "deadline": briefing.deadline.isoformat(),
+    result = service.generate_for_user(user.id, force=force)
+    pending = result if isinstance(result, Deferred) else None
+    recent = service.recent_for_user(user.id)
+    latest = result if isinstance(result, Briefing) else (recent[0] if recent else None)
+    if latest is None:
+        if pending is not None:
+            response.status_code = 202
+            return api_response(
+                {
+                    "briefing_pending": {
+                        "pending_count": pending.pending_count,
+                        "deadline": pending.deadline.isoformat(),
+                    }
                 }
-            }
-        )
-    if briefing is None:
+            )
         not_found("Briefing", "latest")
-    return api_response(_serialize(briefing, next_run_at=next_run_at))
+    return api_response(_latest_payload(app_state, user, latest, recent, next_run_at=next_run_at, pending=pending))
 
 
 def _serialize_schedule(schedule: BriefingSchedule) -> dict:
