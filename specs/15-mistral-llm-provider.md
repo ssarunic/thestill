@@ -63,7 +63,7 @@ mistral_model: str = "mistral-large-latest"
 **Add import:**
 
 ```python
-from mistralai import Mistral
+from mistralai.client import Mistral  # SDK 2.x; 1.x exported it at the top level
 ```
 
 **Add to MODEL_CONFIGS:**
@@ -265,7 +265,7 @@ if llm_provider == "mistral" and not mistral_api_key:
 ```toml
 dependencies = [
     # ... existing deps ...
-    "mistralai>=1.0.0",
+    "mistralai>=2.10.0,<3.0.0",
 ]
 ```
 
