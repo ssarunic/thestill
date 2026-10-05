@@ -2,7 +2,7 @@
 
 > **Status:** 💡 Proposal
 > **Created:** 2026-10-05
-> **Updated:** 2026-10-05
+> **Updated:** 2026-10-05 (review: admission vs expansion, no punctuation splits, in-place re-type)
 > **Priority:** Medium — the summary section that is *only* entities links the fewest of them
 > **Author:** Product & Engineering
 > **Related:** [#28 corpus-search-and-entities](28-corpus-search-and-entities.md), [#53 eval-runs-and-summary-rubric](53-eval-runs-and-summary-rubric.md), [#54 summary-segment-citations](54-summary-segment-citations.md), [#81 live-wikidata-entity-linking](81-live-wikidata-entity-linking.md), [#82 summary-entity-links](82-summary-entity-links.md), [#83 summary-entity-mentions-pipeline](83-summary-entity-mentions-pipeline.md)
@@ -37,9 +37,11 @@ It does not add a source of mentions. The work is in four steps:
    gloss, timestamp. The parser also accepts the shapes that today's
    summaries already use, so the backfill does not need to re-run
    summarization.
-2. **Grounding.** Every item must be found in the transcript, near the
-   segment its citation points to. Items that cannot be found are
-   dropped, so a hallucinated resource never becomes an entity.
+2. **Grounding.** Every item must be found in the transcript by its
+   full name, not a first name or surname. A single word must also
+   appear near the segment its citation points to. Items that cannot be
+   found are dropped, so a hallucinated resource never becomes an
+   entity. Shorter forms are scanned only after admission.
 3. **Seeding.** A grounded item works like the host/guest anchor scan:
    every occurrence of the name in the transcript becomes a mention.
    These are ordinary transcript mentions with a real segment, so the
@@ -79,8 +81,8 @@ chooses its own format. A sample of the 200 most recent local summaries
 Even with a deliberately crude parser, **76%** of item names appear
 verbatim in the cleaned transcript, and **65%** appear within 90 s of
 the cited timestamp. Most of the remaining misses come from combined
-items and "Title by Author" strings, which a contract and a slightly
-better parser recover.
+items and "Title by Author" strings. The contract removes those at the
+source; the parser recovers only the unambiguous ones (Stage 2).
 
 The transcript contains the words, but extraction does not keep them:
 
@@ -223,57 +225,112 @@ because the backfill reads every existing free-form summary:
   deduplicated by case-folded name. The first cite wins.
 - Accepts the contract shape, the current `**Name:** gloss [ts]` shape
   and `Name (Kind) [ts]`.
-- **Name cleanup:**
-  - strip markdown emphasis and quotes;
-  - cut a trailing `by <Author>`, and emit the author as a `person`
-    item with the same cite;
-  - drop a trailing parenthetical that is not a known kind and use it as
-    the gloss.
+- **Name cleanup:** strip markdown emphasis and quotes, and drop a
+  trailing parenthetical that is not a known kind and use it as the
+  gloss. Nothing else is removed from the name at this stage.
 - **Kind:** a free-form kind ("TV Show", "Spending Data/Tool", "Book")
   maps onto the closed list through a small synonym table. Anything
   unmapped is `other`.
-- **Splitting combined items:** "A / B", "A & B" and "A, B" split only
-  when every side starts with a capital letter and is at most five
-  words. This splits "Vercel / GitHub" but leaves "Bed, Bath & Beyond"
-  intact.
 - **Cite ids:** read from the `?cite=cN` link. A bare `[mm:ss]` that is
   not a cite link is kept as `raw_label`.
 
+**The parser never splits or shortens a name on its own.** "Bed, Bath &
+Beyond", "Pride & Prejudice", "Johnson & Johnson" and "Stand by Me" are
+single names that look like combinations, and no rule based on
+punctuation and capitals can tell them apart from "Vercel / GitHub".
+Instead, each item carries an ordered list of **name candidates**:
+
+1. the full name, always first;
+2. only if the full name contains ` / `: the parts, as separate items
+   that share the cite. Slash is the one separator that never occurs
+   inside a real name in the sampled data. `&`, `,` and `and` are never
+   split points;
+3. only if the full name ends in `by <Words>`: the title before ` by `,
+   with the author as a separate `person` item.
+
+Grounding (Stage 3) decides which candidate, if any, is admitted. A
+fallback is tried only when the full name does not ground. So "Pride &
+Prejudice" is never cut into "Pride" and "Prejudice", and "Stand by Me"
+keeps its "by" whenever the transcript says the title. Items joined
+with `&` that do not ground as a whole ("Nebius Group & CoreWeave") are
+dropped and counted. The eval measures that loss before any `&` rule is
+considered (Open questions).
+
 ### Stage 3 — Grounding
 
-Grounding decides whether an item is real. For each item:
+Grounding decides whether an item is real, and it is two separate
+steps with different evidence rules:
 
-1. **Variants:** the name, the name without a leading "The", and, for
-   `person` items, the variants that `expand_anchor_variants`
-   ([entity_anchor.py:42](../thestill/core/entity_anchor.py#L42))
-   already builds for host and guest names. Reusing that function keeps
-   the surname rule the same in both places.
+- **Admission** asks whether the transcript names this thing. It uses
+  only the **full form** of a name candidate.
+- **Expansion** asks where else the transcript refers to it. It may use
+  shorter forms, and only after admission.
+
+Mixing the two is how a hallucinated "Paul Kedrosky" could be admitted
+because someone called Paul speaks in the episode. The gloss would then
+steer the linker towards the wrong person.
+
+**Admission.** For each name candidate, in order, stopping at the first
+that grounds:
+
+1. **Admission forms:** the candidate as written, and the candidate
+   without a leading "The". Never a first name, surname or initial
+   form. In particular, `expand_anchor_variants`
+   ([entity_anchor.py:42](../thestill/core/entity_anchor.py#L42)) is
+   **not** reused here. It emits the first name ("Paul") because an
+   anchor's identity is already established, which a resource's is not.
 2. **Locate the cited segment.** Look up `cite_id` in the citations
    sidecar ([summary_citations.py:228](../thestill/core/summary_citations.py#L228)).
    If there is no sidecar entry, fall back to `raw_label` through
    `parse_timestamp_label`.
-3. **Search** the cleaned transcript, word-bounded and
-   case-insensitive for multi-word variants. Single-token variants are
-   case-sensitive, the same rule #82 uses for "Warp" and "warp".
+3. **Search** the cleaned transcript, word-bounded. Multi-word forms are
+   case-insensitive. Single-token forms are case-sensitive, the same
+   rule #82 uses for "Warp" and "warp".
 4. **Classify the outcome:**
    - `near`: found within `RESOURCE_GROUNDING_WINDOW_S` (default 90 s)
      of the cited segment;
    - `elsewhere`: found in the transcript, but not near the citation;
    - `ungrounded`: not found at all.
 
-`near` and `elsewhere` items become seeds. `ungrounded` items are
-dropped and counted. The measured verbatim rate (76%) means roughly one
-item in four is dropped today, before the contract improves names.
+**Admission rule:**
 
-`elsewhere` is kept deliberately. The citation is an LLM's timestamp:
-Mad Men cited at 12:09 is actually discussed elsewhere. A name the
-transcript contains is still evidence. The outcome is logged so the
-eval can track citation accuracy separately.
+- **Multi-word names** are admitted on `near` or `elsewhere`. A
+  multi-word proper name occurring verbatim is strong evidence. The
+  citation is an LLM's timestamp and can be wrong: Mad Men cited at
+  12:09 is discussed elsewhere.
+- **Single-token names** ("Ramp", "Vanguard") are admitted on `near`
+  only. One capitalised word anywhere in a long transcript is weak
+  evidence, because it can be the start of a sentence or a different
+  thing with the same name.
+- Everything else is `ungrounded`, dropped and counted. The measured
+  verbatim rate (76%) means roughly one item in four is dropped today,
+  before the contract improves names.
+
+**Expansion.** Once an item is admitted, its **scan surfaces** are the
+admission form that grounded plus, for `person` items only, the surname.
+The surname is used only if it is at least four characters, starts with
+a capital and passes the case-sensitive rule. A first name or initial
+form is never a scan surface: "Paul" alone is not evidence of Paul
+Kedrosky, even after admission.
+
+**Ambiguous surfaces are dropped from the scan; the item stays
+admitted.** A surface is ambiguous when it is also any of these:
+
+- a scan surface of another admitted item ("Elson" for both Ed Elson and
+  a listed book by another Elson);
+- a surface the episode's anchors produce (`expand_anchor_variants`
+  output for hosts and guests);
+- a surface GLiNER resolved in this episode to a different entity.
+
+The item then keeps only its unambiguous surfaces, at minimum the full
+form that admitted it. Both outcomes are logged per item
+(`admitted_by`, `dropped_surfaces`) so the eval can see them.
 
 ### Stage 4 — Seeding
 
-Seeds go into `EntityExtractor.extract()` next to `anchor_variants`, as
-a new `resource_seeds` argument. The extractor scans for them with the
+Seeds are admitted items with their scan surfaces. They go into
+`EntityExtractor.extract()` next to `anchor_variants`, as a new
+`resource_seeds` argument. The extractor scans for the surfaces with the
 same machinery as `_scan_anchors`
 ([entity_extractor.py:424](../thestill/core/entity_extractor.py#L424)).
 The differences are in what it writes:
@@ -312,10 +369,12 @@ The surface label is only the linker's fallback type. The P31 rules
 
 `build_link_context`
 ([task_handlers.py:1286](../thestill/core/task_handlers.py#L1286))
-re-parses the summary. The parse is pure and cheap, and redoing it avoids
-a new column for carrying the hint. It adds
-`resource_hints: {casefolded name variant: (kind, gloss)}` to the
-context.
+re-runs parsing and admission. Both are pure and cheap, and redoing them
+avoids a new column for carrying the hint. It adds
+`resource_hints: {casefolded scan surface: (kind, gloss)}` to the
+context. The hint is keyed by the same unambiguous scan surfaces as
+Stage 3, so it never reaches a mention through a dropped surface or a
+first name.
 
 For a name that has a hint, the chooser's user message
 ([chooser.py:239](../thestill/core/entity_linking/chooser.py#L239))
@@ -350,10 +409,47 @@ equivalent.
   literary work Q7725634, podcast Q24634210, album Q482994, video game
   Q7889. Matching that set returns `PRODUCT` **regardless of the
   fallback**, checked before `TOPIC_P31`.
-- Re-bucket existing rows with the existing `backfill-entity-types`
-  ([cli.py:3369](../thestill/cli.py#L3369)), after a `--dry-run` report.
-  Ids keep their prefix. The #296 lookup fallback already serves
-  `topic:margin-call` typed as `product`.
+- **Re-type existing rows in place.** This is new code. The existing
+  commands do not do it:
+  - `backfill-entity-types`
+    ([cli.py:3369](../thestill/cli.py#L3369)) creates a second row at
+    the corrected `{type}:{slug}` id, repoints mentions and leaves the
+    original for `merge-aliases`;
+  - `repair-entity-types` creates the new id, repoints and deletes.
+
+  Both change the id, and mentions are not the only things that hold
+  one:
+
+  | Holder | How it holds the id | On an id change |
+  |---|---|---|
+  | `entity_mentions.entity_id` | FK | repointed |
+  | `entity_cooccurrences` (both sides) | FK, `ON DELETE CASCADE` | stale until the next rebuild; cascades away on delete |
+  | `entity_enrichment.entity_id` | PK + FK, `ON DELETE CASCADE` | left on the old row; lost on delete |
+  | `mention_overrides.entity_id` | FK, `ON DELETE SET NULL` | left on the old row; nulled on delete |
+  | `podcasts.host_entity_ids`, `recurring_entity_ids`, `episodes.guest_entity_ids` | jsonb lists | not updated: anchors point at the old id |
+  | `entity_mentions.candidate_entity_ids` | jsonb list | not updated |
+  | `/entities/<id>` URLs, MCP answers already given | external | old links change target or 404 |
+
+  Phase 0 therefore adds an **in-place mode**,
+  `backfill-entity-types --in-place`. It updates `type` (and the
+  `wikidata_instance_of` cache) on the existing row and touches nothing
+  else. With the id unchanged, every holder in the table stays valid
+  and there is nothing to migrate.
+
+  This matches what the live linker already does: `_with_stable_identity`
+  ([task_handlers.py:1257](../thestill/core/task_handlers.py#L1257))
+  keeps an existing row's id for a known QID. It also matches what the
+  #296 lookup fallback already serves, an id whose prefix differs from
+  its type, e.g. `topic:margin-call` with `type=product`.
+
+  The run is a `--dry-run` report first, scoped by `--podcast-id`, then
+  corpus-wide. Afterwards the cooccurrence and related rails are rebuilt
+  as part of the normal schedule. They are keyed by id, so this is for
+  freshness, not correctness.
+- The id-changing default of `backfill-entity-types` is not used by this
+  spec. Whether to retire it is out of scope. Its gaps (anchors,
+  enrichment and overrides left on the orphan) are recorded in Open
+  questions.
 
 **Phase 4 (separate decision): a `work` type.** Phase 0 makes works
 consistent, but as products they sit next to software and devices in
@@ -437,10 +533,23 @@ extraction commits regardless of what happens to seeds.
   in §Problem: contract, `**Name:** gloss`, `Name (Kind)`, combined
   items, "by Author", italics, repeated chunk sections, missing
   timestamps. A malformed section raises; it never returns `[]`.
+- **Names that look combined:** "Bed, Bath & Beyond", "Pride &
+  Prejudice", "Johnson & Johnson" and "Stand by Me" each yield the full
+  name as the only candidate before grounding, and are admitted whole
+  when the transcript says them. "Vercel / GitHub" yields two items when
+  the full string does not ground. "Nebius Group & CoreWeave" that does
+  not ground whole is dropped, never split.
 - **Grounding:** `near`, `elsewhere` and `ungrounded` on a synthetic
-  transcript; case rules; person surname variants through
-  `expand_anchor_variants`; the cite → segment path and the
-  `raw_label` fallback.
+  transcript; case rules; single-token names admitted on `near` only;
+  the cite → segment path and the `raw_label` fallback.
+- **Admission is never by short form:** a summary item "Paul Kedrosky"
+  against a transcript that says "Paul" (another Paul) and never
+  "Kedrosky" is `ungrounded`, and no hint is emitted. With "Paul
+  Kedrosky" said once, it is admitted, "Kedrosky" is scanned, and "Paul"
+  is not.
+- **Ambiguous surfaces:** a surname shared with an anchor, another seed,
+  or a different GLiNER-resolved entity is dropped from the scan and
+  logged; the full form still scans.
 - **Extractor:** seed occurrences become `pending` mentions with
   `extractor="summary:resource"`; a span already found by GLiNER is not
   duplicated; anchors still win over seeds on the same span.
@@ -450,14 +559,19 @@ extraction commits regardless of what happens to seeds.
 - **Type rules:** film, TV series and book with every fallback →
   `PRODUCT`; film genre → `TOPIC`; existing person, company and topic
   cases unchanged.
+- **In-place re-type** (SQLite and Postgres): the entity keeps its id;
+  mentions, enrichment, overrides, cooccurrences and anchor lists still
+  point at it with no writes to them; `get_entity` by the old id and by
+  name both return the re-typed row; `--dry-run` writes nothing.
 - **Eval:** `resource_list` metrics on the 20 pinned `entity-linking`
   episodes (#81) before and after, with the #81 regression and precision
   numbers as the gate. Seed mentions must not lower link precision.
 
 ## Phases
 
-- **Phase 0 — Type fix.** `Q11424` out of `TOPIC_P31`; `WORK_P31` → `PRODUCT`;
-  tests; `backfill-entity-types --dry-run` report, then apply. Ships on
+- **Phase 0 — Type fix.** `Q11424` out of `TOPIC_P31`; `WORK_P31` →
+  `PRODUCT`; the `--in-place` mode of `backfill-entity-types` with its
+  tests; a `--dry-run --in-place` report on prod, then apply. Ships on
   its own.
 - **Phase 1 — Parser, grounding and the measuring check.** Run
   `thestill eval` over the pinned set and a recent prod sample to record
@@ -490,3 +604,12 @@ extraction commits regardless of what happens to seeds.
   The prompt may not always follow it. Dropping items that match an
   episode anchor is cheap, and anchors already produce better mentions.
   Proposed: yes, in the parser's caller.
+- **Is an `&` split worth adding?** Phase 1 counts the items dropped
+  because an `&`-joined name did not ground whole. Only if that count
+  matters is a rule considered, and then only one that grounds each part
+  as a full multi-word name near the cite.
+- **The id-changing re-type paths.** `backfill-entity-types` without
+  `--in-place` leaves anchors, enrichment and overrides on the orphaned
+  row; `repair-entity-types` deletes the original, so enrichment
+  cascades away and overrides are nulled. Neither is used here. Whether
+  to switch both to in-place is a separate fix.
