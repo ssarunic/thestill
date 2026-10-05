@@ -60,7 +60,7 @@ dependencies = [
     "anthropic>=0.39.0",
     # 2.x moved the client to ``mistralai.client``. <3.0 until the httpx2
     # transport switch in 3.x is vetted against a live API call.
-    "mistralai>=2.10.0,<3.0.0",
+    "mistralai>=2.10.0,<4.0.0",
     # 2.x: handlers are registered through thestill/mcp/registration.py
     # (the 1.x ``@server.call_tool()`` decorators are gone) and receive the
     # request context explicitly. <3.0 until the next major is vetted.
