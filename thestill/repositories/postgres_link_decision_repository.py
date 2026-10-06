@@ -30,14 +30,14 @@ from .link_decision_repository import LinkDecisionRepository, StoredLinkDecision
 
 logger = get_logger(__name__)
 
-_COLS = "surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version, hits"
+_COLS = "surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version, hits, hinted"
 
 # The conflict target must repeat the partial index's predicate, so each
 # scope has its own statement.
 _UPSERT = """
     INSERT INTO entity_link_decisions
-        (surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        (surface_key, podcast_id, qid, label, description, confidence, reason, decided_at, linker_version, hinted)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     ON CONFLICT {target} DO UPDATE SET
         qid = EXCLUDED.qid,
         label = EXCLUDED.label,
@@ -45,7 +45,8 @@ _UPSERT = """
         confidence = EXCLUDED.confidence,
         reason = EXCLUDED.reason,
         decided_at = EXCLUDED.decided_at,
-        linker_version = EXCLUDED.linker_version
+        linker_version = EXCLUDED.linker_version,
+        hinted = EXCLUDED.hinted
 """
 _UPSERT_PODCAST = _UPSERT.format(target="(surface_key, podcast_id) WHERE podcast_id IS NOT NULL")
 _UPSERT_CORPUS = _UPSERT.format(target="(surface_key) WHERE podcast_id IS NULL")
@@ -82,6 +83,7 @@ class PostgresLinkDecisionRepository(LinkDecisionRepository):
                     decision.reason,
                     decision.decided_at,
                     decision.linker_version,
+                    decision.hinted,
                 ),
             )
 
@@ -119,6 +121,7 @@ class PostgresLinkDecisionRepository(LinkDecisionRepository):
             decided_at=row["decided_at"],
             linker_version=row["linker_version"],
             hits=row["hits"],
+            hinted=None if row["hinted"] is None else bool(row["hinted"]),
         )
 
 

@@ -38,6 +38,7 @@ class StoredLinkDecision:
     decided_at: datetime
     linker_version: str
     hits: int = 0
+    hinted: Optional[bool] = None  # spec #92: the chooser saw a Resource List hint
 
 
 class LinkDecisionRepository(ABC):

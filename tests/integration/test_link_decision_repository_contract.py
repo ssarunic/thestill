@@ -179,3 +179,18 @@ def test_keys_are_stored_exactly_as_given(repo):
 def test_rejects_a_confidence_outside_the_three_levels(repo):
     with pytest.raises(Exception):
         repo.upsert(replace(_decision(), confidence="certain"))
+
+
+@pytest.mark.parametrize("hinted", [True, False, None])
+def test_hinted_round_trips(repo, hinted):
+    """Spec #92: whether the chooser saw a Resource List hint."""
+    repo.upsert(_decision(qid=None, hinted=hinted))
+    assert repo.get("dario amodei", POD_A).hinted is hinted
+
+
+def test_a_hinted_redecision_replaces_an_unhinted_none_and_keeps_hits(repo):
+    repo.upsert(_decision(qid=None, confidence="high", reason="no candidates"))
+    repo.record_hit("dario amodei", POD_A)
+    repo.upsert(_decision(qid="Q100", hinted=True))
+    got = repo.get("dario amodei", POD_A)
+    assert (got.qid, got.hinted, got.hits) == ("Q100", True, 1)
