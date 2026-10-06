@@ -80,6 +80,18 @@ class TestParseLine:
         item = parse_resource_line("**Die with Zero** (Book) by Bill Perkins: spend it [12:00]")
         assert (item.name, item.kind) == ("Die with Zero by Bill Perkins", "book")
 
+    def test_a_bold_kind_label_takes_the_name_from_what_follows(self):
+        item = parse_resource_line("**Book:** *Our Mathematical Universe* by Max Tegmark. [55:28](?t=3328&cite=c9)")
+        assert (item.name, item.kind, item.cite_id) == ("Our Mathematical Universe by Max Tegmark", "book", "c9")
+        assert item.fallbacks == (("Our Mathematical Universe", "book"), ("Max Tegmark", "person"))
+        item = parse_resource_line("**Podcast:** Just Now Possible - Teresa's show [10:00]")
+        assert (item.name, item.kind, item.gloss) == ("Just Now Possible", "podcast", "Teresa's show")
+
+    def test_a_case_study_is_not_the_kind_of_the_named_thing(self):
+        item = parse_resource_line("Ellen Brandenberger / Stack Overflow (Case Study) [25:35]")
+        assert item.kind is None and item.gloss == "(Case Study)"
+        assert item.fallbacks == (("Ellen Brandenberger", None), ("Stack Overflow", None))
+
     def test_by_inside_a_title_offers_nothing(self):
         assert parse_resource_line("**Stand by Me** (film): a film [05:00]").fallbacks == ()
 

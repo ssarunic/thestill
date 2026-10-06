@@ -80,7 +80,6 @@ _KIND_SYNONYMS: Dict[str, str] = {
     "newsletter": "article",
     "blog": "article",
     "paper": "paper",
-    "study": "paper",
     "person": "person",
     "people": "person",
     "author": "person",
@@ -358,6 +357,12 @@ def parse_resource_line(text: str) -> ResourceItem:
     name_part, gloss, parentheticals = _split_name_and_gloss(text)
     kind: Optional[str] = None
     extra_gloss: List[str] = []
+    # "**Book:** *Our Mathematical Universe* by Max Tegmark": the bold part
+    # is the kind and the name follows it.
+    label_kind = _KIND_SYNONYMS.get(_clean_name(name_part).lower())
+    if label_kind and gloss.strip():
+        kind = label_kind
+        name_part, gloss, parentheticals = _split_name_and_gloss(_strip_emphasis(gloss))
 
     def _take(paren: str) -> None:
         nonlocal kind
@@ -412,6 +417,11 @@ def _split_name_and_gloss(text: str) -> Tuple[str, str, List[str]]:
             return name, rest.lstrip(":—–- ").strip(), parentheticals
     parts = _GLOSS_SPLIT_RE.split(text, maxsplit=1)
     return (parts[0], parts[1], []) if len(parts) == 2 else (text, "", [])
+
+
+def _strip_emphasis(text: str) -> str:
+    """``*Title* by Author.`` → ``Title by Author``: italics and a closing full stop."""
+    return re.sub(r"(?<!\*)\*(?!\*)", "", text).strip().rstrip(".")
 
 
 def _clean_name(name: str) -> str:
