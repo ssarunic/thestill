@@ -90,15 +90,18 @@ class ResourceSource:
         ctx: PlanContext,
         *,
         transcript: Optional[AnnotatedTranscript] = None,
+        markdown: Optional[str] = None,
         stage: str,
     ) -> Optional[ResourcePlan]:
         """The episode's plan, or ``None`` when there is nothing to plan.
 
         ``transcript`` saves a second read when the caller already holds
-        it; its playback offset is set from the episode either way. Raises
+        it; its playback offset is set from the episode either way. So does
+        ``markdown`` (the summary text) for the eval. Raises
         :class:`ResourceParseError` for a section that cannot be read.
         """
-        markdown = self.read_summary(episode)
+        if markdown is None:
+            markdown = self.read_summary(episode)
         if markdown is None:
             logger.info("resource_seeds_skipped", episode_id=episode.id, stage=stage, reason="no_summary")
             return None

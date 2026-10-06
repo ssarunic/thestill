@@ -2738,7 +2738,21 @@ def _eval_runner_for(ctx, rubric):
     the live linker against what is stored, so it needs the entity repository
     and a linker that remembers nothing and leaves no trace."""
     if rubric.name != ENTITY_LINKING:
-        return EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
+        from .core.resource_seeds import ResourceSource
+        from .evals.resource_list_checks import ResourceListProbe
+
+        # Spec #92: measured whatever ENTITY_RESOURCE_SEEDS_ENABLED says —
+        # the baseline is wanted before the feature is turned on.
+        config = ctx.obj.config
+        supplementary = {}
+        if rubric.name == "summary" and getattr(config, "file_storage", None) is not None:
+            source = ResourceSource(
+                path_manager=ctx.obj.path_manager,
+                file_storage=config.file_storage,
+                window_s=config.resource_grounding_window_s,
+            )
+            supplementary = {"summary": {"resource_list": ResourceListProbe(source, ctx.obj.entity_repository)}}
+        return EvalRunner(config, ctx.obj.path_manager, ctx.obj.feed_manager, supplementary=supplementary)
     from .core.entity_linking.factory import build_linker
     from .core.resource_seeds import make_resource_source
     from .core.task_handlers import build_link_context

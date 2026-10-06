@@ -291,25 +291,31 @@ def parse_resource_list(markdown: str) -> List[ResourceItem]:
     """
     items: List[ResourceItem] = []
     seen: set = set()
-    bullets = 0
+    bullets = resource_bullets(markdown)
+    for text in bullets:
+        try:
+            item = parse_resource_line(text)
+        except ResourceParseError:
+            continue
+        key = surface_key(item.name)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item)
+    if bullets and not items:
+        raise ResourceParseError(f"none of {len(bullets)} resource bullets could be read")
+    return items
+
+
+def resource_bullets(markdown: str) -> List[str]:
+    """The text of every bullet in every ``## 8.`` section, in order."""
+    out: List[str] = []
     for section in _SECTION_RE.findall(markdown or ""):
         for line in section.splitlines():
             bullet = _BULLET_RE.match(line)
-            if not bullet:
-                continue
-            bullets += 1
-            try:
-                item = parse_resource_line(bullet.group(1))
-            except ResourceParseError:
-                continue
-            key = surface_key(item.name)
-            if key in seen:
-                continue
-            seen.add(key)
-            items.append(item)
-    if bullets and not items:
-        raise ResourceParseError(f"none of {bullets} resource bullets could be read")
-    return items
+            if bullet:
+                out.append(bullet.group(1))
+    return out
 
 
 def parse_resource_line(text: str) -> ResourceItem:
