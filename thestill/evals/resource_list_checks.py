@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, Optional
 
-from ..core.entity_anchor import expand_anchor_variants
+from ..core.entity_anchor import expand_anchor_variants, load_anchor_entities
 from ..core.entity_linking.types import surface_key
 from ..core.resource_seeds import ResourceSource, plan_context
 from ..core.summary_resources import ResourcePlan, is_contract_line, resource_bullets
@@ -58,17 +58,17 @@ def resource_list_metrics(
     near = stats.get("near", 0)
     elsewhere = stats.get("elsewhere", 0)
     names = [g.name for g in plan.grounded] if plan else []
-    linked = [n for n in names if is_linked(n)] if is_linked is not None else None
+    unlinked = [n for n in names if not is_linked(n)] if is_linked is not None else None
     return {
         "items": items,
         "bullets": bullets,
         "contract_rate": _rate(contract_bullets, bullets),
         "grounding_rate": _rate(items - anchor - ungrounded, items - anchor),
         "citation_accuracy": _rate(near, near + elsewhere),
-        "linked_rate": _rate(len(linked), len(names)) if linked is not None else None,
+        "linked_rate": _rate(len(names) - len(unlinked), len(names)) if unlinked is not None else None,
         "anchor_items": anchor,
         "ungrounded": [item.name for item, why in (plan.dropped if plan else ()) if why == "ungrounded"][:MAX_LISTED],
-        "unlinked": [n for n in names if linked is not None and n not in linked][:MAX_LISTED],
+        "unlinked": (unlinked or [])[:MAX_LISTED],
     }
 
 
@@ -86,14 +86,13 @@ class ResourceListProbe:
     def __call__(self, episode: Episode, artifact_texts: Dict[str, str]) -> dict:
         markdown = artifact_texts.get("summary") or self._source.read_summary(episode) or ""
         bullets = resource_bullets(markdown)
-        anchors, names, is_linked = [], [], None
-        if self._repo is not None:
-            anchors = [e for e in (self._repo.get_entity(i) for i in self._repo.get_episode_anchors(episode.id)) if e]
-            names = self._repo.list_extracted_names(episode.id)
+        if self._repo is None:
+            ctx, is_linked = plan_context([], []), None
+        else:
+            anchors = expand_anchor_variants(load_anchor_entities(self._repo, episode.id))
+            ctx = plan_context(anchors, self._repo.list_extracted_names(episode.id))
             is_linked = self._linked_lookup(episode.id)
-        plan = self._source.plan(
-            episode, plan_context(expand_anchor_variants(anchors), names), markdown=markdown, stage="eval"
-        )
+        plan = self._source.plan(episode, ctx, markdown=markdown, stage="eval")
         return resource_list_metrics(
             plan,
             bullets=len(bullets),

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from ..models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript
 from .entity_linking.types import surface_key
@@ -112,53 +112,61 @@ _KIND_SYNONYMS: Dict[str, str] = {
 
 # Gloss words that settle a kind-less item's kind. The earliest match in
 # the gloss wins: "Stripe's internal data visualization tool" is a tool.
+# The kind synonyms, minus words too loose in free prose ("show", "data"),
+# plus roles that name a person and a few company words.
+_GLOSS_EXCLUDED = frozenset(
+    {
+        "books",
+        "tools",
+        "show",
+        "blog",
+        "data",
+        "people",
+        "guest",
+        "person",
+        "place",
+        "city",
+        "country",
+        "event",
+        "other",
+    }
+)
+_PERSON_ROLES = (
+    "writer",
+    "journalist",
+    "founder",
+    "co-founder",
+    "ceo",
+    "cfo",
+    "cto",
+    "professor",
+    "economist",
+    "scientist",
+    "researcher",
+    "psychiatrist",
+    "psychologist",
+    "officer",
+    "analyst",
+    "actor",
+    "actress",
+    "director",
+    "comedian",
+    "politician",
+    "senator",
+    "president",
+    "winner",
+    "historian",
+    "philosopher",
+    "entrepreneur",
+    "billionaire",
+    "artist",
+    "musician",
+)
 _GLOSS_KIND_WORDS: Dict[str, str] = {
-    **{
-        w: "person"
-        for w in (
-            "author",
-            "writer",
-            "journalist",
-            "founder",
-            "co-founder",
-            "ceo",
-            "cfo",
-            "cto",
-            "investor",
-            "professor",
-            "economist",
-            "scientist",
-            "researcher",
-            "psychiatrist",
-            "psychologist",
-            "officer",
-            "analyst",
-            "actor",
-            "actress",
-            "director",
-            "comedian",
-            "politician",
-            "senator",
-            "president",
-            "winner",
-            "host",
-            "historian",
-            "philosopher",
-            "entrepreneur",
-            "billionaire",
-            "artist",
-            "musician",
-        )
-    },
-    **{w: "company" for w in ("company", "startup", "firm", "bank", "fund", "brand", "retailer", "lab")},
-    **{w: "book" for w in ("book", "novel", "memoir")},
-    **{w: "film" for w in ("film", "movie", "documentary")},
-    **{w: "tv" for w in ("sitcom", "series", "tv")},
-    "podcast": "podcast",
-    **{w: "article" for w in ("article", "essay", "newsletter")},
-    **{w: "paper" for w in ("paper", "study")},
-    **{w: "tool" for w in ("tool", "platform", "service")},
-    **{w: "product" for w in ("app", "software", "model", "device", "product")},
+    **{w: k for w, k in _KIND_SYNONYMS.items() if " " not in w and w not in _GLOSS_EXCLUDED},
+    **{w: "person" for w in _PERSON_ROLES},
+    "retailer": "company",
+    "lab": "company",
 }
 _GLOSS_KIND_RE = re.compile(
     r"(?<![\w-])(" + "|".join(sorted(map(re.escape, _GLOSS_KIND_WORDS), key=len, reverse=True)) + r")(?![\w-])",
@@ -183,10 +191,14 @@ _CITE_LINK_RE = re.compile(r"\[([^\]]+)\]\(\?[^)]*?cite=(c\d+)[^)]*\)")
 _BARE_LABEL_RE = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*[-–—]\s*[^\]]*)?\]")
 _LABEL_START_RE = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")
 _PAREN_RE = re.compile(r"\s*\(([^()]*)\)")
+_LEADING_PAREN_RE = re.compile(r"^\(([^()]*)\)")
 _GLOSS_SPLIT_RE = re.compile(r":\s+|\s+[—–]\s+|\s+-\s+")
 _CONTRACT_RE = re.compile(r"^\*\*[^*]+\*\*\s+\((?P<kind>[a-z]+)\):\s+\S")
 # The author must be a full name: "Stand by Me" offers no fallback.
-_BY_RE = re.compile(r"^(?P<title>.+?)\s+by\s+(?P<author>[A-Z][\w.'’-]*(?:\s+[A-Z][\w.'’-]*)+)$")
+_FULL_NAME = r"[A-Z][\w.'’-]*(?:\s+[A-Z][\w.'’-]*)+"
+_BY_RE = re.compile(rf"^(?P<title>.+?)\s+by\s+(?P<author>{_FULL_NAME})$")
+# "**Hooked** by Nir Eyal: …" — the author follows the bold title.
+_BY_TAIL_RE = re.compile(rf"^by\s+(?P<author>{_FULL_NAME})")
 _QUOTE_CHARS = "\"'“”‘’*_` "
 
 
@@ -223,6 +235,14 @@ class PlanContext:
 
     anchor_surfaces: FrozenSet[str] = frozenset()
     extracted_names: Sequence[Tuple[str, Optional[str]]] = ()
+
+
+@dataclass(frozen=True)
+class _Admission:
+    item: ResourceItem
+    name: str  # the form the transcript says: the item's name or a fallback
+    outcome: str
+    kind: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -320,8 +340,7 @@ def resource_bullets(markdown: str) -> List[str]:
 
 def parse_resource_line(text: str) -> ResourceItem:
     """One bullet's text (without the bullet marker) → a :class:`ResourceItem`."""
-    contract_match = _CONTRACT_RE.match(text)
-    contract = bool(contract_match and contract_match.group("kind") in KINDS)
+    contract = is_contract_line(text)
 
     cite_id: Optional[str] = None
     raw_label: Optional[str] = None
@@ -336,21 +355,21 @@ def parse_resource_line(text: str) -> ResourceItem:
         raw_label = bare.group(1)
     text = _BARE_LABEL_RE.sub("", text).strip()
 
-    name_part, gloss = _split_name_and_gloss(text)
+    name_part, gloss, parentheticals = _split_name_and_gloss(text)
     kind: Optional[str] = None
     extra_gloss: List[str] = []
 
-    def _take_paren(match: "re.Match[str]") -> str:
+    def _take(paren: str) -> None:
         nonlocal kind
-        mapped = normalize_kind(match.group(1))
+        mapped = normalize_kind(paren)
         if mapped is not None and kind is None:
             kind = mapped
-        elif match.group(1).strip():
-            extra_gloss.append(match.group(1).strip())
-        return ""
+        elif paren.strip():
+            extra_gloss.append(paren.strip())
 
-    name = _PAREN_RE.sub(_take_paren, name_part)
-    name = _clean_name(name)
+    for paren in parentheticals:
+        _take(paren)
+    name = _clean_name(_PAREN_RE.sub(lambda m: _take(m.group(1)) or "", name_part))
     if not name:
         raise ResourceParseError(f"resource bullet has no name: {text[:80]!r}")
     gloss = _clean_gloss(gloss)
@@ -367,22 +386,32 @@ def parse_resource_line(text: str) -> ResourceItem:
     )
 
 
-def _split_name_and_gloss(text: str) -> Tuple[str, str]:
-    """``**Name:** gloss`` / ``**Name** (kind): gloss`` / ``Name - gloss`` / ``Name``."""
+def _split_name_and_gloss(text: str) -> Tuple[str, str, List[str]]:
+    """``(name, gloss, parentheticals)`` for the shapes summaries use.
+
+    ``**Name:** gloss``, ``**Name** (kind): gloss``, ``**Title** by Full
+    Name: gloss``, ``Name - gloss`` and ``Name``. Parentheticals that follow
+    a bold name come back separately; ones inside the name stay in it.
+    """
     if text.startswith("**"):
         end = text.find("**", 2)
         if end > 2:
             name = text[2:end]
             rest = text[end + 2 :].strip()
             if name.rstrip().endswith(":"):
-                return name.rstrip()[:-1], rest
-            paren = re.match(r"^\(([^()]*)\)", rest)
+                return name.rstrip()[:-1], rest, []
+            parentheticals = []
+            paren = _LEADING_PAREN_RE.match(rest)
             if paren:
-                name = f"{name} ({paren.group(1)})"
+                parentheticals.append(paren.group(1))
                 rest = rest[paren.end() :].strip()
-            return name, rest.lstrip(":—–- ").strip()
+            by = _BY_TAIL_RE.match(rest)
+            if by:
+                name = f"{name} by {by.group('author')}"
+                rest = rest[by.end() :].strip()
+            return name, rest.lstrip(":—–- ").strip(), parentheticals
     parts = _GLOSS_SPLIT_RE.split(text, maxsplit=1)
-    return (parts[0], parts[1]) if len(parts) == 2 else (text, "")
+    return (parts[0], parts[1], []) if len(parts) == 2 else (text, "", [])
 
 
 def _clean_name(name: str) -> str:
@@ -467,9 +496,8 @@ def plan_resources(
     """
     segments = [s for s in transcript.segments if s.kind == "content" and s.text.strip()]
     offset = transcript.playback_time_offset_seconds
-    extracted_labels = {surface_key(n): label for n, label in ctx.extracted_names if label}
 
-    admitted: List[Tuple[ResourceItem, str, str, Optional[str]]] = []  # item, form, outcome, kind
+    admitted: Dict[str, _Admission] = {}  # by surface_key(name): one person listed twice is one person
     dropped: List[Tuple[ResourceItem, str]] = []
     stats = {"items": len(items), "near": 0, "elsewhere": 0, "ungrounded": 0, "anchor": 0, "fallback": 0}
 
@@ -481,7 +509,7 @@ def plan_resources(
         cited_s = parse_timestamp_label(item.raw_label) if item.raw_label else None
         outcome = _ground(item.name, segments, cited_s, offset, window_s)
         if outcome is not None:
-            admitted.append((item, item.name, outcome, item.kind))
+            admitted.setdefault(surface_key(item.name), _Admission(item, item.name, outcome, item.kind))
             continue
         parts = []
         for name, kind in item.fallbacks:
@@ -489,15 +517,16 @@ def plan_resources(
                 continue
             part_outcome = _ground(name, segments, cited_s, offset, window_s)
             if part_outcome is not None:
-                parts.append((item, name, part_outcome, kind))
+                parts.append(_Admission(item, name, part_outcome, kind))
         if parts:
-            admitted.extend(parts)
+            for part in parts:
+                admitted.setdefault(surface_key(part.name), part)
             stats["fallback"] += 1
         else:
             dropped.append((item, "ungrounded"))
             stats["ungrounded"] += 1
 
-    grounded = _expand(admitted, ctx, extracted_labels)
+    grounded = _expand(list(admitted.values()), ctx)
     for g in grounded:
         stats[g.outcome] += 1
     return ResourcePlan(items=tuple(items), grounded=tuple(grounded), dropped=tuple(dropped), stats=stats)
@@ -540,46 +569,52 @@ def _distance_s(segment: AnnotatedSegment, raw_t: float) -> float:
     return min(abs(raw_t - segment.start), abs(raw_t - segment.end))
 
 
-def _expand(
-    admitted: Sequence[Tuple[ResourceItem, str, str, Optional[str]]],
-    ctx: PlanContext,
-    extracted_labels: Mapping[str, str],
-) -> List[GroundedItem]:
-    """Scan surfaces per admitted item, with ambiguous surnames dropped.
+def _expand(admitted: Sequence[_Admission], ctx: PlanContext) -> List[GroundedItem]:
+    """Scan surfaces per admitted name, with ambiguous surnames dropped.
 
-    A surname is ambiguous when it is also another admitted item's surface,
-    an anchor surface, or the last word of a different multi-word name
+    A surname is ambiguous when another admitted name also claims it, when
+    it is an anchor surface, or when it ends a different multi-word name
     GLiNER found in the episode ("Kate Perkins" listed, "Bill Perkins"
-    spoken). The full form that admitted the item always stays.
+    spoken). The full form that admitted the name always stays.
     """
-    proposals: List[Tuple[ResourceItem, str, str, Optional[str], Optional[str], Optional[str]]] = []
-    for item, name, outcome, kind in admitted:
-        kind = infer_kind(kind, item.gloss if name == item.name else "")
-        label = KIND_TO_SURFACE_LABEL.get(kind) if kind else extracted_labels.get(surface_key(name))
-        surname = _surname(name) if label == "person" else None
-        proposals.append((item, name, outcome, kind, label, surname))
-
-    claims: Dict[str, int] = {}
-    for _, name, _, _, _, surname in proposals:
-        for surface in (name, surname):
-            if surface:
-                claims[surface_key(surface)] = claims.get(surface_key(surface), 0) + 1
+    extracted_labels = {surface_key(n): label for n, label in ctx.extracted_names if label}
     multiword = [surface_key(n) for n, _ in ctx.extracted_names if len(n.split()) > 1]
 
+    proposals = []
+    for admission in admitted:
+        gloss = admission.item.gloss if admission.name == admission.item.name else ""
+        kind = infer_kind(admission.kind, gloss)
+        if kind:
+            label = KIND_TO_SURFACE_LABEL.get(kind)
+        else:
+            label = extracted_labels.get(surface_key(admission.name))
+        surname = _surname(admission.name) if label == "person" else None
+        proposals.append((admission, kind, label, surname))
+
+    # surface → the distinct full names claiming it
+    claimants: Dict[str, set] = {}
+    for admission, _, _, surname in proposals:
+        full = surface_key(admission.name)
+        for surface in (admission.name, surname):
+            if surface:
+                claimants.setdefault(surface_key(surface), set()).add(full)
+
     out: List[GroundedItem] = []
-    for item, name, outcome, kind, label, surname in proposals:
-        scan = [name]
+    for admission, kind, label, surname in proposals:
+        scan = [admission.name]
         dropped: List[str] = []
         if surname:
             key = surface_key(surname)
-            full = surface_key(name)
+            full = surface_key(admission.name)
             clashes = (
-                claims.get(key, 0) > 1
+                len(claimants[key]) > 1
                 or key in ctx.anchor_surfaces
                 or any(n != full and n.endswith(" " + key) for n in multiword)
             )
             (dropped if clashes else scan).append(surname)
-        out.append(GroundedItem(item, name, outcome, kind, label, tuple(scan), tuple(dropped)))
+        out.append(
+            GroundedItem(admission.item, admission.name, admission.outcome, kind, label, tuple(scan), tuple(dropped))
+        )
     return out
 
 

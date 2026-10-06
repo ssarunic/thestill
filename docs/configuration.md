@@ -521,7 +521,7 @@ QID.
 | `ENTITY_LINKING_MIN_CONFIDENCE` | Lowest chooser confidence that links a name: `low`, `medium` or `high` | `medium` |
 | `ENTITY_LINKING_NONE_TTL_DAYS` | A name that did not link is looked up again after this many days | `30` |
 | `WIKIDATA_MAX_RPS` | Process-wide ceiling on Wikidata search requests per second | `5` |
-| `ENTITY_RESOURCE_SEEDS_ENABLED` | Spec #92: names in the summary's Resource List that the transcript says become entity mentions, and the linker sees each item's kind and description. Off reads no summary | `false` |
+| `ENTITY_RESOURCE_SEEDS_ENABLED` | Spec #92: names in the summary's Resource List that the transcript says become entity mentions, and the linker sees each item's kind and description. Off, extraction and resolution read no summary; `thestill eval run --rubric summary` still measures the Resource List (`resource_list` check) so a baseline exists first | `false` |
 | `RESOURCE_GROUNDING_WINDOW_S` | How close (seconds) to its citation a Resource List item must be said to count as `near`; a one-word item must be `near` | `90` |
 
 The `live` linker needs no extra install: its dependencies are Wikidata and

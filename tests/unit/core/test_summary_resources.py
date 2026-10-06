@@ -73,6 +73,13 @@ class TestParseLine:
         item = parse_resource_line("*The Art of War* (Book) by Sun Tzu [05:00]")
         assert item.fallbacks == (("The Art of War", "book"), ("Sun Tzu", "person"))
 
+    def test_a_bold_title_keeps_its_author(self):
+        item = parse_resource_line("**Hooked** by Nir Eyal: a habit book [12:00]")
+        assert (item.name, item.gloss) == ("Hooked by Nir Eyal", "a habit book")
+        assert item.fallbacks == (("Hooked", None), ("Nir Eyal", "person"))
+        item = parse_resource_line("**Die with Zero** (Book) by Bill Perkins: spend it [12:00]")
+        assert (item.name, item.kind) == ("Die with Zero by Bill Perkins", "book")
+
     def test_by_inside_a_title_offers_nothing(self):
         assert parse_resource_line("**Stand by Me** (film): a film [05:00]").fallbacks == ()
 
@@ -246,6 +253,24 @@ class TestAmbiguity:
         ctx = PlanContext(extracted_names=[("Paul Kedrosky", "person")])
         (g,) = _plan(_section("Paul Kedrosky (Investor) [00:10]"), tx, ctx=ctx).grounded
         assert g.scan_surfaces == ("Paul Kedrosky", "Kedrosky")
+
+    def test_two_books_by_one_author_keep_the_surname(self):
+        tx = _transcript((700, "Nir Eyal wrote both. Eyal again."))
+        plan = _plan(_section("**Hooked** by Nir Eyal [12:00]", "**Indistractable** by Nir Eyal [12:00]"), tx)
+        (g,) = plan.grounded  # one person, admitted once
+        assert g.scan_surfaces == ("Nir Eyal", "Eyal") and plan.stats["near"] == 1
+
+    def test_a_person_listed_and_named_as_an_author_is_one_person(self):
+        tx = _transcript((700, "Daniel Kahneman said so. Kahneman again."))
+        md = _section("Thinking, Fast and Slow by Daniel Kahneman [12:00]", "Daniel Kahneman (Person) [12:00]")
+        (g,) = _plan(md, tx).grounded
+        assert g.scan_surfaces == ("Daniel Kahneman", "Kahneman")
+
+    def test_a_surname_that_is_another_items_full_name_is_ambiguous(self):
+        tx = _transcript((10, "Bill Perkins and Perkins the brand."))
+        plan = _plan(_section("Bill Perkins (Author) [00:10]", "**Perkins:** a brand [00:10]"), tx)
+        bill = next(g for g in plan.grounded if g.name == "Bill Perkins")
+        assert bill.dropped_surfaces == ("Perkins",)
 
 
 class TestLabels:

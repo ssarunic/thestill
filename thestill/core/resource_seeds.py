@@ -32,11 +32,11 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedTranscript
-from ..models.entities import EntityMention
+from ..models.entities import EntityMention, EntityRecord
 from ..models.podcast import Episode
 from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
-from .entity_anchor import AnchorVariant, expand_anchor_variants
+from .entity_anchor import AnchorVariant, expand_anchor_variants, load_anchor_entities
 from .entity_linking.types import surface_key
 from .summary_citations import load_annotated_for_episode
 from .summary_resources import (
@@ -150,37 +150,41 @@ class ResourceSource:
             try:
                 plan = self.plan(episode, plan_context(anchor_variants, names), transcript=transcript, stage="extract")
             except Exception as exc:  # noqa: BLE001 — never a gate on extraction
-                logger.warning(
-                    "resource_seeds_failed",
-                    episode_id=episode.id,
-                    stage="extract",
-                    error=str(exc),
-                    exc_info=not isinstance(exc, ResourceParseError),
-                )
+                _warn_failed(episode, "extract", exc)
                 return []
             return plan.seeds() if plan else []
 
         return provide
 
-    def hints_for(self, repo, episode: Episode) -> Dict[str, Tuple[str, str]]:
+    def hints_for(
+        self, repo, episode: Episode, anchors: Optional[Sequence[EntityRecord]] = None
+    ) -> Dict[str, Tuple[str, str]]:
         """Resolve-stage hints: surface_key → (kind, gloss).
 
-        The Resource List is an addition, never a gate: any failure here is
-        a WARNING and no hints, and resolution goes ahead.
+        ``anchors`` saves the reads when the caller already loaded them. The
+        Resource List is an addition, never a gate: any failure here is a
+        WARNING and no hints, and resolution goes ahead.
         """
         try:
-            anchors = [e for e in (repo.get_entity(i) for i in repo.get_episode_anchors(episode.id)) if e]
+            if anchors is None:
+                anchors = load_anchor_entities(repo, episode.id)
             ctx = plan_context(expand_anchor_variants(anchors), repo.list_extracted_names(episode.id))
             plan = self.plan(episode, ctx, stage="resolve")
-        except ResourceParseError as exc:
-            logger.warning("resource_seeds_failed", episode_id=episode.id, stage="resolve", error=str(exc))
-            return {}
         except Exception as exc:  # noqa: BLE001 — never a gate on resolution
-            logger.warning(
-                "resource_seeds_failed", episode_id=episode.id, stage="resolve", error=str(exc), exc_info=True
-            )
+            _warn_failed(episode, "resolve", exc)
             return {}
         return plan.hints() if plan else {}
+
+
+def _warn_failed(episode: Episode, stage: str, exc: Exception) -> None:
+    """A parse error is the summary's fault (no traceback); anything else is ours."""
+    logger.warning(
+        "resource_seeds_failed",
+        episode_id=episode.id,
+        stage=stage,
+        error=str(exc),
+        exc_info=not isinstance(exc, ResourceParseError),
+    )
 
 
 def make_resource_source(config, path_manager: PathManager) -> Optional[ResourceSource]:

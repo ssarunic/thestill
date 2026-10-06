@@ -214,7 +214,8 @@ def test_build_link_context_carries_resource_hints_only_with_a_source():
     podcast = Podcast(id="p", rss_url="https://x/f.xml", title="Show", slug="s", description="")
 
     class Source:
-        def hints_for(self, repo_, episode):
+        def hints_for(self, repo_, episode, anchors):
+            assert anchors == []  # the anchors build_link_context already loaded
             return {"mad men": ("tv", "the greatest TV show")}
 
     assert build_link_context(repo, podcast, _episode()).resource_hints == {}
@@ -228,7 +229,7 @@ def test_a_linker_that_ignores_the_context_never_reads_the_summary():
         uses_context = False
 
     class Source:
-        def hints_for(self, repo_, episode):
+        def hints_for(self, repo_, episode, anchors):
             raise AssertionError("read the summary for a linker that ignores context")
 
     podcast = Podcast(id="p", rss_url="https://x/f.xml", title="Show", slug="s", description="")

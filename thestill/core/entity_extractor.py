@@ -463,39 +463,28 @@ class EntityExtractor:
         "Gary Neville" is Gary Neville, not the host Gary Lineker, and
         "Dogus" inside "Dogus Cubuk" is the same person counted twice.
         """
+        # Longest first, so "Andrej Karpathy" consumes a span before
+        # "Andrej" has a chance to.
+        patterns = [
+            (surface, re.compile(r"\b" + re.escape(surface) + r"\b", re.IGNORECASE))
+            for surface in sorted(anchor_index.keys(), key=len, reverse=True)
+        ]
         results: List[_SegmentPrediction] = []
-        # Compile each surface once. We sort longest-first so longer
-        # variants ("Andrej Karpathy") consume a span before shorter
-        # ones ("Andrej") have a chance to.
-        compiled = sorted(anchor_index.keys(), key=len, reverse=True)
-        for segment in segments:
-            if segment.kind != "content" or not segment.text.strip():
-                continue
-            text = segment.text
-            consumed_spans: List[Tuple[int, int]] = list(taken_spans.get(segment.id, ()))
-            for surface in compiled:
-                pattern = re.compile(r"\b" + re.escape(surface) + r"\b", re.IGNORECASE)
-                for match in pattern.finditer(text):
-                    span = (match.start(), match.end())
-                    if any(_overlaps(span, c) for c in consumed_spans):
-                        continue
-                    consumed_spans.append(span)
-                    # Pull the canonical-cased variant for the recorded
-                    # surface (cosmetic; resolution keys off the
-                    # entity_id either way).
-                    variants = anchor_index[surface]
-                    canonical_surface = variants[0].surface
-                    results.append(
-                        _SegmentPrediction(
-                            segment=segment,
-                            surface_form=canonical_surface,
-                            label=variants[0].entity_type.value,
-                            confidence=1.0,  # anchor-matched, not GLiNER-scored
-                            char_start=span[0],
-                            char_end=span[1],
-                            extractor="anchor:scan",
-                        )
-                    )
+        for segment, surface, match in _free_matches(segments, patterns, taken_spans):
+            # Pull the canonical-cased variant for the recorded surface
+            # (cosmetic; resolution keys off the entity_id either way).
+            variants = anchor_index[surface]
+            results.append(
+                _SegmentPrediction(
+                    segment=segment,
+                    surface_form=variants[0].surface,
+                    label=variants[0].entity_type.value,
+                    confidence=1.0,  # anchor-matched, not GLiNER-scored
+                    char_start=match.start(),
+                    char_end=match.end(),
+                    extractor="anchor:scan",
+                )
+            )
         return results
 
     def _scan_seeds(
@@ -514,36 +503,25 @@ class EntityExtractor:
         """
         ordered = sorted(seeds, key=lambda seed: len(seed.surface), reverse=True)
         patterns = [(seed, surface_pattern(seed.surface)) for seed in ordered]
-        out: List[EntityMention] = []
-        for segment in segments:
-            if segment.kind != "content" or not segment.text.strip():
-                continue
-            consumed = list(taken_spans.get(segment.id, ()))
-            for seed, pattern in patterns:
-                for match in pattern.finditer(segment.text):
-                    span = (match.start(), match.end())
-                    if any(_overlaps(span, c) for c in consumed):
-                        continue
-                    consumed.append(span)
-                    out.append(
-                        EntityMention(
-                            entity_id=None,
-                            resolution_status=ResolutionStatus.PENDING,
-                            episode_id=episode_id,
-                            segment_id=segment.id,
-                            start_ms=int(round(segment.start * 1000)),
-                            end_ms=int(round(segment.end * 1000)),
-                            speaker=segment.speaker,
-                            role=None,
-                            surface_form=seed.surface,
-                            surface_label=seed.surface_label,
-                            quote_excerpt=_excerpt_around(segment.text, span[0], span[1]),
-                            sentiment=None,
-                            confidence=RESOURCE_SEED_CONFIDENCE,
-                            extractor=RESOURCE_SEED_EXTRACTOR,
-                        )
-                    )
-        return out
+        return [
+            EntityMention(
+                entity_id=None,
+                resolution_status=ResolutionStatus.PENDING,
+                episode_id=episode_id,
+                segment_id=segment.id,
+                start_ms=int(round(segment.start * 1000)),
+                end_ms=int(round(segment.end * 1000)),
+                speaker=segment.speaker,
+                role=None,
+                surface_form=seed.surface,
+                surface_label=seed.surface_label,
+                quote_excerpt=_excerpt_around(segment.text, match.start(), match.end()),
+                sentiment=None,
+                confidence=RESOURCE_SEED_CONFIDENCE,
+                extractor=RESOURCE_SEED_EXTRACTOR,
+            )
+            for segment, seed, match in _free_matches(segments, patterns, taken_spans)
+        ]
 
     def _synthesize_speaker_mentions(
         self,
@@ -633,6 +611,25 @@ def _match_anchor(
     if len(bucket) > 1:
         return None
     return bucket[0]
+
+
+def _free_matches(segments, patterns, taken_spans):
+    """``(segment, key, match)`` for every match in content segments that
+    overlaps no span already taken — GLiNER's, an earlier pattern's, or one
+    in ``taken_spans`` (segment id → spans). ``patterns`` is ``(key,
+    compiled)`` in priority order; callers put longer surfaces first.
+    """
+    for segment in segments:
+        if segment.kind != "content" or not segment.text.strip():
+            continue
+        consumed = list(taken_spans.get(segment.id, ()))
+        for key, pattern in patterns:
+            for match in pattern.finditer(segment.text):
+                span = (match.start(), match.end())
+                if any(_overlaps(span, c) for c in consumed):
+                    continue
+                consumed.append(span)
+                yield segment, key, match
 
 
 def _overlaps(a: tuple, b: tuple) -> bool:

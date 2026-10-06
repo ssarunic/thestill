@@ -60,6 +60,15 @@ def expand_anchor_variants(entities: Iterable[EntityRecord]) -> List[AnchorVaria
     return variants
 
 
+def load_anchor_entities(repo, episode_id: str) -> List[EntityRecord]:
+    """The episode's host/guest/recurring entities that still exist.
+
+    One repository read per anchor (a connection each on Postgres), so a
+    caller that needs them twice passes the list on rather than reloading.
+    """
+    return [e for e in (repo.get_entity(i) for i in repo.get_episode_anchors(episode_id)) if e is not None]
+
+
 def index_variants_by_surface(variants: Iterable[AnchorVariant]) -> Dict[str, List[AnchorVariant]]:
     """Group variants by their lowercased surface for fast extractor lookup."""
     bucket: Dict[str, List[AnchorVariant]] = {}
