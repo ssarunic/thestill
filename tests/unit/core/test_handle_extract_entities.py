@@ -158,3 +158,57 @@ class TestMissingSidecarFile:
         with pytest.raises(FatalError) as exc_info:
             handle_extract_entities(_make_task(), state)
         assert "sidecar not found" in str(exc_info.value)
+
+
+class TestResourceSeeds:
+    """Spec #92 — the Resource List seeds extraction only when enabled, and
+    never blocks the transcript's own mentions."""
+
+    def _state(self, tmp_path, *, enabled, summary):
+        from thestill.utils.file_storage.local import LocalFileStorage
+        from thestill.utils.path_manager import PathManager
+
+        episode = _make_episode(json_path="fixture/ep_cleaned.json")
+        episode = episode.model_copy(update={"summary_path": "fixture/ep_summary.md"})
+        pm = PathManager(storage_path=str(tmp_path))
+        state = _build_state(tmp_path, episode, _make_podcast(), "fixture/ep_cleaned.json")
+        state.path_manager = pm
+        clean = pm.clean_transcript_file("fixture/ep_cleaned.json")
+        clean.parent.mkdir(parents=True, exist_ok=True)
+        clean.write_text(FIXTURE.read_text(), encoding="utf-8")
+        if summary is not None:
+            (pm.summaries_dir() / "fixture").mkdir(parents=True, exist_ok=True)
+            (pm.summaries_dir() / "fixture" / "ep_summary.md").write_text(summary, encoding="utf-8")
+        state.config.entity_resource_seeds_enabled = enabled
+        state.config.resource_grounding_window_s = 90.0
+        state.config.file_storage = LocalFileStorage(str(tmp_path))
+        return state
+
+    def _mentions(self, state):
+        handle_extract_entities(_make_task(), state)
+        return list(state.entity_repository.insert_mentions.call_args.args[0])
+
+    def test_enabled_adds_pending_mentions_for_grounded_names(self, tmp_path):
+        summary = "## 8. Resource List\n* Jeff Gothelf (Author) [01:00](?t=60&cite=c1)\n"
+        seeded = [
+            m
+            for m in self._mentions(self._state(tmp_path, enabled=True, summary=summary))
+            if m.extractor == "summary:resource"
+        ]
+        assert seeded and {m.surface_form for m in seeded} <= {"Jeff Gothelf", "Gothelf"}
+        assert all(m.resolution_status is ResolutionStatus.PENDING and m.surface_label == "person" for m in seeded)
+
+    def test_disabled_reads_no_summary(self, tmp_path):
+        state = self._state(tmp_path, enabled=False, summary="## 8. Resource List\n* Jeff Gothelf (Author) [01:00]\n")
+        state.config.file_storage = MagicMock()
+        mentions = self._mentions(state)
+        assert not any(m.extractor == "summary:resource" for m in mentions)
+        state.config.file_storage.read_text.assert_not_called()
+
+    def test_an_unreadable_resource_list_still_commits_the_transcript_mentions(self, tmp_path):
+        state = self._state(tmp_path, enabled=True, summary="## 8. Resource List\n* [01:00]\n")
+        mentions = self._mentions(state)
+        assert any(m.extractor.startswith("gliner") for m in mentions)
+        assert not any(m.extractor == "summary:resource" for m in mentions)
+        statuses = [c.kwargs["status"] for c in state.repository.update_entity_extraction_status.call_args_list]
+        assert statuses == ["pending", "complete"]

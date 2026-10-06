@@ -1108,11 +1108,17 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         anchor_entities = [e for e in (repo.get_entity(eid) for eid in anchor_ids) if e is not None]
         anchor_variants = expand_anchor_variants(anchor_entities)
 
+        # Spec #92 — the summary's Resource List seeds names GLiNER missed.
+        # None when ENTITY_RESOURCE_SEEDS_ENABLED is off: no summary read.
+        from .resource_seeds import make_resource_source
+
+        resources = make_resource_source(state.config, state.path_manager)
         extractor = _get_or_create_entity_extractor(state)
         mentions = extractor.extract(
             transcript,
             episode_id=episode.id,
             anchor_variants=anchor_variants,
+            seed_provider=resources.seed_provider(episode, transcript, anchor_variants) if resources else None,
         )
 
         # Idempotent re-extract: wipe + write. The brief gap between

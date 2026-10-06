@@ -46,13 +46,14 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript
 from ..models.entities import EntityMention, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
 from .entity_anchor import AnchorVariant, index_variants_by_surface
+from .summary_resources import ResourceSeed, surface_pattern
 
 if TYPE_CHECKING:
     # ``gliner`` is an optional dep — imported lazily inside ``_load_model``
@@ -85,6 +86,11 @@ DEFAULT_LABELS_TO_TYPES = {
 # while cutting ~40% of the topic noise. Filtering at extraction time
 # saves the resolution-stage round-trip.
 DEFAULT_CONFIDENCE_THRESHOLD = 0.65
+
+# Spec #92: mentions proposed by the summary's Resource List. Above the
+# reader's inline-highlight floor; below anchor and speaker rows (1.0).
+RESOURCE_SEED_EXTRACTOR = "summary:resource"
+RESOURCE_SEED_CONFIDENCE = 0.9
 
 # Quote excerpt window: ±N characters around the surface form. Matches
 # the spec contract in §"Citation-shaped results" — every mention
@@ -202,6 +208,7 @@ class EntityExtractor:
         *,
         episode_id: str,
         anchor_variants: Optional[Iterable[AnchorVariant]] = None,
+        seed_provider: Optional[Callable[[List[EntityMention]], Sequence[ResourceSeed]]] = None,
     ) -> List[EntityMention]:
         """Run GLiNER over each ``content`` segment, return mentions.
 
@@ -217,6 +224,12 @@ class EntityExtractor:
         ReFinED), and the extractor additionally scans body text for
         anchor surfaces GLiNER may have missed (last-name-only,
         first-name-only) and synthesizes mentions for them.
+
+        ``seed_provider`` (spec #92) is called with GLiNER's mentions and
+        returns the summary Resource List surfaces to scan for. Seeds are
+        scanned last, around every span GLiNER and the anchor scan took,
+        and always produce ``pending`` mentions: a seed proposes, the
+        linker decides.
         """
         self._load_model()
         anchor_index = index_variants_by_surface(anchor_variants or [])
@@ -231,6 +244,8 @@ class EntityExtractor:
         # Spec §1.13.4 — separate scan for anchor surfaces that GLiNER
         # missed entirely (e.g. last-name-only mentions in episodes with
         # a clean guest signal). Skip text GLiNER already covered.
+        gliner_mentions = list(mentions)
+        taken_spans: Dict[int, List[Tuple[int, int]]] = defaultdict(list, {k: list(v) for k, v in gliner_spans.items()})
         if anchor_index:
             for anchor_pred in self._scan_anchors(transcript.segments, anchor_index, taken_spans=gliner_spans):
                 mentions.append(
@@ -240,6 +255,16 @@ class EntityExtractor:
                         anchor_index=anchor_index,
                     )
                 )
+                taken_spans[anchor_pred.segment.id].append((anchor_pred.char_start, anchor_pred.char_end))
+
+        seed_mentions: List[EntityMention] = []
+        if seed_provider is not None:
+            seeds = seed_provider(gliner_mentions)
+            if seeds:
+                seed_mentions = self._scan_seeds(
+                    transcript.segments, seeds, episode_id=episode_id, taken_spans=taken_spans
+                )
+                mentions.extend(seed_mentions)
 
         # Spec §1.13.2 — synthesize one SPEAKING mention per content
         # segment with a non-empty speaker. The speaker name is matched
@@ -253,6 +278,7 @@ class EntityExtractor:
             mentions=len(mentions),
             content_segments=sum(1 for s in transcript.segments if s.kind == "content"),
             anchor_variants=len(anchor_index),
+            resource_seed_mentions=len(seed_mentions),
         )
         return mentions
 
@@ -471,6 +497,53 @@ class EntityExtractor:
                         )
                     )
         return results
+
+    def _scan_seeds(
+        self,
+        segments: Iterable[AnnotatedSegment],
+        seeds: Sequence[ResourceSeed],
+        *,
+        episode_id: str,
+        taken_spans: Dict[int, List[Tuple[int, int]]],
+    ) -> List[EntityMention]:
+        """Spec #92 Stage 4 — mentions for Resource List surfaces.
+
+        Unlike the anchor scan, a one-word surface matches exact case only
+        ("Ramp", not "ramp up"), nothing is pre-resolved, and spans GLiNER
+        or the anchor scan took are skipped (the #297 lesson).
+        """
+        ordered = sorted(seeds, key=lambda seed: len(seed.surface), reverse=True)
+        patterns = [(seed, surface_pattern(seed.surface)) for seed in ordered]
+        out: List[EntityMention] = []
+        for segment in segments:
+            if segment.kind != "content" or not segment.text.strip():
+                continue
+            consumed = list(taken_spans.get(segment.id, ()))
+            for seed, pattern in patterns:
+                for match in pattern.finditer(segment.text):
+                    span = (match.start(), match.end())
+                    if any(_overlaps(span, c) for c in consumed):
+                        continue
+                    consumed.append(span)
+                    out.append(
+                        EntityMention(
+                            entity_id=None,
+                            resolution_status=ResolutionStatus.PENDING,
+                            episode_id=episode_id,
+                            segment_id=segment.id,
+                            start_ms=int(round(segment.start * 1000)),
+                            end_ms=int(round(segment.end * 1000)),
+                            speaker=segment.speaker,
+                            role=None,
+                            surface_form=seed.surface,
+                            surface_label=seed.surface_label,
+                            quote_excerpt=_excerpt_around(segment.text, span[0], span[1]),
+                            sentiment=None,
+                            confidence=RESOURCE_SEED_CONFIDENCE,
+                            extractor=RESOURCE_SEED_EXTRACTOR,
+                        )
+                    )
+        return out
 
     def _synthesize_speaker_mentions(
         self,

@@ -27,11 +27,12 @@ measure regardless of the flag.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
 from ..models.annotated_transcript import AnnotatedTranscript
+from ..models.entities import EntityMention
 from ..models.podcast import Episode
 from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
@@ -43,6 +44,7 @@ from .summary_resources import (
     PlanContext,
     ResourceParseError,
     ResourcePlan,
+    ResourceSeed,
     parse_resource_list,
     plan_resources,
 )
@@ -125,6 +127,37 @@ class ResourceSource:
             **plan.stats,
         )
         return plan
+
+    def seed_provider(
+        self,
+        episode: Episode,
+        transcript: AnnotatedTranscript,
+        anchor_variants: Sequence[AnchorVariant],
+    ) -> Callable[[List[EntityMention]], List[ResourceSeed]]:
+        """The extractor's ``seed_provider`` for this episode.
+
+        Called with GLiNER's mentions, so the plan sees the same names the
+        resolve stage reads back with ``list_extracted_names``. Any failure
+        is a WARNING and no seeds: the transcript's own mentions are
+        committed regardless.
+        """
+
+        def provide(gliner_mentions: List[EntityMention]) -> List[ResourceSeed]:
+            names = list(dict.fromkeys((m.surface_form, m.surface_label) for m in gliner_mentions))
+            try:
+                plan = self.plan(episode, plan_context(anchor_variants, names), transcript=transcript, stage="extract")
+            except Exception as exc:  # noqa: BLE001 — never a gate on extraction
+                logger.warning(
+                    "resource_seeds_failed",
+                    episode_id=episode.id,
+                    stage="extract",
+                    error=str(exc),
+                    exc_info=not isinstance(exc, ResourceParseError),
+                )
+                return []
+            return plan.seeds() if plan else []
+
+        return provide
 
     def hints_for(self, repo, episode: Episode) -> Dict[str, Tuple[str, str]]:
         """Resolve-stage hints: surface_key → (kind, gloss).
