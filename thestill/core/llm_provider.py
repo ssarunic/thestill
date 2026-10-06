@@ -26,7 +26,7 @@ import ollama
 from anthropic import Anthropic, APIStatusError, BadRequestError, RateLimitError
 from google import genai
 from google.genai import types as genai_types
-from mistralai import Mistral
+from mistralai.client import Mistral
 from openai import OpenAI
 from pydantic import BaseModel
 from structlog import get_logger

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import EntityHighlight from './EntityHighlight'
-import type { EntityCitationRow, EpisodeEntity, MentionLite } from '../../api/types'
+import type { EntityCitationRow, EpisodeEntity, GuestEpisodeRef, MentionLite } from '../../api/types'
 
 vi.mock('../../hooks/useApi', () => ({
   useEntitySummary: vi.fn(),
@@ -51,6 +51,18 @@ function citation(episodeId: string, podcast: string, episode: string, startMs =
     speaker: null,
     quote: '',
     surface_form: 'Alice',
+  }
+}
+
+function guest(episodeId: string, podcast: string, episode: string): GuestEpisodeRef {
+  return {
+    episode_id: episodeId,
+    episode_slug: `ep-${episodeId}`,
+    episode_title: episode,
+    podcast_id: 'p1',
+    podcast_slug: 'show',
+    podcast_title: podcast,
+    published_at: null,
   }
 }
 
@@ -321,6 +333,48 @@ describe('EntityHighlight', () => {
     expect(links[0]).toHaveTextContent('This Show · Last week 0:42')
     expect(links[0]).toHaveAttribute('href', '/podcasts/show/episodes/ep-e2?t=42')
     expect(links[1]).toHaveTextContent('Other Show · Guest spot 10:00')
+    expect(elsewhere).toHaveTextContent('Also mentioned on')
+  })
+
+  it('lists guest appearances instead of mentions, skipping this episode', () => {
+    vi.mocked(useEntitySummary).mockReturnValue({
+      data: {
+        description: null,
+        recent_mentions: [citation('e2', 'This Show', 'Last week', 42_000)],
+        guest_episodes: [
+          guest('e1', 'This Show', 'This episode'),
+          guest('e5', 'Big Show', 'The interview'),
+          guest('e6', 'Small Show', 'Round two'),
+        ],
+      },
+    } as never)
+    renderHighlight()
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    const elsewhere = screen.getByTestId('entity-peek-elsewhere')
+    expect(elsewhere).toHaveTextContent('Guest on')
+    expect(elsewhere).not.toHaveTextContent('Also mentioned on')
+    expect(elsewhere).not.toHaveTextContent('Last week')
+    expect(elsewhere).not.toHaveTextContent('This episode')
+    const links = elsewhere.querySelectorAll('a')
+    expect(links).toHaveLength(2)
+    expect(links[0]).toHaveTextContent(/^Big Show · The interview$/)
+    expect(links[0]).toHaveAttribute('href', '/podcasts/show/episodes/ep-e5')
+    expect(links[1]).toHaveTextContent('Small Show · Round two')
+  })
+
+  it('falls back to mentions when the only guest appearance is this episode', () => {
+    vi.mocked(useEntitySummary).mockReturnValue({
+      data: {
+        description: null,
+        recent_mentions: [citation('e2', 'This Show', 'Last week', 42_000)],
+        guest_episodes: [guest('e1', 'This Show', 'This episode')],
+      },
+    } as never)
+    renderHighlight()
+    fireEvent.click(screen.getByRole('link', { name: /Alice, Person/ }))
+    const elsewhere = screen.getByTestId('entity-peek-elsewhere')
+    expect(elsewhere).toHaveTextContent('Also mentioned on')
+    expect(elsewhere).toHaveTextContent('This Show · Last week 0:42')
   })
 
   it('the entity name is the in-app link to the entity page', () => {

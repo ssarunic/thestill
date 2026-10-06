@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import type { EntityCitationRow, EpisodeEntity, MentionLite } from '../../api/types'
+import type { EntityCitationRow, EpisodeEntity, GuestEpisodeRef, MentionLite } from '../../api/types'
 import { entityHref, entitySlug, entityStyle } from '../../utils/entityColors'
 import { formatClock } from '../../utils/formatClock'
 import { useEntitySummary } from '../../hooks/useApi'
@@ -9,7 +9,9 @@ import { findMentionAnchor, isSpeakingMention } from './mentionPermalink'
 
 // Spec #28 §5.2 visual rules — "Hover card (≤200px wide): name, type,
 // 1-line Wikidata gloss, last 3 mentions of this entity on the same
-// feed". The name itself is the way to the entity page (no separate
+// feed" — except for someone who has been a guest: then the card lists
+// the episodes they were a guest on, and the mention list is only the
+// fallback for people who never were. The name itself is the way to the entity page (no separate
 // link), and the spec #45 enrichment photo, when there is one, sits
 // beside it — a face or a logo is the fastest "is this who I think?".
 //
@@ -59,6 +61,20 @@ const OTHER_MENTIONS_CAP = 3
 function otherEpisodeHref(row: EntityCitationRow): string | null {
   if (!row.podcast_slug || !row.episode_slug) return null
   return episodeTimestampPath(row.podcast_slug, row.episode_slug, row.start_ms / 1000)
+}
+
+function guestEpisodeHref(row: GuestEpisodeRef): string | null {
+  if (!row.podcast_slug || !row.episode_slug) return null
+  return `/podcasts/${row.podcast_slug}/episodes/${row.episode_slug}`
+}
+
+interface ElsewhereRow {
+  key: string
+  podcastTitle: string
+  episodeTitle: string
+  href: string | null
+  // Only mention rows carry a moment; a guest row is the whole episode.
+  startMs: number | null
 }
 
 // The mentions prev/next can actually reach. Two kinds never mix: from a
@@ -119,22 +135,42 @@ export default function EntityHoverCard({
   const prev = currentIdx > 0 ? ordered[currentIdx - 1] : null
   const next = currentIdx !== -1 && currentIdx < ordered.length - 1 ? ordered[currentIdx + 1] : null
 
-  // "Last 3 mentions on the same feed" (spec) — the summary endpoint
-  // returns recent mentions newest-first across every feed. Drop rows
-  // from the episode being read (they're the transcript itself) and take
+  // Where else this entity turns up. A guest appearance says far more
+  // than a passing name-drop, so the episodes they were a guest on
+  // (newest first) come first and replace the mention list entirely;
+  // only someone who was never a guest gets "Last 3 mentions on the same
+  // feed" (spec) — recent mentions newest-first across every feed. Both
+  // drop the episode being read (it's the transcript itself) and take
   // the top few; each row says which show it is from so a cross-feed hit
   // is never mistaken for this one.
-  const elsewhere = useMemo(() => {
-    if (!summary) return []
+  const elsewhere = useMemo((): { heading: string; rows: ElsewhereRow[] } => {
+    if (!summary) return { heading: '', rows: [] }
+    const guestRows: ElsewhereRow[] = (summary.guest_episodes ?? [])
+      .filter((row) => row.episode_id !== episodeId)
+      .slice(0, OTHER_MENTIONS_CAP)
+      .map((row) => ({
+        key: `guest-${row.episode_id}`,
+        podcastTitle: row.podcast_title,
+        episodeTitle: row.episode_title,
+        href: guestEpisodeHref(row),
+        startMs: null,
+      }))
+    if (guestRows.length > 0) return { heading: 'Guest on', rows: guestRows }
     const seen = new Set<string>()
-    const out: EntityCitationRow[] = []
+    const rows: ElsewhereRow[] = []
     for (const row of summary.recent_mentions) {
       if (row.episode_id === episodeId || seen.has(row.episode_id)) continue
       seen.add(row.episode_id)
-      out.push(row)
-      if (out.length === OTHER_MENTIONS_CAP) break
+      rows.push({
+        key: `${row.episode_id}-${row.start_ms}`,
+        podcastTitle: row.podcast_title,
+        episodeTitle: row.episode_title,
+        href: otherEpisodeHref(row),
+        startMs: row.start_ms,
+      })
+      if (rows.length === OTHER_MENTIONS_CAP) break
     }
-    return out
+    return { heading: 'Also mentioned on', rows }
   }, [summary, episodeId])
 
   const textBase = sheet ? 'text-sm' : 'text-xs'
@@ -249,25 +285,30 @@ export default function EntityHoverCard({
         </div>
       )}
 
-      {/* Elsewhere: the last few episodes (any feed) that mention this
-          entity, straight from the summary endpoint. */}
-      {elsewhere.length > 0 && (
+      {/* Elsewhere: the last few episodes (any feed) this entity was a
+          guest on, or else that mention it — straight from the summary
+          endpoint. */}
+      {elsewhere.rows.length > 0 && (
         <div className="mt-2 border-t border-gray-100 pt-2" data-testid="entity-peek-elsewhere">
-          <div className={`uppercase tracking-wide text-gray-400 ${textSmall}`}>Also mentioned on</div>
+          <div className={`uppercase tracking-wide text-gray-400 ${textSmall}`}>{elsewhere.heading}</div>
           <ul className="mt-1 space-y-1">
-            {elsewhere.map((row) => {
-              const href = otherEpisodeHref(row)
+            {elsewhere.rows.map((row) => {
               const label = (
                 <>
-                  <span className="font-medium text-gray-700">{row.podcast_title}</span>
-                  <span className="text-gray-500"> · {row.episode_title}</span>{' '}
-                  <span className="font-mono tabular-nums text-gray-400">{formatTimestamp(row.start_ms)}</span>
+                  <span className="font-medium text-gray-700">{row.podcastTitle}</span>
+                  <span className="text-gray-500"> · {row.episodeTitle}</span>
+                  {row.startMs !== null && (
+                    <>
+                      {' '}
+                      <span className="font-mono tabular-nums text-gray-400">{formatTimestamp(row.startMs)}</span>
+                    </>
+                  )}
                 </>
               )
               return (
-                <li key={`${row.episode_id}-${row.start_ms}`} className={`truncate ${textBase}`}>
-                  {href ? (
-                    <Link to={href} onClick={onNavigate} className="hover:underline">
+                <li key={row.key} className={`truncate ${textBase}`}>
+                  {row.href ? (
+                    <Link to={row.href} onClick={onNavigate} className="hover:underline">
                       {label}
                     </Link>
                   ) : (
