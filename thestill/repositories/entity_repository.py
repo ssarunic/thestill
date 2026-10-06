@@ -256,6 +256,20 @@ class EntityRepository(ABC):
         """Every entity of the given type, ordered by canonical_name."""
 
     @abstractmethod
+    def list_entities_with_qid(
+        self,
+        *,
+        episode_id: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[EntityRecord]:
+        """Entities with a Wikidata QID and at least one mention, ordered by id.
+
+        Scoped to entities mentioned in ``episode_id`` and/or in an episode
+        of ``podcast_id`` when given. ``backfill-entity-types`` walks this.
+        """
+
+    @abstractmethod
     def delete_entity(self, entity_id: str) -> bool:
         """Hard-delete an entity (cascades to mentions/cooccurrences).
 

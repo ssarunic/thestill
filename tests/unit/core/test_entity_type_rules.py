@@ -106,3 +106,34 @@ class TestPriorityOrdering:
     def test_person_takes_precedence_over_topic_when_both_match(self):
         # Hypothetical case — shouldn't really happen but defensive.
         assert classify_entity_type(["Q5", "Q151885"], EntityType.TOPIC) is EntityType.PERSON
+
+
+class TestWorks:
+    """Spec #92 Phase 0: Q11424 is *film*, not a genre. It sat in the topic
+    list, which runs before the product check, so every film became a topic."""
+
+    def test_a_film_is_a_product_whatever_gliner_said(self):
+        for fallback in EntityType:
+            assert classify_entity_type(["Q11424"], fallback) is EntityType.PRODUCT
+
+    def test_series_book_and_podcast_are_products_from_a_topic_tag(self):
+        for p31 in ("Q5398426", "Q571", "Q7725634", "Q24634210"):
+            assert classify_entity_type([p31], EntityType.TOPIC) is EntityType.PRODUCT
+
+    def test_a_work_with_a_topic_class_too_is_still_a_product(self):
+        assert classify_entity_type(["Q11424", "Q1656682"], EntityType.TOPIC) is EntityType.PRODUCT
+
+    def test_film_genre_is_a_topic(self):
+        assert classify_entity_type(["Q201658"], EntityType.PRODUCT) is EntityType.TOPIC
+
+    def test_a_person_stays_a_person(self):
+        assert classify_entity_type(["Q5", "Q11424"], EntityType.TOPIC) is EntityType.PERSON
+
+
+class TestMintedWorks:
+    def test_a_minted_film_is_a_product(self):
+        from thestill.core.entity_review import _mint_type_from_p31
+
+        assert _mint_type_from_p31(["Q11424"]) is EntityType.PRODUCT
+        assert _mint_type_from_p31(["Q5398426", "Q1656682"]) is EntityType.PRODUCT
+        assert _mint_type_from_p31(["Q5"]) is EntityType.PERSON

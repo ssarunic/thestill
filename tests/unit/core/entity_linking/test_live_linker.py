@@ -173,7 +173,7 @@ def test_p31_can_move_an_entity_to_another_bucket(decisions):
     wikidata = FakeWikidata({"Truman": [FILM]}, p31={"Q214801": ["Q11424"]})  # instance of: film
     linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
     (result,) = linker.resolve([mention(1, "Truman", label="person")], context=CTX)
-    assert result.entity.type != EntityType.PERSON
+    assert result.entity.type == EntityType.PRODUCT  # a film, whatever GLiNER said (spec #92)
 
 
 # --- failures ----------------------------------------------------------------
