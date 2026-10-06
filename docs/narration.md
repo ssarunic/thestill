@@ -31,7 +31,7 @@ twice (or theme clustering errors out), the JSON carries `mode:
 |----------|-------------|---------|
 | `NARRATION_ENABLED` | Master rollout switch. Off by default while fallback rates are measured. | `false` |
 | `NARRATION_DEFAULT_DURATION_SECONDS` | Target spoken runtime when the caller doesn't pass one (presets: 180/300/600). | `300` |
-| `NARRATION_ANCHOR_PROMPT` | Anchor voice: `conversational_anchor` (one narrator talking to a friend) or `newsroom_anchor` (measured news-anchor). Spec #77. | `conversational_anchor` |
+| `NARRATION_ANCHOR_PROMPT` | Anchor voice: `conversational_v2` (one narrator with a point of view), `conversational_anchor` (one narrator talking to a friend), or `newsroom_anchor` (measured news-anchor). Spec #77. | `conversational_v2` |
 | `NARRATION_STATED_TARGET_RATIO` | Share of the narration word budget the writer is told to aim for; validation keeps the full budget. `0.5`–`1.0`. Spec #77. | `0.8` |
 | `NARRATION_MATERIAL_MAX_WORDS` | Per-episode cap on the summary material (Gist + Key Takeaways + The Drama) the writer sees. Spec #77. | `400` |
 | `LLM_PROVIDER` | Same provider as the rest of the pipeline (`anthropic` / `openai` / `gemini` / `mistral` / `ollama`). | (per `.env.example`) |
@@ -63,7 +63,8 @@ narration_seconds        =  target - quote_seconds
 narration_word_budget    =  narration_seconds × wpm / 60
 ```
 
-Validation tolerates ±15% on the narration word budget. Quotes that
+Validation tolerates -50%/+15% on the narration word budget (short is
+lenient, overruns are strict since they hurt TTS). Quotes that
 push the run over `max_quote_share` are dropped lowest-scoring-first
 in `NarrationGenerator._enforce_quote_share_cap`.
 
@@ -169,7 +170,8 @@ Four rules enforced after the script-generation LLM call:
    punctuation) is treated as a paraphrase-of-the-quote and rejected.
    Quotes are cued, not retyped.
 3. **Word-budget tolerance** — total narration words must land within
-   `narration_word_budget × (1 ± 0.15)`.
+   `narration_word_budget × (1 - 0.50)` to `narration_word_budget × (1 + 0.15)`
+   (lenient floor, strict cap).
 4. **Non-empty output** — the model must return at least one block,
    and the computed narration word budget must be positive; either
    failing is treated as a validation failure rather than a crash.
