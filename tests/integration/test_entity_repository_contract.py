@@ -360,6 +360,20 @@ def test_retype_in_place_keeps_the_id_and_everything_pointing_at_it(repo):
     assert plan_retype(got, ["Q11424"]) is None
 
 
+def test_list_extracted_names_is_gliner_only_distinct_in_first_seen_order(repo):
+    repo.insert_mentions(
+        [
+            _mention(surface="Mad Men", label="topic", extractor="gliner:urchade/gliner_medium-v2.1"),
+            _mention(surface="Ed Elson", label="person", extractor="anchor:scan"),
+            _mention(surface="Ramp", label="company", extractor="gliner:urchade/gliner_medium-v2.1", segment_id=2),
+            _mention(surface="Mad Men", label="topic", extractor="gliner:urchade/gliner_medium-v2.1", segment_id=3),
+            _mention(surface="Kedrosky", label="person", extractor="summary:resource", segment_id=4),
+            _mention(surface="Other", label="person", extractor="gliner:x", episode_id=EP_2),
+        ]
+    )
+    assert repo.list_extracted_names(EP_1) == [("Mad Men", "topic"), ("Ramp", "company")]
+
+
 def test_delete_entity_cascades_mentions(repo):
     repo.upsert_entity(_entity())
     repo.insert_mentions([_resolved_mention("person:elon-musk")])

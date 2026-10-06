@@ -359,6 +359,16 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def list_extracted_names(self, episode_id: str) -> List[Tuple[str, Optional[str]]]:
+        """Distinct ``(surface_form, surface_label)`` of the episode's GLiNER
+        mentions, in first-seen order.
+
+        Spec #92 plans Resource List seeds from this at resolve time; at
+        extract time the same pairs come from the extractor in memory, so
+        both stages plan from identical input.
+        """
+
+    @abstractmethod
     def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
         """An episode's mentions that a linker decided, ordered by id.
 

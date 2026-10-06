@@ -449,6 +449,16 @@ class PostgresEntityRepository(EntityRepository):
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_mention(r) for r in rows]
 
+    def list_extracted_names(self, episode_id: str) -> List[Tuple[str, Optional[str]]]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT surface_form, surface_label FROM entity_mentions "
+                "WHERE episode_id = %s AND extractor LIKE 'gliner%%' "
+                "GROUP BY surface_form, surface_label ORDER BY MIN(id)",
+                (episode_id,),
+            ).fetchall()
+        return [(r["surface_form"], r["surface_label"]) for r in rows]
+
     def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
         sql = (
             "SELECT * FROM entity_mentions WHERE episode_id = %s "

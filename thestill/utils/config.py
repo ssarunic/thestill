@@ -578,6 +578,10 @@ class Config(BaseModel):
     entity_linking_min_confidence: str = "medium"  # lowest chooser confidence that links: low | medium | high
     entity_linking_none_ttl_days: int = 30  # re-check a name that did not link after this long
     wikidata_max_rps: float = 5.0  # process-wide ceiling on Wikidata search requests
+    # Spec #92: the summary's Resource List seeds entity extraction and gives
+    # the linker each item's kind and gloss. Off = no summary read at all.
+    entity_resource_seeds_enabled: bool = False
+    resource_grounding_window_s: float = 90.0  # how close to its citation a one-word item must be said
 
     # Entity enrichment (spec #45 Tier 0) — Wikidata + Wikipedia fetching.
     enrichment_request_delay_sec: float = 0.5  # politeness delay between Wikimedia requests
@@ -912,6 +916,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "entity_linking_min_confidence": os.getenv("ENTITY_LINKING_MIN_CONFIDENCE", "medium").lower(),
         "entity_linking_none_ttl_days": int(os.getenv("ENTITY_LINKING_NONE_TTL_DAYS", "30")),
         "wikidata_max_rps": float(os.getenv("WIKIDATA_MAX_RPS", "5")),
+        "entity_resource_seeds_enabled": os.getenv("ENTITY_RESOURCE_SEEDS_ENABLED", "false").lower()
+        in ("1", "true", "yes"),
+        "resource_grounding_window_s": float(os.getenv("RESOURCE_GROUNDING_WINDOW_S", "90")),
         "enrichment_request_delay_sec": float(os.getenv("ENRICHMENT_REQUEST_DELAY_SEC", "0.5")),
         "enrichment_wikipedia_lang": os.getenv("ENRICHMENT_WIKIPEDIA_LANG", "en"),
         "enrichment_max_age_days": int(os.getenv("ENRICHMENT_MAX_AGE_DAYS", "30")),

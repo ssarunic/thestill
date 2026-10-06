@@ -447,15 +447,17 @@ def surface_pattern(surface: str) -> "re.Pattern[str]":
 def plan_resources(
     items: Sequence[ResourceItem],
     transcript: AnnotatedTranscript,
-    citations: Mapping[str, float],
     ctx: PlanContext,
     *,
     window_s: float = DEFAULT_GROUNDING_WINDOW_S,
 ) -> ResourcePlan:
-    """Admit, expand and disambiguate. ``citations`` maps cite id → playback seconds.
+    """Admit, expand and disambiguate.
 
-    ``transcript.playback_time_offset_seconds`` must be the episode's, so
-    segment times and citation times are on the same clock.
+    The cited time is the citation's own label ("12:09" in
+    ``[12:09](?t=…&cite=c3)``), which is what the citations sidecar stores
+    as ``cited_playback_s``; no sidecar read is needed. It is playback
+    time, so ``transcript.playback_time_offset_seconds`` must be the
+    episode's.
     """
     segments = [s for s in transcript.segments if s.kind == "content" and s.text.strip()]
     offset = transcript.playback_time_offset_seconds
@@ -470,7 +472,7 @@ def plan_resources(
             dropped.append((item, "anchor"))
             stats["anchor"] += 1
             continue
-        cited_s = _cited_playback_s(item, citations)
+        cited_s = parse_timestamp_label(item.raw_label) if item.raw_label else None
         outcome = _ground(item.name, segments, cited_s, offset, window_s)
         if outcome is not None:
             admitted.append((item, item.name, outcome, item.kind))
@@ -493,12 +495,6 @@ def plan_resources(
     for g in grounded:
         stats[g.outcome] += 1
     return ResourcePlan(items=tuple(items), grounded=tuple(grounded), dropped=tuple(dropped), stats=stats)
-
-
-def _cited_playback_s(item: ResourceItem, citations: Mapping[str, float]) -> Optional[float]:
-    if item.cite_id and item.cite_id in citations:
-        return citations[item.cite_id]
-    return parse_timestamp_label(item.raw_label) if item.raw_label else None
 
 
 def _ground(

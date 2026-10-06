@@ -132,8 +132,8 @@ def _transcript(*segments, offset=0.0):
     )
 
 
-def _plan(md, transcript, citations=None, ctx=None, **kw):
-    return plan_resources(parse_resource_list(md), transcript, citations or {}, ctx or PlanContext(), **kw)
+def _plan(md, transcript, ctx=None, **kw):
+    return plan_resources(parse_resource_list(md), transcript, ctx or PlanContext(), **kw)
 
 
 def _section(*lines):
@@ -143,20 +143,20 @@ def _section(*lines):
 class TestAdmission:
     def test_a_multi_word_name_is_admitted_anywhere(self):
         tx = _transcript((10, "Let's talk markets."), (900, "I've been watching Mad Men again."))
-        plan = _plan(_section("Mad Men (TV Show) [00:10](?t=10&cite=c1)"), tx, {"c1": 10.0})
+        plan = _plan(_section("Mad Men (TV Show) [00:10](?t=10&cite=c1)"), tx)
         (g,) = plan.grounded
         assert (g.name, g.outcome, g.surface_label) == ("Mad Men", "elsewhere", "product")
 
     def test_near_uses_the_cited_segment(self):
         tx = _transcript((700, "Mad Men is the greatest show."))
-        (g,) = _plan(_section("Mad Men (TV Show) [12:09](?t=729&cite=c1)"), tx, {"c1": 729.0}).grounded
+        (g,) = _plan(_section("Mad Men (TV Show) [12:09](?t=729&cite=c1)"), tx).grounded
         assert g.outcome == "near"
 
     def test_a_single_word_needs_near(self):
         tx = _transcript((60, "Ramp data says so."), (2000, "Ramp again."))
-        far = _plan(_section("**Ramp:** spending data [10:00](?t=600&cite=c1)"), tx, {"c1": 600.0})
+        far = _plan(_section("**Ramp:** spending data [10:00](?t=600&cite=c1)"), tx)
         assert far.grounded == () and far.stats["ungrounded"] == 1
-        near = _plan(_section("**Ramp:** spending data [01:00](?t=60&cite=c1)"), tx, {"c1": 60.0})
+        near = _plan(_section("**Ramp:** spending data [01:00](?t=60&cite=c1)"), tx)
         assert [g.name for g in near.grounded] == ["Ramp"]
 
     def test_a_single_word_is_case_sensitive(self):
@@ -206,7 +206,7 @@ class TestFallbacks:
 
     def test_slash_parts_ground_separately_when_the_whole_does_not(self):
         tx = _transcript((1540, "We host on Vercel and keep code in GitHub."))
-        plan = _plan(_section("**Vercel / GitHub:** hosting [25:40](?t=1540&cite=c1)"), tx, {"c1": 1540.0})
+        plan = _plan(_section("**Vercel / GitHub:** hosting [25:40](?t=1540&cite=c1)"), tx)
         assert sorted(g.name for g in plan.grounded) == ["GitHub", "Vercel"]
 
     def test_an_ampersand_item_that_does_not_ground_whole_is_dropped(self):
@@ -287,8 +287,7 @@ def test_the_motivating_episode():
         "Vanguard Bond Funds (Investment Tool) [49:34](?t=2974&cite=c5)",
         "Paul Kedrosky (Investor/Guest) [02:38](?t=158&cite=c6)",
     )
-    cites = {"c1": 729.0, "c2": 1455.0, "c3": 2685.0, "c4": 729.0, "c5": 2974.0, "c6": 158.0}
-    plan = _plan(md, tx, cites)
+    plan = _plan(md, tx)
     assert {g.name for g in plan.grounded} == {"Mad Men", "Modern Family", "Margin Call", "Ramp", "Paul Kedrosky"}
     # "Vanguard Bond Funds" is not what was said; the contract (Phase 3) fixes names at the source.
     assert [i.name for i, why in plan.dropped] == ["Vanguard Bond Funds"]
