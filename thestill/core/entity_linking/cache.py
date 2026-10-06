@@ -72,12 +72,19 @@ class LinkDecisionCache:
         self._none_ttl = timedelta(days=none_ttl_days)
         self._clock = clock
 
-    def lookup(self, key: str, podcast_id: Optional[str]) -> Optional[LinkDecision]:
+    def lookup(self, key: str, podcast_id: Optional[str], *, has_hint: bool = False) -> Optional[LinkDecision]:
         """Read-only: the eval runs the linker through this without leaving
-        a trace. Reuse is counted separately, by ``record_hit``."""
+        a trace. Reuse is counted separately, by ``record_hit``.
+
+        ``has_hint`` (spec #92): the episode's Resource List describes this
+        name. An unlinked row decided without a hint is skipped, so the name
+        is decided once more with the hint in view; the new row records
+        ``hinted`` and is reused from then on."""
         scopes = [podcast_id, None] if podcast_id else [None]
         for scope in scopes:
             row = self._repo.get(key, scope)
+            if row is not None and has_hint and _unlinked(row) and not row.hinted:
+                continue
             if row is not None and self._usable(row):
                 return LinkDecision(
                     surface_key=key,
@@ -87,6 +94,7 @@ class LinkDecisionCache:
                     candidate=Candidate(row.qid, row.label or "", row.description or "") if row.qid else None,
                     from_cache=True,
                     cache_scope="corpus" if scope is None else "podcast",
+                    hinted=bool(row.hinted),
                 )
         return None
 
@@ -96,8 +104,7 @@ class LinkDecisionCache:
             return False
         # An unlinked name is re-checked later: someone with no Wikidata
         # entry today may have one next month. A link does not expire.
-        unlinked = row.qid is None or row.confidence == "low"
-        return not (unlinked and self._clock() - row.decided_at >= self._none_ttl)
+        return not (_unlinked(row) and self._clock() - row.decided_at >= self._none_ttl)
 
     def record_hit(self, decision: LinkDecision, podcast_id: Optional[str]) -> None:
         self._repo.record_hit(decision.surface_key, podcast_id if decision.cache_scope == "podcast" else None)
@@ -123,6 +130,7 @@ class LinkDecisionCache:
             reason=decision.reason[:REASON_MAX_CHARS] or None,
             decided_at=self._clock(),
             linker_version=self._linker_version,
+            hinted=decision.hinted,
         )
         self._repo.upsert(stored)
         if decision.qid is not None and decision.confidence != "low":
@@ -140,3 +148,8 @@ class LinkDecisionCache:
             return
         self._repo.upsert(replace(stored, podcast_id=None, reason=None))
         logger.info("entity_link_decision_promoted", qid=stored.qid, podcasts=len(rows))
+
+
+def _unlinked(row: StoredLinkDecision) -> bool:
+    """A decided "none", or a guess too unsure to link."""
+    return row.qid is None or row.confidence == "low"

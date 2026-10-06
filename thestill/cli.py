@@ -2740,17 +2740,21 @@ def _eval_runner_for(ctx, rubric):
     if rubric.name != ENTITY_LINKING:
         return EvalRunner(ctx.obj.config, ctx.obj.path_manager, ctx.obj.feed_manager)
     from .core.entity_linking.factory import build_linker
+    from .core.resource_seeds import make_resource_source
     from .core.task_handlers import build_link_context
     from .evals.entity_linking import LinkingEvalRunner, no_memory
 
     config = ctx.obj.config.model_copy(update={"entity_linker": "live"})
+    # Spec #92: with ENTITY_RESOURCE_SEEDS_ENABLED on, the eval's linker sees
+    # the same Resource List hints as production; off, the same as before.
+    resources = make_resource_source(ctx.obj.config, ctx.obj.path_manager)
     return LinkingEvalRunner(
         ctx.obj.config,
         ctx.obj.path_manager,
         ctx.obj.feed_manager,
         entity_repository=ctx.obj.entity_repository,
         linker=build_linker(config, no_memory()),
-        context_builder=build_link_context,
+        context_builder=lambda repo, podcast, episode: build_link_context(repo, podcast, episode, resources=resources),
     )
 
 
@@ -3240,10 +3244,12 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
     An episode the linker cannot finish (Wikidata or the LLM unreachable)
     keeps its unanswered mentions pending; run the command again later.
     """
+    from .core.resource_seeds import make_resource_source
     from .core.task_handlers import build_link_context, resolve_pending_mentions
 
     repo = ctx.obj.entity_repository
     podcast_repo = ctx.obj.repository
+    resources = make_resource_source(ctx.obj.config, ctx.obj.path_manager)  # spec #92; None when off
 
     if episode_id:
         episode_ids = [episode_id]
@@ -3284,7 +3290,7 @@ def resolve_entities(ctx, episode_id, podcast_id, max_episodes, dry_run):
             resolver,
             pending,
             episode_id=eid,
-            context=build_link_context(repo, podcast, episode, linker=resolver),
+            context=build_link_context(repo, podcast, episode, linker=resolver, resources=resources),
         )
         total_resolved += sum(1 for r in run.results if r.status == "resolved")
         total_unresolvable += sum(1 for r in run.results if r.status == "unresolvable")

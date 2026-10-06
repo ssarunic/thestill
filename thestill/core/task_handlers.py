@@ -1289,12 +1289,16 @@ def _with_stable_identity(repo, entity):
     return entity.model_copy(update={"id": distinct_id})
 
 
-def build_link_context(repo, podcast, episode, *, linker=None):
+def build_link_context(repo, podcast, episode, *, linker=None, resources=None):
     """What the live linker's chooser knows beyond the excerpts (spec #81).
 
     ``None`` for a linker that declares ``uses_context = False``: the anchor
     lookup is one repository read per anchor (a connection each on
     Postgres), and ReFinED would discard the result.
+
+    ``resources`` (spec #92, a ``ResourceSource`` or ``None`` when the
+    feature is off) re-plans the summary's Resource List to give the
+    chooser each listed name's kind and gloss. It never raises.
     """
     from .entity_linking.types import LinkContext
 
@@ -1310,6 +1314,7 @@ def build_link_context(repo, podcast, episode, *, linker=None):
         podcast_description=getattr(podcast, "description", "") or "",
         episode_description=getattr(episode, "description", "") or "",
         anchor_names=[a.canonical_name for a in anchors if a is not None],
+        resource_hints=resources.hints_for(repo, episode) if resources is not None else {},
     )
 
 
@@ -1358,6 +1363,8 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             return
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
+        from .resource_seeds import make_resource_source
+
         run = ResolutionRun()
         if pending:
             linker = _get_or_create_entity_resolver(state)
@@ -1366,7 +1373,13 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
                 linker,
                 pending,
                 episode_id=episode.id,
-                context=build_link_context(repo, podcast, episode, linker=linker),
+                context=build_link_context(
+                    repo,
+                    podcast,
+                    episode,
+                    linker=linker,
+                    resources=make_resource_source(state.config, state.path_manager),
+                ),
             )
 
         # Spec §1.7 — cooccurrences are rebuilt by the dedicated

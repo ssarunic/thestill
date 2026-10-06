@@ -176,3 +176,24 @@ def test_a_proposed_name_is_carried_and_dropped_on_the_strict_pass():
     strict = chooser.choose([group("Truman")], {"truman": TRUMAN}, CTX, strict=True)
     assert strict.decisions["truman"].proposed_name == ""
     assert "second pass" in provider.system_messages[1] and "second pass" not in provider.system_messages[0]
+
+
+def test_a_resource_list_hint_is_a_line_inside_the_name_fence():
+    """Spec #92: the summary's kind and gloss, sanitised and fenced."""
+    ctx = LinkContext(episode_id="ep-1", resource_hints={"truman": ("film", "Jim Carrey\x07 in a fake world")})
+    message = build_user_message({"n1": group("Truman")}, {"truman": TRUMAN}, ctx)
+    line = "the episode summary lists it as: film — Jim Carrey in a fake world"
+    assert line in message
+    fence = message[message.index("<<<UNTRUSTED_NAME_BEGIN>>>") : message.index("<<<UNTRUSTED_NAME_END>>>")]
+    assert line in fence and "\x07" not in message
+
+
+def test_a_name_without_a_hint_has_no_hint_line():
+    message = build_user_message({"n1": group("Truman")}, {"truman": TRUMAN}, CTX)
+    assert "episode summary lists it" not in message
+
+
+def test_the_system_prompt_explains_the_hint():
+    provider = ScriptedProvider([pick_first_candidate])
+    LLMCandidateChooser(provider).choose([group("Truman")], {"truman": TRUMAN}, CTX)
+    assert "episode's own summary" in provider.system_messages[0]

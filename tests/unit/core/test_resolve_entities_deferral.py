@@ -205,3 +205,31 @@ def test_a_linker_that_ignores_the_context_is_not_charged_the_anchor_lookups():
     handle_resolve_entities(_task(), state)
     state.entity_repository.get_episode_anchors.assert_not_called()
     state.entity_repository.get_entity.assert_not_called()
+
+
+def test_build_link_context_carries_resource_hints_only_with_a_source():
+    """Spec #92: no source (the feature off) means no hints and no summary read."""
+    repo = MagicMock()
+    repo.get_episode_anchors.return_value = []
+    podcast = Podcast(id="p", rss_url="https://x/f.xml", title="Show", slug="s", description="")
+
+    class Source:
+        def hints_for(self, repo_, episode):
+            return {"mad men": ("tv", "the greatest TV show")}
+
+    assert build_link_context(repo, podcast, _episode()).resource_hints == {}
+    assert build_link_context(repo, podcast, _episode(), resources=Source()).resource_hints == {
+        "mad men": ("tv", "the greatest TV show")
+    }
+
+
+def test_a_linker_that_ignores_the_context_never_reads_the_summary():
+    class ExcerptOnlyLinker:
+        uses_context = False
+
+    class Source:
+        def hints_for(self, repo_, episode):
+            raise AssertionError("read the summary for a linker that ignores context")
+
+    podcast = Podcast(id="p", rss_url="https://x/f.xml", title="Show", slug="s", description="")
+    assert build_link_context(MagicMock(), podcast, _episode(), linker=ExcerptOnlyLinker(), resources=Source()) is None

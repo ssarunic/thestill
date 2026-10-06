@@ -27,7 +27,7 @@ turns them into one result per mention.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Set
 
 from structlog import get_logger
@@ -179,7 +179,9 @@ class LiveWikidataLinker:
 
         misses: List[NameGroup] = []
         for group in groups:
-            cached = self._cache.lookup(group.surface_key, context.podcast_id)
+            cached = self._cache.lookup(
+                group.surface_key, context.podcast_id, has_hint=group.surface_key in context.resource_hints
+            )
             if cached is not None and cached.qid and validator.blacklisted(group.surface_form, cached.qid):
                 # A reviewer has since ruled this link out. Decide the name
                 # again, so a correction heals the cache even if nobody
@@ -260,6 +262,12 @@ class LiveWikidataLinker:
                 verified_recall=outcome.verified_recall,
                 strict_pass=outcome.strict_pass,
             )
+        # Spec #92: a fresh decision made with a Resource List hint in view
+        # is remembered as hinted, "no candidates" included, so a hinted
+        # name is not decided again on the next episode that lists it.
+        for key, decision in outcome.decisions.items():
+            if not decision.from_cache and key in context.resource_hints:
+                outcome.decisions[key] = replace(decision, hinted=True)
         return outcome
 
     def _apply_choices(self, groups, choices, fetched, context, validator, outcome) -> List[NameGroup]:
