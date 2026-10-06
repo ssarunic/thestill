@@ -62,7 +62,7 @@ export default {
         section: ['17px', { lineHeight: '1.3', fontWeight: '600' }],
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['Inter Variable', 'Inter', 'system-ui', 'sans-serif'],
         serif: ['Georgia', 'Charter', 'serif'],
         mono: ['JetBrains Mono', 'Menlo', 'monospace'],
       },
