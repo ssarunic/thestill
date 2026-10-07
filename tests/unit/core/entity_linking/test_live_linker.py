@@ -173,7 +173,7 @@ def test_p31_can_move_an_entity_to_another_bucket(decisions):
     wikidata = FakeWikidata({"Truman": [FILM]}, p31={"Q214801": ["Q11424"]})  # instance of: film
     linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
     (result,) = linker.resolve([mention(1, "Truman", label="person")], context=CTX)
-    assert result.entity.type != EntityType.PERSON
+    assert result.entity.type == EntityType.PRODUCT  # a film, whatever GLiNER said (spec #92)
 
 
 # --- failures ----------------------------------------------------------------
@@ -368,3 +368,38 @@ def test_a_proposed_title_with_a_disambiguator_is_accepted(decisions):
     linker, _ = make_linker(decisions, wikidata, [_proposal("n1", "Claude (language model)")])
     (result,) = linker.resolve([mention(1, "Claude", label="product")], context=CTX)
     assert result.entity.wikidata_qid == "Q8"
+
+
+# --- spec #92: Resource List hints -------------------------------------------
+
+HINTED = LinkContext(
+    episode_id="ep-1", podcast_id=POD, podcast_title="Show", resource_hints={"mika": ("person", "a singer")}
+)
+
+
+def test_a_hinted_decision_is_remembered_as_hinted(decisions):
+    linker, provider = make_linker(decisions, FakeWikidata({"Mika": [DARIO]}), [_answer(("n1", None, "high"))])
+    linker.resolve([mention(1, "Mika")], context=HINTED)
+    assert decisions.get("mika", POD).hinted is True
+    assert "the episode summary lists it as: person — a singer" in provider.user_messages[0]
+
+
+def test_an_unhinted_none_is_decided_once_more_with_a_hint_then_reused(decisions):
+    linker, provider = make_linker(
+        decisions,
+        FakeWikidata({"Mika": [DARIO]}),
+        [_answer(("n1", None, "high")), _answer(("n1", "Q100", "high"))],
+    )
+    (first,) = linker.resolve([mention(1, "Mika")], context=CTX)
+    assert first.status == "unresolvable" and not decisions.get("mika", POD).hinted
+    (second,) = linker.resolve([mention(2, "Mika")], context=HINTED)
+    assert second.entity.wikidata_qid == "Q100" and decisions.get("mika", POD).hinted is True
+    linker.resolve([mention(3, "Mika")], context=HINTED)
+    assert len(provider.user_messages) == 2  # the third run reused the hinted decision
+
+
+def test_no_candidates_with_a_hint_is_remembered_as_hinted(decisions):
+    linker, _ = make_linker(decisions, FakeWikidata({}), [])
+    linker.resolve([mention(1, "Mika")], context=HINTED)
+    stored = decisions.get("mika", POD)
+    assert stored.qid is None and stored.hinted is True

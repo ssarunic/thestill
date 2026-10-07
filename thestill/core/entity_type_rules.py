@@ -98,11 +98,25 @@ PRODUCT_P31 = frozenset(
         "Q187320",  # device
         "Q15401930",  # product (commerce)
         "Q49850",  # journal (publication-as-product)
-        "Q11424",  # film
-        "Q571",  # book
-        "Q5398426",  # television series
     }
 )
+
+# Works: films, series, books, podcasts. Spec #92 Phase 0 — a work is a
+# product whatever GLiNER guessed, so "Margin Call" tagged ``topic`` no
+# longer lands in the topic bucket. Checked before ``TOPIC_P31``: a work's
+# P31 set can include generic classes the topic list also names.
+WORK_P31 = frozenset(
+    {
+        "Q11424",  # film
+        "Q5398426",  # television series
+        "Q571",  # book
+        "Q7725634",  # literary work
+        "Q24634210",  # podcast show
+        "Q482994",  # album
+        "Q7889",  # video game
+    }
+)
+PRODUCT_P31 = PRODUCT_P31 | WORK_P31
 
 # Topics is the broad catch-all bucket: places, concepts, events,
 # fields of study, religions, ethnic groups, ideologies, etc. We
@@ -156,7 +170,7 @@ TOPIC_P31 = frozenset(
         "Q4671286",  # academic major
         "Q29028",  # phenomenon
         "Q628523",  # message
-        "Q11424",  # genre
+        "Q201658",  # film genre
         "Q483394",  # literary genre
         # Languages
         "Q34770",  # language
@@ -210,17 +224,20 @@ def classify_entity_type(
        least ambiguous bucket and the most expensive to misclassify
        (the rail's ``People in this episode`` section is the most
        conspicuous).
-    2. Else if any P31 is in ``COMPANY_P31`` and ``fallback`` is also
+    2. Else if any P31 is in ``WORK_P31`` → ``PRODUCT``, whatever the
+       fallback: a film, series, book or podcast is a product even when
+       GLiNER tagged it ``topic`` (spec #92 Phase 0).
+    3. Else if any P31 is in ``COMPANY_P31`` and ``fallback`` is also
        company-or-product → ``COMPANY``. We require fallback agreement
        because organisation P31s pull in things like sports leagues and
        government agencies that the user probably doesn't want in
        "Companies mentioned" unless GLiNER also flagged them as
        company-shaped.
-    3. Else if any P31 is in ``PRODUCT_P31`` and fallback is product →
+    4. Else if any P31 is in ``PRODUCT_P31`` and fallback is product →
        ``PRODUCT``.
-    4. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
+    5. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
        countries / ethnic groups / ideologies that landed elsewhere.
-    5. Else → ``fallback`` (we have no signal to override the resolver).
+    6. Else → ``fallback`` (we have no signal to override the resolver).
 
     Returns ``None`` only when ``p31_qids`` is empty *and* ``fallback``
     is ``None`` — the resolver always passes a fallback so this is a
@@ -230,6 +247,9 @@ def classify_entity_type(
 
     if p31_set & PERSON_P31:
         return EntityType.PERSON
+
+    if p31_set & WORK_P31:
+        return EntityType.PRODUCT
 
     if p31_set & TOPIC_P31:
         # Topic check runs before company because countries/parties

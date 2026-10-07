@@ -523,6 +523,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_podcast
     ON entity_link_decisions(surface_key, podcast_id) WHERE podcast_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_corpus
     ON entity_link_decisions(surface_key) WHERE podcast_id IS NULL;
+-- Spec #92: the chooser saw a Resource List hint for this name (NULL = no).
+ALTER TABLE entity_link_decisions ADD COLUMN IF NOT EXISTS hinted boolean NULL;
 
 -- ===== search: chunks + vectors (pgvector replaces sqlite-vec/FTS5) ======
 CREATE TABLE IF NOT EXISTS chunks (

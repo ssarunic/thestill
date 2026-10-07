@@ -175,13 +175,37 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+# (episode, artifact_texts) -> JSON-serializable dict.
+SupplementaryCheck = Callable[[Episode, Dict[str, str]], dict]
+
+
+def _run_supplementary(name: str, check: SupplementaryCheck, episode: Episode, artifact_texts: Dict[str, str]) -> dict:
+    """A failing measurement is recorded, never fails the item (FM-1)."""
+    try:
+        return check(episode, artifact_texts)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("eval_supplementary_check_failed", check=name, error=str(exc))
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 class EvalRunner:
     """Executes one eval run over discovered (or pinned) episodes."""
 
-    def __init__(self, config, path_manager: PathManager, feed_manager: PodcastFeedManager):
+    def __init__(
+        self,
+        config,
+        path_manager: PathManager,
+        feed_manager: PodcastFeedManager,
+        *,
+        supplementary: Optional[Dict[str, Dict[str, SupplementaryCheck]]] = None,
+    ):
+        """``supplementary`` maps a rubric name to named checks that need the
+        episode itself (spec #92's ``resource_list``). Their results sit next
+        to the deterministic checks in the item report and never feed ``ok``."""
         self.config = config
         self.path_manager = path_manager
         self.feed_manager = feed_manager
+        self.supplementary = supplementary or {}
 
     # -- discovery ---------------------------------------------------------
 
@@ -390,6 +414,10 @@ class EvalRunner:
             checks = None
             if rubric.deterministic_checks is not None:
                 checks = rubric.deterministic_checks(artifact_texts, episode.duration)
+            checks_ok = None if checks is None else bool(checks.get("ok"))  # supplementary checks never gate
+            for name, check in self.supplementary.get(rubric.name, {}).items():
+                checks = dict(checks or {})
+                checks[name] = _run_supplementary(name, check, episode, artifact_texts)
 
             report_file = f"{ITEMS_DIRNAME}/{podcast.slug}_{episode.slug}.json"
             _atomic_write_json(
@@ -421,7 +449,7 @@ class EvalRunner:
                 report_file=report_file,
                 scores=scores,
                 scores_std=scores_std,
-                checks_ok=None if checks is None else bool(checks.get("ok")),
+                checks_ok=checks_ok,
                 transcript_truncated=truncated,
                 duration_s=round(time.monotonic() - started, 1),
             )

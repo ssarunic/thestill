@@ -284,3 +284,78 @@ class TestAnchorScan:
 
         scanned = sorted((m.surface_form, m.entity_id) for m in mentions if m.extractor == "anchor:scan")
         assert scanned == [("Cubuk", "person:dogus-cubuk"), ("Gary", "person:gary-lineker")]
+
+
+class _SeedStub(StubGLiNER):
+    SURFACE_FORMS = (("Mad Men", "topic", 0.9),)
+
+
+class TestResourceSeeds:
+    """Spec #92 Stage 4 — Resource List surfaces become pending mentions
+    wherever the transcript says them, around what GLiNER and anchors took."""
+
+    def _extract(self, *texts, seeds, anchors=()):
+        from thestill.core.entity_anchor import expand_anchor_variants
+
+        transcript = AnnotatedTranscript.model_validate(
+            {
+                "episode_id": "ep-1",
+                "segments": [
+                    {"id": i, "start": i * 10.0, "end": i * 10.0 + 9, "speaker": "Ed", "text": t, "kind": "content"}
+                    for i, t in enumerate(texts)
+                ],
+            }
+        )
+        seen = []
+
+        def provider(gliner_mentions):
+            seen.append([m.surface_form for m in gliner_mentions])
+            return seeds
+
+        mentions = EntityExtractor(preloaded_model=_SeedStub()).extract(
+            transcript, episode_id="ep-1", anchor_variants=expand_anchor_variants(anchors), seed_provider=provider
+        )
+        return mentions, seen
+
+    def _seed(self, surface, label="product"):
+        from thestill.core.summary_resources import ResourceSeed, is_single_token
+
+        return ResourceSeed(surface, label, is_single_token(surface))
+
+    def test_every_occurrence_becomes_a_pending_mention(self):
+        mentions, seen = self._extract(
+            "Kedrosky brings data.",
+            "Paul Kedrosky was here.",
+            seeds=[self._seed("Paul Kedrosky", "person"), self._seed("Kedrosky", "person")],
+        )
+        seeded = [m for m in mentions if m.extractor == "summary:resource"]
+        assert [(m.segment_id, m.surface_form) for m in seeded] == [(0, "Kedrosky"), (1, "Paul Kedrosky")]
+        assert all(m.resolution_status == ResolutionStatus.PENDING and m.entity_id is None for m in seeded)
+        assert all(m.confidence == 0.9 and m.surface_label == "person" and m.role is None for m in seeded)
+        assert seen == [[]]  # the provider saw GLiNER's (empty) mentions
+
+    def test_a_span_gliner_found_is_not_duplicated(self):
+        mentions, seen = self._extract("I've been watching Mad Men.", seeds=[self._seed("Mad Men")])
+        assert [m.extractor.split(":")[0] for m in mentions if "Mad Men" in m.surface_form] == ["gliner"]
+        assert seen == [["Mad Men"]]
+
+    def test_an_anchor_span_is_not_rescanned(self):
+        from thestill.models.entities import EntityRecord, EntityType
+
+        host = EntityRecord(id="person:scott-galloway", type=EntityType.PERSON, canonical_name="Scott Galloway")
+        mentions, _ = self._extract("Galloway said so.", seeds=[self._seed("Galloway", "person")], anchors=[host])
+        assert [m.extractor for m in mentions if m.surface_form == "Galloway"] == ["anchor:scan"]
+
+    def test_a_one_word_seed_matches_exact_case_only(self):
+        mentions, _ = self._extract("Prices ramp up.", "Ramp data says so.", seeds=[self._seed("Ramp", "company")])
+        assert [m.segment_id for m in mentions if m.extractor == "summary:resource"] == [1]
+
+    def test_no_provider_means_no_seed_rows(self):
+        transcript = AnnotatedTranscript.model_validate(
+            {
+                "episode_id": "ep-1",
+                "segments": [{"id": 0, "start": 0, "end": 9, "speaker": None, "text": "Ramp.", "kind": "content"}],
+            }
+        )
+        mentions = EntityExtractor(preloaded_model=_SeedStub()).extract(transcript, episode_id="ep-1")
+        assert not any(m.extractor == "summary:resource" for m in mentions)

@@ -324,6 +324,56 @@ def test_list_entities_by_type_ordered_by_name(repo):
     assert repo.list_entities_by_type("topic") == []
 
 
+def test_list_entities_with_qid_scoped_by_episode_and_podcast(repo):
+    _seed_resolved_corpus(repo)  # ai-jobs has no QID
+    repo.upsert_entity(_entity(id="person:unmentioned", name="Nobody", qid="Q1", aliases=[]))
+    assert [e.id for e in repo.list_entities_with_qid()] == ["company:spacex", "person:elon-musk"]
+    assert [e.id for e in repo.list_entities_with_qid(podcast_id=POD_2)] == ["person:elon-musk"]
+    assert [e.id for e in repo.list_entities_with_qid(episode_id=EP_2)] == ["company:spacex", "person:elon-musk"]
+    assert [e.id for e in repo.list_entities_with_qid(limit=1)] == ["company:spacex"]
+
+
+def test_retype_in_place_keeps_the_id_and_everything_pointing_at_it(repo):
+    """Spec #92 Phase 0: a film stored as a topic becomes a product on the
+    same row, so mentions, anchors and enrichment need no repointing."""
+    from thestill.core.entity_retype import plan_retype, retype_in_place
+
+    film = _entity(id="topic:margin-call", type=EntityType.TOPIC, name="Margin Call", qid="Q624614", aliases=[])
+    repo.upsert_entity(film)
+    repo.insert_mentions([_resolved_mention("topic:margin-call", surface="Margin Call", label="topic")])
+    repo.set_podcast_hosts(POD_1, ["topic:margin-call"])
+    repo.upsert_enrichment(_enrichment(entity_id="topic:margin-call"))
+
+    stored = repo.get_entity("topic:margin-call")
+    new_type = plan_retype(stored, ["Q11424"])
+    assert new_type is EntityType.PRODUCT
+    retype_in_place(repo, stored, new_type, ["Q11424"])
+
+    got = repo.get_entity("topic:margin-call")
+    assert got.type is EntityType.PRODUCT
+    assert got.wikidata_qid == "Q624614" and got.wikidata_instance_of == ["Q11424"]
+    assert repo.get_entity("product:margin-call") is None
+    (row,) = repo.find_mentions(entity_id="topic:margin-call")
+    assert row.mention.entity_id == "topic:margin-call" and row.entity_type == "product"
+    assert repo.get_podcast_anchors(POD_1)["hosts"] == ["topic:margin-call"]
+    assert repo.get_enrichment("topic:margin-call") is not None
+    assert plan_retype(got, ["Q11424"]) is None
+
+
+def test_list_extracted_names_is_gliner_only_distinct_in_first_seen_order(repo):
+    repo.insert_mentions(
+        [
+            _mention(surface="Mad Men", label="topic", extractor="gliner:urchade/gliner_medium-v2.1"),
+            _mention(surface="Ed Elson", label="person", extractor="anchor:scan"),
+            _mention(surface="Ramp", label="company", extractor="gliner:urchade/gliner_medium-v2.1", segment_id=2),
+            _mention(surface="Mad Men", label="topic", extractor="gliner:urchade/gliner_medium-v2.1", segment_id=3),
+            _mention(surface="Kedrosky", label="person", extractor="summary:resource", segment_id=4),
+            _mention(surface="Other", label="person", extractor="gliner:x", episode_id=EP_2),
+        ]
+    )
+    assert repo.list_extracted_names(EP_1) == [("Mad Men", "topic"), ("Ramp", "company")]
+
+
 def test_delete_entity_cascades_mentions(repo):
     repo.upsert_entity(_entity())
     repo.insert_mentions([_resolved_mention("person:elon-musk")])

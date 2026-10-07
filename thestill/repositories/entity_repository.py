@@ -256,6 +256,20 @@ class EntityRepository(ABC):
         """Every entity of the given type, ordered by canonical_name."""
 
     @abstractmethod
+    def list_entities_with_qid(
+        self,
+        *,
+        episode_id: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[EntityRecord]:
+        """Entities with a Wikidata QID and at least one mention, ordered by id.
+
+        Scoped to entities mentioned in ``episode_id`` and/or in an episode
+        of ``podcast_id`` when given. ``backfill-entity-types`` walks this.
+        """
+
+    @abstractmethod
     def delete_entity(self, entity_id: str) -> bool:
         """Hard-delete an entity (cascades to mentions/cooccurrences).
 
@@ -342,6 +356,16 @@ class EntityRepository(ABC):
 
         ``episode_id`` scopes to one episode; without it the full
         backlog is returned (up to ``limit``).
+        """
+
+    @abstractmethod
+    def list_extracted_names(self, episode_id: str) -> List[Tuple[str, Optional[str]]]:
+        """Distinct ``(surface_form, surface_label)`` of the episode's GLiNER
+        mentions, in first-seen order.
+
+        Spec #92 plans Resource List seeds from this at resolve time; at
+        extract time the same pairs come from the extractor in memory, so
+        both stages plan from identical input.
         """
 
     @abstractmethod

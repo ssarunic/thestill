@@ -22,7 +22,7 @@ validated decisions out.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 CONFIDENCE_LEVELS = ("low", "medium", "high")
 
@@ -51,6 +51,9 @@ class LinkContext:
     podcast_description: str = ""
     episode_description: str = ""
     anchor_names: List[str] = field(default_factory=list)
+    # Spec #92: surface_key → (kind, gloss) from the summary's Resource
+    # List, for names the transcript says. Empty when the feature is off.
+    resource_hints: Dict[str, Tuple[str, str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -98,3 +101,4 @@ class LinkDecision:
     candidate: Optional[Candidate] = None
     from_cache: bool = False
     cache_scope: str = ""  # "podcast" | "corpus" when from_cache
+    hinted: bool = False  # spec #92: decided with a Resource List hint in view

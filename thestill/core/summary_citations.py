@@ -236,7 +236,7 @@ def resolve_and_persist_summary_citations(
     """Persist a summary and its citations sidecar when an annotated transcript exists."""
 
     summary_key = path_manager.to_relative(summary_path)
-    annotated = _load_annotated_for_episode(
+    annotated = load_annotated_for_episode(
         episode=episode,
         path_manager=path_manager,
         file_storage=file_storage,
@@ -332,7 +332,7 @@ def backfill_summary_citations_for_episode(
                 unresolved_count=sum(1 for c in existing.citations if not c.resolved),
             )
 
-    annotated = _load_annotated_for_episode(
+    annotated = load_annotated_for_episode(
         episode=episode,
         path_manager=path_manager,
         file_storage=file_storage,
@@ -785,7 +785,7 @@ def _match_range_tail(text: str, start: int) -> int:
     return match.end() if match else -1
 
 
-def _load_annotated_for_episode(
+def load_annotated_for_episode(
     *,
     episode: Episode,
     path_manager: PathManager,

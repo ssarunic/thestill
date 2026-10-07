@@ -1,8 +1,8 @@
 # Resource List Entities
 
-> **Status:** 💡 Proposal
+> **Status:** 🚧 Phases 0–2 built on `feat/92-resource-list-entities` (2026-10-06), behind `ENTITY_RESOURCE_SEEDS_ENABLED` (default off); deviations from the draft in §Implementation notes; Phase 3 (prompt contract) and Phase 4 (`work` type) open
 > **Created:** 2026-10-05
-> **Updated:** 2026-10-05 (review: admission vs expansion, no punctuation splits, in-place re-type)
+> **Updated:** 2026-10-06 (Phases 0–2 implemented)
 > **Priority:** Medium — the summary section that is *only* entities links the fewest of them
 > **Author:** Product & Engineering
 > **Related:** [#28 corpus-search-and-entities](28-corpus-search-and-entities.md), [#53 eval-runs-and-summary-rubric](53-eval-runs-and-summary-rubric.md), [#54 summary-segment-citations](54-summary-segment-citations.md), [#81 live-wikidata-entity-linking](81-live-wikidata-entity-linking.md), [#82 summary-entity-links](82-summary-entity-links.md), [#83 summary-entity-mentions-pipeline](83-summary-entity-mentions-pipeline.md)
@@ -587,6 +587,97 @@ extraction commits regardless of what happens to seeds.
   shapes.
 - **Phase 4 — `work` type** (Stage 6). A separate go/no-go after Phase 2's
   numbers.
+
+## Implementation notes (Phases 0–2)
+
+Built 2026-10-06. Where the code differs from the design above, the code
+is right and the reason is here.
+
+### Phase 0
+
+- `WORK_P31` is checked right after the person rule and returns
+  `product` whatever the fallback. It is also merged into `PRODUCT_P31`,
+  so `entity_review._mint_type_from_p31` files a minted work as a
+  product too.
+- The re-type logic lives in `core/entity_retype.py` (`plan_retype`,
+  `retype_in_place`). `backfill-entity-types` now scopes through
+  `EntityRepository.list_entities_with_qid` on both backends, in both
+  modes. The old SQLite-only SQL meant the command could not run on
+  prod Postgres at all.
+
+### Parsing (Stage 2)
+
+- Every non-kind parenthetical moves to the gloss, not only a trailing
+  one ("Grok (xAI)" is "Grok", gloss "… (xAI)").
+- A bullet that yields no name is skipped. The parser raises only when a
+  section has bullets and none of them parse, so one odd bullet does not
+  cost the episode its whole list.
+- The ` by ` fallback requires a full-name author (two capitalised
+  words), so "Stand by Me" offers no fallback at all.
+- `resource_bullets()` is exposed for the contract rate.
+
+### Grounding (Stage 3)
+
+- **No citations sidecar read.** The cited time is the citation link's
+  own label ("12:09" in `[12:09](?t=…&cite=c3)`), which is exactly what
+  the sidecar stores as `cited_playback_s`. The sidecar adds nothing for
+  grounding, so extract and resolve each save a read.
+- **Surname ambiguity is computed from names, not resolutions.** The
+  draft's test ("a surface GLiNER resolved to a different entity")
+  cannot be evaluated at extract time, because nothing is resolved yet.
+  Extract and resolve must make the same decision, or hints are keyed to
+  surfaces that have no mentions. A surname is now ambiguous when:
+  - it is the last word of a **different multi-word name GLiNER found**
+    in the episode ("Bill Perkins" spoken, "Kate Perkins" listed);
+  - it is another admitted item's surface;
+  - it is an anchor surface.
+- Both stages get GLiNER's names from the same source: in memory at
+  extract time, and through the new `EntityRepository.list_extracted_names`
+  (distinct `(surface_form, surface_label)` of `gliner:*` mentions) at
+  resolve time.
+
+### Kinds and labels (Stage 4)
+
+- A kind-less item takes its kind from the earliest kind word in its
+  gloss ("Author of…" is a person, "…visualization tool" is a tool). If
+  there is none, it borrows GLiNER's `surface_label` for the same name.
+  Failing both, `surface_label` is `None`, which behaves as before
+  (topic). 83% of existing items carry no kind, so this matters until
+  the Phase 3 contract lands.
+
+### Hints (Stage 5)
+
+- `build_link_context(..., resources=ResourceSource | None)`. All three
+  callers pass the same source: the resolve handler, `resolve-entities`
+  and the entity-linking eval. `None` (the feature off) reads nothing.
+  The early return for context-free linkers still runs first.
+- A cached **low-confidence guess** decided without a hint is re-decided
+  too, not only a `none`. Both are "unlinked" by the cache's own rule.
+- Fresh hinted decisions are stamped `hinted` in `link()`, "no
+  candidates" included, so a hinted name is never decided twice.
+- The chooser's system prompt gained one sentence describing the hint.
+  `PROMPT_VERSION` was not bumped: a bump would re-decide every cached
+  name corpus-wide, and the hint only changes prompts for hinted names.
+
+### Measuring
+
+- `resource_list` is a **supplementary check** on the summary rubric
+  (`EvalRunner(..., supplementary={rubric: {name: check}})`), not a key
+  inside `summary_checks.py`. It needs the episode, the transcript and
+  the entity repository, which `deterministic_checks` does not get. It
+  never feeds `checks_ok`, and a failure is recorded as `{"error": …}`
+  without failing the item.
+- `grounding_rate` excludes items naming the episode's hosts or guests.
+  They are dropped by design, and counting them would read as a
+  grounding failure. They are reported as `anchor_items`.
+- The eval measures whatever `ENTITY_RESOURCE_SEEDS_ENABLED` says, so
+  the baseline exists before the feature is enabled.
+
+### Config
+
+- `ENTITY_RESOURCE_SEEDS_ENABLED` (default `false`) and
+  `RESOURCE_GROUNDING_WINDOW_S` (default `90`). With the flag off,
+  extract and resolve read no summary and log nothing.
 
 ## Open questions
 

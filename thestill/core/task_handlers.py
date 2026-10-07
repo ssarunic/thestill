@@ -1102,17 +1102,21 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         # this episode and expand them into surface variants. Empty list
         # is fine: the extractor short-circuits the anchor-scan and
         # speaker-resolution steps when no anchors are configured.
-        from .entity_anchor import expand_anchor_variants
+        from .entity_anchor import expand_anchor_variants, load_anchor_entities
 
-        anchor_ids = repo.get_episode_anchors(episode.id)
-        anchor_entities = [e for e in (repo.get_entity(eid) for eid in anchor_ids) if e is not None]
-        anchor_variants = expand_anchor_variants(anchor_entities)
+        anchor_variants = expand_anchor_variants(load_anchor_entities(repo, episode.id))
 
+        # Spec #92 — the summary's Resource List seeds names GLiNER missed.
+        # None when ENTITY_RESOURCE_SEEDS_ENABLED is off: no summary read.
+        from .resource_seeds import make_resource_source
+
+        resources = make_resource_source(state.config, state.path_manager)
         extractor = _get_or_create_entity_extractor(state)
         mentions = extractor.extract(
             transcript,
             episode_id=episode.id,
             anchor_variants=anchor_variants,
+            seed_provider=resources.seed_provider(episode, transcript, anchor_variants) if resources else None,
         )
 
         # Idempotent re-extract: wipe + write. The brief gap between
@@ -1283,18 +1287,23 @@ def _with_stable_identity(repo, entity):
     return entity.model_copy(update={"id": distinct_id})
 
 
-def build_link_context(repo, podcast, episode, *, linker=None):
+def build_link_context(repo, podcast, episode, *, linker=None, resources=None):
     """What the live linker's chooser knows beyond the excerpts (spec #81).
 
     ``None`` for a linker that declares ``uses_context = False``: the anchor
     lookup is one repository read per anchor (a connection each on
     Postgres), and ReFinED would discard the result.
+
+    ``resources`` (spec #92, a ``ResourceSource`` or ``None`` when the
+    feature is off) re-plans the summary's Resource List to give the
+    chooser each listed name's kind and gloss. It never raises.
     """
+    from .entity_anchor import load_anchor_entities
     from .entity_linking.types import LinkContext
 
     if linker is not None and not getattr(linker, "uses_context", True):
         return None
-    anchors = [repo.get_entity(entity_id) for entity_id in repo.get_episode_anchors(episode.id)]
+    anchors = load_anchor_entities(repo, episode.id)
     return LinkContext(
         episode_id=episode.id,
         podcast_id=podcast.id,
@@ -1303,7 +1312,8 @@ def build_link_context(repo, podcast, episode, *, linker=None):
         episode_title=episode.title or "",
         podcast_description=getattr(podcast, "description", "") or "",
         episode_description=getattr(episode, "description", "") or "",
-        anchor_names=[a.canonical_name for a in anchors if a is not None],
+        anchor_names=[a.canonical_name for a in anchors],
+        resource_hints=resources.hints_for(repo, episode, anchors) if resources is not None else {},
     )
 
 
@@ -1352,6 +1362,8 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
             return
 
     with _handler_error_context(f"resolving entities for {episode.title}"):
+        from .resource_seeds import make_resource_source
+
         run = ResolutionRun()
         if pending:
             linker = _get_or_create_entity_resolver(state)
@@ -1360,7 +1372,13 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
                 linker,
                 pending,
                 episode_id=episode.id,
-                context=build_link_context(repo, podcast, episode, linker=linker),
+                context=build_link_context(
+                    repo,
+                    podcast,
+                    episode,
+                    linker=linker,
+                    resources=make_resource_source(state.config, state.path_manager),
+                ),
             )
 
         # Spec §1.7 — cooccurrences are rebuilt by the dedicated

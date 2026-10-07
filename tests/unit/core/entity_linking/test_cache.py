@@ -181,3 +181,36 @@ def test_invalidate_folds_the_spoken_name_and_clears_every_scope(cache, repo, cl
 def test_the_stored_reason_is_truncated(cache, repo):
     cache.record(_decision(reason="x" * 500), PODS[0])
     assert len(repo.get("mercury", PODS[0]).reason) == 200
+
+
+# --- spec #92: Resource List hints -------------------------------------------
+
+
+def test_an_unhinted_none_is_a_miss_when_a_hint_exists(cache):
+    cache.record(_decision(qid=None, reason="no candidates"), PODS[0])
+    assert cache.lookup("mercury", PODS[0]) is not None
+    assert cache.lookup("mercury", PODS[0], has_hint=True) is None
+
+
+def test_a_hinted_none_is_reused(cache):
+    from dataclasses import replace
+
+    cache.record(replace(_decision(qid=None), hinted=True), PODS[0])
+    hit = cache.lookup("mercury", PODS[0], has_hint=True)
+    assert hit is not None and hit.qid is None and hit.hinted is True
+
+
+def test_a_link_is_reused_whatever_the_hint(cache):
+    cache.record(_decision(qid="Q1"), PODS[0])
+    assert cache.lookup("mercury", PODS[0], has_hint=True).qid == "Q1"
+
+
+def test_an_unhinted_low_confidence_guess_is_a_miss_too(cache):
+    cache.record(_decision(qid="Q1", confidence="low"), PODS[0])
+    assert cache.lookup("mercury", PODS[0], has_hint=True) is None
+
+
+def test_skipping_an_unhinted_podcast_none_still_finds_a_corpus_link(cache, repo, clock):
+    cache.record(_decision(qid=None), PODS[0])
+    _corpus_row(repo, clock, qid="Q9")
+    assert cache.lookup("mercury", PODS[0], has_hint=True).qid == "Q9"

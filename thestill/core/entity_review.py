@@ -61,7 +61,7 @@ from structlog import get_logger
 from ..models.entities import EntityRecord, EntityType
 from .entity_linking.cache import invalidate_link_decisions
 from .entity_linking.shared import _build_entity_id
-from .entity_type_rules import ALLOWED_P31_BY_TYPE, classify_entity_type
+from .entity_type_rules import ALLOWED_P31_BY_TYPE, WORK_P31, classify_entity_type
 from .queue_manager import TaskStage
 
 if TYPE_CHECKING:  # avoid import cost / cycles at runtime
@@ -476,6 +476,8 @@ def _mint_type_from_p31(p31: List[str]) -> EntityType:
     "companies"), defaulting to TOPIC when nothing matches.
     """
     s = {q for q in p31 if q}
+    if not s & ALLOWED_P31_BY_TYPE[EntityType.PERSON] and s & WORK_P31:
+        return EntityType.PRODUCT  # a work, as in classify_entity_type
     for etype in (EntityType.PERSON, EntityType.TOPIC, EntityType.COMPANY, EntityType.PRODUCT):
         if s & ALLOWED_P31_BY_TYPE[etype]:
             return etype

@@ -920,7 +920,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     reason         TEXT NULL,
                     decided_at     TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
                     linker_version TEXT NOT NULL,
-                    hits           INTEGER NOT NULL DEFAULT 0
+                    hits           INTEGER NOT NULL DEFAULT 0,
+                    hinted         INTEGER NULL
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_link_decisions_podcast
                     ON entity_link_decisions(surface_key, podcast_id) WHERE podcast_id IS NOT NULL;
@@ -929,6 +930,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
             )
             logger.info("Migration complete: entity_link_decisions table created")
+        # Spec #92: the chooser saw a Resource List hint (NULL = no).
+        cursor = conn.execute("PRAGMA table_info(entity_link_decisions)")
+        if "hinted" not in {row["name"] for row in cursor.fetchall()}:
+            conn.execute("ALTER TABLE entity_link_decisions ADD COLUMN hinted INTEGER NULL")
+            logger.info("Migration complete: hinted column added to entity_link_decisions")
 
         # spec #45 — entity_enrichment: Tier-0 display data (photo/logo,
         # vital stats, Wikipedia lead, cross-links) fetched from Wikidata

@@ -205,6 +205,32 @@ class SqliteEntityRepository(EntityRepository):
             ).fetchall()
         return [_row_to_entity(r) for r in rows]
 
+    def list_entities_with_qid(
+        self,
+        *,
+        episode_id: Optional[str] = None,
+        podcast_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[EntityRecord]:
+        sql = (
+            "SELECT * FROM entities ent WHERE ent.wikidata_qid IS NOT NULL "
+            "AND EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = ent.id"
+        )
+        params: list = []
+        if episode_id is not None:
+            sql += " AND m.episode_id = ?"
+            params.append(episode_id)
+        if podcast_id is not None:
+            sql += " AND m.episode_id IN (SELECT id FROM episodes WHERE podcast_id = ?)"
+            params.append(podcast_id)
+        sql += ") ORDER BY ent.id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_entity(r) for r in rows]
+
     def delete_entity(self, entity_id: str) -> bool:
         """Hard-delete an entity. ``ON DELETE CASCADE`` removes mentions
         + cooccurrence rows pointing at it. Returns True if a row was
@@ -456,6 +482,16 @@ class SqliteEntityRepository(EntityRepository):
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_mention(r) for r in rows]
+
+    def list_extracted_names(self, episode_id: str) -> List[Tuple[str, Optional[str]]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT surface_form, surface_label FROM entity_mentions "
+                "WHERE episode_id = ? AND extractor LIKE 'gliner%' "
+                "GROUP BY surface_form, surface_label ORDER BY MIN(id)",
+                (episode_id,),
+            ).fetchall()
+        return [(r["surface_form"], r["surface_label"]) for r in rows]
 
     def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
         sql = (

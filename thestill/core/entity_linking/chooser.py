@@ -48,13 +48,17 @@ DESCRIPTION_MAX_CHARS = 160
 # show's subject and its regulars, not the whole show notes.
 CONTEXT_DESCRIPTION_MAX_CHARS = 600
 MAX_ANCHORS = 12
+HINT_MAX_CHARS = 200
 MAX_OUTPUT_TOKENS = 8192
 
 SYSTEM_PROMPT = """You link names spoken in a podcast episode to Wikidata entities.
 
 For each numbered name you get: the name as transcribed, the kind of thing \
 the transcript tagger thought it was, up to three excerpts where it was \
-spoken, and a list of candidate Wikidata entities (QID, label, description).
+spoken, and a list of candidate Wikidata entities (QID, label, description). \
+Some names also say how the episode's own summary lists them: a kind and a \
+short description written by a model from the same transcript. Treat it as \
+context, like an excerpt, not as proof.
 
 For each name, decide which candidate the speakers mean.
 
@@ -237,6 +241,9 @@ def build_user_message(
     blocks = [wrap_untrusted("\n".join(header), label="EPISODE")]
     for name_id, group in by_id.items():
         lines = [f"name: {_one_line(group.surface_form)}", f"tagged as: {group.surface_label or 'unknown'}"]
+        hint = context.resource_hints.get(group.surface_key)
+        if hint:
+            lines.append(f"the episode summary lists it as: {_hint_text(*hint)}")
         for excerpt in group.excerpts[:MAX_EXCERPTS]:
             lines.append(f"excerpt: {_one_line(excerpt)[:EXCERPT_MAX_CHARS]}")
         lines.append("candidates:")
@@ -249,3 +256,10 @@ def build_user_message(
 
 def _one_line(text: str) -> str:
     return " ".join((text or "").split())
+
+
+def _hint_text(kind: str, gloss: str) -> str:
+    """Spec #92: the Resource List's kind and gloss, model output from the
+    transcript, so control characters are stripped like any LLM output."""
+    text = " — ".join(part for part in (kind, gloss) if part)
+    return _one_line(sanitize_text(text)[0])[:HINT_MAX_CHARS]
