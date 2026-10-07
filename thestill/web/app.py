@@ -540,53 +540,31 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         else:
             logger.info("refresh_scheduler_disabled")
 
-        # Spec #50 — start the briefing scheduler when enabled. It generates
-        # each user's briefing at their scheduled hour via the same
-        # BriefingService the lazy /api/briefings/latest path uses; the
-        # min-interval throttle keeps the two triggers from double-running.
-        # Scheduled runs chain narration (#33) when it's enabled, so the
-        # readout — not just the script — is ready by the scheduled hour.
-        # Ships dark, mirroring the refresh scheduler.
-        from ..utils.config import (
-            get_briefing_scheduler_max_per_tick,
-            get_briefing_scheduler_tick_seconds,
-            is_briefing_scheduler_enabled,
+        # Spec #50 — the briefing scheduler always runs. It generates each
+        # user's briefing at their scheduled hour via the same BriefingService
+        # the /api/briefings/latest path uses; the min-interval throttle keeps
+        # the two triggers from double-running. Scheduled runs chain narration
+        # (#33) when it's enabled, so the readout — not just the script — is
+        # ready by the scheduled hour.
+        from ..core.briefing_scheduler import BriefingScheduler
+        from ..utils.config import get_briefing_scheduler_max_per_tick, get_briefing_scheduler_tick_seconds
+
+        briefing_scheduler = BriefingScheduler(
+            schedule_repository=briefing_schedule_repository,
+            briefing_service=briefing_service,
+            tick_seconds=get_briefing_scheduler_tick_seconds(),
+            max_per_tick=get_briefing_scheduler_max_per_tick(),
+            narration_runner=app_state.narration_runner,
+            narration_target_seconds=config.narration_default_duration_seconds,
+            delivery_service=briefing_delivery_service,
         )
-
-        briefing_scheduler = None
-        if is_briefing_scheduler_enabled():
-            from ..core.briefing_scheduler import BriefingScheduler
-
-            briefing_scheduler = BriefingScheduler(
-                schedule_repository=briefing_schedule_repository,
-                briefing_service=briefing_service,
-                tick_seconds=get_briefing_scheduler_tick_seconds(),
-                max_per_tick=get_briefing_scheduler_max_per_tick(),
-                narration_runner=app_state.narration_runner,
-                narration_target_seconds=config.narration_default_duration_seconds,
-                delivery_service=briefing_delivery_service,
-            )
-            briefing_scheduler.start()
-            app_state.briefing_scheduler = briefing_scheduler
-            logger.info(
-                "briefing_scheduler_enabled",
-                narration_chained=app_state.narration_runner is not None,
-                email_delivery=briefing_delivery_service is not None,
-            )
-        else:
-            logger.info("briefing_scheduler_disabled")
-            if briefing_delivery_service is not None:
-                # The delivery pass only runs from the scheduler tick, so
-                # a configured provider without the scheduler can never
-                # send anything. The capability flag keys off
-                # ``briefing_scheduler`` too, so the UI hides the checkbox
-                # rather than accepting opt-ins that would silently never
-                # deliver (FM: silent degradation).
-                logger.warning(
-                    "briefing_email_delivery_inert",
-                    reason="EMAIL_PROVIDER is configured but BRIEFING_SCHEDULER_ENABLED=false; "
-                    "briefing emails will not be sent",
-                )
+        briefing_scheduler.start()
+        app_state.briefing_scheduler = briefing_scheduler
+        logger.info(
+            "briefing_scheduler_started",
+            narration_chained=app_state.narration_runner is not None,
+            email_delivery=briefing_delivery_service is not None,
+        )
 
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s

@@ -367,7 +367,7 @@ def test_force_skips_readiness_gate():
     briefing_repo.count_pending_for_user.assert_not_called()
 
 
-def test_excludes_read_and_dismissed_items(service, db_path, user_repo, inbox_repo):
+def test_covers_read_items_and_excludes_dismissed(service, db_path, user_repo, inbox_repo):
     user = _make_user(user_repo, "alice@example.com")
     podcast_id = str(uuid.uuid4())
     base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
@@ -387,8 +387,8 @@ def test_excludes_read_and_dismissed_items(service, db_path, user_repo, inbox_re
 
     briefing = service.generate_for_user(user.id, now=base + timedelta(hours=1))
     assert briefing is not None
-    # Only ``unread`` + ``saved`` count.
-    assert briefing.episode_count == 2
+    # Everything that landed counts, read or not; only ``dismissed`` is out.
+    assert briefing.episode_count == 3
 
 
 def test_throttle_returns_existing_briefing(service, db_path, user_repo, inbox_repo):

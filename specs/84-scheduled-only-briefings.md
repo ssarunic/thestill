@@ -47,8 +47,8 @@ product:
 ### Rule
 
 On `GET /api/briefings/latest`, when **the briefing scheduler is running**
-(`BRIEFING_SCHEDULER_ENABLED=true`) **and the user has an enabled
-schedule**:
+(always, since the `BRIEFING_SCHEDULER_ENABLED` flag was removed) **and the
+user has an enabled schedule**:
 
 - `force=false` → return the latest briefing as-is, with `next_run_at`
   added to the payload. No generation, no readiness gate, no cursor move.
@@ -120,9 +120,9 @@ to "Past briefings". Without `next_run_at` (lazy path) the card is as before.
       schedule, seed with/without/invalid `tz`, scheduler off
       ([test_api_briefings.py](../tests/unit/web/test_api_briefings.py)).
 - [x] Card tests ([Inbox.test.tsx](../thestill/web/frontend/src/pages/Inbox.test.tsx)).
-- [ ] Production: flip `/thestill/prod/BRIEFING_SCHEDULER_ENABLED` to `true`
-      and reconcile. Until then this spec is inert (rule and seed are both
-      gated on the scheduler running).
+- [x] Production: the `BRIEFING_SCHEDULER_ENABLED` flag was removed
+      (2026-10-07); the scheduler always runs, so the rule and seed are live
+      everywhere.
 
 ## Open Questions
 

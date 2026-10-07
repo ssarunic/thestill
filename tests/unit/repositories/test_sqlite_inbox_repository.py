@@ -463,7 +463,7 @@ def test_list_episode_ids_in_window_filters_window_and_states(inbox_repo, user_r
             state="saved",
             delivered_at=base + timedelta(minutes=10),
         ),
-        # Inside window, but read/dismissed → excluded by state filter.
+        # Inside window and already read → still covered.
         InboxEntry(
             user_id=user.id,
             episode_id=eps[2].id,
@@ -472,6 +472,7 @@ def test_list_episode_ids_in_window_filters_window_and_states(inbox_repo, user_r
             delivered_at=base + timedelta(minutes=20),
             state_changed_at=base + timedelta(hours=1),
         ),
+        # Inside window, but dismissed → excluded by state filter.
         InboxEntry(
             user_id=user.id,
             episode_id=eps[3].id,
@@ -496,7 +497,7 @@ def test_list_episode_ids_in_window_filters_window_and_states(inbox_repo, user_r
         since=base,
         until=base + timedelta(hours=2),
     )
-    assert ids == [eps[0].id, eps[1].id]
+    assert ids == [eps[0].id, eps[1].id, eps[2].id]
 
 
 def test_list_episode_ids_in_window_returns_empty_for_empty_states(inbox_repo, user_repo):

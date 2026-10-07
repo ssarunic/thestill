@@ -1219,10 +1219,9 @@ def cmd_setup(args: argparse.Namespace) -> None:
         "POSTGRES_PASSWORD": pysecrets.token_hex(32),
         "ENVIRONMENT": "production",
         "COOKIE_SECURE": "true",
-        # Ship dark on the first boot: the operator flips these at cutover,
-        # once the old machine's schedulers are stopped.
+        # Ship dark on the first boot: the operator flips this at cutover,
+        # once the old machine's scheduler is stopped.
         "REFRESH_SCHEDULER_ENABLED": "false",
-        "BRIEFING_SCHEDULER_ENABLED": "false",
     }
     for name, value in derived.items():
         if put_secret(region, name, value):
@@ -1293,7 +1292,6 @@ _DIFF_EXPECTED_REMOTE_ONLY = {
     "URL_GUARD_ALLOWLIST",
     "MIGRATE_ON_STARTUP",
     "REFRESH_SCHEDULER_ENABLED",
-    "BRIEFING_SCHEDULER_ENABLED",
 }
 
 

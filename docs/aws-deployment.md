@@ -182,14 +182,16 @@ Notes:
 3. Sync artifacts into `./data`: `raw_transcripts/`, `clean_transcripts/`,
    `summaries/`, `briefings/`, `narrations/`, `episode_facts/`,
    `podcast_facts/`, `corpus/`. Skip `logs/` and `debug_feeds/`.
-4. Start the rest **with schedulers off** (`REFRESH_SCHEDULER_ENABLED=false`, `REFRESH_ON_OPEN_ENABLED=false`,
-   `BRIEFING_SCHEDULER_ENABLED=false` in SSM/.env for the first boot):
+4. Start the rest **with the refresh scheduler off** (`REFRESH_SCHEDULER_ENABLED=false`,
+   `REFRESH_ON_OPEN_ENABLED=false` in SSM/.env for the first boot). The briefing
+   scheduler has no switch; the per-user 6 h throttle stops both machines from
+   cutting the same edition twice, but stop the old instance promptly:
    `docker compose -f docker-compose.prod.yml up -d`
 5. Verify readiness — the compose healthcheck polls `/health/ready`, so
    `docker compose -f docker-compose.prod.yml ps` showing the app as
    `healthy` means the DB round-trip works. Then check login, search, and
    playback through Caddy once DNS resolves.
-6. Flip the scheduler flags on in SSM, re-run `./fetch-secrets.sh`,
+6. Flip the refresh scheduler flags on in SSM, re-run `./fetch-secrets.sh`,
    `docker compose up -d`, and **stop the old instance** — two schedulers
    must never run against the same database.
 7. Cut DNS to the instance's IP; confirm OAuth login on the new callback.

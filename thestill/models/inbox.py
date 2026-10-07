@@ -47,9 +47,10 @@ InboxState = Literal["unread", "read", "saved", "dismissed"]
 INBOX_SOURCES: tuple[str, ...] = get_args(InboxSource)
 INBOX_STATES: tuple[str, ...] = get_args(InboxState)
 
-# States a briefing covers (spec #36): read and dismissed are excluded
-# because the briefing is a readout of *what the user hasn't acted on*.
-INBOX_STATES_ELIGIBLE_FOR_BRIEFING: tuple[InboxState, ...] = ("unread", "saved")
+# States a briefing covers (spec #36): everything that landed in the inbox
+# since the last briefing, whether or not the user has opened it yet. Only
+# ``dismissed`` is excluded — an explicit "not for me".
+INBOX_STATES_ELIGIBLE_FOR_BRIEFING: tuple[InboxState, ...] = ("unread", "read", "saved")
 
 
 class InboxEntry(BaseModel):

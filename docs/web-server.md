@@ -399,5 +399,4 @@ unread coverage exists. It links to the briefing detail page.
 ### Schedule Settings
 
 The Settings page configures per-user scheduled generation: enable toggle,
-daily/weekly frequency (with weekday), hour, and IANA timezone. The server
-must run with `BRIEFING_SCHEDULER_ENABLED=true` for schedules to fire.
+daily/weekly frequency (with weekday), hour, and IANA timezone.
