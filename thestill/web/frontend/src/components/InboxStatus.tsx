@@ -17,11 +17,12 @@ const STATE_SENTENCE: Record<InboxState, string> = {
   dismissed: "You dismissed it, so it's hidden from the main list.",
 }
 
-// The one in-place action offered for each state; ``saved`` has none.
+// The one in-place action offered for each state. Unsaving lands on ``read``:
+// the row stays in the inbox (rows are never removed), just out of Saved.
 const STATE_ACTION: Record<InboxState, { label: string; to: InboxState } | null> = {
   unread: { label: 'Save for later', to: 'saved' },
   read: { label: 'Save for later', to: 'saved' },
-  saved: null,
+  saved: { label: 'Remove from saved', to: 'read' },
   dismissed: { label: 'Restore to inbox', to: 'unread' },
 }
 
