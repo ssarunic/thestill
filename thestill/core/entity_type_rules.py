@@ -118,6 +118,32 @@ WORK_P31 = frozenset(
 )
 PRODUCT_P31 = PRODUCT_P31 | WORK_P31
 
+# Commerce classes no country, party or NGO carries. Wikidata often adds the
+# generic "organization" (Q43229, in TOPIC_P31) to real companies — Allianz,
+# JetBlue, Bechtel — so these are checked before the topic list and win
+# whatever GLiNER guessed. Places that also list one stay topics.
+BUSINESS_P31 = frozenset(
+    {
+        "Q4830453",  # business
+        "Q783794",  # company
+        "Q6881511",  # enterprise
+        "Q891723",  # public company
+        "Q161726",  # multinational corporation
+        "Q1058914",  # software company
+    }
+)
+# Software is a product whatever GLiNER guessed; before this, AlexNet or
+# Google Forms tagged "company" fell through to topic.
+SOFTWARE_P31 = frozenset(
+    {
+        "Q7397",  # software
+        "Q341",  # free software
+        "Q166142",  # application
+        "Q1395226",  # mobile app
+    }
+)
+_PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
+
 # Topics is the broad catch-all bucket: places, concepts, events,
 # fields of study, religions, ethnic groups, ideologies, etc. We
 # enumerate the *common* P31s here so we can demote things that
@@ -227,17 +253,21 @@ def classify_entity_type(
     2. Else if any P31 is in ``WORK_P31`` → ``PRODUCT``, whatever the
        fallback: a film, series, book or podcast is a product even when
        GLiNER tagged it ``topic`` (spec #92 Phase 0).
-    3. Else if any P31 is in ``COMPANY_P31`` and ``fallback`` is also
+    3. Else if any P31 is in ``BUSINESS_P31`` (and none is a place) →
+       ``COMPANY``, and else if any is in ``SOFTWARE_P31`` → ``PRODUCT``,
+       whatever the fallback. Checked before the topic list, which holds
+       the generic "organization" class many real companies also carry.
+    4. Else if any P31 is in ``COMPANY_P31`` and ``fallback`` is also
        company-or-product → ``COMPANY``. We require fallback agreement
        because organisation P31s pull in things like sports leagues and
        government agencies that the user probably doesn't want in
        "Companies mentioned" unless GLiNER also flagged them as
        company-shaped.
-    4. Else if any P31 is in ``PRODUCT_P31`` and fallback is product →
+    5. Else if any P31 is in ``PRODUCT_P31`` and fallback is product →
        ``PRODUCT``.
-    5. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
+    6. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
        countries / ethnic groups / ideologies that landed elsewhere.
-    6. Else → ``fallback`` (we have no signal to override the resolver).
+    7. Else → ``fallback`` (we have no signal to override the resolver).
 
     Returns ``None`` only when ``p31_qids`` is empty *and* ``fallback``
     is ``None`` — the resolver always passes a fallback so this is a
@@ -249,6 +279,12 @@ def classify_entity_type(
         return EntityType.PERSON
 
     if p31_set & WORK_P31:
+        return EntityType.PRODUCT
+
+    if p31_set & BUSINESS_P31 and not p31_set & _PLACE_P31:
+        return EntityType.COMPANY
+
+    if p31_set & SOFTWARE_P31:
         return EntityType.PRODUCT
 
     if p31_set & TOPIC_P31:

@@ -27,7 +27,7 @@ class TestOnlyWorks:
 
     def test_a_company_with_the_generic_organization_class_is_not_demoted(self):
         allianz = _entity("company:allianz", EntityType.COMPANY)
-        assert plan_retype(allianz, COMPANY_AND_ORG) is EntityType.TOPIC  # every rule: the known misfire
+        assert plan_retype(allianz, COMPANY_AND_ORG) is None  # business beats the generic "organization"
         assert plan_retype(allianz, COMPANY_AND_ORG, only_works=True) is None
 
     def test_software_and_people_do_not_move(self):
