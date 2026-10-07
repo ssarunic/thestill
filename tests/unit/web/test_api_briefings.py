@@ -797,14 +797,12 @@ class TestGetBriefingEpisodes:
         assert second["duration_formatted"] is None
         assert show_a_out["episodes"][1]["summary_available"] is True
 
-        # Same window the narration runner resolves: still-eligible rows plus
-        # rows read after the briefing was cut.
+        # Same window the narration runner resolves: every non-dismissed row.
         mock_app_state.inbox_repository.list_episode_ids_in_window.assert_called_once_with(
             "user-1",
             since=briefing.cursor_from,
             until=briefing.cursor_to,
-            states=("unread", "saved"),
-            read_since=briefing.created_at,
+            states=("unread", "read", "saved"),
         )
         mock_app_state.repository.get_episodes_by_ids.assert_called_once_with(["ep-1", "ep-2", "ep-3"])
 

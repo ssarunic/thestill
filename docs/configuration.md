@@ -345,17 +345,18 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 
 ## Briefing Scheduler (spec #50)
 
-Ships dark; flip `BRIEFING_SCHEDULER_ENABLED=true` per deployment.
+The scheduler always runs, and the schedule slot is the only automatic
+trigger (spec #84): opening the inbox returns the latest edition and never
+generates one, users without a schedule are seeded a daily 08:00 row in their
+browser timezone on first inbox open, and "Generate now" is the manual
+override. A user who turns their schedule off gets briefings generated lazily
+on inbox open instead (spec #36).
 
-With the scheduler on, the slot is the only automatic trigger (spec #84):
-opening the inbox returns the latest edition and never generates one, users
-without a schedule are seeded a daily 08:00 row in their browser timezone on
-first inbox open, and "Generate now" is the manual override. With it off,
-briefings are generated lazily on inbox open (spec #36).
+A briefing covers every inbox episode delivered since the previous one,
+read or unread; only dismissed episodes are left out.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BRIEFING_SCHEDULER_ENABLED` | Run the background tick that generates briefings at each user's scheduled hour | `false` |
 | `BRIEFING_SCHEDULER_TICK_SECONDS` | How often the scheduler scans for due schedules (granularity, not cadence) | `60` |
 | `BRIEFING_SCHEDULER_MAX_PER_TICK` | Cap on briefings generated per tick | `50` |
 
@@ -365,8 +366,7 @@ Scheduled briefings can be emailed to each user when their slot fires.
 Delivery is opt-in per user (an "Email each briefing to me" checkbox on
 the briefing schedule in Settings) and disabled globally until an email
 provider is configured. The delivery pass runs inside the briefing
-scheduler tick, so `BRIEFING_SCHEDULER_ENABLED=true` is required for
-sends to happen.
+scheduler tick.
 
 | Variable | Description | Default |
 |----------|-------------|---------|

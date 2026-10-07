@@ -41,14 +41,9 @@ from .narration_generator import NarrationConfig, NarrationGenerator
 
 logger = get_logger(__name__)
 
-# States considered when re-resolving a briefing's episodes for narration.
-# The briefing was generated over ``unread``/``saved`` rows. ``read`` rows
-# are admitted only when they flipped to read *after* the briefing was cut
-# (``read_since=briefing.created_at``): the briefing covered those, so they
-# still narrate. Rows already read before the cut were never counted by the
-# briefing and must not resurface here, or the narration lists more
-# episodes than the briefing claims. ``dismissed`` stays excluded — a
-# negative signal (spec #36).
+# States considered when re-resolving a briefing's episodes for narration:
+# the same set the briefing was cut over, so the narration covers exactly the
+# episodes the briefing lists. ``dismissed`` stays excluded (spec #36).
 _NARRATION_STATES: tuple[InboxState, ...] = INBOX_STATES_ELIGIBLE_FOR_BRIEFING
 
 
@@ -167,7 +162,6 @@ class NarrationRunner:
             since=briefing.cursor_from,
             until=briefing.cursor_to,
             states=_NARRATION_STATES,
-            read_since=briefing.created_at,
         )
         # Spec #69 Phase 8.2 — batched lookup, order preserved (see
         # briefing_renderer for the same pattern).

@@ -272,6 +272,9 @@ BRIEFING_SCHEDULER_TICK_SECONDS=60 # scheduling granularity, not cadence
 BRIEFING_SCHEDULER_MAX_PER_TICK=50 # due-fleet bound per tick
 ```
 
+> **2026-10-07:** the `BRIEFING_SCHEDULER_ENABLED` flag was removed; the
+> scheduler always runs.
+
 Test/rehearsal servers set `BRIEFING_SCHEDULER_ENABLED=false` alongside
 `REFRESH_SCHEDULER_ENABLED=false` (same double-run hazard class).
 

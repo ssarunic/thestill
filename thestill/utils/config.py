@@ -123,14 +123,8 @@ def get_quarantine_probe_interval_seconds() -> int:
 
 # ---------------------------------------------------------------------------
 # Spec #50 — scheduled briefings knobs. Same standalone-getter pattern as the
-# #48 refresh scheduler; ships dark and flips per deployment via env.
+# #48 refresh scheduler. The scheduler itself always runs.
 # ---------------------------------------------------------------------------
-def is_briefing_scheduler_enabled() -> bool:
-    """When true, the web server runs the background tick that generates
-    briefings at each user's scheduled hour. Default: off (ships dark)."""
-    return _env_bool("BRIEFING_SCHEDULER_ENABLED", False)
-
-
 def get_briefing_scheduler_tick_seconds() -> int:
     """How often the scheduler scans for due briefing schedules (default
     60s). Scheduling granularity, NOT the per-user cadence."""

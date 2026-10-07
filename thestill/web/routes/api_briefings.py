@@ -387,18 +387,16 @@ def _briefing_episode_groups(app_state: AppState, briefing: Briefing) -> List[di
     """Episodes a briefing covers, grouped by podcast in first-seen order.
 
     Same window the narration runner resolves (spec #33): inbox rows
-    delivered in ``[cursor_from, cursor_to)`` that are still unread/saved,
-    plus rows read *after* the cut — an episode the user opened from this
-    briefing stays in its index. Episodes deleted since the render are
-    skipped, matching ``BriefingRenderer``. Order is delivery order, the
-    same as the rendered ``script.md``.
+    delivered in ``[cursor_from, cursor_to)`` that are not dismissed, so an
+    episode the user opened from this briefing stays in its index. Episodes
+    deleted since the render are skipped, matching ``BriefingRenderer``.
+    Order is delivery order, the same as the rendered ``script.md``.
     """
     episode_ids = app_state.inbox_repository.list_episode_ids_in_window(
         briefing.user_id,
         since=briefing.cursor_from,
         until=briefing.cursor_to,
         states=INBOX_STATES_ELIGIBLE_FOR_BRIEFING,
-        read_since=briefing.created_at,
     )
     pairs = app_state.repository.get_episodes_by_ids(episode_ids)
     groups: Dict[str, dict] = {}

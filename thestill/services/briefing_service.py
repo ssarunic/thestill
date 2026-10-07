@@ -76,9 +76,9 @@ class BriefingService:
     """
     Per-user briefing state machine.
 
-    Selection: inbox rows in ``[cursor_from, cursor_to)`` whose ``state`` is
-    ``unread`` or ``saved``. Read and dismissed rows are excluded — the
-    briefing is a readout of *what the user hasn't acted on*.
+    Selection: every inbox row delivered in ``[cursor_from, cursor_to)``,
+    read or not — the briefing covers everything that landed since the last
+    one. Only dismissed rows are excluded.
     """
 
     def __init__(
