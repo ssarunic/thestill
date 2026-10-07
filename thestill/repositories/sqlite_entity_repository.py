@@ -493,6 +493,31 @@ class SqliteEntityRepository(EntityRepository):
             ).fetchall()
         return [(r["surface_form"], r["surface_label"]) for r in rows]
 
+    def list_mentions_for_relink(
+        self,
+        *,
+        method: str = "direct",
+        podcast_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+    ) -> List[Tuple[int, str, str, str, str]]:
+        sql = (
+            "SELECT m.id, m.episode_id, m.surface_form, m.entity_id, e.canonical_name "
+            "FROM entity_mentions m JOIN entities e ON e.id = m.entity_id "
+            "JOIN episodes ep ON ep.id = m.episode_id "
+            "WHERE m.resolution_method = ? AND m.resolution_status = 'resolved'"
+        )
+        params: list = [method]
+        if podcast_id is not None:
+            sql += " AND ep.podcast_id = ?"
+            params.append(podcast_id)
+        if since is not None:
+            sql += " AND ep.pub_date >= ?"
+            params.append(since.isoformat())
+        sql += " ORDER BY ep.pub_date DESC NULLS LAST, m.episode_id, m.id"
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [(r["id"], str(r["episode_id"]), r["surface_form"], r["entity_id"], r["canonical_name"]) for r in rows]
+
     def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
         sql = (
             "SELECT * FROM entity_mentions WHERE episode_id = ? "

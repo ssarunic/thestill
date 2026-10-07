@@ -374,6 +374,35 @@ def test_list_extracted_names_is_gliner_only_distinct_in_first_seen_order(repo):
     assert repo.list_extracted_names(EP_1) == [("Mad Men", "topic"), ("Ramp", "company")]
 
 
+def test_list_mentions_for_relink_scopes_and_orders_newest_first(repo):
+    """Spec #81 Phase 4: ReFinED links to re-decide, newest episode first."""
+    repo.upsert_entity(_entity())
+    repo.upsert_entity(_entity(id="company:spacex", type=EntityType.COMPANY, name="SpaceX", qid="Q193701", aliases=[]))
+    repo.insert_mentions(
+        [
+            _resolved_mention("person:elon-musk", episode_id=EP_2, segment_id=1, resolution_method="direct"),
+            _resolved_mention(
+                "company:spacex", episode_id=EP_1, surface="SpaceX", segment_id=1, resolution_method="direct"
+            ),
+            _resolved_mention("person:elon-musk", episode_id=EP_1, segment_id=2, resolution_method="llm_linked"),
+            _resolved_mention("person:elon-musk", episode_id=EP_3, segment_id=1, resolution_method="direct"),
+            _mention(episode_id=EP_1, segment_id=3),  # pending: never relinked
+        ]
+    )
+    rows = repo.list_mentions_for_relink()
+    assert [(r[1], r[2], r[3], r[4]) for r in rows] == [
+        (EP_1, "SpaceX", "company:spacex", "SpaceX"),
+        (EP_3, "Elon Musk", "person:elon-musk", "Elon Musk"),
+        (EP_2, "Elon Musk", "person:elon-musk", "Elon Musk"),
+    ]
+    assert [r[1] for r in repo.list_mentions_for_relink(podcast_id=POD_2)] == [EP_3]
+    assert [r[1] for r in repo.list_mentions_for_relink(since=datetime(2026, 6, 12, tzinfo=timezone.utc))] == [
+        EP_1,
+        EP_3,
+    ]
+    assert [r[1] for r in repo.list_mentions_for_relink(method="llm_linked")] == [EP_1]
+
+
 def test_delete_entity_cascades_mentions(repo):
     repo.upsert_entity(_entity())
     repo.insert_mentions([_resolved_mention("person:elon-musk")])
