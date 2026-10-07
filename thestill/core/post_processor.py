@@ -139,7 +139,13 @@ If nothing spicy happened, say so briefly. Don't force drama where there isn't a
 * Make them sound human, not like a bot.
 
 ## 8. 📚 Resource List
-* Bullet list of books, tools, or people mentioned. Include timestamps.
+* Things mentioned in the episode that a listener might look up: books, films, TV shows, podcasts, articles, papers, people, companies, products, tools.
+* One bullet per thing, in exactly this shape: `* **Name** (kind): one-line description [mm:ss]`
+* **Name:** its full proper name as it is known ("Paul Kedrosky", not "Kedrosky"). No author or year inside a title; list the author as a separate bullet if they matter. Never two things in one bullet ("A / B", "A & B").
+* **kind:** exactly one of book, film, tv, podcast, article, paper, person, company, product, tool, place, event, other. Always these English words, whatever language the summary is in.
+* **Timestamp:** where it is first discussed in substance.
+* Leave out the episode's own hosts and guests, and anything nobody in the episode actually mentioned.
+* At most 12 bullets, the most useful to a listener first.
 
 ## 9. 💩 The "BS" Test
 * Did anything sound weak, circular, or overly hyped? Call it out.
@@ -171,7 +177,12 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
     * Radiology AI now matches expert-level accuracy.
     * Early detection rates have jumped 15% in pilot programmes.
     * Patient outcomes improve when AI assists (not replaces) doctors.
-  * **Source:** [12:45, 15:20, 28:15]"""
+  * **Source:** [12:45, 15:20, 28:15]
+
+## 8. 📚 Resource List
+* **The Emperor of All Maladies** (book): Siddhartha Mukherjee's history of cancer, which Dr. Miller credits with his switch to oncology imaging [31:10]
+* **Siddhartha Mukherjee** (person): Oncologist and author of the book above [31:10]
+* **Aidoc** (company): Radiology AI startup used as the main example of an FDA-cleared tool [18:30]"""
 
     def __init__(
         self, provider: LLMProvider, max_tokens: Optional[int] = None, console: Optional[ConsoleOutput] = None
