@@ -156,6 +156,13 @@ class WikidataClient:
         :class:`WikidataUnavailable` - a failure must never look like "no
         such entity" (failure-mode catalogue: errors-as-empty-results).
         Not memoised: the linker's decision cache sits above this.
+
+        No ``maxlag``: it throttles writers, and Wikidata folds the query
+        service's lag into it, which sits above 5 s for hours at a time.
+        With it, a read that would have answered fails, and every episode
+        linked in that window defers its names. The rate limiter and
+        ``Retry-After`` are the politeness that applies to a reader; the
+        other reads in this client never sent it.
         """
         params = {
             "action": "wbsearchentities",
@@ -164,7 +171,6 @@ class WikidataClient:
             "uselang": language,
             "type": "item",
             "limit": str(limit),
-            "maxlag": "5",
             "format": "json",
         }
         try:
@@ -184,7 +190,7 @@ class WikidataClient:
         except ValueError as exc:
             raise WikidataUnavailable("wikidata search unparseable") from exc
         if not isinstance(payload, dict) or "error" in payload or "search" not in payload:
-            # ``maxlag`` exceeded arrives as a 200 with an ``error`` body.
+            # An API error (rate limit, bad request) arrives as a 200 with an ``error`` body.
             code = (payload.get("error") or {}).get("code") if isinstance(payload, dict) else None
             raise WikidataUnavailable(f"wikidata search error: {code or 'malformed'}", retry_after_seconds=retry_after)
         hits: List[WikidataSearchHit] = []
