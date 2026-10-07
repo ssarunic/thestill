@@ -604,6 +604,20 @@ is right and the reason is here.
   `EntityRepository.list_entities_with_qid` on both backends, in both
   modes. The old SQLite-only SQL meant the command could not run on
   prod Postgres at all.
+- **Run it as `backfill-entity-types --in-place --only-works
+  --cached-only`.** The 2026-10-07 prod dry run over 21,886 entities
+  showed that applying *every* P31 rule is not safe:
+  - Real companies become topics when Wikidata also lists the generic
+    "organization" (Q43229), which `TOPIC_P31` holds and checks first:
+    Allianz, Bechtel, JetBlue, Corning, Capgemini.
+  - Software stored as a company becomes a topic unless GLiNER had said
+    product: AlexNet, Google Forms, Dropbox Paper.
+
+  These rules type new links the same way today. Fixing them is a
+  separate decision. `--only-works` applies just the works rule, and
+  `--cached-only` uses only stored P31, so the run makes no Wikidata
+  calls. The dry run prints type changes only, with a count per
+  transition.
 
 ### Parsing (Stage 2)
 

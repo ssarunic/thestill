@@ -3395,25 +3395,41 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
     is_flag=True,
     help="Change the type on the existing row and keep its id (spec #92); recommended",
 )
+@click.option(
+    "--only-works",
+    is_flag=True,
+    help="Change only films, series, books, podcasts, albums and games to product (spec #92 Phase 0)",
+)
+@click.option(
+    "--cached-only",
+    is_flag=True,
+    help="Use only P31 already stored on each entity: no Wikidata calls, entities without it are skipped",
+)
 @click.option("--dry-run", "-d", is_flag=True, help="Show reclassifications without writing")
 @click.pass_context
 @require_config
 @log_command
-def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, dry_run):
+def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_works, cached_only, dry_run):
     """Spec #28 §5.2 — fetch Wikidata P31 and re-bucket existing entities.
 
     Walks resolved entities with a ``wikidata_qid`` set, fetches
     ``instance of`` (P31) via the Wikidata API, and applies the same
     ``classify_entity_type`` rules the resolver runs on new resolutions.
     Persists the P31 list on each entity row so subsequent calls are
-    cheap.
+    cheap. Only type changes are printed; P31 cache writes are counted.
 
     With ``--in-place`` (spec #92) a changed bucket is stored on the
     existing row and the id is kept, so mentions, enrichment, overrides,
     cooccurrences, host/guest anchors and shared ``/entities/<id>`` links
     all stay valid.
 
-    Without it, a NEW entity row is created at the corrected
+    ``--only-works`` applies just the works rule (film, series, book,
+    podcast, album, game → product). Without it every P31 rule applies,
+    including ones that still demote real companies whose Wikidata classes
+    include the generic "organization" — review a dry run before that.
+    ``--cached-only`` makes no Wikidata calls at all.
+
+    Without ``--in-place``, a NEW entity row is created at the corrected
     ``{type}:{slug}`` id and every mention pointing at the old row is
     repointed to the new one. The old row is left in place — run
     ``merge-aliases`` afterwards — and anchors, enrichment and overrides
@@ -3423,8 +3439,10 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, dry_run)
     episode before running corpus-wide. ``--dry-run`` reports the
     planned changes without writing.
     """
+    from collections import Counter
+
     from .core.entity_linking.shared import _build_entity_id
-    from .core.entity_retype import plan_retype, retype_in_place
+    from .core.entity_retype import plan_backfill, retype_in_place
     from .core.wikidata_client import WikidataClient
     from .models.entities import EntityRecord
 
@@ -3443,32 +3461,22 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, dry_run)
         click.echo("No resolved entities with QIDs match the scope.")
         return
 
-    click.echo(f"Backfilling P31 for {len(entities)} entit(y/ies)…")
-    client = WikidataClient()
-    reclassified = 0
+    click.echo(f"Checking {len(entities)} entit(y/ies)…")
+    fetch_p31 = None if cached_only else WikidataClient().fetch_p31
+    changes: Counter = Counter()
     cached = 0
-    for entity in entities:
-        p31 = entity.wikidata_instance_of or client.fetch_p31(entity.wikidata_qid)
-        if not p31:
-            continue
-        new_type = plan_retype(entity, p31)
-        if new_type is None and entity.wikidata_instance_of == p31:
-            continue  # nothing to change
-        classified = new_type or entity.type
-        new_id = entity.id if in_place else _build_entity_id(classified, entity.canonical_name, entity.wikidata_qid)
-        click.echo(f"  {entity.id} (type={entity.type.value}) → " f"{new_id} (type={classified.value}) [P31={p31}]")
+    for plan in plan_backfill(entities, fetch_p31, only_works=only_works):
+        entity, p31, new_type = plan.entity, plan.p31, plan.new_type
+        if new_type is not None:
+            new_id = entity.id if in_place else _build_entity_id(new_type, entity.canonical_name, entity.wikidata_qid)
+            click.echo(f"  {entity.id} ({entity.type.value} → {new_type.value}) {entity.canonical_name} [P31={p31}]")
+            changes[f"{entity.type.value} → {new_type.value}"] += 1
+        else:
+            cached += 1
         if dry_run:
-            if new_type is not None:
-                reclassified += 1
-            else:
-                cached += 1
             continue
         if in_place:
-            retype_in_place(repo, entity, classified, p31)
-            if new_type is not None:
-                reclassified += 1
-            else:
-                cached += 1
+            retype_in_place(repo, entity, new_type or entity.type, p31)
             continue
         # Persist the P31 cache on the existing row regardless of
         # whether the type changed.
@@ -3488,7 +3496,7 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, dry_run)
             # original row to be swept by merge-aliases.
             new_entity = EntityRecord(
                 id=new_id,
-                type=classified,
+                type=new_type,
                 canonical_name=entity.canonical_name,
                 wikidata_qid=entity.wikidata_qid,
                 aliases=entity.aliases,
@@ -3498,15 +3506,13 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, dry_run)
             repo.upsert_entity(new_entity)
             moved = repo.repoint_mentions(from_entity_id=entity.id, to_entity_id=new_id)
             click.echo(f"    repointed {moved} mention(s)")
-            reclassified += 1
-        else:
-            cached += 1
 
     verb = "would be" if dry_run else "were"
     click.echo(
-        f"\n🎉 backfill-entity-types: {reclassified} entit(y/ies) {verb} "
-        f"reclassified, {cached} P31 cache update(s)."
+        f"\n🎉 backfill-entity-types: {sum(changes.values())} entit(y/ies) {verb} reclassified, {cached} P31 cache update(s)."
     )
+    for transition, count in changes.most_common():
+        click.echo(f"   {count:6}  {transition}")
 
 
 def _upsert_enrichment_with_retry(repo, enrichment, *, attempts: int = 4, base_delay: float = 0.5) -> None:
