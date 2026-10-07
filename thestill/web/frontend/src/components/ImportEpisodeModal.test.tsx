@@ -259,6 +259,7 @@ describe('ImportEpisodeModal', () => {
     it.each([
       ['unread', /You haven't read it yet\./, 'Save for later'],
       ['read', /You've read it\./, 'Save for later'],
+      ['saved', /in your saved items/, 'Remove from saved'],
       ['dismissed', /You dismissed it/, 'Restore to inbox'],
     ] as const)('already_in_inbox (%s) offers one in-place action', async (state, sentence, action) => {
       await importAndWait(alreadyInInbox(state))
@@ -266,10 +267,8 @@ describe('ImportEpisodeModal', () => {
       expect(screen.getByRole('button', { name: action })).toBeInTheDocument()
     })
 
-    it('already_in_inbox (saved) has no action, only a link to the Saved view', async () => {
+    it('already_in_inbox (saved) also links to the Saved view', async () => {
       await importAndWait(alreadyInInbox('saved'))
-      expect(screen.getByText(/in your saved items/)).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: /Save for later|Restore to inbox/ })).toBeNull()
       expect(screen.getByRole('link', { name: 'View saved' })).toHaveAttribute('href', '/inbox?view=saved')
     })
 

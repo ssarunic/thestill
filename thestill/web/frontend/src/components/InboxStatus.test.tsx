@@ -99,15 +99,22 @@ describe('InboxActionButton (spec #88)', () => {
     expect(screen.queryByRole('button', { name: 'Send to my inbox' })).toBeNull()
   })
 
-  it('a saved row links to the Saved view and offers no action', async () => {
-    mockGetEntry.mockResolvedValue({ status: 'ok', timestamp: '', entry: entry('saved') })
+  it('a saved row links to the Saved view and offers Remove from saved', async () => {
+    mockGetEntry.mockResolvedValueOnce({ status: 'ok', timestamp: '', entry: entry('saved') })
+    mockGetEntry.mockResolvedValue({ status: 'ok', timestamp: '', entry: entry('read') })
+    mockSetState.mockResolvedValue({ status: 'ok', timestamp: '', entry: entry('read') })
     const user = userEvent.setup()
     renderButton()
 
     await user.click(await screen.findByRole('button', { name: 'In your inbox' }))
     expect(screen.getByRole('link', { name: 'View saved' })).toHaveAttribute('href', '/inbox?view=saved')
-    // Only the icon itself: a saved row has no in-place action.
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    await user.click(screen.getByRole('button', { name: 'Remove from saved' }))
+
+    // Unsaving lands on read in place; the row stays in the inbox.
+    expect(mockSetState).toHaveBeenCalledWith('ep-1', 'read')
+    expect(mockSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText(/You've read it\./)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Save for later' })).toBeInTheDocument()
   })
 
   it('Restore to inbox changes state in place and never resends', async () => {
