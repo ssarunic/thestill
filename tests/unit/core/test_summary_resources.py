@@ -328,3 +328,20 @@ def test_the_motivating_episode():
     assert {g.name for g in plan.grounded} == {"Mad Men", "Modern Family", "Margin Call", "Ramp", "Paul Kedrosky"}
     # "Vanguard Bond Funds" is not what was said; the contract (Phase 3) fixes names at the source.
     assert [i.name for i, why in plan.dropped] == ["Vanguard Bond Funds"]
+
+
+def test_the_summarizer_prompt_example_is_in_the_contract_shape():
+    """Spec #92 Phase 3: the few-shot example is what the model copies, so
+    every Resource List bullet in it must parse as the contract."""
+    from thestill.core.post_processor import TranscriptSummarizer
+    from thestill.core.summary_resources import is_contract_line, resource_bullets
+
+    example = TranscriptSummarizer.SYSTEM_PROMPT.split("## Example Output", 1)[1]
+    bullets = resource_bullets(example)
+    assert len(bullets) == 3 and all(is_contract_line(b) for b in bullets)
+    items = parse_resource_list(example)
+    assert [(i.name, i.kind) for i in items] == [
+        ("The Emperor of All Maladies", "book"),
+        ("Siddhartha Mukherjee", "person"),
+        ("Aidoc", "company"),
+    ]
