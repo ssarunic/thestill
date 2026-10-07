@@ -4017,6 +4017,83 @@ def repair_entity_types(ctx, min_mentions, min_majority_ratio, dry_run):
 # ---------------------------------------------------------------------------
 
 
+@main.command("relink-direct")
+@click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
+@click.option("--since", help="Only episodes published in this window (e.g. 30d, 24h, 2w).")
+@click.option("--max-episodes", "-m", type=int, help="Cap the episodes in this batch (newest first).")
+@click.option(
+    "--all",
+    "all_links",
+    is_flag=True,
+    help="Re-decide every ReFinED link in scope, not only those whose name does not resemble the entity.",
+)
+@click.option(
+    "--max-open-tasks",
+    type=int,
+    default=2000,
+    show_default=True,
+    help="Refuse to enqueue while the queue already has more open tasks than this.",
+)
+@click.option("--dry-run", "-d", is_flag=True, help="Report what would be re-decided without writing.")
+@click.pass_context
+@require_config
+@log_command
+def relink_direct(ctx, podcast_id, since, max_episodes, all_links, max_open_tasks, dry_run):
+    """Re-decide links the retired ReFinED linker made (spec #81 Phase 4).
+
+    Resets ReFinED mentions (``resolution_method='direct'``) to pending and
+    enqueues ``resolve-entities`` per episode, so the live linker decides
+    each again with context. Nothing is deleted: a right link returns to the
+    same entity, a wrong one moves or becomes unlinked.
+
+    By default only mentions whose spoken text does not resemble the
+    entity's name are picked ("healthcare" on Love, "ChatGPT" on First
+    officer). ``--all`` re-decides every ReFinED link in scope: the full
+    sweep, best run in ``--max-episodes`` batches. Relinked mentions stop
+    being ``direct``, so each batch moves on to the next.
+    """
+    from .core.entity_relink import apply_relink, plan_relink
+
+    repo = ctx.obj.entity_repository
+    scope_podcast_id = None
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        scope_podcast_id = podcast.id
+    date_range = _date_range_from_since(since)
+
+    rows = repo.list_mentions_for_relink(
+        method="direct", podcast_id=scope_podcast_id, since=date_range[0] if date_range else None
+    )
+    plan = plan_relink(rows, unrelated_only=not all_links, max_episodes=max_episodes)
+    click.echo(
+        f"ReFinED links in scope: {plan.scanned:,}  selected: {len(plan.mention_ids):,} "
+        f"in {len(plan.episode_ids):,} episode(s)"
+        + ("" if all_links else f"  (kept, name resembles entity: {plan.skipped_related:,})")
+    )
+    for name, count in plan.by_entity.most_common(15):
+        click.echo(f"  {count:6,}  {name}")
+    if dry_run or not plan.mention_ids:
+        click.echo("Dry run - nothing written." if dry_run else "Nothing to do.")
+        return
+
+    queue = make_queue_manager(ctx.obj.config)
+    stats = queue.get_queue_stats()
+    open_tasks = sum(stats.get(s, 0) for s in ("pending", "processing", "retry_scheduled"))
+    if open_tasks > max_open_tasks:
+        click.echo(
+            f"❌ {open_tasks:,} tasks are already open (limit {max_open_tasks:,}); "
+            "let the worker drain, or raise --max-open-tasks.",
+            err=True,
+        )
+        ctx.exit(1)
+
+    reset = apply_relink(repo, queue, plan)
+    click.echo(f"✓ Reset {reset:,} mention(s); enqueued resolve-entities for {len(plan.episode_ids):,} episode(s)")
+
+
 @main.command("rebuild-entities")
 @click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
 @click.option("--since", help="Only episodes published in this window (e.g. 30d, 24h, 2w).")

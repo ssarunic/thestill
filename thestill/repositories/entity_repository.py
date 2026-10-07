@@ -369,6 +369,22 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def list_mentions_for_relink(
+        self,
+        *,
+        method: str = "direct",
+        podcast_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+    ) -> List[Tuple[int, str, str, str, str]]:
+        """Resolved mentions linked by ``method``, as ``(mention_id,
+        episode_id, surface_form, entity_id, canonical_name)``, newest
+        episode first (undated last), then by mention id.
+
+        Scoped to one podcast and/or episodes published at or after
+        ``since``. ``relink-direct`` (spec #81 Phase 4) plans from this.
+        """
+
+    @abstractmethod
     def list_linker_decided_mentions(self, episode_id: str) -> List[EntityMention]:
         """An episode's mentions that a linker decided, ordered by id.
 

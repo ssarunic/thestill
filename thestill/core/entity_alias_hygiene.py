@@ -254,8 +254,10 @@ def apply_alias_cleanup(
 
     * ``anchor`` mentions are deleted. They were never extracted from the
       audio as a named thing; they exist only because the alias matched.
-    * ``direct`` / ``coref`` mentions are real extractions linked to the
-      wrong entity, so they go back to ``pending`` for re-resolution.
+    * ``direct`` / ``llm_linked`` / ``coref`` mentions are real extractions
+      linked to the wrong entity, so they go back to ``pending`` for
+      re-resolution. (``llm_linked`` was missing until 2026-10-07, so links
+      the live linker made through a polluted alias survived a cleanup.)
 
     With a ``queue_manager``, one ``resolve-entities`` task is enqueued per
     affected episode. Without one (a host that cannot resolve, e.g. the prod
@@ -281,7 +283,9 @@ def apply_alias_cleanup(
             result.anchor_mentions_deleted += repo.delete_mentions_by_entity_surface(
                 entity_id, verdict.alias, methods=("anchor",)
             )
-            affected = repo.find_mention_ids_by_entity_surface(entity_id, verdict.alias, methods=("direct", "coref"))
+            affected = repo.find_mention_ids_by_entity_surface(
+                entity_id, verdict.alias, methods=("direct", "llm_linked", "coref")
+            )
             if affected:
                 result.mentions_reset += repo.reset_mentions_to_pending([mid for mid, _ in affected])
                 episodes.update(ep for _, ep in affected)

@@ -209,7 +209,8 @@ class TestApply:
         result = apply_alias_cleanup(repo, plan, queue_manager=queue)
 
         assert ("delete", "person:elon-musk", "price", ("anchor",)) in repo.calls
-        assert ("find", "person:elon-musk", "price", ("direct", "coref")) in repo.calls
+        # llm_linked too: links the live linker made through a polluted alias.
+        assert ("find", "person:elon-musk", "price", ("direct", "llm_linked", "coref")) in repo.calls
         assert ("reset", (1, 2)) in repo.calls
         assert ("replace", "person:elon-musk", ("Musk",)) in repo.calls
         assert repo.calls[-1] == ("rebuild", None)  # full rebuild, and last
