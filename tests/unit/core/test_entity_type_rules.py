@@ -65,20 +65,20 @@ class TestCompanyAcceptance:
     def test_business_p31_with_company_fallback_stays_company(self):
         assert classify_entity_type(["Q4830453"], EntityType.COMPANY) is EntityType.COMPANY
 
-    def test_company_p31_with_topic_fallback_demotes_to_topic(self):
-        # If GLiNER thought it was a topic but Wikidata says it's a
-        # business, we trust GLiNER's bucket guess less than its
-        # "this is a noun-phrase entity at all" signal — the safe
-        # move is topic so the user doesn't see a false company.
-        assert classify_entity_type(["Q4830453"], EntityType.TOPIC) is EntityType.TOPIC
+    def test_business_p31_with_topic_fallback_is_a_company(self):
+        # Wikidata's business class wins over GLiNER's topic guess: the
+        # live linker chose the QID with context, so a wrong company here
+        # is a linking error, not a typing one (spec #92 follow-up; before
+        # that this stayed a topic).
+        assert classify_entity_type(["Q4830453"], EntityType.TOPIC) is EntityType.COMPANY
 
 
 class TestProductAcceptance:
     def test_software_p31_with_product_fallback_stays_product(self):
         assert classify_entity_type(["Q7397"], EntityType.PRODUCT) is EntityType.PRODUCT
 
-    def test_software_p31_with_company_fallback_demotes_to_topic(self):
-        assert classify_entity_type(["Q7397"], EntityType.COMPANY) is EntityType.TOPIC
+    def test_software_p31_with_company_fallback_is_a_product(self):
+        assert classify_entity_type(["Q7397"], EntityType.COMPANY) is EntityType.PRODUCT
 
 
 class TestNoSignalFallback:
@@ -137,3 +137,43 @@ class TestMintedWorks:
         assert _mint_type_from_p31(["Q11424"]) is EntityType.PRODUCT
         assert _mint_type_from_p31(["Q5398426", "Q1656682"]) is EntityType.PRODUCT
         assert _mint_type_from_p31(["Q5"]) is EntityType.PERSON
+
+
+class TestBusinessAndSoftware:
+    """Follow-up to spec #92: the prod dry run showed real companies and
+    software becoming topics through the generic "organization" class and the
+    product-only-if-GLiNER-said-product gate."""
+
+    ALLIANZ = ["Q2143354", "Q891723", "Q4830453", "Q43229"]
+    JETBLUE = ["Q46970", "Q891723", "Q43229"]
+
+    def test_a_company_with_the_generic_organization_class_is_a_company(self):
+        for fallback in EntityType:
+            if fallback is EntityType.PERSON:
+                continue
+            assert classify_entity_type(self.ALLIANZ, fallback) is EntityType.COMPANY
+        assert classify_entity_type(self.JETBLUE, EntityType.TOPIC) is EntityType.COMPANY
+
+    def test_software_is_a_product_whatever_gliner_said(self):
+        assert classify_entity_type(["Q7397"], EntityType.COMPANY) is EntityType.PRODUCT
+        assert classify_entity_type(["Q1668024", "Q166142"], EntityType.TOPIC) is EntityType.PRODUCT
+
+    def test_countries_intergovernmental_bodies_and_ngos_stay_topics(self):
+        assert classify_entity_type(["Q3624078", "Q6256", "Q43229"], EntityType.COMPANY) is EntityType.TOPIC
+        assert classify_entity_type(["Q245065", "Q484652"], EntityType.COMPANY) is EntityType.TOPIC
+        assert (
+            classify_entity_type(["Q15911314", "Q43229", "Q79913", "Q163740"], EntityType.COMPANY) is EntityType.TOPIC
+        )
+
+    def test_a_place_that_lists_a_business_class_stays_a_topic(self):
+        assert classify_entity_type(["Q515", "Q4830453"], EntityType.COMPANY) is EntityType.TOPIC
+
+    def test_people_and_works_still_win(self):
+        assert classify_entity_type(["Q5", "Q4830453"], EntityType.COMPANY) is EntityType.PERSON
+        assert classify_entity_type(["Q7889", "Q7397"], EntityType.COMPANY) is EntityType.PRODUCT
+
+    def test_minting_agrees(self):
+        from thestill.core.entity_review import _mint_type_from_p31
+
+        assert _mint_type_from_p31(self.ALLIANZ) is EntityType.COMPANY
+        assert _mint_type_from_p31(["Q7397"]) is EntityType.PRODUCT
