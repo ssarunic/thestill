@@ -193,13 +193,15 @@ re-bucketing as today.
   is publicly editable and its labels become entity names.
 - **Politeness.** Descriptive `User-Agent` (already set), a process-wide
   rate limit (default 5 requests/s, `WIKIDATA_MAX_RPS`), honour
-  `Retry-After` and `maxlag`. Wikimedia's API etiquette asks for serial or
-  lightly parallel requests from a single client.
+  `Retry-After`. Wikimedia's API etiquette asks for serial or lightly
+  parallel requests from a single client. Searches do not send `maxlag`:
+  it throttles writers, and Wikidata folds query-service lag into it, so
+  reads failed for hours while the service lagged (2026-10-07).
 - **No candidates** is a real answer: the name resolves to `none` without an
   LLM call.
 - **A failure is never an empty result.** `search_entities` raises
-  `WikidataUnavailable` for a timeout, a non-200, an unparseable body or a
-  `maxlag` error body; only a well-formed empty `search` list means "nothing
+  `WikidataUnavailable` for a timeout, a non-200, an unparseable body or an
+  API error body; only a well-formed empty `search` list means "nothing
   by that name". One name failing does not stop the others.
 - **Blacklisted candidates are removed before the chooser sees them**, so it
   picks among the rest instead of re-proposing what a reviewer ruled out.

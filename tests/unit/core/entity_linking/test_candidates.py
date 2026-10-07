@@ -196,7 +196,7 @@ def test_search_parses_hits_and_skips_malformed_ids():
     hits, get = _search(_response(payload=payload))
     assert [(h.qid, h.label, h.description) for h in hits] == [("Q1", "Dario Amodei", "AI researcher"), ("Q2", "", "")]
     params = get.call_args.kwargs["params"]
-    assert params["action"] == "wbsearchentities" and params["search"] == "Dario Amodei" and params["maxlag"] == "5"
+    assert params["action"] == "wbsearchentities" and params["search"] == "Dario Amodei" and "maxlag" not in params
 
 
 def test_search_with_no_results_returns_an_empty_list():

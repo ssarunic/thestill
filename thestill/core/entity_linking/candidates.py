@@ -138,9 +138,9 @@ class WikidataCandidateSource:
 
     def _paced(self, request):
         """One slot per attempt, and one retry. In a run of 4,000 requests a
-        handful time out, and Wikidata answers ``maxlag`` in bursts of a few
-        minutes while it catches up on replication; each failure would
-        otherwise leave a name pending and the episode retrying. A
+        handful time out, and Wikidata rate-limits in bursts of a few
+        minutes; each failure would otherwise leave a name pending and the
+        episode retrying. A
         ``Retry-After`` holds every caller back before the second try."""
         for attempt in (1, 2):
             self._limiter.acquire()
