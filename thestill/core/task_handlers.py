@@ -1219,7 +1219,7 @@ def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=
     except EntityLinkerBrokenError as exc:
         run.failure = exc
 
-    run.results = run.forced + linked
+    run.results = run.forced + _attach_known_people(repo, linked, episode_id=episode_id)
 
     touched_entity_ids: set[str] = set()
     for r in run.results:
@@ -1256,6 +1256,62 @@ def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=
     if run.merged_pairs:
         logger.info("alias_merge_inline", merged_pairs=run.merged_pairs, episode_id=episode_id)
     return run
+
+
+def _attach_known_people(repo, results, *, episode_id: str) -> list:
+    """Attach a name Wikidata could not place to the one known person it names.
+
+    Regular guests and hosts often have no Wikidata item: Paul Kedrosky is a
+    local entity with hundreds of mentions, every one attached because he was
+    an anchor of those episodes. In an episode where he is only mentioned,
+    the linker finds no candidate and the mention used to be dropped as
+    unresolvable.
+
+    Deliberately narrow, because a name match once tied the Prof G host to a
+    footballer: only an ``unresolvable`` result, only a multi-word name, only
+    an exact canonical-name match (aliases can be polluted), only an entity
+    that is a host, recurring guest or guest somewhere in the corpus, and only
+    when exactly one entity qualifies. The mention is recorded as ``anchor``.
+    """
+    from dataclasses import replace
+
+    from ..models.entities import ResolutionMethod
+    from .entity_linking.types import surface_key
+
+    known: dict = {}
+    out = []
+    attached: list = []
+    for result in results:
+        name = result.entity.canonical_name
+        if result.status != "unresolvable" or len(name.split()) < 2:
+            out.append(result)
+            continue
+        key = surface_key(name)
+        if key not in known:
+            known[key] = _known_person_named(repo, name)
+        person = known[key]
+        if person is None:
+            out.append(result)
+            continue
+        out.append(replace(result, entity=person, status="resolved", method=ResolutionMethod.ANCHOR))
+        attached.append(name)
+    if attached:
+        logger.info(
+            "unresolvable_attached_to_known_person",
+            episode_id=episode_id,
+            mentions=len(attached),
+            names=sorted(set(attached))[:10],
+        )
+    return out
+
+
+def _known_person_named(repo, name: str):
+    from .entity_linking.types import surface_key
+
+    key = surface_key(name)
+    exact = [e for e in repo.find_entities_by_name(name) if surface_key(e.canonical_name) == key]
+    anchors = [e for e in exact if any(repo.get_entity_roles(e.id, guest_episodes_limit=1).values())]
+    return anchors[0] if len(anchors) == 1 else None
 
 
 def _with_stable_identity(repo, entity):

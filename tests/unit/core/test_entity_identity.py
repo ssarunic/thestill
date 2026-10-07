@@ -124,3 +124,97 @@ def test_the_resolve_core_keeps_existing_mentions_on_their_entity(repo):
     with sqlite3.connect(str(repo.db_path)) as conn:
         linked = dict(conn.execute("SELECT id, entity_id FROM entity_mentions"))
     assert linked == {first.id: "person:alex-smith", second.id: "person:alex-smith-q222"}
+
+
+# --- regulars without a Wikidata item -------------------------------------------
+
+EP2 = "33333333-0000-4000-8000-000000000000"
+
+
+def _unplaced_linker():
+    """The live linker's answer for a name Wikidata has nothing for."""
+    from thestill.core.entity_linking.shared import unresolvable_result
+
+    class NoWikidata:
+        def resolve(self, mentions, *, is_blacklisted=None, context=None):
+            return [unresolvable_result(m) for m in mentions]
+
+    return NoWikidata()
+
+
+def _pending(repo, *names):
+    repo.insert_mentions(
+        [
+            EntityMention(
+                episode_id=EP2,
+                segment_id=i,
+                start_ms=i,
+                end_ms=i + 1,
+                surface_form=name,
+                surface_label="person",
+                quote_excerpt=f"... {name} ...",
+                confidence=0.9,
+                extractor="gliner:test",
+            )
+            for i, name in enumerate(names)
+        ]
+    )
+    return repo.list_pending_mentions(episode_id=EP2)
+
+
+@pytest.fixture
+def repo2(repo):
+    with sqlite3.connect(str(repo.db_path)) as conn:
+        conn.execute(
+            "INSERT INTO episodes (id, podcast_id, external_id, title, description, audio_url) "
+            "VALUES (?, ?, 'e2', 'Ep2', '', 'https://x/e2.mp3')",
+            (EP2, POD),
+        )
+    return repo
+
+
+def _entity_of(repo, mention_id):
+    with sqlite3.connect(str(repo.db_path)) as conn:
+        return conn.execute(
+            "SELECT entity_id, resolution_status, resolution_method FROM entity_mentions WHERE id = ?", (mention_id,)
+        ).fetchone()
+
+
+def test_a_regular_guest_without_a_wikidata_item_is_attached_by_full_name(repo2):
+    repo2.upsert_entity(_person("Paul Kedrosky", None))
+    repo2.set_episode_guests(EP, ["person:paul-kedrosky"])
+    (pending,) = _pending(repo2, "Paul Kedrosky")
+    resolve_pending_mentions(repo2, _unplaced_linker(), [pending], episode_id=EP2)
+    assert _entity_of(repo2, pending.id) == ("person:paul-kedrosky", "resolved", "anchor")
+
+
+def test_a_local_entity_that_was_never_a_host_or_guest_is_not_attached(repo2):
+    repo2.upsert_entity(_person("Paul Kedrosky", None))
+    (pending,) = _pending(repo2, "Paul Kedrosky")
+    resolve_pending_mentions(repo2, _unplaced_linker(), [pending], episode_id=EP2)
+    assert _entity_of(repo2, pending.id)[1] == "unresolvable"
+
+
+def test_a_first_name_alone_is_never_attached(repo2):
+    repo2.upsert_entity(_person("Paul Kedrosky", None))
+    repo2.set_episode_guests(EP, ["person:paul-kedrosky"])
+    (pending,) = _pending(repo2, "Paul")
+    resolve_pending_mentions(repo2, _unplaced_linker(), [pending], episode_id=EP2)
+    assert _entity_of(repo2, pending.id)[1] == "unresolvable"
+
+
+def test_two_known_namesakes_attach_to_neither(repo2):
+    repo2.upsert_entity(_person("Alex Smith", None))
+    repo2.upsert_entity(_person("Alex Smith", None, entity_id="person:alex-smith-2"))
+    repo2.set_episode_guests(EP, ["person:alex-smith", "person:alex-smith-2"])
+    (pending,) = _pending(repo2, "Alex Smith")
+    resolve_pending_mentions(repo2, _unplaced_linker(), [pending], episode_id=EP2)
+    assert _entity_of(repo2, pending.id)[1] == "unresolvable"
+
+
+def test_an_alias_match_is_not_enough(repo2):
+    repo2.upsert_entity(_person("Paul Kedrosky", None).model_copy(update={"aliases": ["Paul K"]}))
+    repo2.set_episode_guests(EP, ["person:paul-kedrosky"])
+    (pending,) = _pending(repo2, "Paul K")
+    resolve_pending_mentions(repo2, _unplaced_linker(), [pending], episode_id=EP2)
+    assert _entity_of(repo2, pending.id)[1] == "unresolvable"
