@@ -580,6 +580,19 @@ Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPI
    - Context clues (who asks questions vs gives opinions, host vs guest patterns)
    - Ad narrator patterns (reads sponsor copy, different tone)
 
+   AD VOICES ARE NOT GUESTS:
+   - A voice heard only inside sponsor reads, book or product promos,
+     trailers for other shows, or bumpers is an ad narrator even when it
+     names itself — an author reading from their own book in a promo, a
+     celebrity voicing a sponsor spot, a reporter in a newspaper advert.
+     Label such a voice "Ad Narrator", or "Name (Ad Narrator)" when the
+     name is spoken. Never label it "(Guest)".
+   - "Ad Narrator" is only for advertising. Other voices that are not part
+     of the conversation keep a role that says what they are: archival or
+     quoted audio is "Name (Archival Audio)", a listener's recorded question
+     is "Name (Listener)". They are not guests either.
+   - A guest takes part in the main discussion with the hosts.
+
    CONFIDENCE RULE — do not guess a specific person's name:
    - A specific NAME may only be assigned when the audio itself supports it:
      the speaker introduces themselves, is addressed by name, or is clearly
@@ -603,6 +616,8 @@ Your task is to analyze a raw transcript and extract facts for THIS SPECIFIC EPI
 2. GUESTS: Identify any guests appearing in THIS episode
    - Include their role/company if mentioned
    - Do NOT include regular hosts
+   - Do NOT include voices heard only in ad, sponsor, or promo segments,
+     even when they are named (see AD VOICES ARE NOT GUESTS above)
 
 3. TOPICS/KEYWORDS: Extract episode-specific proper nouns and terms:
    - People discussed in this episode (e.g., "Larry David", "Sam Harris")
@@ -621,7 +636,8 @@ IMPORTANT GUIDELINES:
 - If you know the ROLE but not the NAME (see the CONFIDENCE RULE above), label
   by role rather than guessing a name, e.g. "Host (Netokracija)", "Voditelj";
   number them when there are several ("Host 1", "Host 2")
-- For ad narrators, use "Ad Narrator" as the name
+- For ad narrators, use "Ad Narrator" as the name; when the ad voice names
+  itself, "Name (Ad Narrator)" keeps the name without making them a guest
 - Look for patterns: hosts usually introduce guests, guests are introduced by title/company
 - Keep topics_keywords focused (20-50 items max) - prioritize proper nouns that might be misspelled
 

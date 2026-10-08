@@ -217,3 +217,17 @@ def test_two_unnamed_hosts_stay_distinct_in_rendered_transcript() -> None:
 
 def test_legacy_json_path_also_numbers_generic_labels() -> None:
     assert _extract(_LegacyTwoUnnamedHostsProvider()) == {"SPEAKER_00": "Voditelj 1", "SPEAKER_01": "Voditelj 2"}
+
+
+def test_prompt_keeps_named_ad_voices_out_of_the_guest_list() -> None:
+    """An author reading from his book in a promo was filed as a guest
+    (Evan Gershkovich on The Econoclasts); the prompt now says a voice
+    heard only in ads is an ad narrator even when it names itself."""
+    prompt = _system_prompt(language="en")
+    assert "AD VOICES ARE NOT GUESTS" in prompt
+    assert "even when it\n     names itself" in prompt
+    assert '"Name (Ad Narrator)" when the\n     name is spoken' in prompt
+    # Only advertising is an ad; clips and listener questions keep their own role.
+    assert '"Ad Narrator" is only for advertising' in prompt
+    assert '"Name (Archival Audio)"' in prompt
+    assert "Do NOT include voices heard only in ad, sponsor, or promo segments" in prompt

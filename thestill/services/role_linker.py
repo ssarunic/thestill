@@ -78,11 +78,38 @@ _SPEAKER_HOST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Any speaker-mapping bullet, e.g. ``- SPEAKER_08: Evan Gershkovich (Guest)``
+# or ``- SPEAKER_03: Ad Narrator 1`` — name plus optional ``(Role)``.
+_SPEAKER_MAP_RE = re.compile(
+    r"^\s*[-*]\s*SPEAKER[_ ]?\S+\s*:\s*(?P<name>.+?)\s*(?:\((?P<role>[^)]*)\))?\s*$",
+    re.IGNORECASE,
+)
+
+# A named voice that only reads an advert is not a guest. The extractor
+# is told so, but it has filed "Evan Gershkovich - Journalist (Ad Segment)"
+# under Guest(s) — the author reading from his book in a promo — and the
+# linker then made him a guest of the episode. A role annotation (the
+# bracket on the bullet, or the speaker mapping's) is a single word or
+# two, so any ad word in it is decisive; a bio is free text, so only an
+# ad *phrase* counts there ("ad segment", "(ad)", "in an advert",
+# "book promo"), not a lone word a real guest's job title may contain
+# ("Head of Ad Sales").
+_AD_WORD = r"(?:ads?|adverts?|advertisements?|advertising|sponsors?|sponsored|sponsorship|promos?|promotions?|promotional|commercials?)"
+_AD_ROLE_RE = re.compile(rf"\b{_AD_WORD}\b", re.IGNORECASE)
+_AD_BIO_RE = re.compile(
+    rf"\([^)]*\b{_AD_WORD}\b[^)]*\)"
+    rf"|\b{_AD_WORD}\s+(?:segments?|reads?|breaks?|spots?|narrators?|voices?|copy|messages?|sections?)\b"
+    rf"|\bin\s+(?:an?|the)\s+{_AD_WORD}\b"
+    rf"|\b(?:book|podcast|product|sponsor|newspaper)\s+{_AD_WORD}\b",
+    re.IGNORECASE,
+)
+
 # Heading variants we accept for each section. Lowercased before lookup
 # so a stray capitalisation doesn't drop a section.
 _HOST_HEADINGS = ("hosts", "host")
 _GUEST_HEADINGS = ("guests", "guest", "guest(s)")
 _RECURRING_HEADINGS = ("recurring roles", "recurring", "recurring voices", "recurring guests")
+_SPEAKER_MAPPING_HEADINGS = ("speaker mapping",)
 
 
 @dataclass
@@ -92,6 +119,11 @@ class FactsRoles:
     hosts: List[Tuple[str, Optional[str]]] = field(default_factory=list)  # (name, bio)
     guests: List[Tuple[str, Optional[str]]] = field(default_factory=list)
     recurring: List[Tuple[str, Optional[str]]] = field(default_factory=list)
+    # Guest bullets dropped because their role annotation, bio, or
+    # speaker-mapping role says the voice only read an advert.
+    ad_voices: List[str] = field(default_factory=list)
+    # ``## Speaker Mapping`` roles by casefolded name, e.g. {"evan gershkovich": "Ad Narrator"}.
+    speaker_roles: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -108,6 +140,8 @@ class LinkResult:
     # description could not tell apart; left unlinked rather than guessed.
     ambiguous_names: List[str] = field(default_factory=list)
     demoted_hosts: List[str] = field(default_factory=list)
+    # Guest bullets refused because the voice only read an advert.
+    ad_voices: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +163,7 @@ def parse_facts_file(path: Path) -> FactsRoles:
     content = path.read_text(encoding="utf-8", errors="replace")
     roles = FactsRoles()
     current_bucket: Optional[str] = None
+    guest_roles: List[Optional[str]] = []  # the bracket on each guest bullet, aligned with roles.guests
     for line in content.splitlines():
         heading_match = _HEADING_RE.match(line)
         if heading_match:
@@ -139,19 +174,51 @@ def parse_facts_file(path: Path) -> FactsRoles:
                 current_bucket = "guests"
             elif heading in _RECURRING_HEADINGS:
                 current_bucket = "recurring"
+            elif heading in _SPEAKER_MAPPING_HEADINGS:
+                current_bucket = "speaker_mapping"
             else:
                 current_bucket = None
             continue
         if current_bucket is None:
             continue
+        if current_bucket == "speaker_mapping":
+            map_match = _SPEAKER_MAP_RE.match(line)
+            if map_match and map_match.group("role"):
+                roles.speaker_roles[map_match.group("name").strip().casefold()] = map_match.group("role").strip()
+            continue
         bullet_match = _BULLET_RE.match(line)
         if not bullet_match:
             continue
-        name, bio = _split_name_and_bio(bullet_match.group(1))
+        name, bio, role = _split_bullet(bullet_match.group(1))
         if not name:
             continue
         getattr(roles, current_bucket).append((name, bio))
+        if current_bucket == "guests":
+            guest_roles.append(role)
+    # The speaker mapping may sit above or below Guest(s), so judge the
+    # guests once the whole file is read.
+    kept: List[Tuple[str, Optional[str]]] = []
+    for (name, bio), role in zip(roles.guests, guest_roles):
+        if _is_ad_voice(role=role, bio=bio, speaker_role=roles.speaker_roles.get(name.casefold())):
+            roles.ad_voices.append(name)
+        else:
+            kept.append((name, bio))
+    roles.guests = kept
     return roles
+
+
+def _is_ad_voice(*, role: Optional[str], bio: Optional[str], speaker_role: Optional[str]) -> bool:
+    """Whether a guest bullet describes a voice that only read an advert.
+
+    ``role`` is the bracket on the bullet itself, ``speaker_role`` the
+    bracket on the same name in the speaker mapping; an ad word in either
+    is decisive. ``bio`` is free text and only counts for an ad phrase
+    (see ``_AD_BIO_RE``).
+    """
+    for annotation in (role, speaker_role):
+        if annotation and _AD_ROLE_RE.search(annotation):
+            return True
+    return bool(bio and _AD_BIO_RE.search(bio))
 
 
 def _split_name_and_bio(text: str) -> Tuple[str, Optional[str]]:
@@ -162,17 +229,28 @@ def _split_name_and_bio(text: str) -> Tuple[str, Optional[str]]:
     (Guest)"``) are stripped from the name — the bracket content is
     redundant once we're writing into a typed role column.
     """
+    name, bio, _role = _split_bullet(text)
+    return name, bio
+
+
+def _split_bullet(text: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """``_split_name_and_bio`` that also returns the stripped bracket, so
+    ``"Evan Gershkovich (Ad Narrator) - Journalist"`` gives
+    ``("Evan Gershkovich", "Journalist", "Ad Narrator")``."""
     text = text.strip()
     if not text:
-        return "", None
+        return "", None, None
     name, bio = text, None
     if " - " in text:
         name, bio = text.split(" - ", 1)
         name = name.strip()
         bio = bio.strip() or None
-    # Strip trailing "(Role)" annotation from the name.
-    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
-    return name, bio
+    role: Optional[str] = None
+    role_match = re.search(r"\s*\(([^)]*)\)\s*$", name)
+    if role_match:
+        role = role_match.group(1).strip() or None
+        name = name[: role_match.start()].strip()
+    return name, bio, role
 
 
 # ---------------------------------------------------------------------------
@@ -487,7 +565,18 @@ def link_episode_roles(
         guests.skipped,
         list(guests.ambiguous),
     )
-    if guests.writes:  # see link_podcast_roles: an all-ambiguous list clears stale guests
+    result.ad_voices = list(roles.ad_voices)
+    result.skipped_names.extend(roles.ad_voices)
+    if roles.ad_voices:
+        logger.warning(
+            "episode_guest_ad_voice_skipped",
+            episode_id=episode_id,
+            episode_slug=episode_slug,
+            names=roles.ad_voices,
+        )
+    # see link_podcast_roles: an all-ambiguous list clears stale guests. A
+    # refused ad voice clears too — an earlier run may have stored it.
+    if guests.writes or roles.ad_voices:
         entity_repo.set_episode_guests(episode_id, result.guests)
     logger.info(
         "episode_roles_linked",
@@ -497,6 +586,7 @@ def link_episode_roles(
         created_entities=len(set(result.created_entities)),
         skipped=len(result.skipped_names),
         ambiguous=result.ambiguous_names,
+        ad_voices=result.ad_voices,
     )
     return result
 
