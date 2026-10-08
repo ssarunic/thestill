@@ -150,12 +150,26 @@ router.
 | `GET /api/podcasts/{slug}/episodes/{slug}` | api_podcasts | see payload hygiene below |
 | `GET /api/podcasts/{slug}/episodes/{slug}/summary` | api_podcasts | see cost guard below |
 | `GET /api/top-podcasts` | api_top_podcasts | unchanged |
+| `GET /api/episodes/recent-summaries` | api_episodes | **new**; cross-corpus feed for the landing page, see below |
 | `GET /api/entities/{type}/{slug}` | api_entities | Phase 2 |
 | `GET /api/entities/{type}/{slug}/episodes` | api_entities | Phase 2 |
 | `GET /api/episodes/{id}/entities` | api_entities | Phase 2 |
 
 Everything else, including transcript, transcript words, search, follow,
-inbox, briefings, imports and commands, stays where it is.
+inbox, briefings, imports and commands, stays where it is. The
+cross-corpus `GET /api/episodes` list stays session-only: it has no
+summary filter and exposes processing state.
+
+**Recent summaries feed.** `GET /api/episodes/recent-summaries?limit=N`
+(default 6, max 12) returns the newest episodes across the corpus whose
+podcast has `public_pages = true` and whose summary is real (not `N/A`),
+ordered by the time the summary was written, newest first. Each item is
+the public episode shape plus podcast title, slug and artwork, and the
+first sentence of the summary's gist for the landing card. It is the
+only cross-corpus public read, it takes no filters beyond `limit`, and
+the repository query behind it reuses the sitemap predicate from §4 so
+the feed and the sitemap can never disagree about what is public.
+Cached in-process for five minutes.
 
 **Payload hygiene.** Public responses must not carry storage paths,
 pipeline state internals or provider details. The episode payload is
@@ -188,14 +202,23 @@ routers only. Requests carrying a valid session skip the bucket (they
 are keyed by user elsewhere). Over the limit: 429 with `Retry-After`.
 Crawlers that respect `robots.txt` crawl-delay stay well under it.
 
-**Cache headers.** A public GET with no session cookie returns
+**Cache headers.** Authentication accepts a session cookie **or** a
+bearer token ([dependencies.py:208-220](../thestill/web/dependencies.py#L208-L220)),
+so the policy keys on "any credential present", not on the cookie
+alone. A public GET that carries neither the auth cookie nor an
+`Authorization` header returns
 `Cache-Control: public, max-age=300, stale-while-revalidate=3600`
 (summary responses already carry a content-hash ETag from
 [responses.py:176](../thestill/web/responses.py#L176)). The same route
-with a session cookie returns `Cache-Control: private, no-cache` and
-`Vary: Cookie`. A shared cache must never store a response that was
-computed for a signed-in user. One helper sets this; a test covers both
-branches on every public route.
+with either credential returns `Cache-Control: private, no-cache`.
+**Every** public-route response, anonymous or not, carries
+`Vary: Cookie, Authorization`, so a cached anonymous payload is never
+reused for a request that presents a credential, and the reverse never
+happens either ([RFC 9111 §4.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1)).
+One helper reads the same credential extractor the auth dependency uses
+(no second definition of "has a credential", FM-6) and sets both
+headers; a test covers cookie, bearer and anonymous on every public
+route.
 
 ### 3. HTML shell: head injection, status codes, HEAD
 
@@ -229,11 +252,27 @@ Rules:
 - Unknown slug, hidden podcast or `N/A` summary on a public path: the
   shell is served with **status 404** and `noindex`, so a crawler drops
   the URL; the SPA renders its existing not-found state.
-- Lookups are the same repository calls the API uses, wrapped in a
-  120-second in-process LRU keyed by path so a crawl does not hammer
-  Postgres. A miss on the lookup (repository error) serves the default
-  tags with status 200 and logs at warning; it must not turn into a 500
-  for the SPA shell.
+- Lookups are the same repository calls the API uses, behind three
+  guards, because the shell is reachable by anyone and every distinct
+  URL is a potential Postgres query:
+  1. **Slug validation before any query.** Slugs come from
+     [slug.py:29](../thestill/utils/slug.py#L29) (python-slugify,
+     lowercase `[a-z0-9-]`, at most 100 characters plus a `-N` suffix).
+     A path segment that does not match `^[a-z0-9]([a-z0-9-]{0,110})$`
+     is served the default tags with status 404 and no lookup at all.
+  2. **Positive and negative in-process cache**, 120 seconds, keyed by
+     path, bounded in size. A miss (unknown slug, hidden podcast, `N/A`
+     summary) is cached as a miss, so repeating a bad URL costs nothing
+     after the first hit.
+  3. **The same per-IP bucket as the public API** (§2) is charged for
+     every lookup that reaches the repository, i.e. a cache miss. Over
+     the limit the shell returns 429 with `Retry-After`, like the API;
+     crawlers treat 429 as temporary and come back. Cached hits and
+     non-content paths are never charged, so a signed-in user reloading
+     `/inbox` is unaffected.
+  A repository error (not a miss) serves the default tags with status
+  200 and logs at warning; it must not turn into a 500 for the SPA
+  shell, and it is not cached.
 - The shell keeps `Cache-Control: no-cache, must-revalidate`.
 - The JSON-LD uses schema.org `PodcastSeries` / `PodcastEpisode` with
   `associatedMedia` pointing at the publisher's enclosure URL, not at
@@ -246,6 +285,15 @@ manifest itself stays with spec #80 / #93.
 
 ### 4. robots.txt and sitemap.xml
 
+The body of every public page is still client-rendered, so a crawler
+that renders JavaScript (Googlebot does) must be allowed to fetch the
+JSON the page loads and the one auth-bootstrap call the shell makes
+(`GET /api/auth/status`, [AuthContext.tsx:51](../thestill/web/frontend/src/contexts/AuthContext.tsx#L51)).
+Head tags alone give previews, not an indexable summary body. The file
+therefore allows exactly the public API paths from §2 and disallows the
+rest of `/api/`; Google and Bing resolve conflicts by the most specific
+(longest) matching rule, so the `Allow` lines win for those prefixes.
+
 `robots.txt` (static):
 
 ```
@@ -254,6 +302,12 @@ Allow: /$
 Allow: /top
 Allow: /podcasts/
 Allow: /entities/
+Allow: /api/auth/status
+Allow: /api/podcasts/
+Allow: /api/top-podcasts
+Allow: /api/entities/
+Allow: /api/episodes/recent-summaries
+Allow: /api/episodes/*/entities
 Disallow: /inbox
 Disallow: /briefings
 Disallow: /search
@@ -270,8 +324,13 @@ Sitemap: {PUBLIC_BASE_URL}/sitemap.xml
 
 `/podcasts` without a slug is the signed-in followed list; the shell
 serves it with `noindex`, and `Allow: /podcasts/` only admits the slug
-paths. `/entities/` is listed from day one so Phase 2 needs no robots
-change.
+paths. The same trailing slash on `Allow: /api/podcasts/` keeps the bare
+followed-podcasts list disallowed. Transcript, follow and search routes
+under the allowed API prefixes answer 401 to a crawler and are never
+requested by an anonymous page, so they need no extra rule. `/entities/`
+and its API prefix are listed from day one so Phase 2 needs no robots
+change. A test fetches `robots.txt` and asserts, with a robots parser,
+that every public API route is fetchable and `/api/inbox` is not.
 
 `sitemap.xml` is a route, not a file: all public podcasts, every episode
 of theirs with a real summary (`lastmod` = summary written time), and in
@@ -328,16 +387,16 @@ and the editorial rule that the intelligence is the hero:
 2. A real summary, live: the most recent public episode with a summary,
    rendered with the real `SummaryViewer` inside a reader frame, clamped
    to the first section with a "Read the whole summary" link to its
-   public page. Served by the existing public episodes route with
-   `has_summary=true&limit=1`, so the page is never stale and needs no
-   hand-maintained fixture.
+   public page. Served by `GET /api/episodes/recent-summaries?limit=1`
+   (§2), so the page is never stale and needs no hand-maintained
+   fixture.
 3. Three outcomes, each one line with a small illustration from the real
    UI: the inbox ("every new episode, summarised the morning it drops"),
    the briefing ("one page across all your shows, narrated if you
    like"), the knowledge base ("search every mention of anything across
    every show you follow; ask Claude about it").
-4. "Fresh this week": six recent summarised episodes across the corpus
-   as `ListRow`s linking to their public pages.
+4. "Fresh this week": the same feed with `limit=6`, rendered as
+   `ListRow`s linking to the public episode pages.
 5. Footer: open source on GitHub, self-hostable, Terms, Privacy.
 
 No carousel, no animation on load, no cookie banner (nothing is set
@@ -383,12 +442,13 @@ separate decision; see Non-goals.
 
 | Risk | Guard |
 |---|---|
-| Public cache stores a signed-in response | §2 cache helper: `private` + `Vary: Cookie` whenever a session cookie is present; tested per route |
+| Public cache stores a signed-in response, or serves a cached anonymous body to a signed-in client | §2 cache helper: `private` whenever a cookie **or** bearer token is present, `Vary: Cookie, Authorization` on every public response; tested per route with cookie, bearer and neither |
 | Anonymous request triggers LLM spend | §2 cost guard; test with a raising provider factory |
 | Public route leaks storage paths or pipeline internals | Explicit Pydantic response models; `_path` key walker test |
 | New `/api` router added later is accidentally public | Route-allowlist test: every route under `/api` either carries `require_auth`/`require_admin` or is on the written allowlist |
 | Head injection renders attacker-controlled podcast metadata as HTML | `html.escape` on every value; XSS fixture test (FM-7: feed metadata is untrusted input) |
-| Crawl of 3k episode URLs hammers Postgres through the shell lookups | 120 s LRU in §3, rate limit in §2 |
+| Crawl of 3k episode URLs, or a flood of random slugs, hammers Postgres through the shell lookups | §3: slug regex before any query, positive + negative 120 s cache, the public per-IP bucket charged on every cache miss |
+| Crawler can fetch the shell but not the JSON, so pages index as empty | §4 robots allows the public API prefixes and `/api/auth/status`; parser-backed test |
 | Sitemap advertises pages that 404 (hidden podcast, `N/A` summary) | Same predicate used for sitemap, shell status and API 404; one function |
 | Takedown request with no way to act | `public_pages` column + CLI before Phase 1 ships |
 | Read-on-view marking or progress writes fire for anonymous visitors | Effects gated on `!isAnonymous`; Vitest asserts no `POST` from the anonymous reader |
@@ -428,8 +488,11 @@ wait for 2 or 3.
 - Route allowlist: iterate `app.routes`; every `/api` route is either in
   the public allowlist or has a `require_auth`/`require_admin`
   dependency. Fails on any new router that is neither.
-- Public routes without a cookie: 200, `Cache-Control: public …`, no
-  `_path` keys; with a cookie: `private`, `Vary: Cookie`.
+- Public routes with no credential: 200, `Cache-Control: public …`, no
+  `_path` keys; with a cookie, and separately with a bearer token:
+  `private`; `Vary: Cookie, Authorization` in all three cases.
+- `recent-summaries`: excludes hidden podcasts and `N/A` summaries,
+  caps `limit` at 12, ordered by summary time.
 - Summary route anonymous: `lang` not in `available_languages` → 404;
   provider factory never called; `N/A` → 404.
 - Hidden podcast: API 404, shell 404 + `noindex`, absent from sitemap.
@@ -437,7 +500,12 @@ wait for 2 or 3.
   landing; default + `noindex` for `/inbox`; `HEAD /` is 200.
 - Sitemap: counts match the predicate; splits above the threshold.
 - Rate limit: 121st anonymous request in a minute is 429; a session
-  request is not counted.
+  request is not counted. The shell: 121 distinct unknown slugs → 429;
+  121 requests for the same cached episode URL → all 200; a malformed
+  slug → 404 with zero repository calls.
+- `robots.txt`: a robots parser confirms every public API route and
+  public page is allowed and every private path and `/api/inbox` is
+  not.
 
 **Vitest**:
 
