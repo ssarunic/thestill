@@ -15,7 +15,7 @@ import Panel from '../components/Panel'
 import BriefingCover from '../components/BriefingCover'
 import BriefingIndex, { BriefingIndexSkeleton } from '../components/BriefingIndex'
 import { artworkFrameClass } from '../components/artworkRoles'
-import { describeShows } from '../utils/briefingFormat'
+import { describeShows, editionTitle } from '../utils/briefingFormat'
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
@@ -91,7 +91,7 @@ export default function BriefingDetail() {
             ]}
           />
         }
-        title="Today's briefing"
+        title={editionTitle(briefing.created_at)}
         identity={showsLine ? <p className="text-sm text-muted">{showsLine}</p> : undefined}
       >
         <ActionRow
