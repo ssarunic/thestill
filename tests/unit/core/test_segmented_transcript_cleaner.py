@@ -33,6 +33,7 @@ from thestill.core.segmented_transcript_cleaner import (
     CleanupPatchBatch,
     SegmentedTranscriptCleaner,
     _apply_speaker_mapping,
+    _reassign_orphan_fragments,
 )
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, WordSpan
 from thestill.models.facts import EpisodeFacts, PodcastFacts
@@ -714,3 +715,101 @@ class TestCleaningProvenance:
 
         reloaded = AnnotatedTranscript.model_validate_json(result.model_dump_json())
         assert reloaded.cleaning == result.cleaning
+
+
+class TestOrphanFragmentReassignment:
+    """A speaker whose only speech is a word or two goes to the speaker around them."""
+
+    def test_mid_sentence_fragment_goes_to_the_surrounding_speaker(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Yanis", text="And it's the huge accumulated savings of China."),
+            _segment(seg_id=1, speaker="Evan", text="There are"),
+            _segment(seg_id=2, speaker="Yanis", text="170, more than 170 trillion yuan of savings."),
+            _segment(seg_id=3, speaker="Evan", text="Handcuffs clicked onto my wrists.", kind="ad_break"),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == [("Evan", "Yanis")]
+        assert result[1].speaker == "Yanis"
+        assert result[1].metadata == {"speaker_reassigned_from": "Evan"}
+        # The ad read keeps its own voice: it is not rendered as speech.
+        assert result[3].speaker == "Evan"
+        # Nothing else is touched, and the input list is not mutated.
+        assert [s.speaker for s in result[::2]] == ["Yanis", "Yanis"]
+        assert segments[1].speaker == "Evan"
+
+    def test_a_leading_fragment_takes_the_following_speaker(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="SPEAKER_09", text="Welcome"),
+            _segment(seg_id=1, speaker="Alice", text="back to the show, everyone, we have a lot to cover today."),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == [("SPEAKER_09", "Alice")]
+        assert result[0].speaker == "Alice"
+
+    def test_a_speaker_with_a_real_turn_is_not_an_orphan(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Alice", text="So what do you make of the numbers this quarter?"),
+            _segment(seg_id=1, speaker="Bob", text="Honestly"),
+            _segment(seg_id=2, speaker="Bob", text="I think they are better than the market expected."),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == []
+        assert result == segments
+
+    def test_too_many_fragments_is_a_backchannel_not_an_orphan(self) -> None:
+        segments = [_segment(seg_id=0, speaker="Alice", text="Let me walk you through the whole story from the start.")]
+        segments += [_segment(seg_id=i, speaker="Bob", text="Mm-hmm.") for i in range(1, 6)]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == []
+        assert [s.speaker for s in result] == [s.speaker for s in segments]
+
+    def test_fragments_of_three_words_or_more_are_kept(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Alice", text="A full sentence from the host to anchor the exchange."),
+            _segment(seg_id=1, speaker="Bob", text="Thanks for having me"),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == []
+        assert result[1].speaker == "Bob"
+
+    def test_no_anchor_speaker_leaves_everything_alone(self) -> None:
+        # Every speaker is an orphan (tiny fixture): nothing to attach to.
+        segments = [
+            _segment(seg_id=0, speaker="A", text="hello"),
+            _segment(seg_id=1, speaker="B", text="hi"),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == []
+        assert result == segments
+
+    def test_filler_and_none_speakers_are_ignored(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Alice", text="The long opening remark that sets the scene for everyone."),
+            _segment(seg_id=1, speaker="Bob", text="", kind="filler"),
+            _segment(seg_id=2, speaker=None, text="um"),
+            _segment(seg_id=3, speaker="Bob", text="Right"),
+        ]
+        result, reassigned = _reassign_orphan_fragments(segments)
+        assert reassigned == [("Bob", "Alice")]
+        assert result[1].speaker == "Bob"
+        assert result[2].speaker is None
+        assert result[3].speaker == "Alice"
+
+    def test_clean_applies_the_pass_and_keeps_positional_ids(self) -> None:
+        provider = FakeProvider()
+        # The LLM returns the text unchanged; only speakers matter here.
+        provider.patch_factory = lambda target_ids: []
+        cleaner = SegmentedTranscriptCleaner(provider)
+        annotated = _annotated(
+            [
+                _segment(seg_id=0, speaker="A", text="And it is the huge accumulated savings of China that matter."),
+                _segment(seg_id=1, speaker="B", text="There are"),
+                _segment(seg_id=2, speaker="A", text="more than 170 trillion yuan of them, which is a lot."),
+            ]
+        )
+        facts = EpisodeFacts(episode_title="t", speaker_mapping={"A": "Yanis (Host)", "B": "Evan (Guest)"})
+        cleaned = cleaner.clean(annotated=annotated, podcast_facts=None, episode_facts=facts, language="en")
+        assert [s.id for s in cleaned.segments] == [0, 1, 2]
+        assert [s.speaker for s in cleaned.segments] == ["Yanis", "Yanis", "Yanis"]
+        assert cleaned.segments[1].metadata["speaker_reassigned_from"] == "Evan"
+        assert "Evan" not in cleaned.to_blended_markdown()

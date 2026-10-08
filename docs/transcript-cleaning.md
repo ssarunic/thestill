@@ -34,6 +34,8 @@ Facts are stored as human-editable Markdown files:
 
 If the facts files already exist they are reused, so you can correct a wrong speaker mapping by editing the file and re-running with `--force`. Unmapped `SPEAKER_NN` labels that survive to the output are a visible canary that facts extraction missed a speaker.
 
+A voice heard only in an ad break is an ad narrator, not a guest, even when it names itself (an author reading from their book in a promo). The extraction prompt says so, and the role linker refuses a `Guest(s)` bullet whose bracket, bio, or speaker-mapping role describes an ad voice (`(Ad Narrator)`, `Journalist (Ad Segment)`, `heard in a sponsor read`), logging it as `episode_guest_ad_voice_skipped`. A lone "ad" in a job title (`Head of Ad Sales`) does not count.
+
 ### Pass 2: Segmented Cleaning
 
 The segmented cleaner (`TranscriptSegmenter` + `SegmentedTranscriptCleaner`) preserves transcript structure instead of rewriting free text:
@@ -140,6 +142,7 @@ LLMs occasionally emit raw control characters — the motivating incident was Ge
 
 - **Control-character stripping at the schema boundary**: every patch's `cleaned_text` and `sponsor` pass through a Pydantic validator that strips C0/C1 control characters (tab, newline, and carriage return pass through). Stripping is never silent — it logs a `llm_control_chars_stripped` warning so a provider regression stays visible.
 - **Per-batch prohibited-content fallback**: if the provider refuses a batch on content grounds (e.g. Gemini `PROHIBITED_CONTENT`, raised as `ProhibitedContentError`), the batch falls back to its raw ASR text — no speaker mapping, no ad tagging — instead of failing the whole episode. The fallback is logged as `segmented_cleanup_prohibited_content`.
+- **Orphan speaker fragments**: diarization sometimes hands a word or two of one speaker's sentence to a voice that otherwise only appears in the ad break. After patching, a speaker whose whole speech (`content`, `intro`, `outro` segments) is at most three fragments of under three words each is treated as a stray: each fragment takes the speaker of the nearest preceding speech segment (else the following one) and records the original label in `metadata.speaker_reassigned_from`. Ad, music, and filler segments keep their speaker. Logged as `orphan_speaker_fragments_reassigned`.
 
 ## Tips for Best Results
 

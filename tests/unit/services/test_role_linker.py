@@ -73,6 +73,69 @@ def test_parse_strips_trailing_role_annotation(tmp_path):
     assert roles.guests == [("Greg Brockman", "President of OpenAI")]
 
 
+def test_parse_drops_a_guest_whose_bracket_says_ad(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(
+        """## Guest(s)
+- Evan Gershkovich (Ad Narrator) - Journalist
+- Sarah Paine - Naval War College professor
+"""
+    )
+    roles = parse_facts_file(f)
+    assert roles.guests == [("Sarah Paine", "Naval War College professor")]
+    assert roles.ad_voices == ["Evan Gershkovich"]
+
+
+def test_parse_drops_a_guest_whose_bio_describes_an_ad(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(
+        """## Guest(s)
+- Evan Gershkovich - Journalist (Ad Segment)
+- Deborah Meaden - heard in a sponsor read
+- Kate - author reading from her book promo
+- Alice Example - Head of Ad Sales at Example Corp
+"""
+    )
+    roles = parse_facts_file(f)
+    # A lone "ad" in a job title is not an ad phrase; the other three are.
+    assert roles.guests == [("Alice Example", "Head of Ad Sales at Example Corp")]
+    assert roles.ad_voices == ["Evan Gershkovich", "Deborah Meaden", "Kate"]
+
+
+def test_parse_drops_a_guest_the_speaker_mapping_calls_an_ad_narrator(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(
+        """## Speaker Mapping
+- SPEAKER_00: Alex Host (Host)
+- SPEAKER_08: Evan Gershkovich (Ad Narrator)
+- SPEAKER_09: Ad Narrator 1
+
+## Guest(s)
+- Evan Gershkovich - Journalist/Author
+- Sarah Paine (Guest) - professor
+"""
+    )
+    roles = parse_facts_file(f)
+    assert roles.guests == [("Sarah Paine", "professor")]
+    assert roles.ad_voices == ["Evan Gershkovich"]
+    assert roles.speaker_roles == {"alex host": "Host", "evan gershkovich": "Ad Narrator"}
+
+
+def test_parse_keeps_a_guest_the_speaker_mapping_calls_a_guest(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(
+        """## Guest(s)
+- Evan Gershkovich - Journalist/Author
+
+## Speaker Mapping
+- SPEAKER_08: Evan Gershkovich (Guest)
+"""
+    )
+    roles = parse_facts_file(f)
+    assert roles.guests == [("Evan Gershkovich", "Journalist/Author")]
+    assert roles.ad_voices == []
+
+
 def test_parse_handles_missing_file(tmp_path):
     roles = parse_facts_file(tmp_path / "nope.facts.md")
     assert roles.hosts == []
@@ -219,6 +282,44 @@ def _write_prof_g_facts(storage: Path, podcast_slug: str, bio: str) -> None:
     pm = PathManager(str(storage))
     pm.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
     pm.podcast_facts_file(podcast_slug).write_text(f"## Hosts\n- Scott Galloway - {bio}\n- Ed Elson - co-host\n")
+
+
+def test_link_skips_an_ad_voice_guest_and_clears_a_stale_one(tmp_path):
+    db_path, podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    _write_facts_files(storage, podcast_slug, episode_slug)
+    entity_repo = SqliteEntityRepository(db_path=str(db_path))
+    pm = PathManager(str(storage))
+    # An earlier run (before the guard) stored the ad voice as a guest.
+    entity_repo.upsert_entity(
+        EntityRecord(
+            id="person:evan-gershkovich",
+            type=EntityType.PERSON,
+            canonical_name="Evan Gershkovich",
+            aliases=[],
+            description="Journalist (Ad Segment)",
+        )
+    )
+    entity_repo.set_episode_guests(episode_id, ["person:evan-gershkovich"])
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(
+        """## Guest(s)
+- Evan Gershkovich - Journalist (Ad Segment)
+"""
+    )
+
+    result = link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=entity_repo,
+        path_manager=pm,
+    )
+
+    assert result.guests == []
+    assert result.ad_voices == ["Evan Gershkovich"]
+    assert "Evan Gershkovich" in result.skipped_names
+    assert result.created_entities == []
+    assert entity_repo.get_episode_anchors(episode_id) == []
 
 
 def test_a_host_name_two_entities_share_is_settled_by_the_bio_and_description(tmp_path):

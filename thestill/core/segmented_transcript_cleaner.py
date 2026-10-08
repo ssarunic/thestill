@@ -41,7 +41,7 @@ widened to amortise the repeated prefix.
 """
 
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
@@ -62,6 +62,20 @@ logger = get_logger(__name__)
 # and new prompts. Orthogonal to ``AnnotatedTranscript.algorithm_version``,
 # which tracks the sidecar output *contract*.
 CLEANUP_PROMPT_VERSION = "v1"
+
+# Diarization sometimes hands a word or two of one speaker's sentence to
+# a voice that otherwise only appears in the ad break — the Econoclasts
+# episode where "There are", mid-sentence from a host, carried the label
+# of the author reading his book promo, and became that author's one
+# "mention" once the ad break was stripped. A speaker whose whole speech
+# in the kept transcript is a few such fragments is not a participant;
+# the fragments go to the speaker around them. Thresholds: every
+# fragment under three words, at most this many of them.
+ORPHAN_FRAGMENT_MAX_WORDS = 2
+ORPHAN_SPEAKER_MAX_FRAGMENTS = 3
+# The kinds a listener hears as the episode. Ad reads, music, and filler
+# are not speech a participant is credited with.
+_SPEECH_KINDS: frozenset = frozenset({"content", "intro", "outro"})
 
 
 class CleanupPatch(BaseModel):
@@ -298,6 +312,15 @@ class SegmentedTranscriptCleaner:
             patches_emitted=total_patches_emitted,
             omit_unchanged=self.omit_unchanged,
         )
+
+        cleaned, reassigned = _reassign_orphan_fragments(cleaned)
+        if reassigned:
+            logger.info(
+                "orphan_speaker_fragments_reassigned",
+                episode_id=annotated.episode_id,
+                fragments=len(reassigned),
+                speakers=sorted({old for old, _new in reassigned}),
+            )
 
         # Reassign positional ids so the returned transcript remains
         # 0..N-1 after any filler-drop / ad-merge surgery that Phase D's
@@ -570,6 +593,68 @@ def _segment_to_prompt_dict(segment: AnnotatedSegment) -> Dict[str, object]:
         "text": segment.text,
         "kind": segment.kind,
     }
+
+
+def _is_speech(segment: AnnotatedSegment) -> bool:
+    return segment.kind in _SPEECH_KINDS and bool(segment.text.strip())
+
+
+def _reassign_orphan_fragments(
+    segments: List[AnnotatedSegment],
+) -> Tuple[List[AnnotatedSegment], List[Tuple[str, str]]]:
+    """Give a stray speaker's fragments to the speaker around them.
+
+    A speaker is an orphan when every speech segment of theirs (see
+    ``_SPEECH_KINDS``) has at most ``ORPHAN_FRAGMENT_MAX_WORDS`` words and
+    there are at most ``ORPHAN_SPEAKER_MAX_FRAGMENTS`` of them. Each such
+    fragment takes the speaker of the nearest preceding speech segment
+    whose speaker is not an orphan, else the nearest following one; with
+    no such neighbour it is left alone. Ad-break, music, and filler
+    segments keep their speaker: they are not rendered as speech, and the
+    ad voice's label on its own ad read stays correct.
+
+    Returns the new segment list and the ``(old_speaker, new_speaker)``
+    pair of every reassigned fragment. Reassigned segments record the
+    original label in ``metadata["speaker_reassigned_from"]``.
+    """
+    speech_by_speaker: Dict[str, List[int]] = {}
+    for index, segment in enumerate(segments):
+        if segment.speaker is not None and _is_speech(segment):
+            speech_by_speaker.setdefault(segment.speaker, []).append(index)
+
+    orphans = {
+        speaker
+        for speaker, indices in speech_by_speaker.items()
+        if len(indices) <= ORPHAN_SPEAKER_MAX_FRAGMENTS
+        and all(len(segments[i].text.split()) <= ORPHAN_FRAGMENT_MAX_WORDS for i in indices)
+    }
+    if not orphans or len(orphans) == len(speech_by_speaker):
+        return segments, []
+
+    def neighbour(index: int) -> Optional[str]:
+        for candidates in (range(index - 1, -1, -1), range(index + 1, len(segments))):
+            for j in candidates:
+                other = segments[j]
+                if other.speaker is not None and other.speaker not in orphans and _is_speech(other):
+                    return other.speaker
+        return None
+
+    result = list(segments)
+    reassigned: List[Tuple[str, str]] = []
+    for speaker in orphans:
+        for index in speech_by_speaker[speaker]:
+            target = neighbour(index)
+            if target is None:
+                continue
+            segment = segments[index]
+            result[index] = segment.model_copy(
+                update={
+                    "speaker": target,
+                    "metadata": {**segment.metadata, "speaker_reassigned_from": speaker},
+                }
+            )
+            reassigned.append((speaker, target))
+    return result, reassigned
 
 
 def _apply_speaker_mapping(
