@@ -148,7 +148,11 @@ Close with `gh pr close <n> --comment "<reason>"` when:
 - The bump crosses a ceiling that `pyproject.toml` or `package.json` pins **on
   purpose with a comment** (today: `mistralai<3` until the httpx2 transport in
   3.x is vetted; `mcp<3` until the next major is vetted; `whisperx<4`;
-  `transformers<5.18`). Quote the comment in the close reason.
+  `transformers<6` in the `entities` extra, which ReFinED needs). Quote the
+  comment in the close reason. A bound with no comment is not a ceiling: the
+  `local-transcription` extra's `transformers` upper bound is only where an
+  earlier Dependabot "update requirement" PR (#213) left it, and widening it
+  is an ordinary merge.
   Each of these ceilings has a matching `ignore:` entry in
   `.github/dependabot.yml`, so such a PR should not exist. If one does, the
   ignore list is out of sync with `pyproject.toml`: close it and name the
@@ -211,6 +215,15 @@ After the last merge of the run, watch the `main` CI run it triggered:
 then `gh run watch <id> --exit-status`. A green PR that turns `main` red
 (usually two independent bumps interacting) is reverted at once with
 `gh pr create` from a `revert/...` branch, merged when green, and reported.
+
+An "update requirement" PR (title `update <pkg> requirement from ...`)
+changes `pyproject.toml` only, so after it merges `uv.lock` no longer matches
+(`uv lock --check` fails; CI and the Docker build use `--frozen`, so nothing
+goes red). After the run's merges, if `uv lock --check` fails on `main`, run
+`uv lock` (no `--upgrade`) on a `deps/lock-sync-<date>` branch, confirm the
+`uv.lock` diff only changes `specifier = ...` lines and no `version = ...`
+line, and open a lockfile-only PR; merge it when green. If any `version`
+line moved, leave that PR open for a human instead.
 
 Merging to `main` also publishes a new prod image (`docker-publish` job), but
 it does **not** deploy. Deploys are tag-triggered by a human. Note in the
