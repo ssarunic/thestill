@@ -36,9 +36,10 @@ total wall-clock at 30s; in practice it finishes in ~1s on a laptop.
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
@@ -46,13 +47,17 @@ from thestill.core.queue_manager import QueueManager, TaskStage
 from thestill.models.podcast import Episode, Podcast
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
 
+# One task per episode: add_task coalesces a second task for the same
+# (episode, stage), so the race needs many episodes to have many tasks.
+EPISODE_IDS = [str(uuid5(NAMESPACE_URL, f"race-test-episode-{i}")) for i in range(50)]
+
 
 @pytest.fixture
 def db_with_episode(tmp_path: Path) -> str:
-    """Bootstrap a SQLite DB with one podcast + one episode.
+    """Bootstrap a SQLite DB with one podcast + ``EPISODE_IDS`` episodes.
 
-    Tasks have a FK to episodes; we need a real row for the FK to
-    accept inserts. The podcast/episode here is a vehicle, not the
+    Tasks have a FK to episodes; we need real rows for the FK to
+    accept inserts. The podcast/episodes here are a vehicle, not the
     subject of the test.
     """
     db_path = str(tmp_path / "test.db")
@@ -64,14 +69,15 @@ def db_with_episode(tmp_path: Path) -> str:
         description="",
         episodes=[
             Episode(
-                id="11111111-1111-1111-1111-111111111111",
-                external_id="ep-1",
-                title="Race Test Episode",
+                id=episode_id,
+                external_id=f"ep-{i}",
+                title=f"Race Test Episode {i}",
                 description="",
-                pub_date=datetime(2026, 1, 1),
-                audio_url="https://example.com/ep1.mp3",
+                pub_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                audio_url=f"https://example.com/ep{i}.mp3",
                 duration=60,
-            ),
+            )
+            for i, episode_id in enumerate(EPISODE_IDS)
         ],
     )
     repo.save(podcast)
@@ -79,15 +85,14 @@ def db_with_episode(tmp_path: Path) -> str:
 
 
 def _seed_tasks(db_path: str, count: int) -> List[str]:
-    """Seed ``count`` pending tasks against the fixture episode.
+    """Seed ``count`` pending tasks, one per fixture episode.
 
     Returns the list of task ids in insertion order for assertion
     convenience.
     """
     qm = QueueManager(db_path)
     ids: List[str] = []
-    episode_id = "11111111-1111-1111-1111-111111111111"
-    for _ in range(count):
+    for episode_id in EPISODE_IDS[:count]:
         task = qm.add_task(episode_id=episode_id, stage=TaskStage.DOWNLOAD)
         ids.append(task.id)
     return ids

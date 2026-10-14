@@ -1677,6 +1677,14 @@ def retry_dlq_task(
             detail=f"Task is not in terminal failure state (status={task.status.value}). Only dead/failed tasks can be retried.",
         )
 
+    # An episode that failed several times has one DLQ row per attempt; once
+    # one is retried (or a fresh run started) the rest must not join it.
+    if task.episode_id and state.queue_manager.has_pending_task(task.episode_id, task.stage):
+        raise HTTPException(
+            status_code=409,
+            detail=f"A {task.stage.value} task is already queued or processing for this episode",
+        )
+
     # Move task back to pending
     updated_task = state.queue_manager.retry_dead_task(task_id)
     if not updated_task:

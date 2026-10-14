@@ -60,6 +60,7 @@ from ..utils.postgres_ext import as_str, connect
 from ..utils.url_patterns import is_remote_fetchable_audio_url
 from .queue_manager import (
     _IDEMPOTENT_STAGES,
+    ACTIVE_TASK_STATUSES,
     ErrorType,
     StaleTimeouts,
     Task,
@@ -67,12 +68,40 @@ from .queue_manager import (
     TaskStatus,
     _stale_windows,
     calculate_backoff,
+    coalescing_statuses,
     is_feed_scoped_stage,
     stages_at_or_before,
     starting_stage_for,
 )
 
 logger = get_logger(__name__)
+
+# A DLQ row may be revived only when no sibling (same episode — or same podcast
+# for feed-scoped rows — and same stage) still owns the slot. ``t`` is the row
+# being revived. NULL = NULL is never true, so the OR matches exactly one side.
+_NO_ACTIVE_SIBLING_SQL = """
+    NOT EXISTS (
+        SELECT 1 FROM tasks s
+        WHERE (s.episode_id = t.episode_id OR s.podcast_id = t.podcast_id)
+          AND s.stage = t.stage
+          AND s.id <> t.id
+          AND s.status = ANY(%s)
+    )
+"""
+
+
+def _slot_lock_key(target_id: str, stage: str) -> str:
+    return f"tasks:{target_id.lower()}:{stage}"
+
+
+def _lock_slot(conn: Any, target_id: str, stage: str) -> None:
+    """Serialise writers of one (episode, stage) slot for this transaction.
+
+    Check-then-insert under READ COMMITTED lets two concurrent requests both see
+    "no active task" and both insert. The transaction-scoped advisory lock makes
+    the second wait for the first to commit, so its check sees the new row.
+    """
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (_slot_lock_key(target_id, stage),))
 
 
 class PostgresQueueManager:
@@ -97,6 +126,16 @@ class PostgresQueueManager:
         """
         self.dsn = dsn
         logger.info("PostgresQueueManager initialized")
+
+    @staticmethod
+    def _lock_task_slot(conn: Any, task_id: str) -> None:
+        """Take the :func:`_lock_slot` lock for an existing task's slot."""
+        row = conn.execute(
+            "SELECT COALESCE(episode_id, podcast_id)::text AS target, stage FROM tasks WHERE id = %s",
+            (task_id,),
+        ).fetchone()
+        if row is not None:
+            _lock_slot(conn, row["target"], row["stage"])
 
     def _row_to_task(self, row: dict) -> Task:
         """Convert a dict row to a Task object.
@@ -155,8 +194,13 @@ class PostgresQueueManager:
             metadata: Optional metadata dict (e.g., {"run_full_pipeline": True})
             max_retries: Override default max retries for this task
 
+        Coalesces: when the episode already has a task for ``stage`` in one of
+        :func:`coalescing_statuses`, no row is inserted and that task is
+        returned instead (so a double-click, a chain hand-off racing a manual
+        run, or a bulk action can't queue the same work twice).
+
         Returns:
-            The created Task object
+            The created Task object, or the existing one it coalesced into
         """
         task_id = str(uuid.uuid4())
         now = now_utc()
@@ -164,6 +208,26 @@ class PostgresQueueManager:
         max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
 
         with connect(self.dsn) as conn:
+            _lock_slot(conn, episode_id, stage.value)
+            existing = conn.execute(
+                """
+                SELECT * FROM tasks
+                WHERE episode_id = %s AND stage = %s AND status = ANY(%s)
+                ORDER BY created_at
+                LIMIT 1
+                """,
+                (episode_id, stage.value, list(coalescing_statuses(stage))),
+            ).fetchone()
+            if existing is not None:
+                task = self._row_to_task(existing)
+                logger.info(
+                    "task_enqueue_coalesced",
+                    episode_id=episode_id,
+                    stage=stage.value,
+                    existing_task_id=task.id,
+                    existing_status=task.status.value,
+                )
+                return task
             conn.execute(
                 """
                 INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
@@ -1214,15 +1278,20 @@ class PostgresQueueManager:
         Args:
             task_id: ID of the dead/failed task to retry
 
+        Refused (returns None) while a sibling task for the same episode and
+        stage is still active — reviving it would queue the same work twice.
+
         Returns:
-            Updated Task object, or None if task not found or not in terminal state
+            Updated Task object, or None if task not found, not in terminal
+            state, or its stage already has an active task
         """
         now = now_utc()
 
         with connect(self.dsn) as conn:
+            self._lock_task_slot(conn, task_id)
             cursor = conn.execute(
-                """
-                UPDATE tasks
+                f"""
+                UPDATE tasks t
                 SET status = 'pending',
                     retry_count = 0,
                     error_message = NULL,
@@ -1232,14 +1301,15 @@ class PostgresQueueManager:
                     started_at = NULL,
                     completed_at = NULL,
                     updated_at = %s
-                WHERE id = %s AND status IN ('dead', 'failed')
+                WHERE t.id = %s AND t.status IN ('dead', 'failed')
+                  AND {_NO_ACTIVE_SIBLING_SQL}
                 """,
-                (now, task_id),
+                (now, task_id, list(ACTIVE_TASK_STATUSES)),
             )
 
             if cursor.rowcount == 0:
                 logger.warning(
-                    "Cannot retry task: not found or not in terminal state",
+                    "Cannot retry task: not found, not in terminal state, or its stage is already queued",
                     task_id=task_id,
                 )
                 return None
@@ -1256,6 +1326,12 @@ class PostgresQueueManager:
         API parity with the SQLite manager is what lets ``/dlq/retry-all`` avoid
         the per-task write loop on either backend.
 
+        One row per (episode, stage) at most: every earlier failed attempt
+        leaves its own DLQ row, and reviving all of them used to put N copies
+        of the same transcription in line. The newest row of each slot is
+        revived, and only when the slot has no active task; the older rows stay
+        in the DLQ until ``supersede_stale_tasks`` retires them.
+
         Args:
             task_ids: Candidate DLQ task ids; only rows still ('dead'/'failed')
                 are requeued.
@@ -1269,8 +1345,19 @@ class PostgresQueueManager:
 
         now = now_utc()
         with connect(self.dsn) as conn:
-            cursor = conn.execute(
+            # Sorted so two concurrent retry-alls take the locks in one order.
+            slots = conn.execute(
                 """
+                SELECT DISTINCT COALESCE(episode_id, podcast_id)::text AS target, stage
+                FROM tasks WHERE id = ANY(%s)
+                ORDER BY 1, 2
+                """,
+                (ids,),
+            ).fetchall()
+            for slot in slots:
+                _lock_slot(conn, slot["target"], slot["stage"])
+            cursor = conn.execute(
+                f"""
                 UPDATE tasks
                 SET status = 'pending',
                     retry_count = 0,
@@ -1281,10 +1368,21 @@ class PostgresQueueManager:
                     started_at = NULL,
                     completed_at = NULL,
                     updated_at = %s
-                WHERE id = ANY(%s) AND status IN ('dead', 'failed')
+                WHERE id IN (
+                    SELECT id FROM (
+                        SELECT t.id, ROW_NUMBER() OVER (
+                            PARTITION BY COALESCE(t.episode_id, t.podcast_id), t.stage
+                            ORDER BY t.created_at DESC
+                        ) AS rn
+                        FROM tasks t
+                        WHERE t.id = ANY(%s) AND t.status IN ('dead', 'failed')
+                          AND {_NO_ACTIVE_SIBLING_SQL}
+                    ) newest
+                    WHERE rn = 1
+                )
                 RETURNING id
                 """,
-                (now, ids),
+                (now, ids, list(ACTIVE_TASK_STATUSES)),
             )
             requeued = [as_str(row["id"]) for row in cursor.fetchall()]
 
@@ -1355,12 +1453,28 @@ class PostgresQueueManager:
             task_id: ID of the failed infra-class task to requeue.
             max_heal_attempts: Per-task cap; the transition no-ops at the cap.
 
+        A row whose stage already has an active sibling is marked
+        ``superseded`` instead: the sibling owns that work, and leaving the row
+        ``failed`` would have the healer pick it up again every sweep.
+
         Returns:
             Updated Task (now ``pending``), or None if not eligible.
         """
         now = now_utc()
 
         with connect(self.dsn) as conn:
+            self._lock_task_slot(conn, task_id)
+            superseded = conn.execute(
+                f"""
+                UPDATE tasks t
+                SET status = 'superseded', updated_at = %s
+                WHERE t.id = %s AND t.status = 'failed' AND NOT {_NO_ACTIVE_SIBLING_SQL}
+                """,
+                (now, task_id, list(ACTIVE_TASK_STATUSES)),
+            ).rowcount
+            if superseded:
+                logger.info("queue_heal_superseded", task_id=task_id, note="stage already has an active task")
+                return None
             cursor = conn.execute(
                 """
                 UPDATE tasks
