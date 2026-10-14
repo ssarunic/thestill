@@ -6,9 +6,12 @@ human with a clear reason, and file a short digest of what the upgraded
 libraries newly offer that Thestill could use. Work autonomously and end with a
 summary report.
 
-This runbook is executed by a scheduled Claude cloud routine (Mondays,
-10:00 UTC, two hours after Dependabot opens its PRs). It can also be run by
-hand as `/dependency-sweep` from a local Claude Code session.
+This runbook is executed by a scheduled Claude cloud routine (Mondays and
+Thursdays, 10:00 UTC). Dependabot is scheduled for Monday 09:00 UTC, but its
+schedule is best-effort: on 2026-10-13 it opened the week's PRs at 02:39 UTC
+on Tuesday, after the Monday sweep had found nothing. The Thursday run
+catches a late batch. It can also be run by hand as `/dependency-sweep` from a
+local Claude Code session.
 
 Prime directive: **never land a change that CI has not proven green.** When in
 doubt, leave the PR open with a comment; a human closes the loop. Nothing here
@@ -72,9 +75,13 @@ Collect three lists:
   --paginate` filtered to `state == "open"`, with
   `security_vulnerability.first_patched_version`, `dependency.manifest_path`
   and the advisory summary.
-- **Recently merged Dependabot PRs** since the last sweep: `gh pr list
-  --author app/dependabot --state merged --search "merged:>=<date 8 days ago>"`
-  plus anything you merge in this run. These feed the digest in section 5.
+- **Recently merged Dependabot PRs** not yet in a digest: find the newest
+  issue labeled `dependency-digest` (`gh issue list --label dependency-digest
+  --state all --limit 1 --json number,createdAt`) and list Dependabot PRs
+  merged after its `createdAt` (`gh pr list --author app/dependabot --state
+  merged --search "merged:>=<that date>"`, then drop PRs the issue already
+  names), plus anything you merge in this run. With no digest issue yet, use 8
+  days ago. These feed the digest in section 5.
 
 If all three lists are empty, post the "all clear" report (section 6) and
 stop.
@@ -136,13 +143,19 @@ force-pushes over it.
 
 ### Close
 
-Close with `gh pr close <n> --comment "<reason>"` and, for majors, also
-comment `@dependabot ignore this major version` when:
+Close with `gh pr close <n> --comment "<reason>"` when:
 
 - The bump crosses a ceiling that `pyproject.toml` or `package.json` pins **on
-  purpose with a comment** (today: `mistralai<3` because 2.x dropped the
-  `Mistral` export; `mcp<3` until the next major is vetted;
-  `whisperx<4`; `transformers<5.18`). Quote the comment in the close reason.
+  purpose with a comment** (today: `mistralai<3` until the httpx2 transport in
+  3.x is vetted; `mcp<3` until the next major is vetted; `whisperx<4`;
+  `transformers<5.18`). Quote the comment in the close reason.
+  Each of these ceilings has a matching `ignore:` entry in
+  `.github/dependabot.yml`, so such a PR should not exist. If one does, the
+  ignore list is out of sync with `pyproject.toml`: close it and name the
+  missing entry under "Blockers" in the report for a human to add. Do not rely
+  on an `@dependabot ignore ...` comment: on 2026-10-05 the cloud routine's
+  comment reached GitHub with characters inserted (`·@·d·ependabot`), was not
+  parsed as a command, and the same PR reopened as #338.
 - The PR is superseded (a newer PR for the same dependency exists).
 
 Do not close a PR merely because you could not evaluate it. That is "leave
@@ -206,8 +219,8 @@ knows a deploy would pick it up.
 
 ## 5. Digest: what's new that Thestill could use
 
-For every Dependabot PR merged in the last week (including ones you merged
-now), write a short entry:
+For every Dependabot PR merged since the last digest (section 1, including
+ones you merged now), write a short entry:
 
 - Read the release notes in the PR body. For minor and major bumps also fetch
   the upstream releases or changelog page for the full range.
@@ -220,11 +233,13 @@ now), write a short entry:
   `specs/`). Skip pure bug-fix releases with a single line "bug fixes only".
 
 Publish the digest as a GitHub issue titled
-`Dependency digest: week of <YYYY-MM-DD>` with label `dependency-digest`.
-Group entries under headings "Worth a look" (real opportunities) and
-"Routine" (bug fixes, no action). Put the sweep summary (section 6) at the
-bottom of the same issue so the week has one record. If there is nothing to
-report, do not open an issue.
+`Dependency digest: week of <YYYY-MM-DD>` (the Monday of the current week)
+with label `dependency-digest`. Group entries under headings "Worth a look"
+(real opportunities) and "Routine" (bug fixes, no action). Put the sweep
+summary (section 6) at the bottom of the same issue so the week has one
+record. If that week's issue already exists (the Monday run opened it), add
+this run's entries and summary as a comment on it instead of opening a second
+issue. If there is nothing to report, do not open an issue or comment.
 
 ## 6. Report
 
