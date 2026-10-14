@@ -229,6 +229,11 @@ def bulk_process_episodes(
             # Already summarized or unknown state
             skipped += 1
             continue
+        if app_state.queue_manager.has_pending_task(episode_id, next_stage):
+            # Already queued or running; add_task would coalesce into it anyway,
+            # but counting it as "queued" would misreport what this call did.
+            skipped += 1
+            continue
 
         # Queue the task with run_full_pipeline=True so it processes to completion
         try:

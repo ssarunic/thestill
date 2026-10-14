@@ -237,6 +237,29 @@ def is_entity_branch_stage(stage: TaskStage) -> bool:
 ENTITY_BRANCH_STAGES: frozenset[TaskStage] = _NON_USER_FAILING_STAGES
 
 
+# Statuses in which a task still owns its (episode, stage) slot. A DLQ revive
+# (manual retry, retry-all, auto-heal) is refused while a sibling row sits in
+# any of these, so a requeue never puts a second copy of the same work in line.
+ACTIVE_TASK_STATUSES: Tuple[str, ...] = ("pending", "processing", "retry_scheduled")
+
+
+def coalescing_statuses(stage: TaskStage) -> Tuple[str, ...]:
+    """Statuses of an existing task that make a new ``add_task`` redundant.
+
+    A user-chain stage (download → summarize) that is already queued OR running
+    needs no second row: each extra row is another paid transcription and
+    another downstream clean → summarize → entity chain (three revived DLQ rows
+    once put three transcribes of one episode in flight).
+
+    An entity-branch stage only coalesces against rows still WAITING. A running
+    resolve has already snapshotted its pending mentions, so mentions reset
+    mid-run need a fresh row after it (see ``entity_review._reresolve_surface``).
+    """
+    if is_entity_branch_stage(stage):
+        return ("pending", "retry_scheduled")
+    return ACTIVE_TASK_STATUSES
+
+
 # Spec #28 §0.5 — fully linear chain. The entity branch was originally
 # designed to fan out from CLEAN in parallel with SUMMARIZE, but the
 # worker's per-episode mutex serialised them anyway and the spec design
@@ -443,6 +466,24 @@ _SQL_PARAM_CHUNK = 900
 def _chunked(items: Sequence[str], size: int) -> List[List[str]]:
     """Split ``items`` into consecutive lists of at most ``size`` elements."""
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
+
+
+def _no_active_sibling_sql(row: str) -> str:
+    """SQL predicate: the task aliased ``row`` has no active sibling.
+
+    A sibling shares the episode (or, for feed-scoped rows, the podcast) and the
+    stage. NULL = NULL is never true, so the OR matches exactly one side.
+    """
+    statuses = ", ".join(f"'{s}'" for s in ACTIVE_TASK_STATUSES)
+    return f"""
+        NOT EXISTS (
+            SELECT 1 FROM tasks s
+            WHERE (s.episode_id = {row}.episode_id OR s.podcast_id = {row}.podcast_id)
+              AND s.stage = {row}.stage
+              AND s.id <> {row}.id
+              AND s.status IN ({statuses})
+        )
+    """
 
 
 def calculate_backoff(retry_count: int) -> timedelta:
@@ -840,35 +881,74 @@ class QueueManager:
             metadata: Optional metadata dict (e.g., {"run_full_pipeline": True})
             max_retries: Override default max retries for this task
 
+        Coalesces: when the episode already has a task for ``stage`` in one of
+        :func:`coalescing_statuses`, no row is inserted and that task is
+        returned instead (so a double-click, a chain hand-off racing a manual
+        run, or a bulk action can't queue the same work twice).
+
         Returns:
-            The created Task object
+            The created Task object, or the existing one it coalesced into
         """
         task_id = str(uuid.uuid4())
         now = now_utc().isoformat()
         metadata = metadata or {}
         max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
         metadata_json = json.dumps(metadata) if metadata else None
+        statuses = coalescing_statuses(stage)
+        existing: list[Optional[Task]] = [None]
 
         def _write() -> None:
             with self._get_connection() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-                """,
-                    (
-                        task_id,
-                        episode_id,
-                        stage.value,
-                        priority,
-                        max_retries,
-                        metadata_json,
-                        now,
-                        now,
-                    ),
-                )
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # Guard inside the write txn so two concurrent requests
+                    # can't both see "nothing queued" and both insert.
+                    row = conn.execute(
+                        f"""
+                        SELECT * FROM tasks
+                        WHERE episode_id = ? AND stage = ?
+                          AND status IN ({",".join("?" for _ in statuses)})
+                        ORDER BY created_at
+                        LIMIT 1
+                        """,
+                        (episode_id, stage.value, *statuses),
+                    ).fetchone()
+                    if row is not None:
+                        existing[0] = self._row_to_task(row)
+                        conn.rollback()
+                        return
+                    conn.execute(
+                        """
+                        INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+                        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            task_id,
+                            episode_id,
+                            stage.value,
+                            priority,
+                            max_retries,
+                            metadata_json,
+                            now,
+                            now,
+                        ),
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
 
         self._exec_with_lock_retry("add_task", _write)
+
+        if existing[0] is not None:
+            logger.info(
+                "task_enqueue_coalesced",
+                episode_id=episode_id,
+                stage=stage.value,
+                existing_task_id=existing[0].id,
+                existing_status=existing[0].status.value,
+            )
+            return existing[0]
 
         logger.info(f"Task queued: {task_id} - {stage.value} for episode {episode_id}")
 
@@ -1962,15 +2042,19 @@ class QueueManager:
         Args:
             task_id: ID of the dead/failed task to retry
 
+        Refused (returns None) while a sibling task for the same episode and
+        stage is still active — reviving it would queue the same work twice.
+
         Returns:
-            Updated Task object, or None if task not found or not in terminal state
+            Updated Task object, or None if task not found, not in terminal
+            state, or its stage already has an active task
         """
         now = now_utc().isoformat()
 
         def _write() -> int:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    """
+                    f"""
                     UPDATE tasks
                     SET status = 'pending',
                         retry_count = 0,
@@ -1982,6 +2066,7 @@ class QueueManager:
                         completed_at = NULL,
                         updated_at = ?
                     WHERE id = ? AND status IN ('dead', 'failed')
+                      AND {_no_active_sibling_sql("tasks")}
                     """,
                     (now, task_id),
                 )
@@ -1992,7 +2077,7 @@ class QueueManager:
         # ``database is locked`` here rather than surfacing it to the operator.
         if self._exec_with_lock_retry("retry_dead_task", _write) == 0:
             logger.warning(
-                "Cannot retry task: not found or not in terminal state",
+                "Cannot retry task: not found, not in terminal state, or its stage is already queued",
                 task_id=task_id,
             )
             return None
@@ -2013,6 +2098,14 @@ class QueueManager:
         ``database is locked`` (see specs/49 "The Retry Budget Trap"). Collapsing
         the requeue to one ``UPDATE … WHERE id IN (…) RETURNING id`` per chunk
         turns N writes into 1–2, all under a single ``_exec_with_lock_retry``.
+
+        One row per (episode, stage) at most: every earlier failed attempt
+        leaves its own DLQ row, and reviving all of them used to put N copies
+        of the same transcription in line. The newest row of each slot is
+        revived, and only when the slot has no active task; the older rows stay
+        in the DLQ until ``supersede_stale_tasks`` retires them. A later chunk
+        sees an earlier chunk's revived row as active, so slots split across
+        chunks still revive once.
 
         Args:
             task_ids: Candidate DLQ task ids. Only rows still in a terminal
@@ -2046,7 +2139,18 @@ class QueueManager:
                             started_at = NULL,
                             completed_at = NULL,
                             updated_at = ?
-                        WHERE id IN ({placeholders}) AND status IN ('dead', 'failed')
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT t.id, ROW_NUMBER() OVER (
+                                    PARTITION BY COALESCE(t.episode_id, t.podcast_id), t.stage
+                                    ORDER BY t.created_at DESC
+                                ) AS rn
+                                FROM tasks t
+                                WHERE t.id IN ({placeholders}) AND t.status IN ('dead', 'failed')
+                                  AND {_no_active_sibling_sql("t")}
+                            )
+                            WHERE rn = 1
+                        )
                         RETURNING id
                         """,
                         (now, *chunk),
@@ -2122,13 +2226,27 @@ class QueueManager:
             task_id: ID of the failed infra-class task to requeue.
             max_heal_attempts: Per-task cap; the transition no-ops at the cap.
 
+        A row whose stage already has an active sibling is marked
+        ``superseded`` instead: the sibling owns that work, and leaving the row
+        ``failed`` would have the healer pick it up again every sweep.
+
         Returns:
             Updated Task (now ``pending``), or None if not eligible.
         """
         now = now_utc().isoformat()
+        superseded: list[bool] = [False]
 
         def _write() -> int:
             with self._get_connection() as conn:
+                if conn.execute(
+                    f"""
+                    UPDATE tasks SET status = 'superseded', updated_at = ?
+                    WHERE id = ? AND status = 'failed' AND NOT {_no_active_sibling_sql("tasks")}
+                    """,
+                    (now, task_id),
+                ).rowcount:
+                    superseded[0] = True
+                    return 0
                 cursor = conn.execute(
                     """
                     UPDATE tasks
@@ -2152,6 +2270,9 @@ class QueueManager:
                 return cursor.rowcount
 
         rowcount = self._exec_with_lock_retry("heal_task", _write)
+        if superseded[0]:
+            logger.info("queue_heal_superseded", task_id=task_id, note="stage already has an active task")
+            return None
         if rowcount == 0:
             logger.warning(
                 "queue_heal_skip",
