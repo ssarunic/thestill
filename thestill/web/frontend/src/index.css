@@ -65,9 +65,13 @@
   background: var(--scrollbar-thumb-hover);
 }
 
-/* Smooth scrolling */
+/* Smooth scrolling. The custom scrollbar above is a classic one (it takes
+   layout width even on macOS), so reserve its gutter always: otherwise a
+   page that grows or shrinks past the viewport — Inbox All ↔ Saved — shifts
+   every right-aligned control by the scrollbar width. */
 html {
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 /* Base styles */
