@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft — sources surveyed against live feeds on 2026-10-14, design drafted, not yet scheduled
 > **Created:** 2026-10-14
-> **Updated:** 2026-10-14
+> **Updated:** 2026-10-14 — manual spot check of ten show-note chapters, one ID3 episode and the two chapter-JSON items folded into §1, §6, Edge cases and Testing
 > **Priority:** Medium — a quarter of followed shows already publish a table of contents that Thestill throws away; the same data is the cheapest signal available for the timestamp-drift problem
 > **Author:** Product & Engineering
 > **Related:** [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) (`ad_break` segments, `playback_time_offset_seconds`), [#23 transcript-playback-sync](23-transcript-playback-sync.md) (click-to-seek, `?t=` deep links), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md) (FM-1/FM-6/FM-7), [#54 summary-segment-citations](54-summary-segment-citations.md) (drift caveat, `transcript_source_duration_s`), [#62 youtube-video-rendition](62-youtube-video-rendition.md) (Podcasting 2.0 namespace extraction pattern), [#72 now-playing-sheet](72-now-playing-sheet.md) (scrubber tick row reserved for chapters), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md) (header layout), [#87 episode-platform-links](87-episode-platform-links.md) (post-refresh resolver + not-found markers pattern), [#93 native-web-capabilities](93-native-web-capabilities.md) (Media Session chapters deferred), [#96 prompt-injection-hardening](96-prompt-injection-hardening.md) (feed text is untrusted)
@@ -39,7 +39,7 @@ enclosures, 625 local episodes since 2026-06-01):
 |---|---|---|
 | Show-note timestamp lists (≥3 per episode) | 118 / 625 episodes; 18 of 67 shows do it on most episodes (Huberman Lab, All-In, Diary of a CEO, Lenny's, Dwarkesh, Latent Space, Cal Newport, Football Daily…) | net |
 | `<podcast:chapters>` JSON | 2 / 40 feeds (Acquired, Cheeky Pint) | net |
-| ID3 `CHAP` / `CTOC` frames | 1 / 25 enclosures (The Skip Podcast — its chapters are titled "Finishing Edit" and "Mid roll ad", so the host marks the ad slot itself) | gross for the fetched copy |
+| ID3 `CHAP` / `CTOC` frames | 1 / 25 enclosures (The Skip Podcast — its two "chapters" are the editor's cue points, "Jagjit's Finishing Edit" and "Insert Mid-roll ad here", not a listener table of contents; see §1 *ad markers*) | gross for the fetched copy |
 
 Show notes are by far the most common source and need no network fetch, so
 they are Phase 0. The two structured sources are a feed-stage observer and a
@@ -132,6 +132,26 @@ a source later re-ranks without a backfill.
 Rows must say *which copy* they describe or they are worthless for alignment,
 so a `served` set without a content length is a bug, not a degraded row.
 
+**Ad markers, not chapters.** The one ID3 set found in the survey is not a
+table of contents: The Skip Podcast's enclosure carries two frames,
+"Jagjit's Finishing Edit" from 0 s and "Insert Mid-roll ad here" from
+1875 s to the end, i.e. the editor's cue points left in the file. On
+2026-10-14 that cue sat inside the ad run our cleaner tagged at
+1858–1952 s, so it is a precise slot marker that agrees with our tagging.
+Each set therefore carries a `role`:
+
+- `toc` — a listener-facing list (default).
+- `ad_markers` — at least half of the titles match
+  `\b(ad|ads|advert\w*|mid-?roll|pre-?roll|post-?roll|sponsor\w*)\b`
+  (case-insensitive), or the set has at most two chapters and one of them
+  matches.
+
+`ad_markers` sets are never preferred for display, are excluded from the
+reader list and the tick row, and are kept because a host-written slot
+marker is the most exact ad-position signal available to the drift
+follow-up. The classification is read-time logic over stored titles, so a
+pattern change needs no backfill.
+
 ### 2. Data model
 
 ```sql
@@ -145,6 +165,7 @@ CREATE TABLE IF NOT EXISTS episode_chapter_sets (
     served_content_length INTEGER,                -- id3 only: Content-Length of the fetched copy
     served_duration_s     REAL,                   -- id3 only: TLEN / last CHAP end when present
     parser_version        TEXT NOT NULL,          -- bump to force re-parse (show_notes grammar)
+    role                  TEXT NOT NULL DEFAULT 'toc',  -- toc | ad_markers (§1), recomputed on write
     error                 TEXT,                   -- status = error only; classified, never raw bodies
     checked_at            TEXT NOT NULL,          -- ISO-8601 +00:00 (never CURRENT_TIMESTAMP)
     created_at            TEXT NOT NULL,
@@ -315,22 +336,46 @@ ETag) and returned per chapter as `mapped_start_s`, `segment_id`,
    `[start_s + offset − 10 s, start_s + offset + 45 s]` and score token
    overlap with the chapter title (lower-cased, stop-words removed, numbers
    kept). Pick the candidate with the best score; `confidence` is the score
-   normalised to `[0, 1]`.
+   normalised to `[0, 1]`. When every time in a list is a whole minute
+   (20VC rounds its chapters to `HH:MM:00`), widen the window to
+   `[−30 s, +60 s]`: the publisher's own precision is ±30 s and a tight
+   window would miss correct chapters.
 3. **Carry forward.** If no candidate scores above the floor (titles like
    "Intro" or "Q&A" carry no signal), reuse the previous chapter's chosen
    offset, `confidence = 0`, and anchor to the segment containing
    `start_s + offset`.
 4. **`served` sets** (ID3) are compared by `served_content_length` with the
    transcribed copy's length when known; equal → offset 0 with
-   `confidence = 1`; otherwise treated like a `net` set.
+   `confidence = 1`; otherwise treated like a `net` set. `ad_markers` sets
+   are not mapped at all; they are compared with `ad_break` segments only
+   by the drift follow-up.
+
+**Spot-check evidence (2026-10-14).** Ten show-note chapters from ten shows
+were checked by reading the cleaned transcript at the stated time. Eight
+matched at the stated time (Max Agency, Uncapped, Dwarkesh, How I AI, The
+Knowledge Project, Netokracija, Pragmatic Engineer, What's Cooking). Two
+were shifted, and in both the shift equalled the ad block the cleaner had
+tagged at the start of our copy: Diary of a CEO's "A Journey With
+Ayahuasca" at 69:18 begins 53 s later behind a 52 s pre-roll; 20VC's board
+chapter at 1:11:00 begins 99 s later behind a 99 s block. Both shifts were
+in the candidate set of step 1, so the snap would have landed them exactly.
+The Knowledge Project is the counterexample that makes step 1 a candidate
+set rather than a formula: 102 s of tagged ads preceded the chapter and the
+correct offset was 0, because those ads are host-read and in the master
+too. The two Podcasting 2.0 items (Cheeky Pint, Acquired, both generated by
+Transistor and both only on the newest episode) had no transcript yet, so
+their timing is unverified; their lists are specific and editorial (13 and
+22 chapters).
 
 A chapter with `confidence = 0` still seeks to `start_s` (never snapped —
 the displayed time is the publisher's, as in
 [#54](54-summary-segment-citations.md)) but the transcript scroll uses
-`segment_id`, which is the best guess. The eval for this phase is the 118
-local episodes with show-notes lists and transcripts: report the share of
-chapters with `confidence ≥ 0.5` and spot-check ten by hand (feedback rule
-from the prompt-change routine applies to the scoring heuristic).
+`segment_id`, which is the best guess. The eval for this phase is the 131
+local episodes with accepted show-notes lists and cleaned transcripts on
+disk: report the share of chapters with `confidence ≥ 0.5` and spot-check
+ten by hand (feedback rule from the prompt-change routine applies to the
+scoring heuristic). The manual baseline above is 10 / 10 reliable, 8 at
+offset 0 and 2 at a candidate offset.
 
 Nothing in this phase writes `playback_time_offset_seconds`; the drift spec
 owns that.
@@ -455,6 +500,10 @@ Checked against [#42](42-robustness-and-failure-mode-hardening.md):
 - **Description edited after publication** (a common fix for a typo in the
   timestamps): the batch writer re-parses when the description hash
   changes, so the list follows the correction.
+- **ID3 frames that are cue points** ("Insert Mid-roll ad here"): classified
+  `ad_markers` by §1 and hidden from every listener surface; a show whose
+  only chapter data is cue points renders as having no chapters, which is
+  correct. The marker still lands in the table for the drift work.
 - **Chapters set `toc: false`** (Podcasting 2.0 lets a publisher hide a
   chapter from the list while keeping its image/link window): stored with
   `in_toc = 0`, omitted from the reader list and the tick row.
@@ -480,7 +529,7 @@ Checked against [#42](42-robustness-and-failure-mode-hardening.md):
 | 0 | Data model (both backends + Alembic 0015), show-notes grammar `sn-1` with fixtures from the six observed formats, batch-writer hook, `thestill resolve-chapters --source show_notes` backfill, API endpoint | 118 local episodes parse; zero false positives on a 50-episode no-timestamp sample |
 | 1 | Feed observer for `<podcast:chapters>` and `<psc:chapters>`; `ChapterService` with the JSON fetch and the ID3 range fetch + ffprobe; refresh hook; CLI `--source` for all | Acquired / Cheeky Pint resolve from JSON; The Skip Podcast resolves from ID3 with `served_content_length` set; a 403-on-Range host logs once and does not block the refresh |
 | 2 | Reader chapter list + transcript section headings; Now Playing tick series + current chapter | Phone fold e2e stays under the 732 px budget; Back restores filters and scroll per the list-page rule |
-| 3 | Title-snap mapping (§6) with `mapped_start_s` / `segment_id` / `confidence`; eval report over the local timestamped episodes | ≥ 70 % of chapters at `confidence ≥ 0.5` on the eval set, ten hand-checked |
+| 3 | Title-snap mapping (§6) with `mapped_start_s` / `segment_id` / `confidence`; eval report over the local timestamped episodes | ≥ 70 % of chapters at `confidence ≥ 0.5` on the eval set, ten hand-checked; the two known shifted cases (Diary of a CEO 69:18, 20VC 1:11:00) resolve to their ad-block offsets |
 
 Phases 0–2 ship behind no flag: an episode without chapters renders exactly
 as today.
@@ -504,7 +553,11 @@ as today.
 - **Frontend.** Chapter list render + seek + scroll contract; tick series
   ordering above entities; `in_toc = false` hidden; phone fold e2e.
 - **Eval (Phase 3).** Script under `evals/` that prints confidence buckets
-  and the ten spot-check episodes.
+  and the ten spot-check episodes; the ten from the 2026-10-14 manual check
+  (§6) are the seed set, with their expected offsets as assertions.
+- **Ad-marker classification.** Fixtures: The Skip Podcast's two-frame set
+  → `ad_markers`; a 12-chapter list with one "Sponsor break" entry → `toc`;
+  a three-chapter list titled "Intro / Ad / Outro" → `ad_markers`.
 
 ## Open questions
 
