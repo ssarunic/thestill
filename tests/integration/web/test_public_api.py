@@ -418,3 +418,17 @@ def test_episode_quotes_and_linked_quote(anon, app_state):
     assert {q["speaker"]["name"] for q in body["quotes"]} == {"Scott Galloway", "Ed Elson"}
     assert body["linked"]["text"] == GALLOWAY_LINE
     assert "Hidden Person" not in {m["name"] for m in body["mentioned"]}
+
+
+def test_who_said_what_picks_a_thing_with_several_speakers(anon, app_state):
+    _seed_people(app_state)
+    api_public.reset_trending_cache_for_testing()
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET pub_date = ? WHERE slug = 'summarised'", (datetime.now(timezone.utc).isoformat(),)
+        )
+    body = anon.get("/api/public/who-said-what").json()
+    assert body["entity"]["name"] == "Nvidia"
+    assert body["speakers"] == 2
+    # One show here, so one quote: never two from the same show.
+    assert len(body["quotes"]) == 1

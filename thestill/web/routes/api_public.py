@@ -104,6 +104,15 @@ def _json_list(value: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+_DISAMBIGUATION = re.compile(r"\s*\([^)]*\)$")
+
+
+def display_name(name: Optional[str]) -> str:
+    """``Amazon (company)`` → ``Amazon``: Wikidata-style disambiguation reads
+    as noise on a page; the type is already shown beside the name."""
+    return _DISAMBIGUATION.sub("", name or "").strip() or (name or "")
+
+
 def entity_slug(entity_id: str) -> str:
     """URL slug of an entity: its id without the ``type:`` prefix.
 
@@ -124,7 +133,7 @@ def _entity_refs(state: AppState, visibility: PublicVisibility, ids: Iterable[st
         if entity.id in hidden:
             continue
         refs[entity.id] = {
-            "name": entity.canonical_name,
+            "name": display_name(entity.canonical_name),
             "type": str(entity.type.value if hasattr(entity.type, "value") else entity.type),
             "slug": entity_slug(entity.id),
         }
@@ -456,9 +465,9 @@ def _quote_item(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "text": (row.get("quote") or "").strip(),
         "start_seconds": start_ms // 1000,
-        "speaker": {"name": row["speaker_name"], "slug": entity_slug(str(row["speaker_id"]))},
+        "speaker": {"name": display_name(row["speaker_name"]), "slug": entity_slug(str(row["speaker_id"]))},
         "about": {
-            "name": row["about_name"],
+            "name": display_name(row["about_name"]),
             "type": _entity_type_str(row["about_type"]),
             "slug": entity_slug(str(row["about_id"])),
             "id": str(row["about_id"]),
@@ -471,6 +480,19 @@ def _quote_item(row: Dict[str, Any]) -> Dict[str, Any]:
         },
         "podcast": {"slug": row["podcast_slug"], "title": row["podcast_title"]},
     }
+
+
+_DANGLING_OPENERS = re.compile(
+    r"^(he|she|it|they|them|him|her|his|their|this|that|these|those|and|but|so|or|because|which|who|like|yeah|well)\b",
+    re.I,
+)
+
+
+def _stands_alone(text: str) -> bool:
+    """A featured quote should read on its own: it opens a sentence (capital,
+    no pronoun or connective) and ends one."""
+    text = text.strip().strip('\u201c\u201d"')
+    return bool(text) and text[0].isupper() and not _DANGLING_OPENERS.match(text) and text[-1] in ".!?"
 
 
 def _public_entity_id(state: AppState, visibility: PublicVisibility, entity_type: str, slug: str) -> str:
@@ -553,10 +575,12 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
     _, about_total = queries.quotes(QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id), limit=1)
 
     def featured(f_recent: QuoteFilter, f_any: QuoteFilter) -> Optional[Dict[str, Any]]:
-        rows, _ = queries.quotes(f_recent, order="longest", limit=1)
-        if not rows:
-            rows, _ = queries.quotes(f_any, order="longest", limit=1)
-        return _quote_item(rows[0]) if rows else None
+        for f in (f_recent, f_any):
+            rows, _ = queries.quotes(f, order="longest", limit=25)
+            standalone = [r for r in rows if _stands_alone(r.get("quote") or "")]
+            if standalone or rows:
+                return _quote_item((standalone or rows)[0])
+        return None
 
     since = days_ago(_FEATURED_WINDOW_DAYS)
     if is_person and said_total:
@@ -577,7 +601,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             topics.append(
                 {
                     "id": str(row["about_id"]),
-                    "name": row["about_name"],
+                    "name": display_name(row["about_name"]),
                     "type": _entity_type_str(row["about_type"]),
                     "slug": entity_slug(str(row["about_id"])),
                     "quotes": int(row["quotes"]),
@@ -588,11 +612,12 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
     if not is_person or about_total:
         for row in queries.speakers(entity_id, since=days_ago(_SPEAKERS_WINDOW_DAYS), limit=8):
             best, _ = queries.quotes(
-                QuoteFilter(speaker_id=str(row["speaker_id"]), about_id=entity_id), order="longest", limit=1
+                QuoteFilter(speaker_id=str(row["speaker_id"]), about_id=entity_id), order="longest", limit=10
             )
+            best = sorted(best, key=lambda r: not _stands_alone(r.get("quote") or ""))
             speakers.append(
                 {
-                    "name": row["speaker_name"],
+                    "name": display_name(row["speaker_name"]),
                     "slug": entity_slug(str(row["speaker_id"])),
                     "quotes": int(row["quotes"]),
                     "shows": int(row["shows"]),
@@ -618,7 +643,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             continue
         related.append(
             {
-                "name": other.canonical_name,
+                "name": display_name(other.canonical_name),
                 "type": _entity_type_str(other.type),
                 "slug": entity_slug(other.id),
                 "episode_count": row["episode_count"],
@@ -658,7 +683,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
 
     return {
         "entity": {
-            "name": record.canonical_name,
+            "name": display_name(record.canonical_name),
             "type": entity_type,
             "slug": entity_slug(record.id),
             "description": record.description,
@@ -783,7 +808,7 @@ def list_public_episode_quotes(
             continue
         mentioned.append(
             {
-                "name": row.entity.canonical_name,
+                "name": display_name(row.entity.canonical_name),
                 "type": row.entity.type,
                 "slug": entity_slug(row.entity.id),
                 "count": row.mention_count,
@@ -793,3 +818,71 @@ def list_public_episode_quotes(
             break
     apply_public_cache_headers(request, response)
     return api_response({"quotes": items[:8], "total": total, "linked": linked, "mentioned": mentioned})
+
+
+_TRENDING_TTL_SECONDS = 1800.0
+_trending_lock = threading.Lock()
+_trending_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
+
+@router.get("/who-said-what")
+def get_who_said_what(
+    request: Request,
+    response: Response,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """The landing's "Who said what this week": the subject discussed by the
+    most distinct named speakers across the most shows in the last 7 days
+    (30 if the week is quiet), with up to three quotes from different
+    speakers on different shows."""
+    from ...repositories.public_quotes import QuoteFilter, days_ago
+
+    now = time.monotonic()
+    with _trending_lock:
+        cached = _trending_cache.get("landing")
+    if cached and now - cached[0] <= _TRENDING_TTL_SECONDS:
+        payload = cached[1]
+    else:
+        queries = state.entity_repository.public_quote_queries()
+        payload = {"entity": None, "days": 7, "shows": 0, "speakers": 0, "quotes": []}
+        for days in (7, 30):
+            top = queries.trending(since=days_ago(days), limit=1)
+            if not top:
+                continue
+            row = top[0]
+            about_id = str(row["about_id"])
+            rows, _ = queries.quotes(QuoteFilter(about_id=about_id, since=days_ago(days)), order="longest", limit=40)
+            rows = sorted(rows, key=lambda r: not _stands_alone(r.get("quote") or ""))
+            picked: List[Dict[str, Any]] = []
+            seen_speakers: set = set()
+            seen_shows: set = set()
+            for quote_row in rows:
+                speaker, show = str(quote_row["speaker_id"]), quote_row["podcast_slug"]
+                if speaker in seen_speakers or show in seen_shows:
+                    continue
+                picked.append(_quote_item(quote_row))
+                seen_speakers.add(speaker)
+                seen_shows.add(show)
+                if len(picked) == 3:
+                    break
+            payload = {
+                "entity": {
+                    "name": display_name(row["about_name"]),
+                    "type": _entity_type_str(row["about_type"]),
+                    "slug": entity_slug(about_id),
+                },
+                "days": days,
+                "shows": int(row["shows"]),
+                "speakers": int(row["speakers"]),
+                "quotes": picked,
+            }
+            break
+        with _trending_lock:
+            _trending_cache["landing"] = (now, payload)
+    apply_public_cache_headers(request, response)
+    return api_response(payload)
+
+
+def reset_trending_cache_for_testing() -> None:
+    with _trending_lock:
+        _trending_cache.clear()

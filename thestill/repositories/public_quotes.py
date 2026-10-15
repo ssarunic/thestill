@@ -188,6 +188,23 @@ def topics_sql(speaker_id: str, p: str, *, limit: int) -> Tuple[str, List[Any]]:
     return sql, [*params, limit]
 
 
+def trending_sql(p: str, *, since: datetime, limit: int) -> Tuple[str, List[Any]]:
+    """Things (not people) the most distinct named speakers discussed since
+    ``since``, across the most shows: the landing's "Who said what"."""
+    where, params = _where(QuoteFilter(since=since), p)
+    sql = f"""
+        SELECT m.entity_id AS about_id, ae.canonical_name AS about_name, ae.type AS about_type,
+               COUNT(DISTINCT sp.entity_id) AS speakers, COUNT(DISTINCT p.id) AS shows
+        {_FROM}
+        WHERE {where} AND ae.type <> 'person'
+        GROUP BY m.entity_id, ae.canonical_name, ae.type
+        HAVING COUNT(DISTINCT sp.entity_id) >= 2
+        ORDER BY shows DESC, speakers DESC, about_name
+        LIMIT {p}
+    """
+    return sql, [*params, limit]
+
+
 def indexable_entities_sql(p: str, *, min_quotes: int) -> Tuple[str, List[Any]]:
     """Entities whose public page has enough quotes to be worth indexing:
     people by quotes said plus quotes about them, things by quotes about
@@ -255,6 +272,10 @@ class PublicQuoteQueries:
 
     def topics(self, speaker_id: str, *, limit: int = 8) -> List[Dict[str, Any]]:
         sql, params = topics_sql(speaker_id, self._p, limit=limit)
+        return self._fetch(sql, params)
+
+    def trending(self, *, since: datetime, limit: int = 1) -> List[Dict[str, Any]]:
+        sql, params = trending_sql(self._p, since=since, limit=limit)
         return self._fetch(sql, params)
 
     def indexable_entities(self, *, min_quotes: int = 3) -> List[Dict[str, Any]]:
