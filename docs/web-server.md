@@ -167,7 +167,7 @@ Signed-out read API behind the public pages. Mounted only when
 per-IP rate limited (`RATE_LIMIT_PUBLIC_MAX`). Every response is built from
 an allowlist: no pipeline state, feed URLs, transcripts or per-user flags.
 Anonymous responses are `Cache-Control: public, max-age=300,
-stale-while-revalidate=3600`; a request carrying a credential gets
+stale-while-revalidate=300`; a request carrying a credential gets
 `private, no-cache`, and `Vary: Cookie, Authorization` is always set.
 
 | Endpoint | Method | Description |
@@ -186,7 +186,11 @@ stale-while-revalidate=3600`; a request carrying a credential gets
 **Visibility.** An episode is public when it has a summary with a preview,
 both slugs, and its show is public. Hide a show with
 `thestill set-podcast-visibility --podcast-id X --private` and an entity with
-`thestill set-entity-visibility --entity person:<slug> --hidden`; both take effect within two minutes.
+`thestill set-entity-visibility --entity person:<slug> --hidden`. The
+server re-reads the hidden sets every 60 s, and every cached payload
+(pages, landing modules, page-shell tags, sitemap) is keyed on them, so the
+server stops serving hidden content within about a minute; a browser or
+proxy may keep a copy for up to 10 minutes more.
 Episodes summarised before spec #94 need
 `thestill backfill-summary-previews` once, or they stay off the public pages.
 

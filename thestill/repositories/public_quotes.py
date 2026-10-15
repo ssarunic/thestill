@@ -212,14 +212,17 @@ def indexable_entities_sql(p: str, *, min_quotes: int) -> Tuple[str, List[Any]]:
     gate_sql, params = _gate(p)
     sql = f"""
         WITH q AS (
-            SELECT DISTINCT m.episode_id, m.segment_id, sp.entity_id AS speaker_id, m.entity_id AS about_id
+            SELECT DISTINCT m.episode_id || ':' || CAST(m.segment_id AS TEXT) AS seg,
+                   sp.entity_id AS speaker_id, m.entity_id AS about_id
             {_FROM}
             WHERE {gate_sql}
         ),
+        -- Distinct segments, as the page counts them: a segment naming two
+        -- things is one quote by its speaker, not two.
         counts AS (
-            SELECT speaker_id AS entity_id, COUNT(*) AS n FROM q GROUP BY speaker_id
+            SELECT speaker_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY speaker_id
             UNION ALL
-            SELECT about_id AS entity_id, COUNT(*) AS n FROM q GROUP BY about_id
+            SELECT about_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY about_id
         )
         SELECT c.entity_id, ent.type AS entity_type, SUM(c.n) AS quotes
         FROM counts c JOIN entities ent ON ent.id = c.entity_id

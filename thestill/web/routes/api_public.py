@@ -34,19 +34,26 @@ from __future__ import annotations
 
 import json
 import re
-import threading
-import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from structlog import get_logger
 
+from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state
-from ..public_access import PublicVisibility, apply_public_cache_headers, get_public_visibility, public_rate_limit
+from ..public_access import (
+    PublicVisibility,
+    TtlCache,
+    apply_public_cache_headers,
+    get_public_visibility,
+    public_rate_limit,
+)
 from ..responses import api_response, etag_json_response
+from .api_entities import _entity_id_from_path, get_episode_entities
 from .api_top_podcasts import _MAX_LIMIT as _TOP_MAX_LIMIT
 from .api_top_podcasts import _resolve_region
 
@@ -363,13 +370,7 @@ def get_public_episode_summary(
 # Landing feed and chart
 # ---------------------------------------------------------------------------
 
-_recent_lock = threading.Lock()
-_recent_cache: Dict[int, Tuple[float, List[Dict[str, Any]]]] = {}
-
-
-def reset_recent_cache_for_testing() -> None:
-    with _recent_lock:
-        _recent_cache.clear()
+_recent_cache = TtlCache(_RECENT_TTL_SECONDS, max_size=_RECENT_MAX * 2)
 
 
 @router.get("/recent-summaries")
@@ -380,17 +381,13 @@ def list_recent_summaries(
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """Newest public summaries across the corpus (the landing page feed)."""
-    now = time.monotonic()
-    with _recent_lock:
-        cached = _recent_cache.get(limit)
-    if cached and now - cached[0] <= _RECENT_TTL_SECONDS:
-        items = cached[1]
-    else:
-        visibility = get_public_visibility(state)
+    visibility = get_public_visibility(state)
+
+    def build() -> List[Dict[str, Any]]:
         rows, _ = state.repository.list_public_episode_rows(limit=limit, order_by="published_at")
-        items = _episode_items(state, visibility, rows, with_podcast=True)
-        with _recent_lock:
-            _recent_cache[limit] = (now, items)
+        return _episode_items(state, visibility, rows, with_podcast=True)
+
+    items = _recent_cache.get_or_compute((limit, visibility.fingerprint()), build)
     apply_public_cache_headers(request, response)
     return api_response({"episodes": items})
 
@@ -446,13 +443,7 @@ _INDEX_MIN_QUOTES = 3
 _ENTITY_TTL_SECONDS = 120.0
 _ABOUT_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
 
-_entity_lock = threading.Lock()
-_entity_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
-
-
-def reset_entity_cache_for_testing() -> None:
-    with _entity_lock:
-        _entity_cache.clear()
+_entity_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=512)
 
 
 def _entity_type_str(value: Any) -> str:
@@ -496,8 +487,6 @@ def _stands_alone(text: str) -> bool:
 
 
 def _public_entity_id(state: AppState, visibility: PublicVisibility, entity_type: str, slug: str) -> str:
-    from .api_entities import _entity_id_from_path
-
     if entity_type not in _ENTITY_TYPES:
         raise _not_found("Entity")
     _check_slug(slug, "Entity")
@@ -511,8 +500,6 @@ def _public_entity_id(state: AppState, visibility: PublicVisibility, entity_type
 
 
 def _parse_date(value: Any):
-    from datetime import datetime, timezone
-
     if isinstance(value, str):
         try:
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -525,8 +512,6 @@ def _parse_date(value: Any):
 
 def _activity(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Episodes per week (Monday-based) for the last 26 weeks, oldest first."""
-    from datetime import datetime, timedelta, timezone
-
     today = datetime.now(timezone.utc).date()
     first_monday = today - timedelta(days=today.weekday()) - timedelta(weeks=_ACTIVITY_WEEKS - 1)
     weeks = [0] * _ACTIVITY_WEEKS
@@ -542,8 +527,6 @@ def _activity(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _stats(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Hero counts: shows and episodes where the entity speaks or is named."""
-    from datetime import datetime, timedelta, timezone
-
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     dated = [(str(r["episode_id"]), _parse_date(r.get("pub_date"))) for r in presence]
     dates = [d for _, d in dated if d is not None]
@@ -556,8 +539,6 @@ def _stats(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_id: str) -> Dict[str, Any]:
-    from ...repositories.public_quotes import QuoteFilter, days_ago
-
     repo = state.entity_repository
     summary = repo.get_entity_summary(entity_id, recent_mentions_limit=1, recent_mentions_per_episode=1)
     if summary is None:
@@ -655,8 +636,10 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
     if enrichment is not None and enrichment.has_content():
         affiliations = []
         for aff in enrichment.affiliations or []:
+            if aff.entity_id in hidden_entities:
+                continue  # A hidden entity's name must not appear on other pages either.
             ref = None
-            if aff.entity_id and aff.entity_type and aff.entity_id not in hidden_entities:
+            if aff.entity_id and aff.entity_type:
                 ref = {"type": _entity_type_str(aff.entity_type), "slug": entity_slug(aff.entity_id)}
             affiliations.append({"relation": aff.relation, "label": aff.label, "ref": ref})
         enrichment_wire = {
@@ -669,16 +652,20 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             "affiliations": affiliations[:8],
         }
 
+    guest_rows = [r for r in summary.get("guest_episodes", []) if r.get("podcast_slug") and r.get("episode_slug")]
+    guest_lookup = state.repository.get_episodes_by_ids([str(r["episode_id"]) for r in guest_rows])
     guest_episodes = [
         {
-            "podcast_slug": r.get("podcast_slug"),
+            "podcast_slug": r["podcast_slug"],
             "podcast_title": r["podcast_title"],
-            "episode_slug": r.get("episode_slug"),
+            "episode_slug": r["episode_slug"],
             "episode_title": r["episode_title"],
             "published_at": _iso(r.get("published_at")),
         }
-        for r in summary.get("guest_episodes", [])
-        if r.get("podcast_slug") and r.get("episode_slug") and visibility.podcast_is_public(r["podcast_id"])
+        for r in guest_rows
+        # The same predicate as an episode page: summarised, on a public show.
+        if str(r["episode_id"]) in guest_lookup
+        and visibility.episode_is_public(r["podcast_id"], guest_lookup[str(r["episode_id"])][1])
     ][:12]
 
     return {
@@ -711,17 +698,9 @@ def public_entity_payload(state: AppState, entity_type: str, slug: str) -> Dict[
     """The cached public entity payload (also used by the page shell's head tags)."""
     visibility = get_public_visibility(state)
     entity_id = _public_entity_id(state, visibility, entity_type, slug)
-    now = time.monotonic()
-    with _entity_lock:
-        cached = _entity_cache.get(entity_id)
-    if cached and now - cached[0] <= _ENTITY_TTL_SECONDS:
-        return cached[1]
-    payload = _build_entity_payload(state, visibility, entity_id)
-    with _entity_lock:
-        if len(_entity_cache) > 512:
-            _entity_cache.clear()
-        _entity_cache[entity_id] = (now, payload)
-    return payload
+    return _entity_cache.get_or_compute(
+        (entity_id, visibility.fingerprint()), lambda: _build_entity_payload(state, visibility, entity_id)
+    )
 
 
 @router.get("/entities/{entity_type}/{slug}")
@@ -752,8 +731,6 @@ def list_public_entity_quotes(
 ) -> dict:
     """Quote stream: ``said`` = quotes the person said (optionally ``about``
     one entity id); ``about`` = quotes by other named speakers that name it."""
-    from ...repositories.public_quotes import QuoteFilter
-
     visibility = get_public_visibility(state)
     entity_id = _public_entity_id(state, visibility, entity_type, slug)
     if about is not None and (not _ABOUT_RE.match(about) or not visibility.entity_is_public(about)):
@@ -790,9 +767,6 @@ def list_public_episode_quotes(
     With ``q``, the quote starting within 5 seconds of it is returned as
     ``linked`` even when it is not among the first page.
     """
-    from ...repositories.public_quotes import QuoteFilter
-    from .api_entities import get_episode_entities
-
     visibility = get_public_visibility(state)
     _podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
     queries = state.entity_repository.public_quote_queries()
@@ -821,8 +795,7 @@ def list_public_episode_quotes(
 
 
 _TRENDING_TTL_SECONDS = 1800.0
-_trending_lock = threading.Lock()
-_trending_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_trending_cache = TtlCache(_TRENDING_TTL_SECONDS, max_size=4)
 
 
 @router.get("/who-said-what")
@@ -835,54 +808,45 @@ def get_who_said_what(
     most distinct named speakers across the most shows in the last 7 days
     (30 if the week is quiet), with up to three quotes from different
     speakers on different shows."""
-    from ...repositories.public_quotes import QuoteFilter, days_ago
-
-    now = time.monotonic()
-    with _trending_lock:
-        cached = _trending_cache.get("landing")
-    if cached and now - cached[0] <= _TRENDING_TTL_SECONDS:
-        payload = cached[1]
-    else:
-        queries = state.entity_repository.public_quote_queries()
-        payload = {"entity": None, "days": 7, "shows": 0, "speakers": 0, "quotes": []}
-        for days in (7, 30):
-            top = queries.trending(since=days_ago(days), limit=1)
-            if not top:
-                continue
-            row = top[0]
-            about_id = str(row["about_id"])
-            rows, _ = queries.quotes(QuoteFilter(about_id=about_id, since=days_ago(days)), order="longest", limit=40)
-            rows = sorted(rows, key=lambda r: not _stands_alone(r.get("quote") or ""))
-            picked: List[Dict[str, Any]] = []
-            seen_speakers: set = set()
-            seen_shows: set = set()
-            for quote_row in rows:
-                speaker, show = str(quote_row["speaker_id"]), quote_row["podcast_slug"]
-                if speaker in seen_speakers or show in seen_shows:
-                    continue
-                picked.append(_quote_item(quote_row))
-                seen_speakers.add(speaker)
-                seen_shows.add(show)
-                if len(picked) == 3:
-                    break
-            payload = {
-                "entity": {
-                    "name": display_name(row["about_name"]),
-                    "type": _entity_type_str(row["about_type"]),
-                    "slug": entity_slug(about_id),
-                },
-                "days": days,
-                "shows": int(row["shows"]),
-                "speakers": int(row["speakers"]),
-                "quotes": picked,
-            }
-            break
-        with _trending_lock:
-            _trending_cache["landing"] = (now, payload)
+    visibility = get_public_visibility(state)
+    payload = _trending_cache.get_or_compute(visibility.fingerprint(), lambda: _pick_trending(state))
     apply_public_cache_headers(request, response)
     return api_response(payload)
 
 
-def reset_trending_cache_for_testing() -> None:
-    with _trending_lock:
-        _trending_cache.clear()
+def _pick_trending(state: AppState) -> Dict[str, Any]:
+    queries = state.entity_repository.public_quote_queries()
+    payload = {"entity": None, "days": 7, "shows": 0, "speakers": 0, "quotes": []}
+    for days in (7, 30):
+        top = queries.trending(since=days_ago(days), limit=1)
+        if not top:
+            continue
+        row = top[0]
+        about_id = str(row["about_id"])
+        rows, _ = queries.quotes(QuoteFilter(about_id=about_id, since=days_ago(days)), order="longest", limit=40)
+        rows = sorted(rows, key=lambda r: not _stands_alone(r.get("quote") or ""))
+        picked: List[Dict[str, Any]] = []
+        seen_speakers: set = set()
+        seen_shows: set = set()
+        for quote_row in rows:
+            speaker, show = str(quote_row["speaker_id"]), quote_row["podcast_slug"]
+            if speaker in seen_speakers or show in seen_shows:
+                continue
+            picked.append(_quote_item(quote_row))
+            seen_speakers.add(speaker)
+            seen_shows.add(show)
+            if len(picked) == 3:
+                break
+        payload = {
+            "entity": {
+                "name": display_name(row["about_name"]),
+                "type": _entity_type_str(row["about_type"]),
+                "slug": entity_slug(about_id),
+            },
+            "days": days,
+            "shows": int(row["shows"]),
+            "speakers": int(row["speakers"]),
+            "quotes": picked,
+        }
+        break
+    return payload

@@ -871,9 +871,15 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     status_code=429,
                     headers={"Retry-After": "60", **no_cache},
                 )
-            except Exception as exc:  # A lookup failure must not take the app shell down.
-                logger.warning("public_shell.lookup_failed", path=full_path, error=str(exc), exc_info=True)
+            except Exception as exc:
+                # A lookup failure must not take the app shell down, but a
+                # crawler must not read it as a real page either: 503 asks
+                # it to come back instead of dropping the URL.
+                logger.error("public_shell.lookup_failed", path=full_path, error=str(exc), exc_info=True)
                 tags = HeadTags()
+                if renderer.is_lookup_path(full_path):
+                    tags.status_code = 503
+                    no_cache = {**no_cache, "Retry-After": "120"}
             html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
             return HTMLResponse(html_text, status_code=tags.status_code, headers=no_cache)
 

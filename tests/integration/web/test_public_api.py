@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
@@ -34,6 +35,7 @@ from thestill.utils.config import Config
 from thestill.web import dependencies
 from thestill.web.app import create_app
 from thestill.web.middleware import rate_limit
+from thestill.web.public_access import clear_public_caches, get_public_visibility
 from thestill.web.routes import api_public
 
 REAL_SUMMARY = "## 1. 🎙️ The Gist\n\nTwo hosts argue about chips.\n\n## 2. Timeline\n\n- [01:00] Start\n"
@@ -68,7 +70,7 @@ def app_config(tmp_path: Path) -> Config:
 @pytest.fixture(autouse=True)
 def _fresh_buckets() -> Iterator[None]:
     rate_limit.reset_for_testing()
-    api_public.reset_recent_cache_for_testing()
+    clear_public_caches()
     yield
     rate_limit.reset_for_testing()
 
@@ -371,7 +373,6 @@ def _seed_people(app_state) -> None:
 
 def test_person_page_payload(anon, app_state):
     _seed_people(app_state)
-    api_public.reset_entity_cache_for_testing()
     response = anon.get("/api/public/entities/person/scott-galloway")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -395,7 +396,6 @@ def test_person_quote_streams(anon, app_state):
 
 def test_entity_page_whos_talking_excludes_sponsor_unnamed_and_hidden(anon, app_state):
     _seed_people(app_state)
-    api_public.reset_entity_cache_for_testing()
     body = anon.get("/api/public/entities/company/nvidia").json()
     names = sorted(s["name"] for s in body["speakers"])
     assert names == ["Ed Elson", "Scott Galloway"]
@@ -422,7 +422,6 @@ def test_episode_quotes_and_linked_quote(anon, app_state):
 
 def test_who_said_what_picks_a_thing_with_several_speakers(anon, app_state):
     _seed_people(app_state)
-    api_public.reset_trending_cache_for_testing()
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         conn.execute(
             "UPDATE episodes SET pub_date = ? WHERE slug = 'summarised'", (datetime.now(timezone.utc).isoformat(),)
@@ -432,3 +431,60 @@ def test_who_said_what_picks_a_thing_with_several_speakers(anon, app_state):
     assert body["speakers"] == 2
     # One show here, so one quote: never two from the same show.
     assert len(body["quotes"]) == 1
+
+
+def test_a_takedown_from_another_process_reaches_cached_payloads(anon, app_state):
+    _seed(app_state)
+    assert [e["slug"] for e in anon.get("/api/public/recent-summaries").json()["episodes"]] == ["summarised"]
+    # The takedown CLI runs in its own process: this server learns of it only
+    # when its hidden-set TTL lapses (simulated by expiring just that value),
+    # and the still-fresh payload cache must not outlive it.
+    app_state.repository.set_podcast_public_pages("11111111-1111-1111-1111-111111111111", False)
+    get_public_visibility(app_state)._hidden_podcasts.clear()  # noqa: SLF001
+    assert anon.get("/api/public/recent-summaries").json()["episodes"] == []
+
+
+def test_sign_in_returns_to_next_once(anon, app_state, monkeypatch):
+    auth = app_state.auth_service
+    monkeypatch.setattr(auth, "get_google_auth_url", lambda redirect_uri: ("https://accounts.example/o", "st"))
+
+    async def callback(code, redirect_uri):
+        return SimpleNamespace(email="reader@example.com"), "jwt-token", False
+
+    async def no_region(user, ip):
+        return None
+
+    monkeypatch.setattr(auth, "handle_google_callback", callback)
+    monkeypatch.setattr(auth, "maybe_infer_region", no_region)
+
+    login = anon.get("/api/auth/google/login", params={"next": "/entities/person/x"}, follow_redirects=False)
+    assert login.status_code == 302
+    assert anon.cookies.get("oauth_next", "").strip('"') == "/entities/person/x"
+    done = anon.get("/api/auth/google/callback", params={"code": "c", "state": "st"}, follow_redirects=False)
+    assert done.status_code == 302
+    assert done.headers["location"] == "/entities/person/x"
+    assert anon.cookies.get("oauth_next") is None
+
+    # An abandoned flow's return path never steers a later plain sign-in.
+    anon.cookies.set("oauth_next", "/inbox", domain="testserver.local")
+    anon.get("/api/auth/google/login", follow_redirects=False)
+    assert anon.cookies.get("oauth_next") is None
+    assert (
+        anon.get("/api/auth/google/callback", params={"code": "c", "state": "st"}, follow_redirects=False).headers[
+            "location"
+        ]
+        == "/"
+    )
+
+
+def test_sitemap_and_page_count_quotes_the_same_way(anon, app_state):
+    # One rule decides whether a person or entity page is indexed (FM-6):
+    # the sitemap's SQL count must equal the page's said + about count.
+    _seed_people(app_state)
+    sql_counts = {
+        str(row["entity_id"]): int(row["quotes"])
+        for row in app_state.entity_repository.public_quote_queries().indexable_entities(min_quotes=1)
+    }
+    for entity_type, slug in (("person", "scott-galloway"), ("person", "ed-elson"), ("company", "nvidia")):
+        counts = anon.get(f"/api/public/entities/{entity_type}/{slug}").json()["quote_counts"]
+        assert sql_counts.get(f"{entity_type}:{slug}", 0) == counts["said"] + counts["about"], slug

@@ -24,7 +24,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from thestill.web import public_shell
 from thestill.web.app import create_app
+from thestill.web.dependencies import AUTH_COOKIE_NAME
 from thestill.web.middleware import rate_limit
 
 from .test_public_api import _fresh_buckets, _seed, app_config  # noqa: F401 (fixtures)
@@ -174,10 +176,8 @@ def test_single_user_installs_are_not_indexed(tmp_path, static_dir):
 
 def test_person_page_tags_and_sitemap(site, app_state):
     from tests.integration.web.test_public_api import _seed_people
-    from thestill.web.routes import api_public
 
     _seed_people(app_state)
-    api_public.reset_entity_cache_for_testing()
     response = site.get("/entities/person/scott-galloway")
     assert response.status_code == 200
     head = _head(response.text)
@@ -186,3 +186,30 @@ def test_person_page_tags_and_sitemap(site, app_state):
     assert 'name="robots" content="noindex"' in head
     assert site.get("/entities/person/hidden-person").status_code == 404
     assert site.get("/entities/planet/earth").status_code == 404
+
+
+def test_signed_in_users_are_never_refused_the_shell(site, app_state, monkeypatch):
+    _seed(app_state)
+    monkeypatch.setattr(rate_limit, "PUBLIC_LIMIT", rate_limit.RateLimit(max_events=1, window_seconds=60))
+    assert site.get("/podcasts/unknown-a").status_code == 404
+    assert site.get("/podcasts/unknown-b").status_code == 429
+    monkeypatch.setattr(app_state.auth_service, "get_current_user", lambda token: object() if token == "good" else None)
+    site.cookies.set(AUTH_COOKIE_NAME, "good")
+    assert site.get("/podcasts/unknown-c").status_code == 404
+    site.cookies.set(AUTH_COOKIE_NAME, "forged")
+    assert site.get("/podcasts/unknown-d").status_code == 429
+
+
+def test_a_failed_lookup_is_503_for_crawlers_not_a_page(site, app_state, monkeypatch):
+    _seed(app_state)
+
+    def down(self, parts):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(public_shell.ShellRenderer, "_podcast_or_episode", down)
+    response = site.get("/podcasts/public-show")
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "120"
+    assert "<!--thestill:head-->" in response.text or "<title>" in response.text
+    # Signed-in app paths need no lookup and keep working.
+    assert site.get("/inbox").status_code == 200

@@ -251,6 +251,9 @@ def google_login(
     safe_next = safe_next_path(next)
     if safe_next:
         _set_secure_cookie(response, name=NEXT_COOKIE, value=safe_next, max_age=600, samesite="lax", state=state)
+    else:
+        # An abandoned earlier flow must not steer this sign-in.
+        response.delete_cookie(key=NEXT_COOKIE)
 
     logger.info("Redirecting to Google OAuth")
     return response

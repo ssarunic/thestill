@@ -32,7 +32,6 @@ import html
 import json
 import re
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -40,7 +39,8 @@ from xml.sax.saxutils import escape as xml_escape
 
 from structlog import get_logger
 
-from .public_access import get_public_visibility
+from .middleware.rate_limit import allow_public_request
+from .public_access import TtlCache, get_public_visibility, has_valid_session
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -157,8 +157,7 @@ class ShellRenderer:
 
     def __init__(self, state: "AppState") -> None:
         self._state = state
-        self._cache: Dict[str, Tuple[float, HeadTags]] = {}
-        self._lock = threading.Lock()
+        self._cache = TtlCache(_LOOKUP_TTL_SECONDS, max_size=_LOOKUP_CACHE_MAX)
 
     @property
     def enabled(self) -> bool:
@@ -187,25 +186,20 @@ class ShellRenderer:
     # -- guards ---------------------------------------------------------
 
     def _cached(self, key: str, request: "Request", build) -> HeadTags:
-        now = time.monotonic()
-        with self._lock:
-            hit = self._cache.get(key)
-            if hit and now - hit[0] <= _LOOKUP_TTL_SECONDS:
-                return hit[1]
-        from .middleware.rate_limit import allow_public_request
-
-        if not allow_public_request(request):
+        """Cached tags for ``key``; a miss costs an anonymous caller one
+        public-bucket token (a signed-in user is never refused the app)."""
+        cache_key = (key, get_public_visibility(self._state).fingerprint())
+        if not self._cache.peek(cache_key) and not has_valid_session(request) and not allow_public_request(request):
             raise LookupThrottled()
-        tags = build()
-        with self._lock:
-            if len(self._cache) >= _LOOKUP_CACHE_MAX:
-                self._cache.clear()
-            self._cache[key] = (now, tags)
-        return tags
+        return self._cache.get_or_compute(cache_key, build)
+
+    @staticmethod
+    def is_lookup_path(path: str) -> bool:
+        """True for paths whose tags come from a repository lookup."""
+        return path.strip("/").split("/")[0] in ("podcasts", "entities")
 
     def clear(self) -> None:
-        with self._lock:
-            self._cache.clear()
+        self._cache.clear()
 
     # -- builders -------------------------------------------------------
 
@@ -364,9 +358,7 @@ class SitemapBuilder:
 
     def __init__(self, state: "AppState") -> None:
         self._state = state
-        self._lock = threading.Lock()
-        self._built_at = 0.0
-        self._urls: List[Tuple[str, Optional[str]]] = []
+        self._cache = TtlCache(_SITEMAP_TTL_SECONDS, max_size=2)
 
     def _collect(self) -> List[Tuple[str, Optional[str]]]:
         repo = self._state.repository
@@ -400,14 +392,9 @@ class SitemapBuilder:
         return urls
 
     def urls(self) -> List[Tuple[str, Optional[str]]]:
-        now = time.monotonic()
-        with self._lock:
-            if self._urls and now - self._built_at <= _SITEMAP_TTL_SECONDS:
-                return self._urls
-        urls = self._collect()
-        with self._lock:
-            self._urls, self._built_at = urls, now
-        return urls
+        # Keyed on the visibility fingerprint: a takedown drops its URLs on
+        # the next hidden-set refresh, not an hour later.
+        return self._cache.get_or_compute(get_public_visibility(self._state).fingerprint(), self._collect)
 
     def render(self, page: Optional[int] = None) -> Optional[str]:
         """The sitemap (``page=None``), a sitemap index past 40k URLs, or one

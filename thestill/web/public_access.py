@@ -32,7 +32,8 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import TYPE_CHECKING, Callable, Dict, Optional, Set, Tuple
+import weakref
+from typing import TYPE_CHECKING, Any, Callable, Dict, Hashable, Optional, Set, Tuple
 
 from fastapi import HTTPException, Request, Response, status
 
@@ -43,11 +44,13 @@ if TYPE_CHECKING:
     from ..models.podcast import Episode
     from .dependencies import AppState
 
-# Hidden sets change only when an operator runs a takedown command; a
-# minute of staleness is the documented propagation delay.
+# Hidden sets change only when an operator runs a takedown command (often
+# from another process); a minute of staleness is the propagation delay.
+# Every cached public payload is keyed on :meth:`PublicVisibility.fingerprint`,
+# so a takedown reaches all of them on the same refresh.
 _TTL_SECONDS = 60.0
 
-PUBLIC_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
+PUBLIC_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=300"
 PRIVATE_CACHE_CONTROL = "private, no-cache"
 
 
@@ -72,6 +75,53 @@ class _TtlValue:
     def clear(self) -> None:
         with self._lock:
             self._value = None
+
+
+_ALL_CACHES: "weakref.WeakSet[TtlCache]" = weakref.WeakSet()
+
+
+class TtlCache:
+    """Values computed at most once per TTL per key, bounded and thread-safe.
+
+    Keys of public payloads include the visibility fingerprint, so a hidden
+    show or entity drops out of every cached payload when the hidden sets
+    next refresh, not when the payload's own TTL runs out.
+    """
+
+    def __init__(self, ttl: float, max_size: int = 512) -> None:
+        self._ttl = ttl
+        self._max_size = max_size
+        self._lock = threading.Lock()
+        self._entries: Dict[Hashable, Tuple[float, Any]] = {}
+        _ALL_CACHES.add(self)
+
+    def get_or_compute(self, key: Hashable, loader: Callable[[], Any]) -> Any:
+        with self._lock:
+            hit = self._entries.get(key)
+            if hit and time.monotonic() - hit[0] <= self._ttl:
+                return hit[1]
+        value = loader()
+        with self._lock:
+            if len(self._entries) >= self._max_size:
+                self._entries.clear()
+            self._entries[key] = (time.monotonic(), value)
+        return value
+
+    def peek(self, key: Hashable) -> bool:
+        """True when ``key`` has a fresh value (no load, no side effects)."""
+        with self._lock:
+            hit = self._entries.get(key)
+            return bool(hit and time.monotonic() - hit[0] <= self._ttl)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+def clear_public_caches() -> None:
+    """Drop every public payload cache (tests, and in-process takedowns)."""
+    for cache in list(_ALL_CACHES):
+        cache.clear()
 
 
 class PublicVisibility:
@@ -126,12 +176,18 @@ class PublicVisibility:
     def entity_is_public(self, entity_id: str) -> bool:
         return entity_id not in self._hidden_entities.get()
 
+    def fingerprint(self) -> int:
+        """Changes whenever the hidden show or entity sets change; part of
+        every public payload cache key."""
+        return hash((frozenset(self._hidden_podcasts.get().items()), frozenset(self._hidden_entities.get())))
+
     def invalidate(self) -> None:
         """Drop every cached answer (tests and takedown commands in-process)."""
         self._hidden_podcasts.clear()
         self._hidden_entities.clear()
         with self._lock:
             self._podcast_public.clear()
+        clear_public_caches()
 
 
 _VISIBILITY_ATTR = "_public_visibility"
@@ -159,12 +215,20 @@ def has_credential(request: Request) -> bool:
 def apply_public_cache_headers(request: Request, response: Response) -> None:
     """Spec #94 §2 cache policy for every public API response.
 
-    Anonymous: shareable for 5 minutes, served stale for an hour while
-    revalidating. Any credential: private. ``Vary`` always, so a shared
+    Anonymous: shareable for 5 minutes, served stale for 5 more while
+    revalidating (a takedown is visible everywhere within ~11 minutes). Any credential: private. ``Vary`` always, so a shared
     cache never crosses the two.
     """
     response.headers["Cache-Control"] = PRIVATE_CACHE_CONTROL if has_credential(request) else PUBLIC_CACHE_CONTROL
     response.headers["Vary"] = "Cookie, Authorization"
+
+
+def has_valid_session(request: Request) -> bool:
+    """True when the request carries a credential that resolves to a user."""
+    token = _get_token_from_request(request)
+    if not token:
+        return False
+    return request.app.state.app_state.auth_service.get_current_user(token) is not None
 
 
 def public_rate_limit(request: Request) -> None:
@@ -174,11 +238,8 @@ def public_rate_limit(request: Request) -> None:
     elsewhere); an invalid or missing credential pays, so a junk cookie is
     no way around the limit.
     """
-    token = _get_token_from_request(request)
-    if token:
-        state = request.app.state.app_state
-        if state.auth_service.get_current_user(token) is not None:
-            return
+    if has_valid_session(request):
+        return
     if not allow_public_request(request):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
