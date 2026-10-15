@@ -1,6 +1,6 @@
 # Sign-in Page
 
-> **Status:** 🚧 Implemented, in review (2026-10-16; on `feat/94-public-pages`, PR #353)
+> **Status:** 🚧 Merged in PR #353 (2026-10-16), awaiting deploy
 > **Created:** 2026-10-16
 > **Updated:** 2026-10-16
 > **Priority:** High. The public pages (spec #94) put "Sign in" in front of every visitor, and today it means four different things.

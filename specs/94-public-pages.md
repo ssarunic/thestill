@@ -1,6 +1,6 @@
 # Public Pages
 
-> **Status:** 🚧 Implemented, in review (branch `feat/94-public-pages`, 2026-10-15); see [Outcome](#outcome-2026-10-15)
+> **Status:** 🚧 Merged in PR #353 (2026-10-16), awaiting deploy; see [Outcome](#outcome-2026-10-15)
 > **Created:** 2026-10-08
 > **Updated:** 2026-10-15
 > **Priority:** High. Every other growth idea (launch posts, directory listings, share links, a digest) needs a page a stranger can land on. Today there is none.
