@@ -162,7 +162,7 @@ export default function Episode() {
             </article>
           )}
 
-          {(quotes.isLoading || (quotes.data && quotes.data.quotes.length >= 2)) && (
+          {(quotes.isLoading || (quotes.data && (quotes.data.quotes.length >= 2 || linked))) && (
             <section className="ts-section" aria-labelledby="episode-quotes">
               <div className="ts-section-head">
                 <h2 className="ts-h2" id="episode-quotes">

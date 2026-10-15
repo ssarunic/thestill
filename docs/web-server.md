@@ -160,6 +160,51 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 |----------|--------|-------------|
 | `/api/top-podcasts` | GET | Top-podcasts chart (`?region=` ISO code, defaults to the user's region) |
 
+### Public pages (`/api/public`, spec #94)
+
+Signed-out read API behind the public pages. Mounted only when
+`MULTI_USER=true` and `PUBLIC_PAGES_ENABLED=true`; no session needed,
+per-IP rate limited (`RATE_LIMIT_PUBLIC_MAX`). Every response is built from
+an allowlist: no pipeline state, feed URLs, transcripts or per-user flags.
+Anonymous responses are `Cache-Control: public, max-age=300,
+stale-while-revalidate=3600`; a request carrying a credential gets
+`private, no-cache`, and `Vary: Cookie, Authorization` is always set.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/public/podcasts/{slug}` | GET | Show metadata, hosts, recurring guests, summarised-episode count |
+| `/api/public/podcasts/{slug}/episodes` | GET | Summarised episodes, newest first (`?limit=` ≤50, `?offset=`) |
+| `/api/public/podcasts/{slug}/episodes/{episode}` | GET | Episode metadata, hosts/guests, platform links, `has_transcript` |
+| `/api/public/podcasts/{slug}/episodes/{episode}/summary` | GET | Stored summary (`?lang=` only if already translated; never calls an LLM) |
+| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes; `?q=<seconds>` returns the quote within 5 s as `linked` |
+| `/api/public/recent-summaries` | GET | Latest summarised episodes across public shows (≤12) |
+| `/api/public/top-podcasts` | GET | Apple chart; hidden shows lose their link |
+| `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |
+| `/api/public/entities/{type}/{slug}/quotes` | GET | Paged quotes, `?kind=said\|about`, `?about=<type:slug>`, `?page=` |
+| `/api/public/who-said-what` | GET | Landing module: the week's most-quoted entity and three quotes from different speakers and shows |
+
+**Visibility.** An episode is public when it has a summary with a preview,
+both slugs, and its show is public. Hide a show with
+`thestill set-podcast-visibility --podcast-id X --private` and an entity with
+`thestill set-entity-visibility --entity person:<slug> --hidden`; both take effect within two minutes.
+Episodes summarised before spec #94 need
+`thestill backfill-summary-previews` once, or they stay off the public pages.
+
+**Page shell.** The SPA catch-all injects per-page `<title>`, description,
+canonical, Open Graph and JSON-LD into `index.html`, and answers 404 +
+`noindex` for unknown or hidden pages. Person and entity pages are
+`noindex` until they have three quotes. `/robots.txt` allows the public
+paths and blocks the signed-in app; `/sitemap.xml` lists public shows,
+episodes and indexable entities (a sitemap index past 40k URLs). In
+single-user mode `robots.txt` disallows everything.
+
+**Frontend.** A signed-out visitor gets `PublicApp` (lazy-loaded), styled
+with the scoped `.public-theme` tokens in `src/styles/public.css`. Signed-in
+paths redirect to `/login?next=…`, and Google sign-in returns to `next`
+after validation (`safe_next_path`). `tests/public-pages.spec.ts` fails if a
+public page calls any `/api` endpoint outside `/api/public` and
+`/api/auth/status`.
+
 ### Authentication (`/api/auth`)
 
 | Endpoint | Method | Description |
