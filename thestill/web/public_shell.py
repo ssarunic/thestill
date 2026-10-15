@@ -283,8 +283,48 @@ class ShellRenderer:
         )
 
     def _entity(self, entity_type: str, slug: str) -> HeadTags:
-        # Phase D adds entity head tags; until then entity pages are not indexed.
-        return HeadTags(index=False)
+        from fastapi import HTTPException
+
+        from .routes.api_public import public_entity_payload
+
+        try:
+            payload = public_entity_payload(self._state, entity_type, slug)
+        except HTTPException:
+            return HeadTags(status_code=404)
+        entity = payload["entity"]
+        enrichment = payload.get("enrichment") or {}
+        name = entity["name"]
+        featured = payload.get("featured_quote")
+        is_person = entity_type == "person"
+        if is_person:
+            title = f"{name} — podcast quotes and appearances · {SITE_NAME}"
+        else:
+            title = f"{name} in podcasts — who's talking and what they said · {SITE_NAME}"
+        if featured:
+            description = _clip(
+                f"\u201c{featured['text']}\u201d — {featured['speaker']['name']}, {featured['podcast']['title']}"
+            )
+        else:
+            description = _clip(enrichment.get("headline") or entity.get("description")) or DEFAULT_DESCRIPTION
+        same_as = [u for u in (enrichment.get("wikipedia_url"),) if u]
+        if entity.get("wikidata_qid"):
+            same_as.append(f"https://www.wikidata.org/wiki/{entity['wikidata_qid']}")
+        return HeadTags(
+            title=title,
+            description=description,
+            canonical_path=f"/entities/{entity_type}/{slug}",
+            og_type="profile" if is_person else "website",
+            image=enrichment.get("image_url"),
+            index=bool(payload.get("indexable")),
+            json_ld={
+                "@context": "https://schema.org",
+                "@type": "Person" if is_person else ("Organization" if entity_type == "company" else "Thing"),
+                "name": name,
+                "description": enrichment.get("headline") or entity.get("description"),
+                "image": enrichment.get("image_url"),
+                "sameAs": same_as,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +390,13 @@ class SitemapBuilder:
             if not rows or offset >= total:
                 break
         urls[2:2] = [(f"/podcasts/{slug}", lastmod) for slug, lastmod in sorted(podcasts.items())]
+        # Person and entity pages with enough quotes to be worth indexing
+        # (the same threshold the page uses for noindex).
+        for row in self._state.entity_repository.public_quote_queries().indexable_entities(min_quotes=3):
+            entity_id = str(row["entity_id"])
+            slug = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
+            entity_type = row["entity_type"].value if hasattr(row["entity_type"], "value") else row["entity_type"]
+            urls.append((f"/entities/{entity_type}/{slug}", None))
         return urls
 
     def urls(self) -> List[Tuple[str, Optional[str]]]:

@@ -36,10 +36,6 @@ from structlog import get_logger
 
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
-
-# ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
-# spec #44; re-exported here so existing call sites keep importing them
-# from this module.
 from .entity_repository import (
     ANCHOR_SCAN_OVERLAPS_SQL,
     RECENT_MENTIONS_BY_EPISODE_SQL,
@@ -51,6 +47,11 @@ from .entity_repository import (
     EntityRepository,
     MentionContext,
 )
+
+# ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
+# spec #44; re-exported here so existing call sites keep importing them
+# from this module.
+from .public_quotes import PublicQuoteQueries
 
 __all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
 
@@ -1906,6 +1907,13 @@ class SqliteEntityRepository(EntityRepository):
             for entry in entries[1:]:
                 pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def public_quote_queries(self) -> PublicQuoteQueries:
+        def fetch(sql: str, params) -> List[dict]:
+            with self._get_connection() as conn:
+                return [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
+
+        return PublicQuoteQueries(fetch, "?")
 
     def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
         with self._get_connection() as conn:

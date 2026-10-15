@@ -856,6 +856,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Spec #94 — public-page hide switch (Postgres migration 0015).
             if "public_hidden" not in entity_columns_now:
                 conn.execute("ALTER TABLE entities ADD COLUMN public_hidden INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mentions_episode_segment ON entity_mentions(episode_id, segment_id)"
+            )
 
         # spec #28 §1.13.7 — mention_overrides + resolution_blacklist tables.
         # The override layer is what guarantees human corrections survive

@@ -407,6 +407,46 @@ def set_podcast_visibility(ctx, podcast_id, public):
     click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
 
 
+@main.command("backfill-summary-previews")
+@click.option("--dry-run", "-d", is_flag=True, help="Count what would be filled; write nothing")
+@click.pass_context
+@require_config
+@log_command
+def backfill_summary_previews(ctx, dry_run):
+    """Store the summary preview for every summarised episode missing one.
+
+    Public pages (spec #94) list an episode only when its stored preview is
+    present: a real summary has one, an ``N/A`` summary stores "". Episodes
+    summarised before spec #69 Phase 6.5 only filled the column lazily, so
+    run this once after deploying public pages. Safe to re-run.
+    """
+    from .services.podcast_service import resolve_summary_preview
+
+    obj = ctx.obj
+    filled = without = 0
+    for podcast in obj.repository.get_all():
+        for episode in podcast.episodes:
+            if not episode.summary_path or episode.summary_preview is not None:
+                continue
+            if dry_run:
+                filled += 1
+                continue
+            preview = resolve_summary_preview(
+                episode,
+                repository=obj.repository,
+                path_manager=obj.path_manager,
+                file_storage=obj.config.file_storage,
+            )
+            if preview:
+                filled += 1
+            else:
+                without += 1
+    if dry_run:
+        click.echo(f"✓ {filled} summarised episode(s) have no stored preview yet.")
+    else:
+        click.echo(f"✓ Filled {filled} preview(s); {without} summary(ies) had no gist (N/A) or no file.")
+
+
 @main.command("set-entity-visibility")
 @click.option("--entity", "entity_id", required=True, help='Entity id, e.g. "person:scott-galloway"')
 @click.option("--public/--hidden", "public", required=True, help="Show or hide the entity on signed-out pages")

@@ -423,3 +423,373 @@ def list_public_top_podcasts(
             "top_podcasts": items,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# People, entities and quotes
+# ---------------------------------------------------------------------------
+
+_QUOTE_PAGE = 12
+_FEATURED_WINDOW_DAYS = 90
+_SPEAKERS_WINDOW_DAYS = 365
+_ACTIVITY_WEEKS = 26
+_INDEX_MIN_QUOTES = 3
+_ENTITY_TTL_SECONDS = 120.0
+_ABOUT_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
+
+_entity_lock = threading.Lock()
+_entity_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
+
+def reset_entity_cache_for_testing() -> None:
+    with _entity_lock:
+        _entity_cache.clear()
+
+
+def _entity_type_str(value: Any) -> str:
+    return str(value.value if hasattr(value, "value") else value)
+
+
+def _quote_item(row: Dict[str, Any]) -> Dict[str, Any]:
+    """One public quote, attributed and timed (no transcript beyond the excerpt)."""
+    start_ms = int(row.get("start_ms") or 0)
+    return {
+        "text": (row.get("quote") or "").strip(),
+        "start_seconds": start_ms // 1000,
+        "speaker": {"name": row["speaker_name"], "slug": entity_slug(str(row["speaker_id"]))},
+        "about": {
+            "name": row["about_name"],
+            "type": _entity_type_str(row["about_type"]),
+            "slug": entity_slug(str(row["about_id"])),
+            "id": str(row["about_id"]),
+        },
+        "episode": {
+            "slug": row["episode_slug"],
+            "title": row["episode_title"],
+            "pub_date": _iso(row.get("episode_pub_date")),
+            "image_url": row.get("episode_image_url") or row.get("podcast_image_url"),
+        },
+        "podcast": {"slug": row["podcast_slug"], "title": row["podcast_title"]},
+    }
+
+
+def _public_entity_id(state: AppState, visibility: PublicVisibility, entity_type: str, slug: str) -> str:
+    from .api_entities import _entity_id_from_path
+
+    if entity_type not in _ENTITY_TYPES:
+        raise _not_found("Entity")
+    _check_slug(slug, "Entity")
+    try:
+        entity_id = _entity_id_from_path(state.entity_repository, entity_type, slug)
+    except HTTPException:
+        raise _not_found("Entity") from None
+    if not visibility.entity_is_public(entity_id):
+        raise _not_found("Entity")
+    return entity_id
+
+
+def _parse_date(value: Any):
+    from datetime import datetime, timezone
+
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if value is not None and value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _activity(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Episodes per week (Monday-based) for the last 26 weeks, oldest first."""
+    from datetime import datetime, timedelta, timezone
+
+    today = datetime.now(timezone.utc).date()
+    first_monday = today - timedelta(days=today.weekday()) - timedelta(weeks=_ACTIVITY_WEEKS - 1)
+    weeks = [0] * _ACTIVITY_WEEKS
+    for row in presence:
+        pub = _parse_date(row.get("pub_date"))
+        if pub is None:
+            continue
+        index = (pub.date() - first_monday).days // 7
+        if 0 <= index < _ACTIVITY_WEEKS:
+            weeks[index] += 1
+    return {"start": first_monday.isoformat(), "weeks": weeks}
+
+
+def _stats(presence: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Hero counts: shows and episodes where the entity speaks or is named."""
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    dated = [(str(r["episode_id"]), _parse_date(r.get("pub_date"))) for r in presence]
+    dates = [d for _, d in dated if d is not None]
+    return {
+        "shows": len({str(r["podcast_id"]) for r in presence}),
+        "episodes": len({episode for episode, _ in dated}),
+        "since": min(dates).date().isoformat() if dates else None,
+        "last_30_days": len({episode for episode, d in dated if d is not None and d >= cutoff}),
+    }
+
+
+def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_id: str) -> Dict[str, Any]:
+    from ...repositories.public_quotes import QuoteFilter, days_ago
+
+    repo = state.entity_repository
+    summary = repo.get_entity_summary(entity_id, recent_mentions_limit=1, recent_mentions_per_episode=1)
+    if summary is None:
+        raise _not_found("Entity")
+    record = summary["entity"]
+    entity_type = _entity_type_str(record.type)
+    queries = repo.public_quote_queries()
+    hidden_podcasts = visibility.hidden_podcast_ids()
+    hidden_entities = visibility.hidden_entity_ids()
+    is_person = entity_type == "person"
+
+    said_total = 0
+    if is_person:
+        _, said_total = queries.quotes(QuoteFilter(speaker_id=entity_id), limit=1)
+    _, about_total = queries.quotes(QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id), limit=1)
+
+    def featured(f_recent: QuoteFilter, f_any: QuoteFilter) -> Optional[Dict[str, Any]]:
+        rows, _ = queries.quotes(f_recent, order="longest", limit=1)
+        if not rows:
+            rows, _ = queries.quotes(f_any, order="longest", limit=1)
+        return _quote_item(rows[0]) if rows else None
+
+    since = days_ago(_FEATURED_WINDOW_DAYS)
+    if is_person and said_total:
+        featured_quote = featured(QuoteFilter(speaker_id=entity_id, since=since), QuoteFilter(speaker_id=entity_id))
+    elif about_total:
+        featured_quote = featured(
+            QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id, since=since),
+            QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id),
+        )
+    else:
+        featured_quote = None
+
+    topics = []
+    if is_person:
+        for row in queries.topics(entity_id, limit=8):
+            if str(row["about_id"]) in hidden_entities:
+                continue
+            topics.append(
+                {
+                    "id": str(row["about_id"]),
+                    "name": row["about_name"],
+                    "type": _entity_type_str(row["about_type"]),
+                    "slug": entity_slug(str(row["about_id"])),
+                    "quotes": int(row["quotes"]),
+                }
+            )
+
+    speakers = []
+    if not is_person or about_total:
+        for row in queries.speakers(entity_id, since=days_ago(_SPEAKERS_WINDOW_DAYS), limit=8):
+            best, _ = queries.quotes(
+                QuoteFilter(speaker_id=str(row["speaker_id"]), about_id=entity_id), order="longest", limit=1
+            )
+            speakers.append(
+                {
+                    "name": row["speaker_name"],
+                    "slug": entity_slug(str(row["speaker_id"])),
+                    "quotes": int(row["quotes"]),
+                    "shows": int(row["shows"]),
+                    "quote": _quote_item(best[0])["text"] if best else None,
+                }
+            )
+
+    presence = queries.presence(entity_id)
+
+    def podcast_refs(rows: Iterable[Dict[str, Any]], count_key: str) -> List[Dict[str, Any]]:
+        return [
+            {"slug": r.get("podcast_slug"), "title": r["podcast_title"], "count": r.get(count_key)}
+            for r in rows
+            if r.get("podcast_slug")
+            and str(r["podcast_id"]) not in hidden_podcasts
+            and visibility.podcast_is_public(r["podcast_id"])
+        ]
+
+    related = []
+    for row in summary.get("cooccurring", []):
+        other = row["entity"]
+        if other.id in hidden_entities:
+            continue
+        related.append(
+            {
+                "name": other.canonical_name,
+                "type": _entity_type_str(other.type),
+                "slug": entity_slug(other.id),
+                "episode_count": row["episode_count"],
+            }
+        )
+
+    enrichment = summary.get("enrichment")
+    enrichment_wire = None
+    if enrichment is not None and enrichment.has_content():
+        affiliations = []
+        for aff in enrichment.affiliations or []:
+            ref = None
+            if aff.entity_id and aff.entity_type and aff.entity_id not in hidden_entities:
+                ref = {"type": _entity_type_str(aff.entity_type), "slug": entity_slug(aff.entity_id)}
+            affiliations.append({"relation": aff.relation, "label": aff.label, "ref": ref})
+        enrichment_wire = {
+            "headline": enrichment.headline,
+            "image_url": enrichment.image_url,
+            "image_attribution": enrichment.image_attribution,
+            "wikipedia_extract": enrichment.wikipedia_extract,
+            "wikipedia_url": enrichment.wikipedia_url,
+            "facts": [{"label": f.label, "value": f.value, "url": f.url} for f in (enrichment.facts or [])][:6],
+            "affiliations": affiliations[:8],
+        }
+
+    guest_episodes = [
+        {
+            "podcast_slug": r.get("podcast_slug"),
+            "podcast_title": r["podcast_title"],
+            "episode_slug": r.get("episode_slug"),
+            "episode_title": r["episode_title"],
+            "published_at": _iso(r.get("published_at")),
+        }
+        for r in summary.get("guest_episodes", [])
+        if r.get("podcast_slug") and r.get("episode_slug") and visibility.podcast_is_public(r["podcast_id"])
+    ][:12]
+
+    return {
+        "entity": {
+            "name": record.canonical_name,
+            "type": entity_type,
+            "slug": entity_slug(record.id),
+            "description": record.description,
+            "wikidata_qid": record.wikidata_qid,
+        },
+        "enrichment": enrichment_wire,
+        "stats": _stats(presence),
+        "activity": _activity(presence),
+        "roles": {
+            "hosts": podcast_refs(summary.get("hosts_podcasts", []), "episode_count"),
+            "recurring": podcast_refs(summary.get("recurring_podcasts", []), "episode_count"),
+            "guest_episodes": guest_episodes,
+        },
+        "most_discussed_on": podcast_refs(summary.get("most_discussed_on", []), "mention_count")[:8],
+        "related": related[:10],
+        "featured_quote": featured_quote,
+        "topics": topics,
+        "speakers": speakers,
+        "quote_counts": {"said": said_total, "about": about_total},
+        "indexable": (said_total + about_total) >= _INDEX_MIN_QUOTES,
+    }
+
+
+def public_entity_payload(state: AppState, entity_type: str, slug: str) -> Dict[str, Any]:
+    """The cached public entity payload (also used by the page shell's head tags)."""
+    visibility = get_public_visibility(state)
+    entity_id = _public_entity_id(state, visibility, entity_type, slug)
+    now = time.monotonic()
+    with _entity_lock:
+        cached = _entity_cache.get(entity_id)
+    if cached and now - cached[0] <= _ENTITY_TTL_SECONDS:
+        return cached[1]
+    payload = _build_entity_payload(state, visibility, entity_id)
+    with _entity_lock:
+        if len(_entity_cache) > 512:
+            _entity_cache.clear()
+        _entity_cache[entity_id] = (now, payload)
+    return payload
+
+
+@router.get("/entities/{entity_type}/{slug}")
+def get_public_entity(
+    entity_type: str,
+    slug: str,
+    request: Request,
+    response: Response,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """A person or entity page: who they are, where they're heard, the
+    featured quote, topics (people) or who's talking (things)."""
+    payload = public_entity_payload(state, entity_type, slug)
+    apply_public_cache_headers(request, response)
+    return api_response(payload)
+
+
+@router.get("/entities/{entity_type}/{slug}/quotes")
+def list_public_entity_quotes(
+    entity_type: str,
+    slug: str,
+    request: Request,
+    response: Response,
+    kind: str = Query("about", pattern="^(said|about)$"),
+    about: Optional[str] = Query(None, max_length=120),
+    page: int = Query(1, ge=1, le=200),
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """Quote stream: ``said`` = quotes the person said (optionally ``about``
+    one entity id); ``about`` = quotes by other named speakers that name it."""
+    from ...repositories.public_quotes import QuoteFilter
+
+    visibility = get_public_visibility(state)
+    entity_id = _public_entity_id(state, visibility, entity_type, slug)
+    if about is not None and (not _ABOUT_RE.match(about) or not visibility.entity_is_public(about)):
+        raise _not_found("Topic")
+    if kind == "said":
+        f = QuoteFilter(speaker_id=entity_id, about_id=about)
+    else:
+        f = QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id)
+    rows, total = state.entity_repository.public_quote_queries().quotes(
+        f, order="recent", limit=_QUOTE_PAGE, offset=(page - 1) * _QUOTE_PAGE
+    )
+    apply_public_cache_headers(request, response)
+    return api_response(
+        {
+            "quotes": [_quote_item(r) for r in rows],
+            "total": total,
+            "page": page,
+            "next_page": page + 1 if page * _QUOTE_PAGE < total else None,
+        }
+    )
+
+
+@router.get("/podcasts/{podcast_slug}/episodes/{episode_slug}/quotes")
+def list_public_episode_quotes(
+    podcast_slug: str,
+    episode_slug: str,
+    request: Request,
+    response: Response,
+    q: Optional[int] = Query(None, ge=0, le=60 * 60 * 12, description="Start second of a linked quote"),
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """Quotes from one episode in episode order, plus the entities it mentions.
+
+    With ``q``, the quote starting within 5 seconds of it is returned as
+    ``linked`` even when it is not among the first page.
+    """
+    from ...repositories.public_quotes import QuoteFilter
+    from .api_entities import get_episode_entities
+
+    visibility = get_public_visibility(state)
+    _podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
+    queries = state.entity_repository.public_quote_queries()
+    rows, total = queries.quotes(QuoteFilter(episode_id=episode.id), order="episode", limit=40)
+    items = [_quote_item(r) for r in rows]
+    linked = None
+    if q is not None:
+        linked = next((item for item in items if abs(item["start_seconds"] - q) <= 5), None)
+    hidden = visibility.hidden_entity_ids()
+    mentioned = []
+    for row in get_episode_entities(episode.id, min_confidence=0.0, state=state).entities:
+        if row.entity.id in hidden:
+            continue
+        mentioned.append(
+            {
+                "name": row.entity.canonical_name,
+                "type": row.entity.type,
+                "slug": entity_slug(row.entity.id),
+                "count": row.mention_count,
+            }
+        )
+        if len(mentioned) >= 12:
+            break
+    apply_public_cache_headers(request, response)
+    return api_response({"quotes": items[:8], "total": total, "linked": linked, "mentioned": mentioned})

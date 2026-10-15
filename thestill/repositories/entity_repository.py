@@ -26,10 +26,13 @@ compatibility with existing call sites.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..models.enrichment import EntityEnrichment
 from ..models.entities import EntityMention, EntityRecord
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .public_quotes import PublicQuoteQueries
 
 
 @dataclass(frozen=True)
@@ -762,6 +765,10 @@ class EntityRepository(ABC):
         Keeper rank: mention_count DESC, ``EntityType`` declaration
         order ASC, id ASC.
         """
+
+    def public_quote_queries(self) -> "PublicQuoteQueries":
+        """Spec #94 public-page quote queries bound to this backend."""
+        raise NotImplementedError
 
     @abstractmethod
     def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:

@@ -20,6 +20,10 @@ page shell, sitemap). ``entities.public_hidden`` hides a person or entity
 page and every quote they speak from the same surfaces. Both default to
 today's behaviour, so the migration changes nothing until someone flips one.
 
+``idx_mentions_episode_segment`` serves the public quote queries, which join
+each mention to the ``speaking`` row of the same transcript segment (without
+it Postgres filters hundreds of thousands of same-episode rows per page).
+
 Same convergence contract as earlier migrations: the DDL also lives in
 ``postgres_schema.SCHEMA_SQL`` (idempotent).
 
@@ -38,8 +42,10 @@ depends_on = None
 def upgrade() -> None:
     op.execute("ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS public_pages boolean NOT NULL DEFAULT true")
     op.execute("ALTER TABLE entities ADD COLUMN IF NOT EXISTS public_hidden boolean NOT NULL DEFAULT false")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_mentions_episode_segment ON entity_mentions(episode_id, segment_id)")
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS idx_mentions_episode_segment")
     op.execute("ALTER TABLE entities DROP COLUMN IF EXISTS public_hidden")
     op.execute("ALTER TABLE podcasts DROP COLUMN IF EXISTS public_pages")

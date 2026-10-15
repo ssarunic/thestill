@@ -443,6 +443,8 @@ CREATE TABLE IF NOT EXISTS entity_mentions (
 );
 CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id, episode_id) WHERE entity_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_mentions_episode ON entity_mentions(episode_id);
+-- Spec #94: public quotes join a mention to its segment's speaking row (migration 0015).
+CREATE INDEX IF NOT EXISTS idx_mentions_episode_segment ON entity_mentions(episode_id, segment_id);
 CREATE INDEX IF NOT EXISTS idx_mentions_pending ON entity_mentions(resolution_status) WHERE resolution_status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_mentions_role ON entity_mentions(entity_id, role) WHERE entity_id IS NOT NULL;
 -- Per-mention resolution looks up by case-folded surface form; without this

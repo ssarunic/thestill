@@ -57,6 +57,7 @@ from .entity_repository import (
     EntityRepository,
     MentionContext,
 )
+from .public_quotes import PublicQuoteQueries
 
 logger = get_logger(__name__)
 
@@ -1672,6 +1673,13 @@ class PostgresEntityRepository(EntityRepository):
             for entry in entries[1:]:
                 pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def public_quote_queries(self) -> PublicQuoteQueries:
+        def fetch(sql: str, params) -> List[dict]:
+            with connect(self.dsn) as conn:
+                return [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
+
+        return PublicQuoteQueries(fetch, "%s")
 
     def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
         with connect(self.dsn) as conn:

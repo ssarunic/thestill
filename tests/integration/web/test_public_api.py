@@ -274,3 +274,147 @@ def test_single_user_mode_mounts_no_public_api(tmp_path):
     config = Config(storage_path=tmp_path, multi_user=False, jwt_secret_key="test" * 16, cookie_secure=False)
     app = create_app(config)
     assert not [r for r in app.routes if getattr(r, "path", "").startswith("/api/public")]
+
+
+# ---------------------------------------------------------------------------
+# Phase D — people, entities and quotes
+# ---------------------------------------------------------------------------
+
+GALLOWAY_LINE = (
+    "I think Nvidia has built the deepest moat in enterprise computing, and the market is only starting to price it."
+)
+ELSON_LINE = (
+    "Scott keeps saying Nvidia is overvalued, but the data centre numbers keep proving him wrong every quarter."
+)
+
+
+def _seed_people(app_state) -> None:
+    from thestill.models.entities import EntityMention, EntityRecord, EntityType, MentionRole
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    for entity_id, kind, name in (
+        ("person:scott-galloway", EntityType.PERSON, "Scott Galloway"),
+        ("person:ed-elson", EntityType.PERSON, "Ed Elson"),
+        ("person:hidden-person", EntityType.PERSON, "Hidden Person"),
+        ("company:nvidia", EntityType.COMPANY, "Nvidia"),
+    ):
+        repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=name))
+    episode_id = "00000000-0000-0000-0000-000000000001"
+
+    def speaking(segment: int, who: str, name: str) -> EntityMention:
+        return EntityMention(
+            entity_id=who,
+            episode_id=episode_id,
+            segment_id=segment,
+            start_ms=segment * 60_000,
+            end_ms=segment * 60_000 + 20_000,
+            speaker=name,
+            role=MentionRole.SPEAKING,
+            surface_form=name,
+            quote_excerpt="First sentence only.",
+            confidence=1.0,
+            extractor="speaker:synth",
+        )
+
+    def named(segment: int, about: str, speaker: str, quote: str) -> EntityMention:
+        return EntityMention(
+            entity_id=about,
+            episode_id=episode_id,
+            segment_id=segment,
+            start_ms=segment * 60_000 + 5_000,
+            end_ms=segment * 60_000 + 8_000,
+            speaker=speaker,
+            role=MentionRole.MENTIONED,
+            surface_form="Nvidia",
+            quote_excerpt=quote,
+            confidence=0.9,
+            extractor="gliner:test",
+        )
+
+    repo.insert_mentions(
+        [
+            speaking(2, "person:scott-galloway", "Scott Galloway"),
+            named(2, "company:nvidia", "Scott Galloway", GALLOWAY_LINE),
+            speaking(3, "person:ed-elson", "Ed Elson"),
+            named(3, "company:nvidia", "Ed Elson", ELSON_LINE),
+            named(3, "person:scott-galloway", "Ed Elson", ELSON_LINE),
+            # A sponsor read by the host is never a public quote.
+            speaking(4, "person:scott-galloway", "Scott Galloway"),
+            named(
+                4,
+                "company:nvidia",
+                "Scott Galloway",
+                "This episode is brought to you by Nvidia, use code PROFG for ten percent off today.",
+            ),
+            # An unnamed speaker's segment has no resolved speaking row.
+            named(
+                5,
+                "company:nvidia",
+                "SPEAKER_03",
+                "Nvidia is a company that somebody we cannot name talked about at great length.",
+            ),
+            # A hidden person's quotes disappear everywhere.
+            speaking(6, "person:hidden-person", "Hidden Person"),
+            named(
+                6,
+                "company:nvidia",
+                "Hidden Person",
+                "Nvidia is something the hidden person has a long and detailed opinion about, apparently.",
+            ),
+        ]
+    )
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute("UPDATE entity_mentions SET resolution_status = 'resolved' WHERE entity_id IS NOT NULL")
+    repo.set_entity_public_hidden("person:hidden-person", True)
+
+
+def test_person_page_payload(anon, app_state):
+    _seed_people(app_state)
+    api_public.reset_entity_cache_for_testing()
+    response = anon.get("/api/public/entities/person/scott-galloway")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["entity"]["name"] == "Scott Galloway"
+    assert body["featured_quote"]["text"] == GALLOWAY_LINE
+    assert body["quote_counts"] == {"said": 1, "about": 1}
+    assert [t["name"] for t in body["topics"]] == ["Nvidia"]
+    assert body["stats"]["shows"] == 1
+    _assert_clean(body)
+
+
+def test_person_quote_streams(anon, app_state):
+    _seed_people(app_state)
+    said = anon.get("/api/public/entities/person/scott-galloway/quotes?kind=said").json()
+    assert [q["text"] for q in said["quotes"]] == [GALLOWAY_LINE]
+    filtered = anon.get("/api/public/entities/person/scott-galloway/quotes?kind=said&about=company:nvidia").json()
+    assert filtered["total"] == 1
+    about = anon.get("/api/public/entities/person/scott-galloway/quotes?kind=about").json()
+    assert [(q["speaker"]["name"], q["text"]) for q in about["quotes"]] == [("Ed Elson", ELSON_LINE)]
+
+
+def test_entity_page_whos_talking_excludes_sponsor_unnamed_and_hidden(anon, app_state):
+    _seed_people(app_state)
+    api_public.reset_entity_cache_for_testing()
+    body = anon.get("/api/public/entities/company/nvidia").json()
+    names = sorted(s["name"] for s in body["speakers"])
+    assert names == ["Ed Elson", "Scott Galloway"]
+    stream = anon.get("/api/public/entities/company/nvidia/quotes").json()
+    texts = [q["text"] for q in stream["quotes"]]
+    assert sorted(texts) == sorted([GALLOWAY_LINE, ELSON_LINE])
+    assert len(body["activity"]["weeks"]) == 26
+
+
+def test_hidden_entities_are_404(anon, app_state):
+    _seed_people(app_state)
+    assert anon.get("/api/public/entities/person/hidden-person").status_code == 404
+    assert anon.get("/api/public/entities/person/nobody").status_code == 404
+    assert anon.get("/api/public/entities/planet/earth").status_code == 404
+
+
+def test_episode_quotes_and_linked_quote(anon, app_state):
+    _seed_people(app_state)
+    body = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes?q=125").json()
+    assert {q["speaker"]["name"] for q in body["quotes"]} == {"Scott Galloway", "Ed Elson"}
+    assert body["linked"]["text"] == GALLOWAY_LINE
+    assert "Hidden Person" not in {m["name"] for m in body["mentioned"]}

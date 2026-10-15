@@ -170,3 +170,19 @@ def test_single_user_installs_are_not_indexed(tmp_path, static_dir):
     assert client.get("/sitemap.xml").status_code == 404
     # The shell is served untouched: the build's default head, no lookups.
     assert _title(client.get("/podcasts/anything").text) == "Thestill"
+
+
+def test_person_page_tags_and_sitemap(site, app_state):
+    from tests.integration.web.test_public_api import _seed_people
+    from thestill.web.routes import api_public
+
+    _seed_people(app_state)
+    api_public.reset_entity_cache_for_testing()
+    response = site.get("/entities/person/scott-galloway")
+    assert response.status_code == 200
+    head = _head(response.text)
+    assert _title(response.text).startswith("Scott Galloway — podcast quotes and appearances")
+    # Two quotes is below the indexing threshold of three.
+    assert 'name="robots" content="noindex"' in head
+    assert site.get("/entities/person/hidden-person").status_code == 404
+    assert site.get("/entities/planet/earth").status_code == 404
