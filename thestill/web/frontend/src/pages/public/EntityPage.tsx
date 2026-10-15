@@ -104,6 +104,17 @@ export default function EntityPage() {
   const aboutQuotes = about.data?.pages.flatMap((p) => p.quotes) ?? []
   const stats = data?.stats
   const featured = aboutTopic ? saidQuotes[0] ?? null : data?.featured_quote ?? null
+  // Wikidata lists one affiliation per relation (founder, CEO, …); show
+  // each person once with their relations joined.
+  const people: { slug: string; label: string; relations: string[] }[] = []
+  if (!isPerson) {
+    for (const aff of enrichment?.affiliations ?? []) {
+      if (aff.ref?.type !== 'person') continue
+      const existing = people.find((p) => p.slug === aff.ref!.slug)
+      if (!existing) people.push({ slug: aff.ref.slug, label: aff.label, relations: [aff.relation] })
+      else if (!existing.relations.includes(aff.relation)) existing.relations.push(aff.relation)
+    }
+  }
 
   return (
     <div className="ts-container">
@@ -111,9 +122,9 @@ export default function EntityPage() {
         {data ? (
           <div style={{ flex: 'none', textAlign: 'center' }}>
             {isPerson || enrichment?.image_url ? (
-              <Avatar src={enrichment?.image_url} name={name} size={112} shape={isPerson ? 'round' : 'square'} eager />
+              <Avatar src={enrichment?.image_url} name={name} size={112} shape={isPerson ? 'round' : 'square'} logo={!isPerson} eager />
             ) : null}
-            {enrichment?.image_url && enrichment.image_attribution && <div className="ts-photo-credit">Photo: Wikimedia Commons</div>}
+            {enrichment?.image_url && enrichment.image_attribution && <div className="ts-photo-credit">{isPerson ? 'Photo' : 'Image'}: Wikimedia Commons</div>}
           </div>
         ) : (
           <Skeleton width={112} height={112} round={isPerson} />
@@ -341,21 +352,19 @@ export default function EntityPage() {
           {enrichment && enrichment.facts.length > 0 && (
             <FactList title="Facts" source="Wikidata" items={enrichment.facts.map((f) => ({ label: f.label, value: f.value, href: f.url }))} />
           )}
-          {enrichment && !isPerson && enrichment.affiliations.some((a) => a.ref?.type === 'person') && (
+          {people.length > 0 && (
             <section className="ts-rail-module">
               <h3 className="ts-rail-label">People</h3>
               <ul className="ts-related">
-                {enrichment.affiliations
-                  .filter((a) => a.ref?.type === 'person')
-                  .map((a) => (
-                    <li key={`${a.relation}-${a.label}`}>
-                      <Link to={entityPath(a.ref!)}>
-                        <EntityDot type="person" />
-                        <span>{a.label}</span>
-                      </Link>
-                      <span className="ts-related-count">{a.relation}</span>
-                    </li>
-                  ))}
+                {people.map((p) => (
+                  <li key={p.slug}>
+                    <Link to={entityPath({ type: 'person', slug: p.slug })}>
+                      <EntityDot type="person" />
+                      <span>{p.label}</span>
+                    </Link>
+                    <span className="ts-related-count">{p.relations.join(' · ')}</span>
+                  </li>
+                ))}
               </ul>
             </section>
           )}

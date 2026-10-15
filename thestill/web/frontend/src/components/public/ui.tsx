@@ -244,15 +244,18 @@ export function Avatar({
   size,
   shape = 'round',
   eager = false,
+  logo = false,
 }: {
   src?: string | null
   name: string
   size: number
   shape?: 'round' | 'square'
   eager?: boolean
+  /** Fit the whole image inside the tile (logos of any aspect ratio) instead of cropping to fill it. */
+  logo?: boolean
 }) {
   const [failed, setFailed] = useState(false)
-  const cls = cx('ts-avatar', shape === 'square' ? 'ts-avatar-square' : 'ts-avatar-round')
+  const cls = cx('ts-avatar', shape === 'square' ? 'ts-avatar-square' : 'ts-avatar-round', logo && 'ts-avatar-logo')
   const style = { width: size, height: size, fontSize: Math.round(size * 0.36) }
   if (src && !failed) {
     return (
