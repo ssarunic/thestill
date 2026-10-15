@@ -43,8 +43,10 @@ from structlog import get_logger
 from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
+from ...utils.geoip import lookup_country_from_ip
 from ...utils.language_config import normalize_language_code
 from ..dependencies import AppState, get_app_state
+from ..middleware import resolve_client_ip
 from ..public_access import (
     PublicVisibility,
     TtlCache,
@@ -68,6 +70,7 @@ _ENTITY_TYPES = ("person", "company", "product", "topic")
 
 _EPISODE_PAGE_MAX = 50
 _RECENT_MAX = 12
+_DEFAULT_TOP_REGION = "us"
 _RECENT_TTL_SECONDS = 300.0
 
 
@@ -392,6 +395,24 @@ def list_recent_summaries(
     return api_response({"episodes": items})
 
 
+# A visitor's country by IP, kept a day per address so a returning visitor
+# (or a crawler) costs one ipinfo call, not one per page view.
+_visitor_country_cache = TtlCache(24 * 3600.0, max_size=10_000)
+
+
+async def visitor_country(request: Request) -> Optional[str]:
+    """The signed-out visitor's country (ISO code, lower case) from their IP,
+    or None when the chart region was chosen explicitly or the lookup fails."""
+    if request.query_params.get("region"):
+        return None
+    ip = resolve_client_ip(request)
+    hit, country = _visitor_country_cache.lookup(ip)
+    if not hit:
+        country = await lookup_country_from_ip(ip)
+        _visitor_country_cache.put(ip, country)
+    return country
+
+
 @router.get("/top-podcasts")
 def list_public_top_podcasts(
     request: Request,
@@ -399,12 +420,15 @@ def list_public_top_podcasts(
     region: Optional[str] = Query(None, min_length=2, max_length=2),
     category: Optional[str] = Query(None, min_length=1, max_length=100),
     limit: int = Query(100, ge=1, le=_TOP_MAX_LIMIT),
+    country: Optional[str] = Depends(visitor_country),
     state: AppState = Depends(get_app_state),
 ) -> dict:
-    """The chart for one region. Rows link to a show page only when the show is public."""
+    """The chart for one region: ``?region=``, else the visitor's country by
+    IP, else the US. Rows link to a show page only when the show is public."""
     visibility = get_public_visibility(state)
     available = state.repository.get_top_podcast_regions()
-    resolved = _resolve_region(region, None, available)
+    preferred = country if country in available else _DEFAULT_TOP_REGION
+    resolved = _resolve_region(region, preferred, available)
     category_clean = category.strip() if category and category.strip() else None
     rows = state.repository.get_top_podcasts(resolved, limit=limit, q=None, category=category_clean, user_id=None)
     hidden_slugs = visibility.hidden_podcast_slugs()
@@ -421,6 +445,10 @@ def list_public_top_podcasts(
         for row in rows
     ]
     apply_public_cache_headers(request, response)
+    if not region:
+        # Picked from the visitor's IP: a shared cache must not hand this
+        # country's chart to someone in another.
+        response.headers["Cache-Control"] = "private, max-age=300"
     return api_response(
         {
             "region": resolved,

@@ -107,6 +107,20 @@ class TtlCache:
             self._entries[key] = (time.monotonic(), value)
         return value
 
+    def lookup(self, key: Hashable) -> Tuple[bool, Any]:
+        """``(True, value)`` for a fresh entry, else ``(False, None)``."""
+        with self._lock:
+            hit = self._entries.get(key)
+            if hit and time.monotonic() - hit[0] <= self._ttl:
+                return True, hit[1]
+            return False, None
+
+    def put(self, key: Hashable, value: Any) -> None:
+        with self._lock:
+            if len(self._entries) >= self._max_size:
+                self._entries.clear()
+            self._entries[key] = (time.monotonic(), value)
+
     def peek(self, key: Hashable) -> bool:
         """True when ``key`` has a fresh value (no load, no side effects)."""
         with self._lock:

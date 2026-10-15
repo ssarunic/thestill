@@ -488,3 +488,47 @@ def test_sitemap_and_page_count_quotes_the_same_way(anon, app_state):
     for entity_type, slug in (("person", "scott-galloway"), ("person", "ed-elson"), ("company", "nvidia")):
         counts = anon.get(f"/api/public/entities/{entity_type}/{slug}").json()["quote_counts"]
         assert sql_counts.get(f"{entity_type}:{slug}", 0) == counts["said"] + counts["about"], slug
+
+
+def test_top_chart_region_follows_the_visitor_then_the_us(anon, app_state, monkeypatch):
+    import sqlite3
+
+    from .conftest import seed_top_chart
+
+    seed_top_chart(app_state, "gb", [{"rank": 1, "name": "The Rest Is History", "rss_url": "https://example.com/t"}])
+    with sqlite3.connect(str(app_state.repository.db_path)) as conn:
+        conn.execute(
+            "INSERT INTO top_podcasts_meta (region, source_path, source_mtime, row_count, seeded_at) "
+            "VALUES ('us', 'test', 0, 0, '2026-10-15T00:00:00+00:00')"
+        )
+    assert set(app_state.repository.get_top_podcast_regions()) == {"gb", "us"}
+    calls: list = []
+
+    async def from_ip(ip):
+        calls.append(ip)
+        return answers[ip]
+
+    monkeypatch.setattr(api_public, "lookup_country_from_ip", from_ip)
+    monkeypatch.setattr(api_public, "_visitor_country_cache", api_public.TtlCache(60.0))
+
+    answers = {"81.2.69.142": "gb", "203.0.113.9": "zz", "198.51.100.7": None}
+    # The client IP is whatever the proxy-aware resolver says; stand it in.
+    headers = lambda ip: {"X-Test-Ip": ip}  # noqa: E731
+    monkeypatch.setattr(api_public, "resolve_client_ip", lambda request: request.headers["X-Test-Ip"])
+
+    uk = anon.get("/api/public/top-podcasts", headers=headers("81.2.69.142"))
+    assert uk.json()["region"] == "gb"
+    # Chosen from the IP, so no shared cache may store it.
+    assert uk.headers["Cache-Control"] == "private, max-age=300"
+    anon.get("/api/public/top-podcasts", headers=headers("81.2.69.142"))
+    assert calls == ["81.2.69.142"]  # one lookup per address
+
+    # A country with no chart, or no answer, falls back to the US.
+    assert anon.get("/api/public/top-podcasts", headers=headers("203.0.113.9")).json()["region"] == "us"
+    assert anon.get("/api/public/top-podcasts", headers=headers("198.51.100.7")).json()["region"] == "us"
+
+    # An explicit choice wins and skips the lookup.
+    chosen = anon.get("/api/public/top-podcasts?region=gb", headers=headers("198.51.100.7"))
+    assert chosen.json()["region"] == "gb"
+    assert chosen.headers["Cache-Control"].startswith("public")
+    assert len(calls) == 3
