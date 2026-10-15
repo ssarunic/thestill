@@ -83,6 +83,7 @@ from .routes import (
     api_me_mcp_token,
     api_narrations,
     api_podcasts,
+    api_public,
     api_search,
     api_status,
     api_top_podcasts,
@@ -763,6 +764,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(
         api_commands.admin_router, prefix="/api/commands", tags=["commands", "admin"], dependencies=require_session
     )
+
+    # Spec #94 — the ONE deliberate exception to default-deny: signed-out
+    # reads for the public pages. Everything the module serves is assembled
+    # from an allowlist, never spends (no LLM, no enqueue, no writes) and is
+    # rate-limited per IP. Multi-user only: single-user installs have no
+    # anonymous visitors.
+    if config.multi_user and config.public_pages_enabled:
+        app.include_router(api_public.router, prefix="/api/public", tags=["public"])
 
     # Spec #78 — mount the MCP capability-URL endpoint before the SPA
     # catch-all so route matching can never hand /mcp/* to the frontend

@@ -148,7 +148,9 @@ CREATE TABLE IF NOT EXISTS podcasts (
     consecutive_refresh_failures integer NOT NULL DEFAULT 0,
     refresh_failure_streak_started_at timestamptz NULL,
     refresh_disabled_reason text NULL,
-    refresh_retry_after_at timestamptz NULL
+    refresh_retry_after_at timestamptz NULL,
+    -- Spec #94: false hides the show from every signed-out surface (migration 0015).
+    public_pages boolean NOT NULL DEFAULT true
 );
 CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
 CREATE INDEX IF NOT EXISTS idx_podcasts_next_refresh ON podcasts(next_refresh_at) WHERE next_refresh_at IS NOT NULL;
@@ -162,6 +164,7 @@ ALTER TABLE podcasts
     ADD COLUMN IF NOT EXISTS refresh_failure_streak_started_at timestamptz NULL,
     ADD COLUMN IF NOT EXISTS refresh_disabled_reason text NULL,
     ADD COLUMN IF NOT EXISTS refresh_retry_after_at timestamptz NULL;
+ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS public_pages boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_podcasts_quarantine ON podcasts(refresh_disabled_reason, last_refresh_at) WHERE refresh_disabled_reason IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS episodes (
@@ -407,8 +410,11 @@ CREATE TABLE IF NOT EXISTS entities (
     description text NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
-    wikidata_instance_of jsonb NOT NULL DEFAULT '[]'::jsonb
+    wikidata_instance_of jsonb NOT NULL DEFAULT '[]'::jsonb,
+    -- Spec #94: true hides the entity's public page and every quote it speaks (migration 0015).
+    public_hidden boolean NOT NULL DEFAULT false
 );
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS public_hidden boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);

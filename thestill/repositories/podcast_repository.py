@@ -402,6 +402,25 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def set_podcast_public_pages(self, podcast_id: str, public: bool) -> bool:
+        """Spec #94 takedown switch: ``public=False`` hides the show, its
+        episodes and their quotes from every signed-out surface. Returns
+        whether a row was updated."""
+        pass
+
+    def is_podcast_public(self, podcast_id: str) -> bool:
+        """True when the podcast may appear on signed-out pages (spec #94):
+        ``public_pages`` on and not a synthetic import container. Default
+        False keeps non-SQL test doubles private."""
+        return False
+
+    @abstractmethod
+    def list_hidden_podcasts(self) -> Dict[str, str]:
+        """``{id: slug}`` of podcasts with ``public_pages`` off (spec #94).
+        Small by construction (takedowns only), so callers filter in memory."""
+        pass
+
+    @abstractmethod
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
         """
         Store a show link and where it came from (spec #87 Phase 3c):
@@ -714,6 +733,26 @@ class EpisodeRepository(ABC):
             if pair is not None:
                 out[str(episode_id)] = pair
         return out
+
+    def list_public_episode_rows(
+        self,
+        *,
+        podcast_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        order_by: str = "pub_date",
+    ) -> Tuple[List[Dict], int]:
+        """Episodes a signed-out visitor may see (spec #94), newest first.
+
+        The one definition of "public episode": a real summary (stored
+        preview present and non-empty; ``N/A`` summaries have none), a slug,
+        on a podcast with ``public_pages`` on that is not a synthetic import
+        container. The public API, the page shell and the sitemap all use
+        it, so they never disagree. ``order_by`` is ``pub_date`` or
+        ``published_at`` (first summary time; the landing feed). Returns
+        ``(rows, total)``; each row carries episode and podcast display
+        fields only. Default: none (non-SQL test doubles)."""
+        return [], 0
 
     def set_episode_summary_preview(self, episode_id: str, preview: "Optional[str]") -> None:
         """Persist the pre-computed summary preview (spec #69 Phase 6.5).

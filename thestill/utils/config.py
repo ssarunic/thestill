@@ -543,6 +543,9 @@ class Config(BaseModel):
     # Canonical public URL — used to build OAuth redirects when the request
     # does NOT come from a trusted proxy. Must include scheme.
     public_base_url: str = ""
+    # Spec #94 — signed-out public pages (API under /api/public, page-shell
+    # head tags, robots.txt, sitemap.xml). Multi-user mode only.
+    public_pages_enabled: bool = True
     # OpenAPI docs / redoc. On in dev; on in prod only if explicitly enabled.
     enable_docs: bool = False
     # Hard cap on any user-triggered audio download. Attackers controlling an
@@ -896,6 +899,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "allowed_origins": [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()],
         "trusted_proxies": [proxy.strip() for proxy in os.getenv("TRUSTED_PROXIES", "").split(",") if proxy.strip()],
         "public_base_url": os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
+        "public_pages_enabled": _env_bool("PUBLIC_PAGES_ENABLED", True),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),

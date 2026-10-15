@@ -26,7 +26,7 @@ compatibility with existing call sites.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..models.enrichment import EntityEnrichment
 from ..models.entities import EntityMention, EntityRecord
@@ -762,6 +762,17 @@ class EntityRepository(ABC):
         Keeper rank: mention_count DESC, ``EntityType`` declaration
         order ASC, id ASC.
         """
+
+    @abstractmethod
+    def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
+        """Spec #94 takedown switch for a person or entity page: ``hidden``
+        removes the page and every quote the entity speaks from signed-out
+        surfaces. Returns whether a row was updated."""
+
+    @abstractmethod
+    def list_hidden_entity_ids(self) -> Set[str]:
+        """Ids of entities with ``public_hidden`` on (spec #94); small by
+        construction, so callers filter in memory."""
 
     @abstractmethod
     def find_mistyped_entities(

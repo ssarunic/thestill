@@ -386,6 +386,49 @@ def set_show_link(ctx, podcast_id, platform, url, clear):
         click.echo(f"✓ {podcast.title}: {platform} → {url} (curated; survives chart syncs and resolvers).")
 
 
+@main.command("set-podcast-visibility")
+@click.option("--podcast-id", required=True, help="Podcast (index, slug, RSS URL or UUID)")
+@click.option("--public/--private", "public", required=True, help="Show or hide the podcast on signed-out pages")
+@click.pass_context
+@require_config
+@log_command
+def set_podcast_visibility(ctx, podcast_id, public):
+    """Publisher takedown switch for public pages (spec #94).
+
+    --private hides the show, its episodes and their quotes from every
+    signed-out surface (public API, page shell, sitemap) within a few
+    minutes (caches expire). Signed-in users are unaffected.
+    """
+    podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+    if not podcast:
+        click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+        ctx.exit(1)
+    ctx.obj.repository.set_podcast_public_pages(str(podcast.id), public)
+    click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
+
+
+@main.command("set-entity-visibility")
+@click.option("--entity", "entity_id", required=True, help='Entity id, e.g. "person:scott-galloway"')
+@click.option("--public/--hidden", "public", required=True, help="Show or hide the entity on signed-out pages")
+@click.pass_context
+@require_config
+@log_command
+def set_entity_visibility(ctx, entity_id, public):
+    """Takedown switch for a person or entity page (spec #94).
+
+    --hidden removes the page and every quote the entity speaks from
+    signed-out surfaces. Use it for a person who asks to be removed, or
+    at once when a quote is attributed to the wrong person.
+    """
+    repo = ctx.obj.entity_repository
+    entity = repo.get_entity(entity_id)
+    if entity is None:
+        click.echo(f"❌ Entity not found: {entity_id}", err=True)
+        ctx.exit(1)
+    repo.set_entity_public_hidden(entity.id, not public)
+    click.echo(f"✓ {entity.canonical_name} ({entity.id}): public page {'on' if public else 'hidden'}.")
+
+
 @main.command("link-platforms")
 @click.option("--podcast-id", help="Only this podcast (index or RSS URL)")
 @click.option("--dry-run", "-d", is_flag=True, help="Fetch and match, but write nothing")

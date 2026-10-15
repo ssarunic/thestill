@@ -30,7 +30,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from structlog import get_logger
 
@@ -1906,6 +1906,16 @@ class SqliteEntityRepository(EntityRepository):
             for entry in entries[1:]:
                 pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE entities SET public_hidden = ? WHERE id = ?", (1 if hidden else 0, entity_id))
+            return cursor.rowcount > 0
+
+    def list_hidden_entity_ids(self) -> Set[str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT id FROM entities WHERE public_hidden = 1").fetchall()
+        return {row["id"] for row in rows}
 
     def find_mistyped_entities(
         self,
