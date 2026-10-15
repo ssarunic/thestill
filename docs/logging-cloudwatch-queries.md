@@ -221,6 +221,44 @@ filter message = "http_request_completed"
 | sort p95_duration desc
 ```
 
+## LLM Cost
+
+Every billed LLM call logs one `llm_usage` event with `provider`, `model`, `call` (`chat`, `structured` or `stream`), `input_tokens` and `output_tokens`. Gemini events also carry `thinking_tokens` (billed at the output rate) and `cached_tokens` (a subset of `input_tokens`, billed at the cached rate). Pipeline calls inherit `stage` and `episode_id` from the task worker; briefing narration calls carry `stage = "narration"` and `briefing_id`.
+
+### Tokens and Cost by Stage (Last 7 Days)
+
+Prices are gemini-3-flash-preview per 1M tokens on 2026-10-15 ($0.50 input, $0.05 cached input, $3.00 output and thinking); update them when the model or price changes:
+
+```sql
+filter message = "llm_usage"
+| fields (input_tokens - cached_tokens) * 0.50 / 1000000
+         + cached_tokens * 0.05 / 1000000
+         + (output_tokens + thinking_tokens) * 3.00 / 1000000 as cost_usd
+| stats count(*) as calls,
+        sum(input_tokens) as input,
+        sum(cached_tokens) as cached,
+        sum(output_tokens) as output,
+        sum(thinking_tokens) as thinking,
+        sum(cost_usd) as usd,
+        count_distinct(episode_id) as episodes
+  by stage, model
+| sort usd desc
+```
+
+Divide a stage's `usd` by the audio hours of the episodes it covered (from the database) to get cost per audio hour.
+
+### Cost per Episode
+
+```sql
+filter message = "llm_usage" and ispresent(episode_id)
+| fields (input_tokens - cached_tokens) * 0.50 / 1000000
+         + cached_tokens * 0.05 / 1000000
+         + (output_tokens + thinking_tokens) * 3.00 / 1000000 as cost_usd
+| stats sum(cost_usd) as usd, count(*) as calls by episode_id
+| sort usd desc
+| limit 50
+```
+
 ## Time-Based Analysis
 
 ### Episodes Processed Per Hour
