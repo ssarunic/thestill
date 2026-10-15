@@ -7,6 +7,7 @@ import {
   Avatar,
   Button,
   EntityDot,
+  EpisodeRow,
   QuoteCard,
   QuoteSkeleton,
   Skeleton,
@@ -127,29 +128,13 @@ function FreshThisWeek() {
       <div>
         {data.episodes.map((episode) =>
           episode.podcast ? (
-            <article key={`${episode.podcast.slug}/${episode.slug}`} className="ts-eprow">
-              <div className="ts-meta">
-                <Link to={`/podcasts/${episode.podcast.slug}`} className="ts-link">
-                  {episode.podcast.title}
-                </Link>
-                <span className="ts-sep" aria-hidden="true">
-                  ·
-                </span>
-                <span>{formatDate(episode.pub_date)}</span>
-                {episode.duration_formatted && (
-                  <>
-                    <span className="ts-sep" aria-hidden="true">
-                      ·
-                    </span>
-                    <span>{episode.duration_formatted}</span>
-                  </>
-                )}
-              </div>
-              <Link to={episodePath(episode.podcast.slug, episode.slug)} className="ts-eprow-title">
-                {episode.title}
-              </Link>
-              {episode.summary_preview && <p className="ts-eprow-desc">{episode.summary_preview}</p>}
-            </article>
+            <EpisodeRow
+              key={`${episode.podcast.slug}/${episode.slug}`}
+              episode={episode}
+              podcastSlug={episode.podcast.slug}
+              podcastTitle={episode.podcast.title}
+              showPodcast
+            />
           ) : null,
         )}
       </div>

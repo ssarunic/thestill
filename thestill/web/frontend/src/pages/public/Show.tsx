@@ -2,11 +2,11 @@
 // summarised episodes. Following asks for sign-in and returns here.
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
+import { PublicNotFound, entityPath, formatDate } from '../../api/public'
 import {
   Avatar,
   Button,
-  GuestLine,
+  EpisodeRow,
   ListenOn,
   SignInCard,
   Skeleton,
@@ -125,24 +125,12 @@ export default function Show() {
             )}
             <div>
               {items.map((episode) => (
-                <article key={episode.slug} className="ts-eprow">
-                  <div className="ts-meta">
-                    <span>{formatDate(episode.pub_date)}</span>
-                    {episode.duration_formatted && (
-                      <>
-                        <span className="ts-sep" aria-hidden="true">
-                          ·
-                        </span>
-                        <span>{episode.duration_formatted}</span>
-                      </>
-                    )}
-                  </div>
-                  <Link to={episodePath(podcastSlug, episode.slug)} className="ts-eprow-title">
-                    {episode.title}
-                  </Link>
-                  {episode.summary_preview && <p className="ts-eprow-desc">{episode.summary_preview}</p>}
-                  <GuestLine guests={episode.guests} />
-                </article>
+                <EpisodeRow
+                  key={episode.slug}
+                  episode={episode}
+                  podcastSlug={podcastSlug}
+                  podcastTitle={show?.title ?? ''}
+                />
               ))}
             </div>
             {episodes.hasNextPage && (

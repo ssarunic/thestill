@@ -9,6 +9,7 @@ import {
   formatDate,
   formatTimestamp,
   type PublicEntityType,
+  type PublicEpisodeListItem,
   type PublicQuote,
 } from '../../api/public'
 import { quoteUrl, useSignIn } from './helpers'
@@ -271,6 +272,57 @@ export function Avatar({
     <span className={cls} style={style} aria-hidden="true">
       {shape === 'square' ? '' : initials(name)}
     </span>
+  )
+}
+
+/** One episode in a list: artwork (episode, else show), then date, title,
+ * gist and guests. ``podcast`` adds the show name for cross-show lists. */
+export function EpisodeRow({
+  episode,
+  podcastSlug,
+  podcastTitle,
+  showPodcast = false,
+}: {
+  episode: PublicEpisodeListItem
+  podcastSlug: string
+  podcastTitle: string
+  showPodcast?: boolean
+}) {
+  const href = episodePath(podcastSlug, episode.slug)
+  return (
+    <article className="ts-eprow ts-eprow-media">
+      <Link to={href} className="ts-eprow-art" tabIndex={-1} aria-hidden="true">
+        <Avatar src={episode.image_url ?? episode.podcast?.image_url} name={podcastTitle} size={72} shape="square" />
+      </Link>
+      <div className="ts-eprow-body">
+        <div className="ts-meta">
+          {showPodcast && (
+            <>
+              <Link to={`/podcasts/${podcastSlug}`} className="ts-link">
+                {podcastTitle}
+              </Link>
+              <span className="ts-sep" aria-hidden="true">
+                ·
+              </span>
+            </>
+          )}
+          <span>{formatDate(episode.pub_date)}</span>
+          {episode.duration_formatted && (
+            <>
+              <span className="ts-sep" aria-hidden="true">
+                ·
+              </span>
+              <span>{episode.duration_formatted}</span>
+            </>
+          )}
+        </div>
+        <Link to={href} className="ts-eprow-title">
+          {episode.title}
+        </Link>
+        {episode.summary_preview && <p className="ts-eprow-desc">{episode.summary_preview}</p>}
+        <GuestLine guests={episode.guests} />
+      </div>
+    </article>
   )
 }
 

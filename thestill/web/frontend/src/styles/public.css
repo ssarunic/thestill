@@ -212,6 +212,10 @@
 .ts-eprow-guests a { color: var(--on-surface); font-weight: 500; text-decoration: none; }
 .ts-eprow-guests a:hover { text-decoration: underline; }
 .ts-eprow-show { display: flex; align-items: center; gap: 12px; }
+.ts-eprow-media { flex-direction: row; align-items: flex-start; gap: var(--space-md); }
+.ts-eprow-art { flex: none; line-height: 0; border-radius: var(--radius-sm, 8px); }
+.ts-eprow-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+@media (max-width: 639px) { .ts-eprow-art .ts-avatar { width: 56px !important; height: 56px !important; } }
 .ts-personrow { display: flex; align-items: flex-start; gap: 14px; padding: var(--space-md) var(--space-sm); margin: 0 calc(-1 * var(--space-sm)); border-bottom: 1px solid var(--hairline); border-radius: var(--radius-md); text-decoration: none; transition: background-color 120ms ease; }
 .ts-personrow:hover { background: var(--surface-container-low); }
 .ts-personrow-main { flex: 1; min-width: 0; }
