@@ -7,6 +7,16 @@ import App from './App'
 // routing shell only: the pages and the overlay chrome are mocked so we can
 // assert *which* trees render, not what's inside them.
 
+// Spec #94 — App branches on ``isAnonymous``; these tests drive both sides.
+const auth = vi.hoisted(() => ({ isAnonymous: false }))
+vi.mock('./contexts/AuthContext', () => ({
+  useAuth: () => auth,
+}))
+
+vi.mock('./PublicApp', () => ({
+  default: () => <div>PUBLIC_SITE</div>,
+}))
+
 vi.mock('./components/ProtectedRoute', () => ({
   default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -101,5 +111,22 @@ describe('App background-location route split (spec #52)', () => {
     // the overlay pass matches nothing.
     expect(await screen.findByText('INBOX_PAGE')).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
+describe('App public/private split (spec #94)', () => {
+  it('renders the public site for a signed-out visitor in multi-user mode', async () => {
+    auth.isAnonymous = true
+    try {
+      render(
+        <MemoryRouter initialEntries={['/podcasts/pod/episodes/ep']}>
+          <App />
+        </MemoryRouter>,
+      )
+      expect(await screen.findByText('PUBLIC_SITE')).toBeInTheDocument()
+      expect(screen.queryByText('STANDALONE_EPISODE_PAGE')).toBeNull()
+    } finally {
+      auth.isAnonymous = false
+    }
   })
 })

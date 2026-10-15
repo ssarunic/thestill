@@ -1,17 +1,21 @@
 import { useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { safeNextPath } from '../utils/safeNext'
 
 export default function Login() {
   const { isAuthenticated, isLoading, isMultiUser, login } = useAuth()
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  // Spec #94 — where to return after sign-in (validated client- and server-side).
+  const next = safeNextPath(params.get('next'))
 
-  // Redirect to home if already authenticated or in single-user mode
+  // Redirect if already authenticated or in single-user mode
   useEffect(() => {
     if (!isLoading && (isAuthenticated || !isMultiUser)) {
-      navigate('/', { replace: true })
+      navigate(next ?? '/', { replace: true })
     }
-  }, [isAuthenticated, isLoading, isMultiUser, navigate])
+  }, [isAuthenticated, isLoading, isMultiUser, navigate, next])
 
   if (isLoading) {
     return (
@@ -45,7 +49,7 @@ export default function Login() {
           </h2>
 
           <button
-            onClick={login}
+            onClick={() => login(next ?? undefined)}
             className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 hover:border-gray-400 transition-colors"
           >
             {/* Google icon */}

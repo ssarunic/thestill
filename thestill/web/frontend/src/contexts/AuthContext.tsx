@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+import { safeNextPath } from '../utils/safeNext'
 
 // User type matching backend model
 export interface User {
@@ -28,9 +29,13 @@ interface AuthContextType {
   isLoading: boolean
   isMultiUser: boolean
   isAuthenticated: boolean
+  // Spec #94 — a signed-out visitor in multi-user mode (false while the
+  // auth status is still loading, and always false in single-user mode).
+  isAnonymous: boolean
   isAdmin: boolean
   emailDeliveryAvailable: boolean
-  login: () => void
+  // ``next``: same-origin path to return to after sign-in (spec #94).
+  login: (next?: string) => void
   logout: () => Promise<void>
   refreshAuth: () => Promise<void>
   updateRegion: (region: string | null) => Promise<void>
@@ -90,9 +95,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshAuth()
   }, [refreshAuth])
 
-  const login = useCallback(() => {
-    // Redirect to Google OAuth login
-    window.location.href = `${AUTH_BASE}/google/login`
+  const login = useCallback((next?: string) => {
+    // Redirect to Google OAuth login; the server validates ``next`` again
+    // and returns here after the callback.
+    const safe = safeNextPath(next)
+    window.location.href = `${AUTH_BASE}/google/login${safe ? `?next=${encodeURIComponent(safe)}` : ''}`
   }, [])
 
   const logout = useCallback(async () => {
@@ -109,6 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isMultiUser])
 
   const isAuthenticated = user !== null
+  const isAnonymous = !isLoading && isMultiUser && !isAuthenticated
   // Single-user mode: the local user is always the operator (admin), even if
   // the stored flag is unset on a pre-existing database. In multi-user mode,
   // admin is gated on the server-provided is_admin flag.
@@ -121,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         isMultiUser,
         isAuthenticated,
+        isAnonymous,
         isAdmin,
         emailDeliveryAvailable,
         login,
