@@ -22,6 +22,8 @@ interface AuthStatus {
   // Spec #51 capability flag: false when EMAIL_PROVIDER=none, hiding the
   // briefing email-delivery checkbox in settings.
   email_delivery_available?: boolean
+  // Spec #94: signed-out visitors get the public site (PUBLIC_PAGES_ENABLED).
+  public_pages?: boolean
 }
 
 interface AuthContextType {
@@ -50,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [isMultiUser, setIsMultiUser] = useState(false)
   const [emailDeliveryAvailable, setEmailDeliveryAvailable] = useState(false)
+  const [publicPages, setPublicPages] = useState(false)
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -62,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsMultiUser(authStatus.multi_user)
       setUser(authStatus.user)
       setEmailDeliveryAvailable(authStatus.email_delivery_available === true)
+      setPublicPages(authStatus.public_pages === true)
     } catch (error) {
       console.error('Auth status check failed:', error)
       setUser(null)
@@ -116,7 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isMultiUser])
 
   const isAuthenticated = user !== null
-  const isAnonymous = !isLoading && isMultiUser && !isAuthenticated
+  // A signed-out visitor who gets the public site; with public pages off
+  // they stay on the sign-in wall like before spec #94.
+  const isAnonymous = !isLoading && isMultiUser && !isAuthenticated && publicPages
   // Single-user mode: the local user is always the operator (admin), even if
   // the stored flag is unset on a pre-existing database. In multi-user mode,
   // admin is gated on the server-provided is_admin flag.

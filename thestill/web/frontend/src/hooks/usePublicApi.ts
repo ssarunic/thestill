@@ -40,10 +40,12 @@ export function usePublicSummary(podcastSlug: string, episodeSlug: string) {
   })
 }
 
-export function usePublicEpisodeQuotes(podcastSlug: string, episodeSlug: string, q: number | null) {
-  return useQuery({
-    queryKey: ['public', 'episode-quotes', podcastSlug, episodeSlug, q],
-    queryFn: () => publicApi.episodeQuotes(podcastSlug, episodeSlug, q),
+export function usePublicEpisodeQuotes(podcastSlug: string, episodeSlug: string, q: number | null, speaker: string | null) {
+  return useInfiniteQuery({
+    queryKey: ['public', 'episode-quotes', podcastSlug, episodeSlug, q, speaker ?? ''],
+    queryFn: ({ pageParam }) => publicApi.episodeQuotes(podcastSlug, episodeSlug, q, speaker, pageParam),
+    initialPageParam: 1,
+    getNextPageParam: (last) => last.next_page ?? undefined,
     retry,
     staleTime,
   })

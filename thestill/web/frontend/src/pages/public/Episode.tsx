@@ -5,6 +5,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
 import {
   Avatar,
+  Button,
   EntityDot,
   FilterChip,
   ListenOn,
@@ -13,7 +14,7 @@ import {
   SignInCard,
   Skeleton,
 } from '../../components/public/ui'
-import { typeLabel } from '../../components/public/helpers'
+import { splitSummary, typeLabel } from '../../components/public/helpers'
 import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
@@ -36,17 +37,24 @@ function LockIcon() {
 export default function Episode() {
   const { podcastSlug = '', episodeSlug = '' } = useParams()
   const [params, setParams] = useSearchParams()
-  const q = params.get('q')
+  // ``t`` is the shared deep-link parameter (signed-in reader too); ``q`` was
+  // its first name and still works for links shared before.
+  const q = params.get('t') ?? params.get('q')
   const linkedSeconds = q && /^\d{1,6}$/.test(q) ? Number(q) : null
   const tab = params.get('view') === 'transcript' ? 'transcript' : 'summary'
-  const [speaker, setSpeaker] = useState<string | null>(null)
+  const speaker = params.get('speaker')
 
   const episodeQuery = usePublicEpisode(podcastSlug, episodeSlug)
   const summary = usePublicSummary(podcastSlug, episodeSlug)
-  const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds)
+  // The gist and key takeaways first; the rest one click away (the promise
+  // is a three-minute read).
+  const summaryParts = useMemo(() => (summary.data ? splitSummary(summary.data.content) : null), [summary.data])
+  const [fullSummary, setFullSummary] = useState(false)
+  const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
+  const firstPage = quotes.data?.pages[0]
   const more = usePublicPodcastEpisodes(podcastSlug)
 
-  const linked = quotes.data?.linked ?? null
+  const linked = firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
   useEffect(() => {
     if (!linkedId) return
@@ -56,16 +64,19 @@ export default function Episode() {
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
   }, [linkedId])
 
-  const speakers = useMemo(() => {
-    const names = new Map<string, string>()
-    for (const quote of quotes.data?.quotes ?? []) names.set(quote.speaker.slug, quote.speaker.name)
-    return [...names.entries()]
-  }, [quotes.data])
+  const speakers = firstPage?.speakers ?? []
+  const quoteCount = speakers.reduce((n, s) => n + s.quotes, 0)
 
   if (episodeQuery.error instanceof PublicNotFound) {
     return <NotFound title="This episode isn't summarised yet" message="Its show may have newer episodes with summaries." />
   }
   const episode = episodeQuery.data?.episode
+  const setSpeaker = (slug: string | null) => {
+    const nextParams = new URLSearchParams(params)
+    if (slug) nextParams.set('speaker', slug)
+    else nextParams.delete('speaker')
+    setParams(nextParams, { replace: true })
+  }
   const setTab = (next: 'summary' | 'transcript') => {
     const nextParams = new URLSearchParams(params)
     if (next === 'transcript') nextParams.set('view', 'transcript')
@@ -74,7 +85,7 @@ export default function Episode() {
   }
   const people = episode ? [...episode.hosts, ...episode.guests] : []
   const youtube = episode?.platform_links.find((l) => l.platform === 'youtube')?.url ?? null
-  const shown = (quotes.data?.quotes ?? []).filter((quote) => !speaker || quote.speaker.slug === speaker)
+  const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
   const linkedInList = linked && shown.some((quote) => quote.start_seconds === linked.start_seconds)
   const moreEpisodes = (more.data?.pages[0]?.episodes ?? []).filter((e) => e.slug !== episodeSlug).slice(0, 3)
 
@@ -154,15 +165,26 @@ export default function Episode() {
                 </>
               )}
               {summary.isError && <ModuleError onRetry={() => summary.refetch()} />}
-              {summary.data && (
+              {summaryParts && (
                 <Suspense fallback={<Skeleton width="100%" height={200} />}>
-                  <SummaryViewer content={summary.data.content} available />
+                  <SummaryViewer
+                    content={fullSummary ? `${summaryParts.lead}\n${summaryParts.rest}` : summaryParts.lead}
+                    available
+                  />
                 </Suspense>
+              )}
+              {summaryParts && summaryParts.rest && !fullSummary && (
+                <div className="ts-summary-more">
+                  <Button variant="secondary" onClick={() => setFullSummary(true)}>
+                    Read the full summary
+                  </Button>
+                  <span className="ts-meta">Also: {summaryParts.restTitles.join(' · ')}</span>
+                </div>
               )}
             </article>
           )}
 
-          {(quotes.isLoading || (quotes.data && (quotes.data.quotes.length >= 2 || linked))) && (
+          {(quotes.isLoading || quoteCount >= 2 || linked) && (
             <section className="ts-section" aria-labelledby="episode-quotes">
               <div className="ts-section-head">
                 <h2 className="ts-h2" id="episode-quotes">
@@ -174,9 +196,9 @@ export default function Episode() {
                   <FilterChip selected={!speaker} onClick={() => setSpeaker(null)}>
                     All
                   </FilterChip>
-                  {speakers.map(([slug, name]) => (
-                    <FilterChip key={slug} selected={speaker === slug} onClick={() => setSpeaker(slug)}>
-                      {name}
+                  {speakers.map((s) => (
+                    <FilterChip key={s.slug} selected={speaker === s.slug} onClick={() => setSpeaker(s.slug)}>
+                      {s.name}
                     </FilterChip>
                   ))}
                 </div>
@@ -207,6 +229,14 @@ export default function Episode() {
                     />
                   )
                 })}
+                {quotes.isFetchingNextPage && <QuoteSkeleton />}
+                {quotes.hasNextPage && !quotes.isFetchingNextPage && (
+                  <div>
+                    <Button variant="text" onClick={() => quotes.fetchNextPage()}>
+                      Show more quotes
+                    </Button>
+                  </div>
+                )}
               </div>
             </section>
           )}
@@ -219,11 +249,11 @@ export default function Episode() {
         </div>
 
         <aside className="ts-rail" aria-label="About this episode">
-          {quotes.data && quotes.data.mentioned.length >= 3 && (
+          {firstPage && firstPage.mentioned.length >= 3 && (
             <section className="ts-rail-module">
               <h3 className="ts-rail-label">Mentioned in this episode</h3>
               <ul className="ts-related">
-                {quotes.data.mentioned.map((entity) => (
+                {firstPage.mentioned.map((entity) => (
                   <li key={`${entity.type}-${entity.slug}`}>
                     <Link to={entityPath(entity)}>
                       <EntityDot type={entity.type} />

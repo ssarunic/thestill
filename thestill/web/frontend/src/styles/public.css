@@ -113,6 +113,7 @@
 .ts-eyebrow a { color: var(--primary); text-decoration: none; }
 .ts-eyebrow a:hover { text-decoration: underline; }
 .ts-link { color: var(--primary); text-decoration: none; font-weight: 500; }
+.ts-link-button { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; text-align: left; align-self: flex-start; }
 .ts-link:hover { text-decoration: underline; }
 .ts-page-title { margin: 0; font-size: 28px; line-height: 36px; font-weight: 700; letter-spacing: -0.02em; color: var(--on-surface); text-wrap: balance; }
 @media (min-width: 1024px) { .ts-page-title { font-size: 40px; line-height: 48px; letter-spacing: -0.01em; } }
@@ -129,11 +130,11 @@
 .ts-wordmark { font-size: 20px; line-height: 28px; font-weight: 700; letter-spacing: -0.015em; color: var(--primary); text-decoration: none; }
 .ts-header { position: sticky; top: 0; z-index: 50; background: var(--surface-container-lowest); border-bottom: 1px solid var(--divider); }
 .ts-header-inner { max-width: var(--container-max); height: var(--header-height); margin: 0 auto; padding: 0 var(--gutter); display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); }
-.ts-header-nav { display: none; }
+.ts-header-nav { display: block; }
 .ts-header-link { font-size: 15px; line-height: 23px; font-weight: 500; color: var(--on-surface-variant); text-decoration: none; }
 .ts-header-link:hover, .ts-header-link[aria-current='page'] { color: var(--on-surface); }
-@media (min-width: 640px) { .ts-header-nav { display: block; } }
-@media (max-width: 639px) { .ts-header-inner { padding: 0 var(--gutter-sm); } }
+/* Phones keep the one discovery link: it is the only way in from the landing. */
+@media (max-width: 639px) { .ts-header-inner { padding: 0 var(--gutter-sm); } .ts-header-link { font-size: 14px; white-space: nowrap; } }
 .ts-footer { margin-top: 64px; padding: 48px 0; background: var(--surface-container-low); border-top: 1px solid var(--divider); }
 .ts-footer-inner { max-width: var(--container-max); margin: 0 auto; padding: 0 var(--gutter); }
 .ts-footer-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-md); padding-bottom: var(--space-lg); border-bottom: 1px solid var(--divider); }
@@ -300,3 +301,5 @@
   .public-theme *, .public-theme *::before, .public-theme *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   .ts-highlight { background-color: var(--surface-container-low); }
 }
+
+.ts-summary-more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: var(--space-lg); }

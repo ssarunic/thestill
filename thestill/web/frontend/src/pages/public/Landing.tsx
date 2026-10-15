@@ -12,25 +12,10 @@ import {
   QuoteSkeleton,
   Skeleton,
 } from '../../components/public/ui'
-import { useSignIn } from '../../components/public/helpers'
+import { splitSummary, useSignIn } from '../../components/public/helpers'
 import { usePublicRecentSummaries, usePublicSummary, usePublicWhoSaidWhat } from '../../hooks/usePublicApi'
 
 const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
-
-/** The summary up to (not including) its second numbered section. */
-function firstSection(markdown: string): string {
-  const lines = markdown.split('\n')
-  let headings = 0
-  const out: string[] = []
-  for (const line of lines) {
-    if (/^##\s/.test(line)) {
-      headings += 1
-      if (headings > 2) break
-    }
-    out.push(line)
-  }
-  return out.join('\n')
-}
 
 function LatestSummary() {
   const recent = usePublicRecentSummaries(1)
@@ -65,7 +50,7 @@ function LatestSummary() {
       <div className="ts-summary">
         {summary.data ? (
           <Suspense fallback={<Skeleton width="100%" height={160} />}>
-            <SummaryViewer content={firstSection(summary.data.content)} available />
+            <SummaryViewer content={splitSummary(summary.data.content).lead} available />
           </Suspense>
         ) : (
           <p className="ts-standfirst">{episode.summary_preview}</p>
@@ -122,7 +107,7 @@ function FreshThisWeek() {
     <section className="ts-section" aria-labelledby="fresh">
       <div className="ts-section-head">
         <h2 className="ts-h2" id="fresh">
-          Fresh this week
+          Recently summarised
         </h2>
       </div>
       <div>

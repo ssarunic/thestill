@@ -176,6 +176,9 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     return api_response(
         {
             "multi_user": multi_user,
+            # Spec #94: whether signed-out visitors get the public site
+            # (else the frontend keeps the sign-in wall).
+            "public_pages": bool(multi_user and state.config.public_pages_enabled),
             "authenticated": user is not None,
             "user": user.model_dump(exclude={"google_id"}) if user else None,
             # Spec #51 capability flag: the settings UI only shows the

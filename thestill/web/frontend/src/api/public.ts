@@ -128,8 +128,13 @@ export interface PublicQuotePage {
 
 export interface PublicEpisodeQuotes {
   quotes: PublicQuote[]
+  /** Quotes matching the speaker filter (all of them without one). */
   total: number
+  page: number
+  next_page: number | null
   linked: PublicQuote | null
+  /** Everyone quoted in the episode, most quotes first (ignores the filter). */
+  speakers: { name: string; slug: string; quotes: number }[]
   mentioned: (PublicEntityRef & { count: number })[]
 }
 
@@ -178,10 +183,12 @@ export const publicApi = {
     get<{ episode: PublicEpisode }>(`/podcasts/${enc(podcastSlug)}/episodes/${enc(episodeSlug)}`),
   summary: (podcastSlug: string, episodeSlug: string) =>
     get<PublicSummary>(`/podcasts/${enc(podcastSlug)}/episodes/${enc(episodeSlug)}/summary`),
-  episodeQuotes: (podcastSlug: string, episodeSlug: string, q?: number | null) =>
-    get<PublicEpisodeQuotes>(
-      `/podcasts/${enc(podcastSlug)}/episodes/${enc(episodeSlug)}/quotes${q != null ? `?q=${q}` : ''}`,
-    ),
+  episodeQuotes: (podcastSlug: string, episodeSlug: string, q?: number | null, speaker?: string | null, page = 1) => {
+    const params = new URLSearchParams({ page: String(page) })
+    if (q != null) params.set('q', String(q))
+    if (speaker) params.set('speaker', speaker)
+    return get<PublicEpisodeQuotes>(`/podcasts/${enc(podcastSlug)}/episodes/${enc(episodeSlug)}/quotes?${params.toString()}`)
+  },
   whoSaidWhat: () => get<PublicWhoSaidWhat>('/who-said-what'),
   recentSummaries: (limit = 6) => get<{ episodes: PublicEpisodeListItem[] }>(`/recent-summaries?limit=${limit}`),
   topChart: (region?: string, category?: string) => {

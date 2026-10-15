@@ -793,21 +793,31 @@ def list_public_episode_quotes(
     request: Request,
     response: Response,
     q: Optional[int] = Query(None, ge=0, le=60 * 60 * 12, description="Start second of a linked quote"),
+    speaker: Optional[str] = Query(None, max_length=120, description="Only quotes by this person (slug)"),
+    page: int = Query(1, ge=1, le=200),
     state: AppState = Depends(get_app_state),
 ) -> dict:
-    """Quotes from one episode in episode order, plus the entities it mentions.
+    """Quotes from one episode in episode order, a page at a time, plus who
+    speaks in it and the entities it mentions.
 
     With ``q``, the quote starting within 5 seconds of it is returned as
-    ``linked`` even when it is not among the first page.
+    ``linked`` wherever it falls in the episode.
     """
     visibility = get_public_visibility(state)
     _podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
-    queries = state.entity_repository.public_quote_queries()
-    rows, total = queries.quotes(QuoteFilter(episode_id=episode.id), order="episode", limit=40)
-    items = [_quote_item(r) for r in rows]
+    every = _episode_quote_cache.get_or_compute(
+        (str(episode.id), visibility.fingerprint()), lambda: _all_episode_quotes(state, str(episode.id))
+    )
+    shown = [item for item in every if not speaker or item["speaker"]["slug"] == speaker]
+    start = (page - 1) * _QUOTE_PAGE
     linked = None
     if q is not None:
-        linked = next((item for item in items if abs(item["start_seconds"] - q) <= 5), None)
+        near = [item for item in every if abs(item["start_seconds"] - q) <= 5]
+        linked = min(near, key=lambda item: abs(item["start_seconds"] - q)) if near else None
+    speakers: Dict[str, Dict[str, Any]] = {}
+    for item in every:
+        entry = speakers.setdefault(item["speaker"]["slug"], {**item["speaker"], "quotes": 0})
+        entry["quotes"] += 1
     hidden = visibility.hidden_entity_ids()
     mentioned = []
     for row in get_episode_entities(episode.id, min_confidence=0.0, state=state).entities:
@@ -824,7 +834,29 @@ def list_public_episode_quotes(
         if len(mentioned) >= 12:
             break
     apply_public_cache_headers(request, response)
-    return api_response({"quotes": items[:8], "total": total, "linked": linked, "mentioned": mentioned})
+    return api_response(
+        {
+            "quotes": shown[start : start + _QUOTE_PAGE],
+            "total": len(shown),
+            "page": page,
+            "next_page": page + 1 if start + _QUOTE_PAGE < len(shown) else None,
+            "linked": linked,
+            "speakers": sorted(speakers.values(), key=lambda s: -s["quotes"]),
+            "mentioned": mentioned,
+        }
+    )
+
+
+_EPISODE_QUOTES_MAX = 1000
+_episode_quote_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=256)
+
+
+def _all_episode_quotes(state: AppState, episode_id: str) -> List[Dict[str, Any]]:
+    """Every public quote in one episode, in episode order (a few hundred at most)."""
+    rows, _ = state.entity_repository.public_quote_queries().quotes(
+        QuoteFilter(episode_id=episode_id), order="episode", limit=_EPISODE_QUOTES_MAX
+    )
+    return [_quote_item(r) for r in rows]
 
 
 _TRENDING_TTL_SECONDS = 1800.0

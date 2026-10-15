@@ -2,7 +2,7 @@
 // People: what they said (filterable by topic, the filter lives in the URL
 // as ?about=), where they're heard, what others say about them. Things:
 // who's talking about it and the latest quotes naming it.
-import { Fragment, useMemo } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, formatDate, type PublicEntityType, type PublicQuote } from '../../api/public'
 import {
@@ -38,12 +38,13 @@ function QuoteStream({
   onMore: () => void
 }) {
   const groups = groupByEpisode(quotes)
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   return (
     <div className="ts-quote-list">
       {groups.map((group) => (
         <div key={group.key} className="ts-ep-group">
           <EpisodeGroupHead quote={group.quotes[0]} />
-          {group.quotes.slice(0, 2).map((quote) => (
+          {(expanded.has(group.key) ? group.quotes : group.quotes.slice(0, 2)).map((quote) => (
             <QuoteCard
               key={`${quote.episode.slug}-${quote.start_seconds}-${quote.about.id}`}
               quote={quote}
@@ -52,10 +53,15 @@ function QuoteStream({
               showDate={false}
             />
           ))}
-          {group.quotes.length > 2 && (
-            <Link to={`/podcasts/${group.quotes[0].podcast.slug}/episodes/${group.quotes[0].episode.slug}`} className="ts-link" style={{ fontSize: 13 }}>
-              +{group.quotes.length - 2} more from this episode →
-            </Link>
+          {group.quotes.length > 2 && !expanded.has(group.key) && (
+            <button
+              type="button"
+              className="ts-link ts-link-button"
+              style={{ fontSize: 13 }}
+              onClick={() => setExpanded((prev) => new Set(prev).add(group.key))}
+            >
+              +{group.quotes.length - 2} more from this episode
+            </button>
           )}
         </div>
       ))}

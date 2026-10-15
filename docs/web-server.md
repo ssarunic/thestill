@@ -176,7 +176,7 @@ stale-while-revalidate=300`; a request carrying a credential gets
 | `/api/public/podcasts/{slug}/episodes` | GET | Summarised episodes, newest first (`?limit=` ≤50, `?offset=`) |
 | `/api/public/podcasts/{slug}/episodes/{episode}` | GET | Episode metadata, hosts/guests, platform links, `has_transcript` |
 | `/api/public/podcasts/{slug}/episodes/{episode}/summary` | GET | Stored summary (`?lang=` only if already translated; never calls an LLM) |
-| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes; `?q=<seconds>` returns the quote within 5 s as `linked` |
+| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes; `?q=<seconds>` returns the quote within 5 s as `linked` (the page's URL carries it as `?t=`, the reader's deep-link parameter); `?speaker=<slug>` and `?page=` page through the rest |
 | `/api/public/recent-summaries` | GET | Latest summarised episodes across public shows (≤12) |
 | `/api/public/top-podcasts` | GET | Apple chart; hidden shows lose their link |
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |

@@ -26,6 +26,7 @@ const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 // Spec #94 — the signed-out public site, its own chunk (no player, no inbox).
 const PublicApp = lazy(() => import('./PublicApp'))
+const LegalPage = lazy(() => import('./pages/public/LegalPage'))
 const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 
 // Loading fallback for page transitions
@@ -70,6 +71,15 @@ function App() {
           <Login />
         </Suspense>
       } />
+
+      {/* Spec #94 — Terms and Privacy are readable signed in or not. */}
+      {(['terms', 'privacy'] as const).map((doc) => (
+        <Route key={doc} path={`/${doc}`} element={
+          <Suspense fallback={<PageLoader />}>
+            <LegalPage doc={doc} />
+          </Suspense>
+        } />
+      ))}
 
       {/* Protected routes with layout */}
       <Route path="/" element={

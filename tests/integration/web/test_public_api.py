@@ -532,3 +532,34 @@ def test_top_chart_region_follows_the_visitor_then_the_us(anon, app_state, monke
     assert chosen.json()["region"] == "gb"
     assert chosen.headers["Cache-Control"].startswith("public")
     assert len(calls) == 3
+
+
+def test_episode_quotes_page_filter_and_find_a_linked_quote_anywhere(anon, app_state, monkeypatch):
+    _seed_people(app_state)
+    monkeypatch.setattr(api_public, "_QUOTE_PAGE", 1)
+    url = "/api/public/podcasts/public-show/episodes/summarised/quotes"
+
+    first = anon.get(url, params={"q": 185}).json()
+    assert [q["speaker"]["slug"] for q in first["quotes"]] == ["scott-galloway"]
+    assert first["next_page"] == 2 and first["total"] == 2
+    # The linked quote is found even though it is not on this page.
+    assert first["linked"]["speaker"]["slug"] == "ed-elson"
+    assert {s["slug"]: s["quotes"] for s in first["speakers"]} == {"scott-galloway": 1, "ed-elson": 1}
+
+    second = anon.get(url, params={"page": 2}).json()
+    assert [q["speaker"]["slug"] for q in second["quotes"]] == ["ed-elson"] and second["next_page"] is None
+
+    elson = anon.get(url, params={"speaker": "ed-elson"}).json()
+    assert [q["speaker"]["slug"] for q in elson["quotes"]] == ["ed-elson"] and elson["total"] == 1
+    # The chips still list everyone quoted in the episode.
+    assert len(elson["speakers"]) == 2
+
+
+def test_auth_status_says_whether_the_public_site_is_on(app_config, app_state):
+    app = create_app(app_config)
+    app.state.app_state = app_state
+    assert TestClient(app).get("/api/auth/status").json()["public_pages"] is True
+    app_config.public_pages_enabled = False
+    app = create_app(app_config)
+    app.state.app_state = app_state
+    assert TestClient(app).get("/api/auth/status").json()["public_pages"] is False

@@ -51,7 +51,7 @@ async function mockPublicApi(page: Page): Promise<string[]> {
     return route.fulfill({ status: 401, json: { detail: 'Not authenticated' } })
   })
   await page.route('**/api/auth/status', (route) =>
-    route.fulfill({ json: { multi_user: true, authenticated: false, email_delivery_available: false, user: null } }),
+    route.fulfill({ json: { multi_user: true, public_pages: true, authenticated: false, email_delivery_available: false, user: null } }),
   )
   await page.route('**/api/public/**', (route) => {
     const url = new URL(route.request().url())
@@ -104,7 +104,7 @@ test('landing renders the latest summary without signed-in calls', async ({ page
 
 test('episode page shows the summary, keeps the transcript behind sign-in, and lands on a linked quote', async ({ page }) => {
   const privateCalls = await mockPublicApi(page)
-  await page.goto('/podcasts/public-show/episodes/chips?q=460')
+  await page.goto('/podcasts/public-show/episodes/chips?t=460')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Chips and Cheese')
   await expect(page.getByText('Linked quote')).toBeVisible()
   await page.getByRole('tab', { name: /Transcript/ }).click()
@@ -133,4 +133,39 @@ test('an unknown public page is a 404 page, not a crash', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1 })).toHaveText("This page isn't here")
   await page.goto('/podcasts/public-show/episodes/missing')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText("This episode isn't summarised yet")
+})
+
+test('phones keep the way to Top podcasts', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 800 })
+  await mockPublicApi(page)
+  await page.goto('/')
+  await expect(page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Top podcasts' })).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375)
+})
+
+test('a signed-in reader can still open Terms and Privacy', async ({ page }) => {
+  await page.route('**/api/**', (route) => route.fulfill({ status: 404, json: {} }))
+  await page.route('**/api/auth/status', (route) =>
+    route.fulfill({
+      json: {
+        multi_user: true,
+        public_pages: true,
+        authenticated: true,
+        email_delivery_available: false,
+        user: { id: 'u1', email: 'r@example.com', name: 'Reader', picture: null, created_at: '2026-01-01T00:00:00Z', last_login_at: null, region: 'gb', region_locked: false, is_admin: false },
+      },
+    }),
+  )
+  await page.goto('/privacy')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Privacy Policy')
+})
+
+test('with public pages off, a signed-out visitor gets the sign-in wall', async ({ page }) => {
+  const privateCalls = await mockPublicApi(page)
+  await page.route('**/api/auth/status', (route) =>
+    route.fulfill({ json: { multi_user: true, public_pages: false, authenticated: false, email_delivery_available: false, user: null } }),
+  )
+  await page.goto('/podcasts/public-show/episodes/chips')
+  await expect(page).toHaveURL(/\/login/)
+  expect(privateCalls).toEqual([])
 })
