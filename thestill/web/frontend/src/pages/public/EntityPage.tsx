@@ -220,7 +220,7 @@ export default function EntityPage() {
               <div>
                 {data.speakers.map((person) => (
                   <Link key={person.slug} to={`/entities/person/${person.slug}?about=${data.entity.slug}`} className="ts-personrow">
-                    <Avatar name={person.name} size={40} />
+                    <Avatar src={person.image_url} name={person.name} size={40} />
                     <div className="ts-personrow-main">
                       <div className="ts-personrow-head">
                         <span className="ts-personrow-name">{person.name}</span>

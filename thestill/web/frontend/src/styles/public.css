@@ -198,7 +198,7 @@
 
 /* ---------- Rows and tiles ---------- */
 .ts-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none; object-fit: cover; background: var(--surface-container-high); color: var(--on-surface-variant); font-weight: 600; border: 1px solid var(--hairline); }
-.ts-avatar-round { border-radius: var(--radius-round); }
+.ts-avatar-round { border-radius: var(--radius-round); object-position: 50% 20%; } /* portraits: keep the face */
 .ts-avatar-square { border-radius: var(--radius-lg); background: var(--surface-container); }
 /* Logos come in every aspect ratio and are drawn for a white ground. */
 .ts-avatar-logo { object-fit: contain; padding: 14px; background: #fff; box-sizing: border-box; }

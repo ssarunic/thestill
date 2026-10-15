@@ -98,7 +98,7 @@ export default function Show() {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
                 {people.slice(0, 4).map((person) => (
                   <Link key={person.slug} to={entityPath(person)} className="ts-ep-head">
-                    <Avatar name={person.name} size={48} />
+                    <Avatar src={person.image_url} name={person.name} size={48} />
                     <span className="ts-personrow-name">{person.name}</span>
                   </Link>
                 ))}

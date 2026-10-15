@@ -26,7 +26,7 @@ compatibility with existing call sites.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ..models.enrichment import EntityEnrichment
 from ..models.entities import EntityMention, EntityRecord
@@ -555,6 +555,11 @@ class EntityRepository(ABC):
     @abstractmethod
     def get_enrichment(self, entity_id: str) -> Optional[EntityEnrichment]:
         """The stored enrichment for an entity, or ``None``."""
+
+    @abstractmethod
+    def get_entity_image_urls(self, entity_ids: Sequence[str]) -> Dict[str, str]:
+        """``{entity_id: image_url}`` for the given entities that have an
+        enrichment image (spec #94 avatars); entities without one are absent."""
 
     @abstractmethod
     def delete_enrichment(self, entity_id: str) -> bool:

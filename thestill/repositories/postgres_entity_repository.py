@@ -985,6 +985,18 @@ class PostgresEntityRepository(EntityRepository):
             ).fetchone()
         return _row_to_enrichment(row) if row else None
 
+    def get_entity_image_urls(self, entity_ids: Sequence[str]) -> Dict[str, str]:
+        ids = [i for i in dict.fromkeys(entity_ids) if i]
+        if not ids:
+            return {}
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT entity_id, image_url FROM entity_enrichment "
+                "WHERE entity_id = ANY(%s) AND COALESCE(image_url, '') <> ''",
+                (ids,),
+            ).fetchall()
+        return {r["entity_id"]: r["image_url"] for r in rows}
+
     def delete_enrichment(self, entity_id: str) -> bool:
         """Drop an entity's ``entity_enrichment`` row so it re-enriches."""
         with connect(self.dsn) as conn:

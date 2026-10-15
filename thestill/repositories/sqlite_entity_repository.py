@@ -1135,6 +1135,22 @@ class SqliteEntityRepository(EntityRepository):
             ).fetchone()
         return _row_to_enrichment(row) if row else None
 
+    def get_entity_image_urls(self, entity_ids: Sequence[str]) -> Dict[str, str]:
+        ids = [i for i in dict.fromkeys(entity_ids) if i]
+        if not ids:
+            return {}
+        found: Dict[str, str] = {}
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), 500):  # stay under SQLite's variable limit
+                chunk = ids[start : start + 500]
+                rows = conn.execute(
+                    f"SELECT entity_id, image_url FROM entity_enrichment "
+                    f"WHERE entity_id IN ({','.join('?' * len(chunk))}) AND COALESCE(image_url, '') <> ''",
+                    chunk,
+                ).fetchall()
+                found.update({r["entity_id"]: r["image_url"] for r in rows})
+        return found
+
     def delete_enrichment(self, entity_id: str) -> bool:
         """Drop an entity's ``entity_enrichment`` row so it re-enriches.
 

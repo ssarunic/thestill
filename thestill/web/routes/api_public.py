@@ -138,6 +138,7 @@ def _entity_refs(state: AppState, visibility: PublicVisibility, ids: Iterable[st
     if not wanted:
         return {}
     hidden = visibility.hidden_entity_ids()
+    images = state.entity_repository.get_entity_image_urls(wanted)
     refs: Dict[str, Dict[str, Any]] = {}
     for entity in state.entity_repository.get_entities_by_ids(wanted):
         if entity.id in hidden:
@@ -146,6 +147,7 @@ def _entity_refs(state: AppState, visibility: PublicVisibility, ids: Iterable[st
             "name": display_name(entity.canonical_name),
             "type": str(entity.type.value if hasattr(entity.type, "value") else entity.type),
             "slug": entity_slug(entity.id),
+            "image_url": images.get(entity.id),
         }
     return refs
 
@@ -619,7 +621,9 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
 
     speakers = []
     if not is_person or about_total:
-        for row in queries.speakers(entity_id, since=days_ago(_SPEAKERS_WINDOW_DAYS), limit=8):
+        speaker_rows = queries.speakers(entity_id, since=days_ago(_SPEAKERS_WINDOW_DAYS), limit=8)
+        speaker_images = state.entity_repository.get_entity_image_urls([str(r["speaker_id"]) for r in speaker_rows])
+        for row in speaker_rows:
             best, _ = queries.quotes(
                 QuoteFilter(speaker_id=str(row["speaker_id"]), about_id=entity_id), order="longest", limit=10
             )
@@ -630,6 +634,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
                     "slug": entity_slug(str(row["speaker_id"])),
                     "quotes": int(row["quotes"]),
                     "shows": int(row["shows"]),
+                    "image_url": speaker_images.get(str(row["speaker_id"])),
                     "quote": _quote_item(best[0])["text"] if best else None,
                 }
             )

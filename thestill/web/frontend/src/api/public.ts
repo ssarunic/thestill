@@ -8,6 +8,8 @@ export interface PublicEntityRef {
   name: string
   type: PublicEntityType
   slug: string
+  /** Wikimedia image when the entity has one (people: a portrait). */
+  image_url?: string | null
 }
 
 export interface PublicPodcast {
@@ -112,7 +114,7 @@ export interface PublicEntityPayload {
   related: (PublicEntityRef & { episode_count: number })[]
   featured_quote: PublicQuote | null
   topics: (PublicEntityRef & { id: string; quotes: number })[]
-  speakers: { name: string; slug: string; quotes: number; shows: number; quote: string | null }[]
+  speakers: { name: string; slug: string; quotes: number; shows: number; image_url: string | null; quote: string | null }[]
   quote_counts: { said: number; about: number }
   indexable: boolean
 }

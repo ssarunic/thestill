@@ -202,3 +202,15 @@ def test_quote_queries(repos):
 
     presence = queries.presence("company:acme")
     assert [str(r["episode_id"]) for r in presence] == [EP_SUMMARISED]
+
+
+def test_entity_image_urls(repos):
+    from thestill.models.enrichment import EntityEnrichment
+
+    _, entities = repos
+    entities.upsert_enrichment(EntityEnrichment(entity_id="person:alice", image_url="https://img.example/alice.jpg"))
+    entities.upsert_enrichment(EntityEnrichment(entity_id="person:bob", image_url=None))
+    assert entities.get_entity_image_urls(["person:alice", "person:bob", "person:nobody", ""]) == {
+        "person:alice": "https://img.example/alice.jpg"
+    }
+    assert entities.get_entity_image_urls([]) == {}
