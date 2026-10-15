@@ -722,3 +722,9 @@ anonymous e2e contract. Transcripts stay behind sign-in.
 - Move repeated inline styles in `pages/public/*` into `public.css`.
 - Split `_build_entity_payload` into per-module helpers.
 - Terms and Privacy are drafts; open question 1 still stands.
+- From the second review (2026-10-15), not built: a compact sample
+  briefing and a "Read a sample" action on the landing, before the long
+  summary; the positioning line "Keep up with your favourite podcasts in
+  minutes. Read the key ideas, check the source, and get your morning
+  briefing."; curating launch examples and suppressing unreviewed entity
+  links on public pages; Follow intent that survives sign-in.
