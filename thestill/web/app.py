@@ -26,6 +26,7 @@ Usage:
     app = create_app()
 """
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -33,7 +34,7 @@ from typing import Optional
 import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
@@ -72,6 +73,17 @@ from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
 from .dependencies import AppState, require_admin, require_auth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
+from .public_shell import (
+    ROBOTS_PRIVATE,
+    ROBOTS_PUBLIC,
+    HeadTags,
+    LookupThrottled,
+    ShellTemplate,
+    get_shell_renderer,
+    get_sitemap_builder,
+    inject,
+    render_head,
+)
 from .routes import (
     api_briefings,
     api_commands,
@@ -787,35 +799,83 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         install_uvicorn_access_redaction()
         logger.info("mcp_http_endpoint_mounted", mount="/mcp")
 
-    # Serve static frontend files
-    static_dir = Path(__file__).parent / "static"
+    # Serve static frontend files. THESTILL_STATIC_DIR points tests (and
+    # unusual deployments) at another build directory.
+    static_dir = Path(os.getenv("THESTILL_STATIC_DIR") or Path(__file__).parent / "static")
     if static_dir.exists():
         # Mount static assets (JS, CSS) with aggressive caching
         assets_dir = static_dir / "assets"
         if assets_dir.exists():
             app.mount("/assets", CachedStaticFiles(directory=str(assets_dir)), name="assets")
 
-        # Catch-all route for SPA - must be after API routes
-        @app.get("/{full_path:path}")
-        async def serve_spa(request: Request, full_path: str):
-            """Serve the SPA index.html for all non-API routes.
+        # Spec #94 — robots.txt, sitemap.xml and the per-page <head>. Public
+        # pages exist only in multi-user mode with PUBLIC_PAGES_ENABLED; any
+        # other install tells crawlers to stay out entirely.
+        shell_template = ShellTemplate(static_dir / "index.html")
+        static_root = static_dir.resolve()
+
+        @app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
+        def robots_txt(request: Request):
+            state = request.app.state.app_state
+            body = (
+                ROBOTS_PUBLIC.format(base=state.config.public_base_url)
+                if get_shell_renderer(state).enabled
+                else ROBOTS_PRIVATE
+            )
+            return PlainTextResponse(body, headers={"Cache-Control": "public, max-age=3600"})
+
+        @app.api_route("/sitemap.xml", methods=["GET", "HEAD"], include_in_schema=False)
+        @app.api_route("/sitemap-{page}.xml", methods=["GET", "HEAD"], include_in_schema=False)
+        def sitemap_xml(request: Request, page: Optional[int] = None):
+            state = request.app.state.app_state
+            if not get_shell_renderer(state).enabled:
+                return PlainTextResponse("Not found", status_code=404)
+            body = get_sitemap_builder(state).render(page)
+            if body is None:
+                return PlainTextResponse("Not found", status_code=404)
+            return Response(body, media_type="application/xml", headers={"Cache-Control": "public, max-age=3600"})
+
+        # Catch-all route for SPA - must be after API routes. A plain ``def``
+        # so the shell's repository lookups run in the threadpool, never on
+        # the event loop.
+        @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+        def serve_spa(request: Request, full_path: str):
+            """Serve the SPA shell (``index.html``) for every non-API route.
 
             ``index.html`` references the hashed JS/CSS chunks by filename, so
-            it itself is the only file that must never be cached — otherwise
-            the browser keeps the old shell after a redeploy and never loads
-            the freshly-built chunks. The hashed assets under /assets are
-            cached aggressively by ``CachedStaticFiles``; here we explicitly
-            opt out for the shell.
+            it is the one file that must never be cached; the hashed assets
+            under /assets are cached aggressively by ``CachedStaticFiles``.
+            Files at the root of the build (favicon, og image, legal Markdown)
+            are served as files. In public mode the shell's ``<head>`` is
+            rewritten per path (spec #94 §3) and unknown or hidden public
+            paths answer 404 so crawlers drop them.
             """
             # Skip if it's an API or known route
             if full_path.startswith(("api/", "webhook/", "mcp/", "docs", "redoc", "openapi.json", "health")):
                 return None
             index_file = static_dir / "index.html"
-            target = index_file if index_file.exists() else (static_dir / "index.html")
-            return FileResponse(
-                str(target),
-                headers={"Cache-Control": "no-cache, must-revalidate"},
-            )
+            if full_path and full_path != "index.html":
+                candidate = (static_dir / full_path).resolve()
+                if candidate.is_file() and static_root in candidate.parents:
+                    return FileResponse(str(candidate), headers={"Cache-Control": "public, max-age=86400"})
+            no_cache = {"Cache-Control": "no-cache, must-revalidate"}
+            state = request.app.state.app_state
+            renderer = get_shell_renderer(state)
+            if not renderer.enabled:
+                return FileResponse(str(index_file), headers=no_cache)
+            try:
+                tags = renderer.head_for(full_path, request)
+            except LookupThrottled:
+                return PlainTextResponse(
+                    "Too many requests from your network. Try again in a minute.",
+                    status_code=429,
+                    headers={"Retry-After": "60", **no_cache},
+                )
+            except Exception as exc:  # A lookup failure must not take the app shell down.
+                logger.warning("public_shell.lookup_failed", path=full_path, error=str(exc), exc_info=True)
+                tags = HeadTags()
+            html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
+            return HTMLResponse(html_text, status_code=tags.status_code, headers=no_cache)
 
         logger.info("serving_static_frontend", directory=str(static_dir))
     else:
