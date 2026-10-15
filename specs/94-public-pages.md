@@ -1,8 +1,8 @@
 # Public Pages
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Active development (implementation plan added 2026-10-15; branch `feat/94-public-pages`)
 > **Created:** 2026-10-08
-> **Updated:** 2026-10-08
+> **Updated:** 2026-10-15
 > **Priority:** High. Every other growth idea (launch posts, directory listings, share links, a digest) needs a page a stranger can land on. Today there is none.
 > **Author:** Product & Engineering
 > **Related:** [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md) (the corpus is shared across users, which is what makes it publishable), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP, default-deny routers), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#54 summary-segment-citations](54-summary-segment-citations.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md) (tokens the landing page reuses), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#80 share-to-thestill](80-share-to-thestill.md) (root static files, `next` through login), [#87 episode-platform-links](87-episode-platform-links.md) (Listen on … links), [#91 transcript-and-summary-export](91-transcript-and-summary-export.md), [#93 native-web-capabilities](93-native-web-capabilities.md) (manifest, icons)
@@ -480,6 +480,128 @@ separate decision; see Non-goals.
 
 Phase 1 is the first thing a launch post can link to and should not
 wait for 2 or 3.
+
+## Implementation plan (2026-10-15)
+
+This section supersedes the Phases table above where they differ. It
+records the decisions taken before implementation started and the order
+the work ships in. The UX brief ("Thestill public pages — UX design
+brief", 2026-10-15) and the "Thestill Editorial" design system (tokens,
+14 components, built from the Stitch project "Thestill Public Pages UX
+Design") are the design inputs.
+
+### Clarifications (2026-10-15)
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| 1 | Where does the plan live? | Here, in #94; branch `feat/94-public-pages` in worktree `../thestill-94` | #94 is the spec being implemented |
+| 2 | Reuse signed-in pages in an anonymous mode, or build separate public pages? | Separate public pages under `pages/public/` built from new `components/public/`; data hooks shared where they fit; signed-in pages untouched | `EpisodeReader` runs ~10 per-user hooks at mount (mark-read, task polling, transcript download) and the editorial design differs from the app; gating every hook is riskier than a separate tree. Supersedes §5's "reused, not forked" |
+| 3 | Where does a person's "What they said" come from? | Mention rows (role not `speaking`) in segments whose `speaking` row resolves to that person | Mention excerpts are ±200 chars of real speech and carry the entity they are about, so the topic filter works; speaking rows hold only a first sentence |
+| 4 | Featured quote ranking before #100 exists | Read-time heuristic: last 90 days, outside the first 90 s and last 60 s, longest excerpt that passes a lexical sponsor check | Cheap, deterministic; #100 replaces it |
+| 5 | Person takedown | `entities.public_hidden` + `thestill set-entity-visibility` ship with the person pages | UX brief open question 2: required before person pages go live |
+| 6 | Entity extraction in prod | Running (quotes from 2026-10-14 episodes resolve) | No Phase 0 fix needed |
+| 7 | Sign-in return path | Built here: `next` validated on the client and server, carried through Google OAuth in a short-lived cookie | #80 never shipped it |
+| 8 | Fonts | Self-host Newsreader via `@fontsource-variable/newsreader`; no CSP change | CSP blocks Google Fonts; Inter is already self-hosted |
+| 9 | Shipping | Stacked PRs A–E below | Each phase reviewable alone |
+| 10 | Defaults | RSS URL not public; single-user mode gets no public pages; Terms/Privacy ship as labelled drafts; one default OG image; 120 req/min/IP | Brief and #94 defaults |
+
+### Architecture
+
+**A separate public API namespace, `/api/public/*`.** Instead of moving
+existing handlers onto `public_router`s (§2), public reads get their own
+router module with explicit Pydantic response models. The public shapes
+differ from the signed-in ones (no `state`, `external_id`, failure
+fields, `rss_url`, `refresh_pending`, `is_following`), the cost guard is
+structural (the public module never imports the LLM provider factory or
+`refresh_on_open`), and the route allowlist test reduces to "everything
+under `/api/public/` and nothing else is unauthenticated". Handlers call
+the same services and repositories as the private routes; no SQL is
+duplicated. `robots.txt` allows `/api/public/` and `/api/auth/status`
+and disallows the rest of `/api/`.
+
+**Visibility predicate in one place.** `PublicVisibility` (a small
+service) answers `podcast_is_public(slug)`, `episode_is_public(...)`
+(public podcast **and** a real summary: `summary_preview` non-empty and
+not `N/A`), and filters entity-page lists to public podcasts and
+non-hidden entities. API 404s, the shell's status codes and the sitemap
+all call it (FM-6).
+
+**Frontend split.** `AuthContext` gains `isAnonymous` (false while
+loading). `App.tsx` renders a `PublicApp` route tree when `isAnonymous`:
+`PublicLayout` (scoped `.public-theme` tokens, SiteHeader, SiteFooter,
+scroll restoration, no PlayerProvider) and lazy public pages. Signed-in
+routing is unchanged; `ProtectedRoute` sends anonymous visitors on
+private paths to `/login?next=…`.
+
+### Execution plan
+
+**Phase A — public API (backend only).**
+
+| # | File | Change |
+|---|---|---|
+| A1 | `thestill/migrations/versions/0015_public_visibility.py`, `postgres_schema.py`, `sqlite_podcast_repository.py`, `sqlite_entity_repository.py` | `podcasts.public_pages boolean NOT NULL DEFAULT true`, `entities.public_hidden boolean NOT NULL DEFAULT false` |
+| A2 | `models/podcast.py`, podcast + entity repositories | Read/write the two flags; `set_podcast_public_pages`, `set_entity_public_hidden` |
+| A3 | `cli.py` | `set-podcast-visibility`, `set-entity-visibility` |
+| A4 | `web/public_access.py` (new) | `PublicVisibility`; credential-present helper; public cache headers (`public, max-age=300, stale-while-revalidate=3600` / `private, no-cache`, always `Vary: Cookie, Authorization`) |
+| A5 | `web/middleware/rate_limit.py` | `PUBLIC_LIMIT` bucket; dependency that skips requests carrying a valid credential |
+| A6 | `web/routes/api_public.py` (new), `app.py` | Podcast, summarised episodes (limit ≤ 50), episode, summary (`allow_generate=False`), recent summaries, top chart; mounted without `require_auth`, only in multi-user mode |
+| A7 | `tests/integration/web/test_public_api.py` (new) | Anonymous 200s; hidden podcast 404; `N/A` summary 404; no LLM factory call; no refresh enqueue; no forbidden keys; cache headers per credential; rate limit; route allowlist over `app.routes` |
+
+Gate: `PYTHONPATH=$PWD ./venv/bin/pytest tests/integration/web/test_public_api.py tests/unit/web -q` green; `ruff` clean on touched files.
+
+**Phase B — shell, robots, sitemap.**
+
+| # | File | Change |
+|---|---|---|
+| B1 | `web/public_shell.py` (new), `app.py` | GET+HEAD catch-all; per-path title/description/OG/canonical/JSON-LD injected at a marker in `index.html`; slug regex before lookup; 120 s positive/negative cache; 404 + `noindex` for unknown/hidden; private paths `noindex` |
+| B2 | `app.py`, `frontend/public/` | `robots.txt`, `sitemap.xml` (index past 40k), `og-default.png`, `favicon.svg` routes before the catch-all |
+| B3 | `frontend/index.html` | `<!--thestill:head-->` marker, default description |
+| B4 | tests | Escaping (`</script>` in a title), status codes, HEAD, sitemap predicate parity, robots parser |
+
+**Phase C — public frontend: layout, landing, chart, show, episode, sign-in return.**
+
+| # | File | Change |
+|---|---|---|
+| C1 | `routes/auth.py` | `next` on `/google/login` validated (`/`-relative, not `//`, not `/login`), stored in a 10-minute cookie, honoured by the callback |
+| C2 | `contexts/AuthContext.tsx`, `utils/safeNext.ts`, `ProtectedRoute.tsx`, `pages/Login.tsx` | `isAnonymous`; `login(next)`; redirects carry `next` |
+| C3 | `package.json`, `package-lock.json`, `index.css`, `tailwind.config.js` | Newsreader font; `.public-theme` token scope (Thestill Editorial tokens) |
+| C4 | `components/public/*` | SiteHeader, SiteFooter, SignInCard, QuoteCard, FilterChip, EntityDot, EpisodeRow, PersonRow, ShowTile, FactList, ListenOn, ActivitySparkline, ReaderTabs, Button |
+| C5 | `App.tsx`, `PublicApp.tsx`, `layouts/PublicLayout.tsx`, `pages/public/{Landing,Top,Show,Episode,NotFound}.tsx`, `api/public.ts`, `hooks/usePublicApi.ts` | Public route tree and pages |
+| C6 | tests | Vitest for AuthContext/App split and pages; no per-user API call fires anonymously |
+
+**Phase D — person and entity pages.**
+
+| # | File | Change |
+|---|---|---|
+| D1 | `postgres_entity_repository.py`, `sqlite_entity_repository.py`, `entity_repository.py` | Queries: quotes by speaker entity (optionally `about`), quotes about an entity by named speakers, who's talking, topic options, weekly activity; all one row per segment, public podcasts only, hidden entities excluded, read-time gate (≥ 12 words, no unnamed speakers, sponsor terms) |
+| D2 | `api_public.py` | `/entities/{type}/{slug}`, `/entities/{type}/{slug}/quotes`, `/podcasts/{s}/episodes/{e}/quotes` |
+| D3 | `pages/public/{Person,Entity}.tsx` | Person and entity pages per the brief; `?about=` filter in the URL |
+| D4 | shell + sitemap | Entity head tags, entity URLs in the sitemap (≥ 3 quality quotes, else `noindex`) |
+
+**Phase E — legal, polish, end-to-end.** Terms/Privacy pages from
+`public/legal/*.md` (labelled drafts); Playwright anonymous spec at phone
+and desktop widths that fails on any unmocked private `/api` call;
+`docs/web-server.md` section on public pages.
+
+### Alternatives considered
+
+- **Move existing handlers onto `public_router`s (§2 as written).**
+  Rejected: the signed-in payloads carry fields that must not be public,
+  so every handler would need a second response model and cost-guard
+  flags; a separate module makes the boundary structural.
+- **Reuse signed-in pages with an anonymous mode (§5 as written).**
+  Rejected for the reasons in Clarification 2.
+- **Read transcript turns from storage for person quotes.** Rejected for
+  now: one storage read per quote per anonymous request; spec #100's
+  candidates table is the right home for full-turn quotes.
+
+### Rollback
+
+Every phase is additive. The two columns default to today's behaviour
+(`public_pages = true`, `public_hidden = false`) and can stay if the
+code is reverted. Turning public pages off without a revert: the public
+router and shell injection only mount in multi-user mode, and a
+`PUBLIC_PAGES_ENABLED=false` setting disables both.
 
 ## Testing
 
