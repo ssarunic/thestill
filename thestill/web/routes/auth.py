@@ -29,7 +29,7 @@ Routes:
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from structlog import get_logger
@@ -190,8 +190,33 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     )
 
 
+# Spec #94 — where to land after sign-in. A same-origin path only: starts with
+# one "/", no scheme, no "//" or "/\\" (protocol-relative), no control
+# characters, and never back to /login. Anything else lands on "/".
+NEXT_COOKIE = "oauth_next"
+_NEXT_MAX_LENGTH = 512
+
+
+def safe_next_path(value: Optional[str]) -> Optional[str]:
+    """``value`` if it is a safe same-origin path to return to, else None."""
+    if not value or len(value) > _NEXT_MAX_LENGTH:
+        return None
+    if not value.startswith("/") or value.startswith(("//", "/\\")):
+        return None
+    if any(ord(ch) < 0x20 or ch == "\\" for ch in value):
+        return None
+    path = value.split("?", 1)[0].split("#", 1)[0]
+    if path == "/login" or path.startswith("/login/") or path.startswith("/api/"):
+        return None
+    return value
+
+
 @router.get("/google/login")
-def google_login(request: Request, state: AppState = Depends(get_app_state)):
+def google_login(
+    request: Request,
+    next: Optional[str] = Query(None, max_length=_NEXT_MAX_LENGTH),  # noqa: A002 - the query name is the contract
+    state: AppState = Depends(get_app_state),
+):
     """
     Initiate Google OAuth login flow.
 
@@ -222,6 +247,10 @@ def google_login(request: Request, state: AppState = Depends(get_app_state)):
         samesite="lax",
         state=state,
     )
+    # Spec #94 — remember where the visitor was; validated again on return.
+    safe_next = safe_next_path(next)
+    if safe_next:
+        _set_secure_cookie(response, name=NEXT_COOKIE, value=safe_next, max_age=600, samesite="lax", state=state)
 
     logger.info("Redirecting to Google OAuth")
     return response
@@ -281,12 +310,14 @@ async def google_callback(
         # and leave region NULL — the user can still pick one in settings.
         await app_state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
 
-        # Redirect to home page with auth cookie
-        response = RedirectResponse(url="/", status_code=302)
+        # Redirect back to where sign-in started (spec #94), else home.
+        destination = safe_next_path(request.cookies.get(NEXT_COOKIE)) or "/"
+        response = RedirectResponse(url=destination, status_code=302)
         _set_auth_cookie(response, jwt_token, app_state)
 
-        # Clear the OAuth state cookie
+        # Clear the OAuth state and return-path cookies
         response.delete_cookie(key="oauth_state")
+        response.delete_cookie(key=NEXT_COOKIE)
 
         logger.info("user_authenticated", email=user.email)
         return response
