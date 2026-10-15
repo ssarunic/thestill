@@ -1,6 +1,6 @@
 # Public Pages
 
-> **Status:** 🚧 Active development (implementation plan added 2026-10-15; branch `feat/94-public-pages`)
+> **Status:** 🚧 Implemented, in review (branch `feat/94-public-pages`, 2026-10-15); see [Outcome](#outcome-2026-10-15)
 > **Created:** 2026-10-08
 > **Updated:** 2026-10-15
 > **Priority:** High. Every other growth idea (launch posts, directory listings, share links, a digest) needs a page a stranger can land on. Today there is none.
@@ -656,3 +656,69 @@ Slackbot user agent and asserts the OG tags.
 4. **OG image for episodes.** Publisher artwork is square; previewers
    crop it. Is a generated 1200×630 card (artwork + title + "Summary on
    thestill") worth a small image route in Phase 3?
+
+## Outcome (2026-10-15)
+
+Phases A–E of the implementation plan are built on `feat/94-public-pages`:
+the signed-out read API, per-page head tags with 404 + `noindex`,
+`robots.txt` and `sitemap.xml`, the public frontend (landing, `/top`,
+show, episode, person, entity, terms, privacy) in the Thestill Editorial
+design system, sign-in that returns to the page it started from, and the
+anonymous e2e contract. Transcripts stay behind sign-in.
+
+### Deviations from the plan
+
+| Planned | Built | Why |
+|---------|-------|-----|
+| Public quote SQL in the entity repositories (D1) | One shared module, `repositories/public_quotes.py`, run by both backends through `public_quote_queries()` | One SQL text for SQLite and Postgres; the contract test runs it on both |
+| Quote gate: ≥ 12 words, skip the last 60 s | ≥ 60 characters, skip the first 90 s, sponsor phrases excluded, one row per segment | Characters are cheap in SQL; the noise on real data was at the start (cold opens, ad reads), not the end |
+| Featured quote from the last 90 days only | Last 90 days first, then any age; prefers a sentence that stands alone | Quiet people would otherwise have no featured quote; mid-sentence openers ("He said…") read badly |
+| Follow on a public page follows after sign-in | Sign-in returns to the page; the visitor presses Follow again | Auto-follow needs a signed intent token through OAuth; deferred |
+| Separate `Person.tsx` / `Entity.tsx`, `layouts/` | One `EntityPage.tsx` (person vs thing by type), `components/public/PublicLayout.tsx`, `ui.tsx` + `helpers.ts` | The two pages share 80 % of their modules |
+| Summary route with `allow_generate=False` | Calls only the stored-summary service methods | Same guarantee, no new flag |
+| `?q=` quote-specific OG description | Not built | The page lands on and highlights the quote; the share preview uses the episode description |
+| Playwright at phone and desktop; `@live` Slackbot OG check | Desktop only; checked phone width by hand (375 px, no horizontal scroll); no `@live` job | Follow-up |
+
+### Added during implementation
+
+- `idx_mentions_episode_segment` on `entity_mentions(episode_id, segment_id)`
+  (migration 0015): the person page's quote queries went from 10 s to
+  20–70 ms on an 800k-mention copy of production.
+- `thestill backfill-summary-previews`: 1991 of 2060 local summaries had
+  no stored preview, and the public predicate requires one. **Run it once
+  after deploying**, or most episodes stay off the public pages.
+- `/api/public/who-said-what` for the landing module.
+- `display_name()` strips Wikidata disambiguators ("Amazon (company)").
+- Review fixes: one `TtlCache` for every public payload, keyed on a
+  fingerprint of the hidden sets, so a takedown run from the CLI reaches
+  every cache within the 60 s visibility refresh;
+  `stale-while-revalidate` cut from 3600 to 300; guest episodes use the
+  full episode predicate; affiliations to hidden entities are dropped; the
+  page shell never rate-limits a signed-in user and answers 503 on a
+  failed lookup; login clears a stale `oauth_next`; the sitemap counts
+  quotes exactly as the page does.
+
+### Verified
+
+- Backend: 884 web/security/contract tests pass;
+  `tests/integration/test_public_queries_contract.py` passes on SQLite and
+  Postgres (`TEST_DATABASE_URL`).
+- Frontend: 640 vitest, `tests/public-pages.spec.ts` 5/5; the rest of the
+  hermetic e2e suite passes (the Top Podcasts scroll test flaked once
+  under load and passes alone).
+- Visual check on a Postgres copy of production data (person, company,
+  episode with `?q=`, landing, top, show; desktop and 375 px).
+- Multi-speaker segments: 0 of 295k segments have more than one resolved
+  speaker, so a quote is never attributed to the wrong person by the
+  speaker join.
+
+### Follow-ups
+
+- Data quality seen on the person page: some "Scott" vocatives and Scott
+  Bessent mentions are linked to Scott Galloway, so "What others say about"
+  shows quotes that are not about him; the topic "Anthropic principle" is a
+  mislink of Anthropic. Both are linker issues, not public-page issues.
+- Phone-width Playwright run and the `@live` OG check.
+- Move repeated inline styles in `pages/public/*` into `public.css`.
+- Split `_build_entity_payload` into per-module helpers.
+- Terms and Privacy are drafts; open question 1 still stands.
