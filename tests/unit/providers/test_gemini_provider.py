@@ -7,6 +7,7 @@ a bare JSONDecodeError.
 """
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -127,3 +128,108 @@ class TestThinkingLevelModelMatching:
     def test_flash_detection_for_dotted_ids(self):
         assert self._provider("gemini-3.6-flash")._is_gemini_3_flash() is True
         assert self._provider("gemini-3.5-pro", level="low")._is_gemini_3_flash() is False
+
+
+class TestGeminiUsageLogging:
+    """Every billed Gemini call logs one ``llm_usage`` event at INFO.
+
+    Asserted on a patched module logger, not ``structlog.testing.capture_logs``,
+    which misses loggers that earlier tests already cached.
+    """
+
+    @staticmethod
+    def _usage(prompt=1200, candidates=300, thoughts=40, cached=800):
+        return SimpleNamespace(
+            prompt_token_count=prompt,
+            candidates_token_count=candidates,
+            thoughts_token_count=thoughts,
+            cached_content_token_count=cached,
+        )
+
+    @staticmethod
+    def _usage_calls(fake_logger):
+        return [c for c in fake_logger.info.call_args_list if c.args and c.args[0] == "llm_usage"]
+
+    def test_structured_call_logs_token_counts(self, provider, monkeypatch):
+        p, client = provider
+        fake_logger = MagicMock()
+        monkeypatch.setattr("thestill.core.llm_provider.logger", fake_logger)
+        response = _mock_response("STOP", json.dumps({"text": "ok"}))
+        response.usage_metadata = self._usage()
+        client.models.generate_content.return_value = response
+
+        p.generate_structured(messages=[{"role": "user", "content": "x"}], response_model=_PatchModel)
+
+        (call,) = self._usage_calls(fake_logger)
+        assert call.kwargs == {
+            "provider": "gemini",
+            "model": "gemini-3-flash-preview",
+            "call": "structured",
+            "input_tokens": 1200,
+            "output_tokens": 300,
+            "thinking_tokens": 40,
+            "cached_tokens": 800,
+        }
+
+    def test_refused_call_is_still_logged(self, provider, monkeypatch):
+        """A refusal is billed, so usage is logged before the finish-reason raise."""
+        p, client = provider
+        fake_logger = MagicMock()
+        monkeypatch.setattr("thestill.core.llm_provider.logger", fake_logger)
+        response = _mock_response("RECITATION", None)
+        response.usage_metadata = self._usage(candidates=0)
+        client.models.generate_content.return_value = response
+
+        with pytest.raises(ProhibitedContentError):
+            p.generate_structured(messages=[{"role": "user", "content": "x"}], response_model=_PatchModel)
+
+        assert len(self._usage_calls(fake_logger)) == 1
+
+    def test_continuation_logs_each_attempt(self, provider, monkeypatch):
+        p, client = provider
+        fake_logger = MagicMock()
+        monkeypatch.setattr("thestill.core.llm_provider.logger", fake_logger)
+        first = _mock_response("MAX_TOKENS", "part one ")
+        first.usage_metadata = self._usage(candidates=100)
+        second = _mock_response("STOP", "part two")
+        second.usage_metadata = self._usage(candidates=50)
+        client.models.generate_content.side_effect = [first, second]
+
+        text = p.chat_completion_with_continuation(messages=[{"role": "user", "content": "x"}])
+
+        assert text == "part one part two"
+        assert [c.kwargs["output_tokens"] for c in self._usage_calls(fake_logger)] == [100, 50]
+        assert {c.kwargs["call"] for c in self._usage_calls(fake_logger)} == {"chat"}
+
+    def test_stream_logs_usage_from_final_chunk(self, provider, monkeypatch):
+        p, client = provider
+        fake_logger = MagicMock()
+        monkeypatch.setattr("thestill.core.llm_provider.logger", fake_logger)
+        chunk = MagicMock()
+        chunk.text = "hello"
+        chunk.candidates = [MagicMock(finish_reason="STOP")]
+        chunk.usage_metadata = self._usage(candidates=5)
+        client.models.generate_content_stream.return_value = iter([chunk])
+
+        assert p.chat_completion_streaming(messages=[{"role": "user", "content": "x"}]) == "hello"
+
+        (call,) = self._usage_calls(fake_logger)
+        assert call.kwargs["call"] == "stream"
+        assert call.kwargs["output_tokens"] == 5
+
+    def test_missing_counts_log_as_zero_and_absent_metadata_logs_nothing(self, provider, monkeypatch):
+        p, client = provider
+        fake_logger = MagicMock()
+        monkeypatch.setattr("thestill.core.llm_provider.logger", fake_logger)
+        with_none = _mock_response("STOP", "a")
+        with_none.usage_metadata = self._usage(thoughts=None, cached=None)
+        without = _mock_response("STOP", "b")
+        without.usage_metadata = None
+        client.models.generate_content.side_effect = [with_none, without]
+
+        p.chat_completion(messages=[{"role": "user", "content": "x"}])
+        p.chat_completion(messages=[{"role": "user", "content": "x"}])
+
+        (call,) = self._usage_calls(fake_logger)
+        assert call.kwargs["thinking_tokens"] == 0
+        assert call.kwargs["cached_tokens"] == 0

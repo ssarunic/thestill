@@ -1,12 +1,10 @@
-Turn podcasts into readable content. Automatically.
+You follow more podcasts than you'll ever hear, and the best things said on them are impossible to find again.
 
-## The Problem
+thestill reads every episode for you. Each morning it briefs you on what matters. Behind that, it keeps a searchable library of who said what, about whom, across every show. Ask it through Claude and get the answer with a timestamp.
 
-You subscribe to 20 podcasts. Each episode is 60-90 minutes. That's 30+ hours of content per week. You'll never catch up by listening.
+## Get Started
 
-## The Solution
-
-thestill downloads your podcasts, transcribes them with speaker identification, cleans up the messy speech-to-text output, and generates summaries. You get a morning briefing of everything that dropped overnight.
+Under the hood, thestill downloads your podcasts, transcribes them with speaker identification, cleans up the messy speech-to-text output, and generates summaries.
 
 ```bash
 # Add some podcasts
