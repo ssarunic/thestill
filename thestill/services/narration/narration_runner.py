@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from structlog import get_logger
+from structlog.contextvars import bound_contextvars
 
 from ...models.briefing import Briefing
 from ...models.inbox import INBOX_STATES_ELIGIBLE_FOR_BRIEFING, InboxState
@@ -132,7 +133,10 @@ class NarrationRunner:
             # stack trace, and the API can convert to 400.
             raise NarrationRunnerError(str(exc)) from exc
         started = time.perf_counter()
-        content = self.generator.generate(episodes, cfg)
+        # Tags the generator's llm_usage events, which run outside the
+        # task worker and so carry no stage of their own.
+        with bound_contextvars(stage="narration", briefing_id=briefing.id):
+            content = self.generator.generate(episodes, cfg)
         content.latency_ms = int((time.perf_counter() - started) * 1000)
         self.generator.write_json_script(content, cfg)
         self.generator.write_markdown(content, cfg)

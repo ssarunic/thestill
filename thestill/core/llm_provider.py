@@ -860,6 +860,25 @@ class LLMProvider(ABC):
             name = name[: -len("Provider")]
         return name.lower()
 
+    def _log_usage(self, *, call: str, input_tokens: Any, output_tokens: Any, **extra: Any) -> None:
+        """Log one ``llm_usage`` event per billed API call.
+
+        INFO, not DEBUG, so production logs carry it: this is how cost per
+        audio hour gets measured instead of estimated. The task worker binds
+        ``stage`` and ``episode_id`` as contextvars, so every event is
+        attributable to a pipeline stage and episode without the caller
+        passing them.
+        """
+        logger.info(
+            "llm_usage",
+            provider=self.get_provider_name(),
+            model=self.get_model_name(),
+            call=call,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            **extra,
+        )
+
     @abstractmethod
     def get_model_display_name(self) -> str:
         """Get human-readable model name for display"""
@@ -1118,10 +1137,9 @@ class OpenAIProvider(LLMProvider):
             current_text = response.choices[0].message.content or ""
             full_response += current_text
 
-            # Log token usage if available
             if hasattr(response, "usage") and response.usage:
-                logger.debug(
-                    "Token usage",
+                self._log_usage(
+                    call="chat",
                     input_tokens=response.usage.prompt_tokens,
                     output_tokens=response.usage.completion_tokens,
                 )
@@ -1397,10 +1415,9 @@ class OllamaProvider(LLMProvider):
             response_text = response.get("response", "")
             done = response.get("done", True)
 
-            # Log token counts if available
             if "prompt_eval_count" in response and "eval_count" in response:
-                logger.debug(
-                    "Token usage",
+                self._log_usage(
+                    call="chat",
                     input_tokens=response.get("prompt_eval_count", 0),
                     output_tokens=response.get("eval_count", 0),
                 )
@@ -1822,10 +1839,9 @@ class AnthropicProvider(LLMProvider):
 
             full_response += current_text
 
-            # Log token usage if available
             if hasattr(response, "usage"):
-                logger.debug(
-                    "Token usage",
+                self._log_usage(
+                    call="chat",
                     input_tokens=response.usage.input_tokens,
                     output_tokens=response.usage.output_tokens,
                 )
@@ -2377,6 +2393,25 @@ class GeminiProvider(LLMProvider):
 
         return genai_types.GenerateContentConfig(**config_kwargs)
 
+    def _log_usage_metadata(self, response: Any, call: str) -> None:
+        """Log Gemini's ``usage_metadata`` for one billed call.
+
+        Called right after the API returns and before any finish-reason
+        check, because a refused or truncated response is still billed.
+        Thinking tokens are billed at the output rate, so they are logged
+        separately from ``output_tokens`` (candidates only).
+        """
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return
+        self._log_usage(
+            call=call,
+            input_tokens=usage.prompt_token_count or 0,
+            output_tokens=usage.candidates_token_count or 0,
+            thinking_tokens=usage.thoughts_token_count or 0,
+            cached_tokens=usage.cached_content_token_count or 0,
+        )
+
     def chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -2454,6 +2489,7 @@ class GeminiProvider(LLMProvider):
                 contents=contents,
                 config=config,
             )
+            self._log_usage_metadata(response, call="chat")
 
             # Handle different finish reasons
             if not response.candidates:
@@ -2616,6 +2652,7 @@ class GeminiProvider(LLMProvider):
             contents=contents,
             config=config,
         )
+        self._log_usage_metadata(response, call="structured")
 
         if not response.candidates:
             raise RuntimeError("Gemini returned no candidates in response")
@@ -2755,6 +2792,10 @@ class GeminiProvider(LLMProvider):
 
             # Accumulate response
             full_response += attempt_response
+
+            # Usage totals for the whole stream arrive on the final chunk
+            if last_chunk is not None:
+                self._log_usage_metadata(last_chunk, call="stream")
 
             # Check finish reason from the final chunk
             finish_reason_str = ""
@@ -2957,10 +2998,9 @@ class MistralProvider(LLMProvider):
 
             full_response += current_text
 
-            # Log token usage if available
             if hasattr(response, "usage") and response.usage:
-                logger.debug(
-                    "Token usage",
+                self._log_usage(
+                    call="chat",
                     input_tokens=response.usage.prompt_tokens,
                     output_tokens=response.usage.completion_tokens,
                 )
