@@ -19,9 +19,15 @@ mode; in single-user mode all checks pass. Admin-only endpoints:
 - `POST /api/commands/episode/{id}/cancel-pipeline`
 - `/api/commands/queue/*` and `/api/commands/dlq*` (queue + DLQ management)
 - `POST /api/episodes/bulk/process` and `POST /api/episodes/{id}/retry`
+- `GET /api/episodes` (corpus-wide browser), `GET /api/episodes/failed` and `GET /api/episodes/{id}/failure` (raw failure reasons)
 - `GET /api/entities/review-queue` and `POST /api/entities/corrections` (global entity-resolution surgery)
 - `GET /api/status` and `GET /api/dashboard/*` (operator dashboards)
 - `GET`/`DELETE` `/webhook/elevenlabs/results*` (stored payload inspection)
+
+Episode payloads on user routes (`/api/podcasts/{slug}/episodes`,
+`/api/podcasts/{slug}/episodes/{episode_slug}`) keep `is_failed`,
+`failed_at_stage` and `failure_type`, but return `failure_reason: null`
+to non-admins.
 
 Deliberately public (no session): `/health`, `/unsubscribe/briefings`
 (signed token), and `POST /webhook/elevenlabs/speech-to-text`

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import {
   useQuery,
   useInfiniteQuery,
@@ -859,10 +860,11 @@ export function useRetryAllDLQTasks() {
 // Queue Viewer hooks
 // ============================================================================
 
-export function useQueueTasks(completedLimit = 10) {
+export function useQueueTasks(completedLimit = 10, enabled = true) {
   return useQuery({
     queryKey: ['queue', 'tasks', completedLimit],
     queryFn: () => getQueueTasks(completedLimit),
+    enabled,
     refetchInterval: (query) => {
       // Poll every 5 seconds while there are active tasks, 15 seconds when idle
       const data = query.state.data
@@ -880,7 +882,9 @@ export type EpisodeActiveStage = {
 }
 
 export function useProcessingStageByEpisodeId(): Map<string, EpisodeActiveStage> {
-  const { data } = useQueueTasks()
+  // The queue endpoint is require_admin — non-admins would only poll 403s.
+  const { isAdmin } = useAuth()
+  const { data } = useQueueTasks(10, isAdmin)
   const map = new Map<string, EpisodeActiveStage>()
   // Pending first, processing wins if both exist for the same episode
   for (const task of data?.pending_tasks ?? []) {

@@ -44,7 +44,9 @@ export default function FailureBanner({
   const [showDetails, setShowDetails] = useState(false)
   // Retry mirrors the server-side require_admin gate on
   // POST /api/episodes/{id}/retry (always satisfied in single-user mode).
-  // Non-admins still see the failure info, just no action.
+  // The stage, error text and fix-it guidance are operator information too
+  // (the API withholds failure_reason from non-admins), so ordinary users
+  // get one plain line instead.
   const { isAdmin } = useAuth()
   const retryMutation = useRetryFailedEpisode()
 
@@ -58,6 +60,16 @@ export default function FailureBanner({
   }
 
   const isFatal = failureType === 'fatal'
+
+  if (!isAdmin) {
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 p-4" role="status">
+        <p className="text-sm text-gray-700">
+          We couldn&rsquo;t prepare a summary and transcript for this episode.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div
@@ -92,24 +104,22 @@ export default function FailureBanner({
               </p>
             </div>
 
-            {/* Retry button (admin-only) */}
-            {isAdmin && (
-              <button
-                onClick={handleRetry}
-                disabled={retryMutation.isPending}
-                className={`
-                  px-4 py-2 text-sm font-medium rounded-lg transition-colors flex-shrink-0
-                  ${retryMutation.isPending
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                    : isFatal
-                      ? 'bg-red-600 text-white hover:bg-red-700'
-                      : 'bg-yellow-600 text-white hover:bg-yellow-700'
-                  }
-                `}
-              >
-                {retryMutation.isPending ? 'Retrying...' : 'Retry'}
-              </button>
-            )}
+            {/* Retry button */}
+            <button
+              onClick={handleRetry}
+              disabled={retryMutation.isPending}
+              className={`
+                px-4 py-2 text-sm font-medium rounded-lg transition-colors flex-shrink-0
+                ${retryMutation.isPending
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : isFatal
+                    ? 'bg-red-600 text-white hover:bg-red-700'
+                    : 'bg-yellow-600 text-white hover:bg-yellow-700'
+                }
+              `}
+            >
+              {retryMutation.isPending ? 'Retrying...' : 'Retry'}
+            </button>
           </div>
 
           {/* Error details toggle */}

@@ -123,9 +123,11 @@ function App() {
           </Suspense>
         } />
         <Route path="episodes" element={
-          <Suspense fallback={<PageLoader />}>
-            <Episodes />
-          </Suspense>
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <Episodes />
+            </Suspense>
+          </AdminRoute>
         } />
         <Route path="inbox" element={
           <Suspense fallback={<PageLoader />}>

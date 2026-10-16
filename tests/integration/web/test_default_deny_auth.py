@@ -53,6 +53,10 @@ ADMIN_ROUTES = {
     ("POST", "/api/commands/dlq/retry-all"),
     ("POST", "/api/episodes/bulk/process"),
     ("POST", "/api/episodes/{episode_id}/retry"),
+    # Corpus-wide episode browser + DLQ failure details (raw provider errors).
+    ("GET", "/api/episodes"),
+    ("GET", "/api/episodes/failed"),
+    ("GET", "/api/episodes/{episode_id}/failure"),
     ("GET", "/api/entities/review-queue"),
     ("POST", "/api/entities/corrections"),
     ("GET", "/api/status"),

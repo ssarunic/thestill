@@ -72,12 +72,14 @@ const settingsIcon = (
 export const MAIN_NAV_ITEMS: NavEntry[] = [
   { to: '/inbox', label: 'Inbox', icon: inboxIcon },
   { to: '/podcasts', label: 'Podcasts', icon: podcastsIcon },
-  { to: '/episodes', label: 'Episodes', icon: episodesIcon },
   { to: '/top', label: 'Top', icon: topIcon },
 ]
 
 // Operator-only pipeline views, hidden for non-admins (multi-user mode).
+// Episodes is the corpus-wide browser (every episode in the database,
+// filtered by pipeline state) — users browse via Inbox, Podcasts, Search.
 export const ADMIN_NAV_ITEMS: NavEntry[] = [
+  { to: '/episodes', label: 'Episodes', icon: episodesIcon },
   { to: '/status', label: 'Status', icon: statusIcon },
   { to: '/queue', label: 'Task Queue', icon: queueIcon },
   { to: '/failed', label: 'Failed Tasks', icon: failedIcon },

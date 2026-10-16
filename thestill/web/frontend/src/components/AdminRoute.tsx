@@ -6,12 +6,13 @@ interface AdminRouteProps {
 }
 
 /**
- * Wrapper component that protects operator-only routes (task queue, DLQ).
+ * Wrapper component that protects operator-only routes (episode browser,
+ * task queue, DLQ).
  *
  * In single-user mode (MULTI_USER=false): the local user is the operator, so
  * access is always allowed.
  * In multi-user mode (MULTI_USER=true): access requires an admin user;
- * non-admins are redirected to the dashboard.
+ * non-admins are redirected to `/` (the inbox).
  *
  * This mirrors the server-side `require_admin` guard — the frontend hides the
  * nav and blocks the route, but the API enforces access independently.

@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import type { PipelineStage, EpisodeTask } from '../api/types'
+import { useAuth } from '../contexts/AuthContext'
 
 // Spec #28 §"Failure isolation rule" + Phase 5.2 — the four entity-
 // branch stages get their own status row, separate from the user
@@ -101,7 +102,10 @@ export default function EntityBranchProgress({
   hideWhenComplete = false,
   className = '',
 }: EntityBranchProgressProps) {
-  if (!episodeId) return null
+  // Indexing-chain status is operator information: a failure here never
+  // changes what the reader sees, only search completeness.
+  const { isAdmin } = useAuth()
+  if (!isAdmin || !episodeId) return null
 
   // Build a per-stage status map from the most-recent task at each
   // entity-branch stage. The queue can have multiple historical tasks

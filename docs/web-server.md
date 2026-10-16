@@ -347,6 +347,7 @@ operator-only surface requires an admin session (`require_admin`):
 - Manual pipeline triggers: `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}` and `POST /api/commands/episode/{id}/cancel-pipeline`
 - Queue and DLQ management: `/api/commands/queue/*`, `/api/commands/dlq*`
 - Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
+- Corpus-wide episode browser and failure details: `GET /api/episodes`, `GET /api/episodes/failed`, `GET /api/episodes/{id}/failure` (non-admins get `failure_reason: null` on the podcast episode routes too)
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)
 - Remote MCP feature flag: `GET /api/status/mcp` (spec #78 — reports only whether the endpoint is mounted; connector URLs are per user via `/api/me/mcp-token`)

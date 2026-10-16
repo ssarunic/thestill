@@ -5,9 +5,10 @@ import { MemoryRouter } from 'react-router-dom'
 import EpisodeCard from './EpisodeCard'
 import type { Episode } from '../api/types'
 
-// Mirrors the server-side require_admin on POST /api/episodes/{id}/retry:
-// the failure-details modal keeps its info for everyone, but only admins
-// get the Retry action.
+// Pipeline state and failure details are operator information: admins get
+// the stage badge, failure reason and the details modal with Retry
+// (mirroring require_admin on POST /api/episodes/{id}/retry); everyone
+// else sees a neutral "Unavailable" pill.
 let mockIsAdmin = true
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ isAdmin: mockIsAdmin }),
@@ -44,29 +45,42 @@ function failedEpisode(): Episode {
   }
 }
 
-async function openFailureModal() {
+function renderCard(episode: Episode = failedEpisode()) {
   render(
     <MemoryRouter>
-      <EpisodeCard episode={failedEpisode()} isSelected={false} />
+      <EpisodeCard episode={episode} isSelected={false} />
     </MemoryRouter>
   )
-  await userEvent.click(screen.getByRole('button', { name: /view details/i }))
 }
 
-describe('EpisodeCard failure modal admin gating', () => {
+describe('EpisodeCard admin gating', () => {
   beforeEach(() => {
     mockIsAdmin = true
   })
 
-  it('shows Retry in the failure modal for admins', async () => {
-    await openFailureModal()
+  it('shows stage, reason and Retry in the failure modal for admins', async () => {
+    renderCard()
+    expect(screen.getByText('Downsampled')).toBeInTheDocument()
+    expect(screen.getByText(/whisper exploded/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /view details/i }))
     expect(screen.getByRole('button', { name: /^retry/i })).toBeInTheDocument()
   })
 
-  it('hides Retry but keeps the modal for non-admins', async () => {
+  it('shows non-admins only a neutral Unavailable pill', () => {
     mockIsAdmin = false
-    await openFailureModal()
-    expect(screen.getByRole('button', { name: /close/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^retry/i })).not.toBeInTheDocument()
+    renderCard()
+    expect(screen.getByText('Unavailable')).toBeInTheDocument()
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Downsampled')).not.toBeInTheDocument()
+    expect(screen.queryByText(/whisper exploded/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/failed at/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /view details/i })).not.toBeInTheDocument()
+  })
+
+  it('shows non-admins no pipeline state pill on a ready episode', () => {
+    mockIsAdmin = false
+    renderCard({ ...failedEpisode(), state: 'summarized', is_failed: false, failure_type: null, failed_at_stage: null, failure_reason: null })
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument()
+    expect(screen.queryByText('Unavailable')).not.toBeInTheDocument()
   })
 })
