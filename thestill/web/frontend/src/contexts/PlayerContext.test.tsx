@@ -1017,6 +1017,18 @@ describe('spec #90 — listening progress', () => {
       expect(video.currentTime).toBe(1234)
     })
 
+    it('starting another episode from a restored, paused bar writes nothing for it', async () => {
+      // Another device may hold newer progress for the restored episode; a
+      // tab that never played it must not overwrite that.
+      snapshot()
+      const { video } = renderPlayer()
+      metadata(video)
+      listeningCache.seed('ep-video', null)
+      act(() => ctx.play(videoTrack))
+      await settle()
+      expect(writes().filter((w) => w.episodeId === 'ep-audio')).toEqual([])
+    })
+
     it('re-sends the pending write carried by the snapshot', async () => {
       const body = { event: 'tick' as const, position_seconds: 1234, duration_seconds: 3600, session_id: 'old', seq: 9 }
       snapshot({ pending: { episodeId: 'ep-audio', body } })

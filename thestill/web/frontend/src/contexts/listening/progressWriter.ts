@@ -14,7 +14,11 @@
 // - writes to one episode go out in order (a per-episode promise chain), so
 //   a manual mark can never be overtaken by a tick already in flight;
 // - keepalive writes (page hide) leave synchronously — the document is going
-//   away — and rely on seq for ordering;
+//   away — but still join their episode's chain, so a later write (a mark)
+//   waits for them;
+// - leaving a track records it only when this tab is playing it: a paused
+//   tab never writes, so it cannot overwrite newer progress from another
+//   device;
 // - the latest unacknowledged write stays pending (mirrored into the tab
 //   snapshot) and is superseded by the next write; failures never touch
 //   playback and warn once per failure streak.
@@ -91,6 +95,19 @@ export class ProgressWriter {
   closeSession(): void {
     this.cancelSeek()
     this.session = null
+  }
+
+  /**
+   * Leaving the track (another one is starting): record its position only
+   * when this tab is playing it, or a seek write is still debounced, then
+   * close the session.
+   */
+  endSession(): void {
+    const sample = this.sessionSample()
+    if (sample && (sample.playing || this.seekTimer !== null)) {
+      this.write(sample.playing ? 'pause' : 'seek', sample, false)
+    }
+    this.closeSession()
   }
 
   hasSession(episodeId?: string): boolean {
@@ -225,17 +242,21 @@ export class ProgressWriter {
 
   private dispatch(write: PendingWrite, keepalive: boolean): Promise<SendResult> {
     const run = () => this.opts.send(write.episodeId, write.body, { keepalive })
-    const request = keepalive ? run() : this.enqueue(write.episodeId, run)
-    return request.then((result) => {
+    return this.enqueue(write.episodeId, run, keepalive).then((result) => {
       this.settle(write, result)
       return result
     })
   }
 
-  private enqueue<T>(episodeId: string, run: () => Promise<T>): Promise<T> {
+  /**
+   * Chain a write behind the episode's in-flight ones. `immediate` (keepalive)
+   * leaves now — the document is going away — yet still joins the chain, so
+   * whatever comes next waits for it too.
+   */
+  private enqueue<T>(episodeId: string, run: () => Promise<T>, immediate: boolean): Promise<T> {
     const previous = this.chains.get(episodeId) ?? Promise.resolve()
-    const next = previous.then(run, run)
-    const tail = next.catch(() => undefined)
+    const next = immediate ? run() : previous.then(run, run)
+    const tail: Promise<unknown> = Promise.allSettled([previous, next])
     this.chains.set(episodeId, tail)
     void tail.then(() => {
       if (this.chains.get(episodeId) === tail) this.chains.delete(episodeId)

@@ -254,9 +254,9 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
   const startTrack = useCallback(
     (next: PlayerTrack, options: PlayOptions | undefined, offset: number): number | null => {
       userActedRef.current = true
-      // The outgoing track's last position, while the port still reports it.
-      if (port.getTrack()) writer.flush('pause')
-      writer.closeSession()
+      // The outgoing track's last position, while the port still reports
+      // it — only if this tab was playing it (see ProgressWriter.endSession).
+      writer.endSession()
 
       const decision = resolveResume({
         startAt: options?.startAt,

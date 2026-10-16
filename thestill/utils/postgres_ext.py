@@ -33,7 +33,6 @@ lifecycle is deliberately out of this first slice.
 
 from __future__ import annotations
 
-import uuid
 from typing import Optional
 
 import psycopg
@@ -81,17 +80,3 @@ def connect(dsn: str, *, vector: bool = False) -> psycopg.Connection:
 def as_str(value: object) -> Optional[str]:
     """uuid.UUID → str passthrough for row parsing (None-safe)."""
     return None if value is None else str(value)
-
-
-def is_uuid(value: object) -> bool:
-    """True when ``value`` parses as a UUID.
-
-    Ids from URL paths reach ``uuid`` columns unvalidated; on Postgres a
-    malformed one raises on the cast instead of matching nothing, so
-    callers check the shape first and treat a bad id as a miss.
-    """
-    try:
-        uuid.UUID(str(value))
-    except ValueError:
-        return False
-    return True

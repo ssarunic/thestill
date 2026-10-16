@@ -141,17 +141,21 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   // Spec #90 — apply a resume position learned after the source was
-  // assigned (a parallel fetch for surfaces whose payload had none). Before
-  // metadata it replaces the deferred seek; afterwards it seeks only while
-  // the source is still near its start and the user has not seeked.
+  // assigned (a parallel fetch for surfaces whose payload had none). Never
+  // after a user seek on this source. Otherwise, before metadata it replaces
+  // the deferred seek; afterwards it seeks only while the source is still
+  // near its start.
   // Returns false when the position no longer applies.
   setPendingSeek(seconds: number): boolean {
     if (this.url === null || !Number.isFinite(seconds) || seconds < 0) return false
+    // A seek the user made wins, metadata or not (a transcript click while
+    // the source is still loading).
+    if (this.userSeeked) return false
     if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) {
       this.pendingSeek = seconds
       return true
     }
-    if (this.userSeeked || this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
+    if (this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
     this.el.currentTime = seconds
     return true
   }

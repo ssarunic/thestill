@@ -63,6 +63,15 @@ describe('NativeEngine.setPendingSeek', () => {
     expect(t.engine.setPendingSeek(1934)).toBe(false)
   })
 
+  it('a user seek before metadata wins over a late resume (transcript click while loading)', () => {
+    const t = makeEngine()
+    t.engine.load({ url: 'https://cdn.test/a.mp3' })
+    t.engine.seekTo(42)
+    expect(t.engine.setPendingSeek(1934)).toBe(false)
+    t.metadataLoaded()
+    expect(t.time()).toBe(42)
+  })
+
   it('a replacement engine on the same element keeps a deferred seek (StrictMode remount)', () => {
     const t = makeEngine()
     t.engine.load({ url: 'https://cdn.test/a.mp3' }, { seekTo: 1234 })

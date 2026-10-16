@@ -41,7 +41,10 @@ from ..models.listening import (
 )
 from ..models.podcast import AlternateEnclosure, Episode, Podcast
 from ..repositories.listening_progress_repository import ListeningProgressRepository
-from ..utils.postgres_ext import is_uuid
+
+# Not utils.postgres_ext: psycopg is an optional extra, and this service also
+# runs on SQLite-only installs.
+from ..utils.ids import is_uuid
 from .playback import build_track_payload
 
 logger = get_logger(__name__)

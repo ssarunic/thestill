@@ -206,6 +206,24 @@ describe('sessions and ordering', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
+  it('a mark waits for an in-flight keepalive write to the same episode', async () => {
+    let resolveKeepalive: (r: SendResult) => void = () => {}
+    const send = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<SendResult>((r) => (resolveKeepalive = r)))
+      .mockResolvedValue(okAck)
+    const t = setup({ send })
+    t.writer.startSession(EP)
+    t.writer.flush('tick', { keepalive: true }) // tab hidden while playing
+    const marked = t.writer.mark(EP, 'mark_played')
+    await flushPromises()
+    expect(send).toHaveBeenCalledTimes(1) // the mark is queued behind the tick
+
+    resolveKeepalive(okAck)
+    await marked
+    expect(t.bodies().map((b) => b.event)).toEqual(['tick', 'mark_played'])
+  })
+
   it('keepalive writes leave synchronously, bypassing the queue', async () => {
     const send = vi.fn(() => new Promise<SendResult>(() => {}))
     const t = setup({ send })
@@ -218,6 +236,38 @@ describe('sessions and ordering', () => {
     await flushPromises()
     // seq, not arrival order, keeps the server right.
     expect(send.mock.calls.map((c) => (c[1] as ProgressBody).seq)).toEqual([2, 1])
+  })
+})
+
+describe('leaving a track', () => {
+  it('a paused tab writes nothing for the outgoing episode', async () => {
+    const t = setup()
+    t.writer.startSession(EP)
+    t.setSample({ position: 100, playing: false })
+    t.writer.endSession()
+    await flushPromises()
+    expect(t.send).not.toHaveBeenCalled()
+    expect(t.writer.hasSession()).toBe(false)
+  })
+
+  it('a playing tab records the outgoing position as a pause', async () => {
+    const t = setup()
+    t.writer.startSession(EP)
+    t.setSample({ position: 640 })
+    t.writer.endSession()
+    await flushPromises()
+    expect(t.bodies()).toEqual([expect.objectContaining({ event: 'pause', position_seconds: 640 })])
+  })
+
+  it('a paused tab with a seek write still debounced sends the seek', async () => {
+    const t = setup()
+    t.writer.startSession(EP)
+    t.setSample({ position: 900, playing: false })
+    t.writer.onSeeked()
+    t.writer.endSession()
+    vi.advanceTimersByTime(2_000)
+    await flushPromises()
+    expect(t.bodies()).toEqual([expect.objectContaining({ event: 'seek', position_seconds: 900 })])
   })
 })
 

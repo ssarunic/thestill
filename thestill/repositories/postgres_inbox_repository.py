@@ -42,7 +42,8 @@ from ..models.inbox import (
 )
 from ..models.listening import ListeningSummary
 from ..models.podcast import Episode, FailureType
-from ..utils.postgres_ext import as_str, connect, is_uuid
+from ..utils.ids import is_uuid
+from ..utils.postgres_ext import as_str, connect
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from .inbox_repository import ARRIVING_TASK_COLUMNS_SQL, ARRIVING_WHERE_SQL, InboxRepository
 

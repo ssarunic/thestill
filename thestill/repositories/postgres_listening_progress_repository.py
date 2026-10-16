@@ -25,7 +25,8 @@ from typing import List, Optional
 from structlog import get_logger
 
 from ..models.listening import ListeningProgress
-from ..utils.postgres_ext import as_str, connect, is_uuid
+from ..utils.ids import is_uuid
+from ..utils.postgres_ext import as_str, connect
 from .listening_progress_repository import ListeningProgressRepository
 
 logger = get_logger(__name__)
