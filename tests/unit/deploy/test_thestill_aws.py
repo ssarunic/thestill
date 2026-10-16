@@ -212,6 +212,17 @@ class TestAliasDomains:
         caddyfile = (SCRIPT.parent / "Caddyfile").read_text()
         assert "import /etc/caddy/redirects.caddy" in caddyfile
 
+    def test_caddyfile_proxies_usage_events_without_the_session(self):
+        # Spec #95: /ingest is PostHog EU on our own origin; the browser's
+        # cookies (the session) and auth headers must never be forwarded.
+        caddyfile = (SCRIPT.parent / "Caddyfile").read_text()
+        ingest = caddyfile[caddyfile.index("handle_path /ingest/static/*") : caddyfile.index("handle {")]
+        assert "reverse_proxy https://eu.i.posthog.com:443" in ingest
+        assert "reverse_proxy https://eu-assets.i.posthog.com:443" in ingest
+        assert ingest.count("header_up -Cookie") == 2
+        assert ingest.count("header_up -Authorization") == 2
+        assert "reverse_proxy thestill:8000" in caddyfile[caddyfile.index("handle {") :]
+
     def test_compose_mounts_the_redirects_file(self):
         compose = (SCRIPT.parent / "docker-compose.prod.yml").read_text()
         assert "./redirects.caddy:/etc/caddy/redirects.caddy:ro" in compose

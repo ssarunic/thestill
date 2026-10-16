@@ -148,6 +148,17 @@ def test_signup_source_is_set_once(repo):
     assert repo.get_by_email("old@example.com").signup_source is None
 
 
+def test_usage_analytics_switch(repo):
+    """Spec #95: on by default; only the explicit update changes it."""
+    u = repo.save(_mk_user())
+    assert repo.get_by_id(u.id).usage_analytics_enabled is True
+    assert repo.update_usage_analytics(u.id, False) is True
+    assert repo.get_by_id(u.id).usage_analytics_enabled is False
+    repo.save(_mk_user(name="Ada Lovelace", usage_analytics_enabled=True))  # a login upsert
+    assert repo.get_by_email("ada@example.com").usage_analytics_enabled is False
+    assert repo.update_usage_analytics("00000000-0000-0000-0000-000000000000", True) is False
+
+
 def test_update_region_normalises_lowercase(repo):
     u = _mk_user(region=None, region_locked=False)
     repo.save(u)

@@ -34,7 +34,9 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
-from ...utils.page_kind import signup_source_for
+from ...services.analytics_sink import LoginCompleted, LoginStarted
+from ...utils.page_kind import public_page_kind, signup_source_for
+from ..analytics_request import capture_event, request_gpc
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
 from ..responses import api_response
@@ -174,6 +176,9 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     if user is not None:
         await state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
 
+    sink = state.analytics_sink
+    usage_events = bool(sink is not None and sink.enabled)
+
     return api_response(
         {
             "multi_user": multi_user,
@@ -189,6 +194,16 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             # opt-in would be accepted but nothing would ever send.
             "email_delivery_available": (
                 state.briefing_delivery_service is not None and state.briefing_scheduler is not None
+            ),
+            # Spec #95: whether usage events exist at all (shows the Settings
+            # switch), and the key the signed-in app initialises its SDK
+            # with. No key for an opted-out user or under GPC, so the
+            # browser never loads the analytics code for them.
+            "usage_analytics_available": usage_events,
+            "analytics": (
+                {"key": sink.browser_key}
+                if usage_events and user is not None and user.usage_analytics_enabled and not request_gpc(request)
+                else None
             ),
         }
     )
@@ -259,6 +274,8 @@ def google_login(
         # An abandoned earlier flow must not steer this sign-in.
         response.delete_cookie(key=NEXT_COOKIE)
 
+    # Spec #95: which public page sign-in started from (anonymous).
+    capture_event(state, request, LoginStarted(from_kind=public_page_kind(safe_next) or "none"))
     logger.info("Redirecting to Google OAuth")
     return response
 
@@ -332,6 +349,7 @@ async def google_callback(
         response.delete_cookie(key="oauth_state")
         response.delete_cookie(key=NEXT_COOKIE)
 
+        capture_event(app_state, request, LoginCompleted(next_kind=public_page_kind(next_path) or "none"), user=user)
         logger.info("user_authenticated", email=user.email)
         return response
 
@@ -395,13 +413,17 @@ def get_current_user(request: Request, state: AppState = Depends(get_app_state))
 
 
 class UpdateMeRequest(BaseModel):
-    """Body for PATCH /api/auth/me. Only ``region`` is mutable today."""
+    """Body for PATCH /api/auth/me. Only the fields sent are changed."""
 
     region: Optional[str] = Field(
         default=None,
         description="ISO 3166-1 alpha-2 country code (case-insensitive). "
         "Pass null to clear; either way the locked flag is set so future "
         "logins won't overwrite the choice.",
+    )
+    usage_analytics_enabled: Optional[bool] = Field(
+        default=None,
+        description="Spec #95: the Settings switch for usage events.",
     )
 
 
@@ -411,20 +433,24 @@ def update_current_user(
     request: Request,
     state: AppState = Depends(get_app_state),
 ):
-    """Update the current user's profile.
+    """Update the current user's profile; only the fields sent change.
 
-    Currently only ``region`` is mutable. Setting it always locks future
-    IP-based inference; the only way to re-enable inference is to clear
-    region directly in the database.
+    Setting ``region`` (even to null) locks future IP-based inference; the
+    only way to re-enable inference is to clear region in the database.
+    ``usage_analytics_enabled`` is the spec #95 usage-events switch.
     """
     token = _get_token_from_request(request)
     user = state.auth_service.get_current_user(token)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    try:
-        updated = state.auth_service.set_user_region(user, payload.region)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    updated = user
+    if "region" in payload.model_fields_set:
+        try:
+            updated = state.auth_service.set_user_region(updated, payload.region)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload.usage_analytics_enabled is not None:
+        updated = state.auth_service.set_usage_analytics(updated, payload.usage_analytics_enabled)
 
     return api_response({"user": updated.model_dump(exclude={"google_id"})})

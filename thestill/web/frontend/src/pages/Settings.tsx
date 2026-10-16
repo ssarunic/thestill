@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import BriefingScheduleSettings from '../components/BriefingScheduleSettings'
 import McpConnectorSettings from '../components/McpConnectorSettings'
+import UsageEventsSettings from '../components/UsageEventsSettings'
 
 // Region dropdown options. The data layer ships top-podcast rankings for
 // "us", "gb", and the whole EEA (spec #57); the remaining entries are common
@@ -94,6 +95,8 @@ export default function Settings() {
       <BriefingScheduleSettings />
 
       <McpConnectorSettings />
+
+      <UsageEventsSettings />
 
       <form
         onSubmit={handleSubmit}

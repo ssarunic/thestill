@@ -173,10 +173,26 @@ Get authentication status and configuration.
     "name": "User Name",
     "picture": "https://...",
     "created_at": "2026-01-01T...",
-    "last_login_at": "2026-01-21T..."
-  }
+    "last_login_at": "2026-01-21T...",
+    "usage_analytics_enabled": true
+  },
+  "usage_analytics_available": true,
+  "analytics": {"key": "phc_..."}
 }
 ```
+
+`usage_analytics_available` is true when usage events are configured
+(spec #95); `analytics` carries the PostHog project key only for a signed-in
+user who has not opted out and whose request has no `Sec-GPC: 1`, else null.
+
+### PATCH /api/auth/me
+
+Update the current user. Only the fields present in the body change.
+
+| Field | Type | Description |
+|---|---|---|
+| region | string \| null | ISO 3166-1 alpha-2 code; setting it (even to null) locks IP inference |
+| usage_analytics_enabled | bool | Spec #95: the Settings switch for usage events |
 
 ### GET /api/auth/google/login
 

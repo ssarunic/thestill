@@ -75,3 +75,22 @@ class FakeAnalyticsRepository(AnalyticsRepository):
             follows=5,
             follows_per_active_user=2.5,
         )
+
+
+class RecordingSink:
+    """An enabled analytics sink that keeps what it was asked to capture."""
+
+    enabled = True
+    browser_key = "phc_test"
+
+    def __init__(self):
+        self.captured = []
+
+    def capture(self, event, *, user=None, visitor_key=None, gpc=False):
+        self.captured.append({"event": event, "user": user, "visitor_key": visitor_key, "gpc": gpc})
+
+    def names(self):
+        return [c["event"].name for c in self.captured]
+
+    def shutdown(self):
+        pass

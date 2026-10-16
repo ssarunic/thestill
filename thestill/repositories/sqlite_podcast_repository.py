@@ -584,6 +584,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Written once on insert, never updated (Postgres migration 0017).
             if "signup_source" not in user_columns:
                 conn.execute("ALTER TABLE users ADD COLUMN signup_source TEXT NULL")
+            # Spec #95 Layer B — the Settings switch for usage events (0017).
+            if "usage_analytics_enabled" not in user_columns:
+                conn.execute("ALTER TABLE users ADD COLUMN usage_analytics_enabled INTEGER NOT NULL DEFAULT 1")
 
         # Digest retirement: the legacy global digests tables are dropped.
         # Briefings (spec #36/#50) are the only consumer-facing concept;
@@ -2552,6 +2555,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 region_locked INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 signup_source TEXT NULL,
+                usage_analytics_enabled INTEGER NOT NULL DEFAULT 1,
                 CHECK (length(id) = 36),
                 CHECK (length(email) > 0),
                 CHECK (region IS NULL OR length(region) = 2),

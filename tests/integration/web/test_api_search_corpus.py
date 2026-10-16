@@ -107,3 +107,26 @@ class TestCorpusGroupedByEpisode:
         _seed(app_state)
         assert client.get("/api/search/corpus", params={"q": "legora", "episode_id": "nope"}).status_code == 422
         assert client.get("/api/search/corpus", params={"q": "legora", "per_episode": 0}).status_code == 422
+
+
+class TestSearchUsageEvent:
+    """Spec #95: a corpus search is a usage event; never the query text."""
+
+    def test_search_is_counted_without_the_query(self, client, app_state):
+        from tests.unit.analytics_fakes import RecordingSink
+
+        _seed(app_state)
+        app_state.analytics_sink = RecordingSink()
+        client.get("/api/search/corpus", params={"q": "legora", "limit": 3, "mode": "lexical"})
+        [call] = app_state.analytics_sink.captured
+        assert call["event"].properties() == {"result_count": 3, "mode": "lexical"}
+        assert call["user"] is not None
+        assert "legora" not in repr(call)
+
+    def test_in_episode_expansion_is_not_a_new_search(self, client, app_state):
+        from tests.unit.analytics_fakes import RecordingSink
+
+        _seed(app_state)
+        app_state.analytics_sink = RecordingSink()
+        client.get("/api/search/corpus", params={"q": "legora", "episode_id": FLOOD})
+        assert app_state.analytics_sink.captured == []

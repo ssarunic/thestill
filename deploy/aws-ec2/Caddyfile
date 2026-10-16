@@ -8,10 +8,32 @@
 # a missing file is a hard parse error.
 
 {$PUBLIC_DOMAIN} {
-	# SSE progress streams must not be buffered; flush_interval -1 turns
-	# proxy buffering off so events reach the browser as they happen.
-	reverse_proxy thestill:8000 {
-		flush_interval -1
+	# Spec #95 — product usage events. The signed-in app's bundled PostHog
+	# SDK sends to /ingest on this origin, so the CSP stays connect-src
+	# 'self' and content blockers do not drop events. Cookies and auth
+	# headers are stripped: PostHog must never see the session.
+	handle_path /ingest/static/* {
+		rewrite * /static{path}
+		reverse_proxy https://eu-assets.i.posthog.com:443 {
+			header_up Host {upstream_hostport}
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+	handle_path /ingest/* {
+		reverse_proxy https://eu.i.posthog.com:443 {
+			header_up Host {upstream_hostport}
+			header_up -Cookie
+			header_up -Authorization
+		}
+	}
+
+	handle {
+		# SSE progress streams must not be buffered; flush_interval -1 turns
+		# proxy buffering off so events reach the browser as they happen.
+		reverse_proxy thestill:8000 {
+			flush_interval -1
+		}
 	}
 
 	encode gzip

@@ -20,12 +20,15 @@ import time
 import uuid
 from typing import Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from structlog import get_logger
 
+from ...models.user import User
 from ...search.base import SearchFilters, SearchMode
-from ..dependencies import AppState, get_app_state
+from ...services.analytics_sink import Search
+from ..analytics_request import capture_event
+from ..dependencies import AppState, get_app_state, require_auth
 
 logger = get_logger(__name__)
 
@@ -202,6 +205,7 @@ class QuickSearchResponse(BaseModel):
 
 @router.get("/corpus", response_model=SearchResponse)
 def search_corpus(
+    request: Request,
     q: str = Query(..., min_length=1, description="Search text."),
     mode: str = Query("hybrid", pattern="^(lexical|semantic|hybrid)$"),
     limit: int = Query(10, ge=1, le=50),
@@ -218,6 +222,7 @@ def search_corpus(
         "also returns per-episode literal match counts.",
     ),
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ):
     backend = state.search_backend
     if backend is None:
@@ -275,6 +280,10 @@ def search_corpus(
     match_counts = None
     if per_episode is not None:
         match_counts = backend.count_lexical_matches(q, list(dict.fromkeys(h.episode_id for h in hits)), filters)
+    # Spec #95: a reader's search, never the query text. In-episode
+    # expansion (episode_id) is a drill-down, not a new search.
+    if episode_id is None:
+        capture_event(state, request, Search(result_count=len(results), mode=effective_mode.value), user=user)
     return SearchResponse(
         query=q,
         mode=effective_mode.value,

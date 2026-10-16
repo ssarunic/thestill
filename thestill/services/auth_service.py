@@ -375,6 +375,15 @@ class AuthService:
         logger.info("user_region_inferred", user_id=user.id, region=country)
         return country
 
+    def set_usage_analytics(self, user: User, enabled: bool) -> User:
+        """The user's Settings switch for usage events (spec #95)."""
+        self.user_repository.update_usage_analytics(user.id, enabled)
+        user.usage_analytics_enabled = enabled
+        if self._default_user and self._default_user.id == user.id:
+            self._default_user.usage_analytics_enabled = enabled
+        logger.info("user_usage_analytics_set", user_id=user.id, enabled=enabled)
+        return user
+
     def set_user_region(self, user: User, region: Optional[str]) -> User:
         """Persist an explicit user-chosen region and lock further inference.
 

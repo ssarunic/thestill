@@ -36,7 +36,8 @@ from .user_repository import UserRepository
 logger = get_logger(__name__)
 
 _SELECT_COLS = (
-    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source"
+    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
+    " usage_analytics_enabled"
 )
 
 
@@ -126,9 +127,9 @@ class SqliteUserRepository(UserRepository):
                 INSERT INTO users (
                     id, email, name, picture, google_id,
                     created_at, last_login_at, region, region_locked, is_admin,
-                    signup_source
+                    signup_source, usage_analytics_enabled
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     name = excluded.name,
                     picture = excluded.picture,
@@ -147,11 +148,19 @@ class SqliteUserRepository(UserRepository):
                     1 if user.region_locked else 0,
                     1 if user.is_admin else 0,
                     user.signup_source,
+                    1 if user.usage_analytics_enabled else 0,
                 ),
             )
 
             logger.debug(f"Saved user: {user.email}")
             return user
+
+    def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET usage_analytics_enabled = ? WHERE id = ?", (1 if enabled else 0, user_id)
+            )
+            return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
         """Update region + lock flag. Region is normalised to lowercase."""
@@ -270,4 +279,5 @@ class SqliteUserRepository(UserRepository):
             region_locked=bool(row["region_locked"]),
             is_admin=bool(row["is_admin"]),
             signup_source=row["signup_source"],
+            usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
         )

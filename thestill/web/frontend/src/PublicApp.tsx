@@ -5,6 +5,7 @@
 import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import PublicLayout from './components/public/PublicLayout'
+import PublicPageViews from './analytics/PublicPageViews'
 
 const Landing = lazy(() => import('./pages/public/Landing'))
 const TopChart = lazy(() => import('./pages/public/TopChart'))
@@ -22,6 +23,8 @@ function SignInRedirect() {
 
 export default function PublicApp() {
   return (
+    <>
+    <PublicPageViews />
     <Routes>
       <Route
         path="/login"
@@ -44,7 +47,7 @@ export default function PublicApp() {
           <Route key={path as string} path={path as string} element={<Suspense fallback={null}>{element}</Suspense>} />
         ))}
         {/* Signed-in areas: ask for sign-in, then come back. */}
-        {['/inbox', '/briefings/*', '/search', '/settings', '/episodes', '/status', '/queue', '/failed', '/podcasts'].map((path) => (
+        {['/inbox', '/briefings/*', '/search', '/settings', '/episodes', '/status', '/queue', '/failed', '/analytics', '/podcasts'].map((path) => (
           <Route key={path} path={path} element={<SignInRedirect />} />
         ))}
         <Route
@@ -57,5 +60,6 @@ export default function PublicApp() {
         />
       </Route>
     </Routes>
+    </>
   )
 }

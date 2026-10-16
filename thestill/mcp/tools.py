@@ -45,7 +45,7 @@ from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_d
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
 from .middleware.stdio_adapter import log_mcp_stdio
-from .registration import register_tools
+from .registration import ToolCalledFn, register_tools
 from .search_tools import dispatch_search_tool, search_tool_definitions
 from .utils import resolve_identifier
 
@@ -68,7 +68,12 @@ _MUTATING_TOOLS = frozenset(
 )
 
 
-def setup_tools(server: Server, storage_path: str, config: Optional[Config] = None):
+def setup_tools(
+    server: Server,
+    storage_path: str,
+    config: Optional[Config] = None,
+    on_tool_called: Optional[ToolCalledFn] = None,
+):
     """
     Set up all MCP tools for the server.
 
@@ -78,6 +83,8 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
         config: the caller's Config. The web server passes its own so the
             HTTP mount never re-reads the environment (spec #78 Phase 2);
             the stdio entry point leaves it None and loads it here.
+        on_tool_called: spec #95 — observes each call's outcome (the HTTP
+            runtime counts remote calls; stdio passes nothing).
     """
     config = config or load_config()
     # Mirrors the web app's exception handler: exception text is relayed to
@@ -1670,7 +1677,7 @@ def setup_tools(server: Server, storage_path: str, config: Optional[Config] = No
             # here except authored messages and a logged reference id.
             return [TextContent(type="text", text=json.dumps({"success": False, "error": _public_error(e)}))]
 
-    register_tools(server, list_tools=list_tools, call_tool=call_tool)
+    register_tools(server, list_tools=list_tools, call_tool=call_tool, on_tool_called=on_tool_called)
 
 
 def _get_transcriber(config, pending_ops_repository=None):

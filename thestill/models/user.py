@@ -55,6 +55,10 @@ class User(BaseModel):
             ``entity``, ``share``) or ``direct``. Set once when the row is
             created and never updated; None for accounts created before it
             was tracked.
+        usage_analytics_enabled: Spec #95 — the Settings switch for usage
+            events (PostHog). Off means the browser loads no analytics code
+            and the server drops every event for this user. Product tables
+            still count them (Layer A).
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -68,6 +72,7 @@ class User(BaseModel):
     region_locked: bool = False
     is_admin: bool = False
     signup_source: Optional[str] = None
+    usage_analytics_enabled: bool = True
 
 
 class TokenPayload(BaseModel):

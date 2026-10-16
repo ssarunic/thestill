@@ -40,6 +40,7 @@ import {
   highlightMatches,
   type SegmentMentionSet,
 } from './episode-entities/applyHighlights'
+import { track as trackEvent } from '../analytics/client'
 
 const SHOW_FILLER_STORAGE_KEY = 'thestill:transcript:showFiller'
 // Global preference, not per-episode: matches reader intent ("I never
@@ -766,6 +767,7 @@ export default function SegmentedTranscriptViewer({
       const url = buildTimestampDeepLink(seconds)
       try {
         await navigator.clipboard.writeText(url)
+        trackEvent('share', { kind: 'moment' })
         showToast(`Copied link at ${formatTimestamp(seconds)}`, 'success')
       } catch {
         showToast('Failed to copy link', 'error')

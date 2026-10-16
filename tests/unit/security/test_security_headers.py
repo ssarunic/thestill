@@ -77,6 +77,14 @@ class TestSecurityHeaders:
         assert "frame-src" in directives
         assert directives["frame-src"] == "frame-src https://www.youtube.com"
 
+    def test_csp_keeps_analytics_same_origin(self):
+        """Spec #95 — usage events go through the same-origin /ingest proxy
+        and the SDK is bundled, so no analytics host is ever allow-listed."""
+        csp = TestClient(_make_app(is_production=True)).get("/x").headers["Content-Security-Policy"]
+        directives = {c.strip().split(" ")[0]: c.strip() for c in csp.split(";") if c.strip()}
+        assert directives["connect-src"] == "connect-src 'self'"
+        assert "posthog" not in csp
+
     def test_route_set_header_not_overwritten(self):
         """A deliberate per-route header override must win."""
         app = FastAPI()

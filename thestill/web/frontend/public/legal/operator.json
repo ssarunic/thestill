@@ -9,5 +9,6 @@
   "governing_law": "England and Wales",
   "supervisory_authority": "the Information Commissioner's Office (ICO), ico.org.uk",
   "liability_cap": "£100",
-  "log_retention": "30 days"
+  "log_retention": "30 days",
+  "analytics_retention": "12 months"
 }
