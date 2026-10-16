@@ -184,6 +184,7 @@ stale-while-revalidate=300`; a request carrying a credential gets
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |
 | `/api/public/entities/{type}/{slug}/quotes` | GET | Paged quotes, `?kind=said\|about`, `?about=<type:slug>`, `?page=` |
 | `/api/public/who-said-what` | GET | Landing module: the week's most-quoted entity and three quotes from different speakers and shows |
+| `/api/public/pageview` | POST | Spec #95: the public site reports each route change as `{path, referrer}` (referrer only on the first view). The server derives the page kind, logs `public_page_view`, and sends browser views (not crawlers or link previews) to PostHog with a daily visitor key. Always 204; signed-in readers and unknown paths are ignored |
 
 **Visibility.** An episode is public when it has a summary with a preview,
 both slugs, and its show is public. Hide a show with
@@ -215,12 +216,12 @@ public page calls any `/api` endpoint outside `/api/public` and
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/status` | GET | Get authentication mode and user info |
+| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95) |
 | `/api/auth/google/login` | GET | Initiate Google OAuth flow |
 | `/api/auth/google/callback` | GET | OAuth callback handler |
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
-| `/api/auth/me` | PATCH | Update user region |
+| `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference) and/or `usage_analytics_enabled` (spec #95 Settings switch) |
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |

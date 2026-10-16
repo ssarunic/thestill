@@ -4,7 +4,7 @@ Effective {{effective_date}}
 
 This policy explains what personal data thestill handles, why, who else sees it and what you can do about it. It covers visitors, signed-in users and people who are mentioned in podcasts on thestill.
 
-In short: public pages set no cookies and run no third-party trackers. We do not sell your data, show advertising, or use your data to train AI models.
+In short: public pages set no cookies and load no third-party scripts, and we count visits on our own server without identifying you. We do not sell your data, show advertising, or use your data to train AI models.
 
 ## Who is responsible
 
@@ -15,6 +15,8 @@ thestill is run by {{operator_name}}, {{operator_description}}. We are the "cont
 Like any web server, ours keeps request logs (IP address, browser, page requested and time) for security and rate limiting. We keep them for up to {{log_retention}}.
 
 To show the podcast chart for your country, we look up the country of your IP address with ipinfo.io. We keep the answer for a day and do not store your address with it.
+
+We count page views to learn which pages people find useful: the kind of page (for example "an episode page"), the website that sent you, and a visitor code that changes every day so the same visit is not counted twice. The code is made from your IP address and browser in a way that cannot be reversed, and neither is stored. If your browser sends Global Privacy Control, we count the view without the code. See "Usage analytics" below.
 
 Legal basis: our legitimate interest in running a secure service and showing relevant content.
 
@@ -27,6 +29,7 @@ Legal basis: our legitimate interest in running a secure service and showing rel
 | Shows you follow, your inbox and what you have read, briefings, settings, searches and episodes you import | To provide the features you use | Contract |
 | Briefing email delivery and unsubscribe records | To send briefings by email, if you turn that on | Contract |
 | Access tokens you create for connecting an AI assistant | To let that assistant read your thestill data on your behalf | Contract |
+| Which features you use, such as pages by type, searches (not what you searched for), shares and AI assistant requests | To learn what to improve; you can turn it off in Settings | Legitimate interests |
 | Messages you send us | To answer you and handle requests | Legitimate interests |
 
 "Contract" means we need the data to provide the service you signed up for. "Legitimate interests" means we have weighed our interest against your privacy and your rights; you can object (see "Your rights").
@@ -41,6 +44,18 @@ The data comes from public podcast feeds and Wikidata. We use it to make podcast
 
 If you are named on thestill, you can ask us to hide your person page, correct a quote or remove your data from thestill's pages, at {{privacy_email}}. We do not need a reason.
 
+## Usage analytics
+
+We use PostHog, hosted in the EU, to see how thestill is used. It receives:
+
+- for signed-in users: your internal account number (not your name or email), whether you are an administrator, the kind of page you open, and events such as "searched", "shared an episode" or "an AI assistant used a tool", with counts but never the text you searched for, page text or full web addresses;
+- for signed-out visitors: the page views described above, without any account number;
+- the browser, operating system and device type, worked out from your browser's user agent.
+
+Your IP address reaches PostHog's servers when your browser or our server sends an event, and PostHog discards it rather than storing it. Signed-out visitors' browsers never contact PostHog: our own server forwards the page views.
+
+You can turn usage analytics off at any time in Settings, and we honour Global Privacy Control. Either way, the things the service has to keep to work (such as the shows you follow and the episodes you read) still count towards our overall numbers.
+
 ## Cookies and browser storage
 
 Public pages set no cookies. When you sign in, we set:
@@ -48,7 +63,7 @@ Public pages set no cookies. When you sign in, we set:
 - a session cookie that keeps you signed in, for up to 30 days;
 - two short-lived cookies during sign-in that protect it against forgery and remember where to send you back, for 10 minutes.
 
-The app also keeps small preferences, such as scroll position and filters, in your browser's storage. All of this is strictly necessary to provide the service, so we do not ask for consent. We use no advertising or analytics cookies.
+The app also keeps small preferences, such as scroll position and filters, in your browser's storage. All of this is strictly necessary to provide the service, so we do not ask for consent. We use no advertising or analytics cookies: usage analytics keeps nothing in your browser.
 
 ## Who we share data with
 
@@ -59,6 +74,7 @@ We use these service providers ("processors") to run thestill. They may only use
 | Amazon Web Services, London (UK) | Hosting, database, backups, server logs and sending briefing emails | Everything thestill stores |
 | Google Gemini API (US and other countries) | Writing summaries, briefings and person descriptions | Podcast transcripts and episode information; for briefings, the episodes in your briefing, not your name or email |
 | ipinfo.io (US) | Looking up the country of an IP address | Your IP address |
+| PostHog, EU hosting (Germany) | Usage analytics (see "Usage analytics") | Internal account number, which features you use, pages by type, browser and device type; your IP address in transit, not stored |
 
 Google also runs "Sign in with Google". For that, Google acts as its own controller under its own privacy policy, and learns that you signed in to thestill.
 
@@ -77,6 +93,7 @@ Some providers process data outside the UK and the European Economic Area. Where
 | Account and activity data | Until you delete your account |
 | Server request logs | Up to {{log_retention}} |
 | Country lookups for signed-out visitors | One day |
+| Usage analytics events | Up to {{analytics_retention}} |
 | Backups | Up to 60 days, then overwritten |
 
 When you delete your account, we delete your account data within 30 days. It may remain in backups for up to 60 more days until they expire.

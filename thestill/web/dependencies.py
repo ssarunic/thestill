@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
     from ..services.analytics_service import AnalyticsService
+    from ..services.analytics_sink import AnalyticsSink
     from ..services.auth_service import AuthService
     from ..services.briefing_delivery_service import BriefingDeliveryService
     from ..services.briefing_service import BriefingService
@@ -186,6 +187,9 @@ class AppState:
     # Spec #95 — Layer A product analytics. ``Optional`` only for
     # hand-built test fixtures; production wiring always passes it.
     analytics_service: "Optional[AnalyticsService]" = None
+    # Spec #95 Layer B — usage events (PostHog, or NullSink when off).
+    # ``None`` only in hand-built test fixtures; emitters treat it as off.
+    analytics_sink: "Optional[AnalyticsSink]" = None
 
 
 def get_app_state(request: Request) -> AppState:

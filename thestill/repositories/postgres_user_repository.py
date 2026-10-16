@@ -45,7 +45,8 @@ from .user_repository import UserRepository
 logger = get_logger(__name__)
 
 _SELECT_COLS = (
-    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source"
+    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
+    " usage_analytics_enabled"
 )
 
 
@@ -116,9 +117,9 @@ class PostgresUserRepository(UserRepository):
                 INSERT INTO users (
                     id, email, name, picture, google_id,
                     created_at, last_login_at, region, region_locked, is_admin,
-                    signup_source
+                    signup_source, usage_analytics_enabled
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (email) DO UPDATE SET
                     name = EXCLUDED.name,
                     picture = EXCLUDED.picture,
@@ -137,10 +138,16 @@ class PostgresUserRepository(UserRepository):
                     user.region_locked,
                     user.is_admin,
                     user.signup_source,
+                    user.usage_analytics_enabled,
                 ),
             )
             logger.debug("Saved user", email=user.email)
             return user
+
+    def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute("UPDATE users SET usage_analytics_enabled = %s WHERE id = %s", (enabled, user_id))
+            return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
         """Update region + lock flag. Region is normalised to lowercase."""
@@ -223,4 +230,5 @@ class PostgresUserRepository(UserRepository):
             region_locked=bool(row["region_locked"]),
             is_admin=bool(row["is_admin"]),
             signup_source=row["signup_source"],
+            usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
         )

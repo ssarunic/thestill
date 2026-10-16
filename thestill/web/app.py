@@ -49,6 +49,7 @@ from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.analytics_service import AnalyticsService
+from ..services.analytics_sink import make_analytics_sink
 from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
 from ..services.briefing_script_generator import BriefingScriptGenerator
@@ -409,6 +410,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             repos.listening_progress, repository, mark_read=inbox_service.mark_read
         ),
         analytics_service=AnalyticsService(repos.analytics, enabled=config.multi_user),
+        analytics_sink=make_analytics_sink(config),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -458,7 +460,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # repository bundle the app uses.
     from .mcp_http import build_mcp_http
 
-    mcp_runtime = build_mcp_http(config, repos, token_service=app_state.mcp_token_service)
+    mcp_runtime = build_mcp_http(
+        config, repos, token_service=app_state.mcp_token_service, analytics_sink=app_state.analytics_sink
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -634,6 +638,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         # Stop task worker gracefully
         task_worker.stop()
         logger.info("task_worker_stopped")
+
+        # Flush queued usage events (bounded by the SDK's own timeout).
+        app_state.analytics_sink.shutdown()
 
     # /docs and /redoc are off by default in production.
     # Flip ENABLE_DOCS=true (or ENVIRONMENT=development) to re-enable them.

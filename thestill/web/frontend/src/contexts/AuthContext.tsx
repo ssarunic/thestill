@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { safeNextPath } from '../utils/safeNext'
+import { resetAnalytics } from '../analytics/client'
 
 // User type matching backend model
 export interface User {
@@ -12,6 +13,8 @@ export interface User {
   region: string | null
   region_locked: boolean
   is_admin: boolean
+  // Spec #95 — the Settings switch for usage events.
+  usage_analytics_enabled?: boolean
 }
 
 // Auth status response from /auth/status
@@ -24,6 +27,10 @@ interface AuthStatus {
   email_delivery_available?: boolean
   // Spec #94: signed-out visitors get the public site (PUBLIC_PAGES_ENABLED).
   public_pages?: boolean
+  // Spec #95: usage events exist (shows the Settings switch), and the key
+  // this reader's app initialises with — null when off, opted out or GPC.
+  usage_analytics_available?: boolean
+  analytics?: { key: string } | null
 }
 
 interface AuthContextType {
@@ -36,11 +43,15 @@ interface AuthContextType {
   isAnonymous: boolean
   isAdmin: boolean
   emailDeliveryAvailable: boolean
+  // Spec #95 — see AuthStatus.
+  usageAnalyticsAvailable: boolean
+  analyticsKey: string | null
   // ``next``: same-origin path to return to after sign-in (spec #94).
   login: (next?: string) => void
   logout: () => Promise<void>
   refreshAuth: () => Promise<void>
   updateRegion: (region: string | null) => Promise<void>
+  updateUsageAnalytics: (enabled: boolean) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -53,6 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isMultiUser, setIsMultiUser] = useState(false)
   const [emailDeliveryAvailable, setEmailDeliveryAvailable] = useState(false)
   const [publicPages, setPublicPages] = useState(false)
+  const [usageAnalyticsAvailable, setUsageAnalyticsAvailable] = useState(false)
+  const [analyticsKey, setAnalyticsKey] = useState<string | null>(null)
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -66,6 +79,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(authStatus.user)
       setEmailDeliveryAvailable(authStatus.email_delivery_available === true)
       setPublicPages(authStatus.public_pages === true)
+      setUsageAnalyticsAvailable(authStatus.usage_analytics_available === true)
+      setAnalyticsKey(authStatus.analytics?.key ?? null)
     } catch (error) {
       console.error('Auth status check failed:', error)
       setUser(null)
@@ -74,22 +89,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const updateRegion = useCallback(async (region: string | null) => {
+  // PATCH /me changes only the fields sent.
+  const patchMe = useCallback(async (fields: Record<string, unknown>, what: string) => {
     const response = await fetch(`${AUTH_BASE}/me`, {
       method: 'PATCH',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ region }),
+      body: JSON.stringify(fields),
     })
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
-      throw new Error(body.detail || `Failed to update region (${response.status})`)
+      throw new Error(body.detail || `Failed to update ${what} (${response.status})`)
     }
     const body = await response.json()
     if (body?.user) {
       setUser(body.user as User)
     }
   }, [])
+
+  const updateRegion = useCallback(
+    (region: string | null) => patchMe({ region }, 'region'),
+    [patchMe],
+  )
+
+  // Spec #95 — the status decides whether this reader gets a key, so re-read
+  // it after the switch flips; AnalyticsBridge then starts or stops.
+  const updateUsageAnalytics = useCallback(
+    async (enabled: boolean) => {
+      await patchMe({ usage_analytics_enabled: enabled }, 'usage events')
+      await refreshAuth()
+    },
+    [patchMe, refreshAuth],
+  )
 
   // Check auth status on mount
   useEffect(() => {
@@ -109,7 +140,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     try {
       await fetch(`${AUTH_BASE}/logout`, { method: 'POST' })
+      resetAnalytics()
       setUser(null)
+      setAnalyticsKey(null)
       // In multi-user mode, redirect to login page after logout
       if (isMultiUser) {
         window.location.href = '/login'
@@ -138,10 +171,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAnonymous,
         isAdmin,
         emailDeliveryAvailable,
+        usageAnalyticsAvailable,
+        analyticsKey,
         login,
         logout,
         refreshAuth,
         updateRegion,
+        updateUsageAnalytics,
       }}
     >
       {children}

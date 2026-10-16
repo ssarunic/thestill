@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useEntityEpisodeMentions, useEntitySummary } from '../hooks/useApi'
 import type { EntityCitationRow, EntityType, HostedPodcastRef } from '../api/types'
@@ -8,6 +8,7 @@ import { formatClock } from '../utils/formatClock'
 import { groupByEpisode } from '../utils/groupByEpisode'
 import { episodeTimestampPath } from '../hooks/useDeepLinkSeek'
 import { usePlayer } from '../contexts/PlayerContext'
+import { track } from '../analytics/client'
 
 // Spec #45 Tier 0 — entity page enriched with Wikidata/Wikipedia data:
 // hero photo/logo + headline, a vital-stats sidebar, a Wikipedia "About"
@@ -203,6 +204,16 @@ export default function Entities() {
     ? (entityType as EntityType)
     : null
   const { data, isLoading, error } = useEntitySummary(validType, idSlug ?? null)
+  // Spec #95 usage event: one per entity page, once it has loaded (the
+  // component stays mounted across entity-to-entity navigation).
+  const reportedOpen = useRef<string | null>(null)
+  useEffect(() => {
+    if (!data || !validType || !idSlug) return
+    const key = `${validType}/${idSlug}`
+    if (reportedOpen.current === key) return
+    reportedOpen.current = key
+    track('entity_open', { entity_type: validType })
+  }, [data, validType, idSlug])
   const player = usePlayer()
   const mentionGroups = useMemo(() => groupByEpisode(data?.recent_mentions ?? []), [data])
 

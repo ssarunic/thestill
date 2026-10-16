@@ -38,15 +38,21 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 from structlog import get_logger
 
 from ...repositories.public_quotes import QuoteFilter, days_ago
+from ...services.analytics_sink import PublicPageView
 from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.geoip import lookup_country_from_ip
 from ...utils.language_config import normalize_language_code
+from ...utils.page_kind import public_page_kind
+from ...utils.user_agent import classify_user_agent
+from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state
 from ..middleware import resolve_client_ip
 from ..public_access import (
@@ -54,6 +60,7 @@ from ..public_access import (
     TtlCache,
     apply_public_cache_headers,
     get_public_visibility,
+    has_valid_session,
     public_rate_limit,
 )
 from ..responses import api_response, etag_json_response
@@ -969,3 +976,52 @@ def _pick_trending(state: AppState) -> Dict[str, Any]:
         }
         break
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Spec #94 §7 / #95 Layer B — public page views
+# ---------------------------------------------------------------------------
+
+
+class PageViewRequest(BaseModel):
+    """What the public site reports on each route change."""
+
+    path: str = Field(max_length=512)
+    referrer: Optional[str] = Field(default=None, max_length=2048)
+
+
+def _external_referrer_host(referrer: Optional[str], request: Request, public_base_url: str) -> Optional[str]:
+    """The referring site's host, or None for none, our own site or junk."""
+    if not referrer:
+        return None
+    try:
+        parts = urlsplit(referrer)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    own = {(request.url.hostname or "").lower(), (urlsplit(public_base_url).hostname or "").lower()}
+    return None if host in own else host[:200]
+
+
+@router.post("/pageview", status_code=204)
+def public_page_view(payload: PageViewRequest, request: Request, state: AppState = Depends(get_app_state)) -> Response:
+    """Count one signed-out view of a public page.
+
+    The public site sends this on every route change, because after the
+    first load it navigates without asking the server for HTML. The server
+    decides the page kind from the path (never the client), logs every
+    view, and sends browsers (not crawlers or link previews) to PostHog
+    with a daily visitor key. Signed-in readers and unknown paths are
+    ignored. Always 204: the caller is fire-and-forget.
+    """
+    kind = public_page_kind(payload.path)
+    if kind is None or has_valid_session(request):
+        return Response(status_code=204)
+    ua_class = classify_user_agent(request.headers.get("user-agent"))
+    referrer_host = _external_referrer_host(payload.referrer, request, state.config.public_base_url)
+    logger.info("public_page_view", kind=kind, ua_class=ua_class, referrer_host=referrer_host)
+    if ua_class == "browser":
+        capture_event(state, request, PublicPageView(kind=kind, referrer_host=referrer_host))
+    return Response(status_code=204)

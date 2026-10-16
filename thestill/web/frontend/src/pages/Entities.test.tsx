@@ -49,7 +49,10 @@ vi.mock('../api/client', () => ({
   getEntityEpisodeMentions: vi.fn(),
 }))
 
+vi.mock('../analytics/client', () => ({ track: vi.fn() }))
+
 import { getEntityEpisodeMentions, getEntitySummary } from '../api/client'
+import { track } from '../analytics/client'
 
 const mockGetEntitySummary = getEntitySummary as ReturnType<typeof vi.fn>
 const mockGetEntityEpisodeMentions = getEntityEpisodeMentions as ReturnType<typeof vi.fn>
@@ -352,5 +355,20 @@ describe('Entities page — recent mentions grouped by episode', () => {
 
     expect(await screen.findByTestId('entity-episode-mention-count')).toHaveTextContent('1 mention')
     expect(screen.queryByTestId('entity-episode-expand')).toBeNull()
+  })
+})
+
+describe('Entities usage event (spec #95)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetEntitySummary.mockResolvedValue(summary())
+    mockGetEntityEpisodeMentions.mockResolvedValue({ entity_id: 'person:cliff-weitzman', groups: [] })
+  })
+
+  it('reports one entity_open per entity, with its type only, once loaded', async () => {
+    renderPage()
+    await screen.findAllByText('Cliff Weitzman')
+    await waitFor(() => expect(track).toHaveBeenCalledWith('entity_open', { entity_type: 'person' }))
+    expect(track).toHaveBeenCalledTimes(1)
   })
 })

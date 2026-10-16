@@ -255,6 +255,28 @@ class TestIdentityOnScope:
             Harness.rpc(c, token, "tools/list", id_=2)
             assert captured[identity_mod.STATE_IS_ADMIN] is False
 
+    def test_guard_records_global_privacy_control(self, harness, monkeypatch):
+        """Spec #95: Sec-GPC on the request reaches the identity, so the
+        tool-call usage event can be dropped."""
+        from thestill.mcp import identity as identity_mod
+
+        captured = {}
+        runtime = next(r.app for r in harness._app.routes if getattr(r, "path", None) == MOUNT_PATH)  # noqa: SLF001
+        real_handle = runtime.session_manager.handle_request
+
+        async def spy(scope, receive, send):
+            captured.update(scope["state"])
+            await real_handle(scope, receive, send)
+
+        monkeypatch.setattr(runtime.session_manager, "handle_request", spy)
+        token = harness.mint()
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        with harness.client() as c:
+            Harness.rpc(c, token, "tools/list")
+            assert captured[identity_mod.STATE_GPC] is False
+            c.post(f"/mcp/{token}", json=body, headers={**MCP_HEADERS, "Sec-GPC": "1"})
+            assert captured[identity_mod.STATE_GPC] is True
+
 
 class TestBuildMcpHttp:
     def test_disabled_returns_none(self, isolated_env, tmp_path):

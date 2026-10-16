@@ -317,6 +317,21 @@ Startup guards:
 - `MULTI_USER=true` requires `PUBLIC_BASE_URL`, so the OAuth redirect
   URI can never be derived from an attacker-controllable `Host` header.
 
+## Product Analytics (spec #95)
+
+Usage events go to PostHog Cloud (EU) only when a project key is set, and
+never in single-user mode. See [analytics.md](analytics.md) for what is sent
+and the PostHog project settings this relies on.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `POSTHOG_PROJECT_KEY` | PostHog project key (`phc_…`). Public by design: it can only send events. Empty turns usage events off | - (empty) |
+| `POSTHOG_HOST` | Where the server SDK sends events. The browser always sends through the same-origin `/ingest` proxy | `https://eu.i.posthog.com` |
+| `ANALYTICS_ENABLED` | Kill switch for usage events without removing the key. Ignored (off) in single-user mode | `true` |
+
+The admin `/analytics` page and `thestill analytics` (Layer A) read product
+tables and need neither variable.
+
 ## Rate Limits
 
 In-memory per-client rate limiting on the sensitive web surfaces.

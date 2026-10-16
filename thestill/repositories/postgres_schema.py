@@ -62,11 +62,14 @@ CREATE TABLE IF NOT EXISTS users (
     region text NULL CHECK (region IS NULL OR length(region) = 2),
     region_locked boolean NOT NULL DEFAULT false,
     is_admin boolean NOT NULL DEFAULT false,
-    signup_source text NULL
+    signup_source text NULL,
+    usage_analytics_enabled boolean NOT NULL DEFAULT true
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 -- Spec #95 — converge databases bootstrapped before signup_source (alembic 0017).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source text NULL;
+-- Spec #95 Layer B — per-user usage-events switch (alembic 0018).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_analytics_enabled boolean NOT NULL DEFAULT true;
 CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (

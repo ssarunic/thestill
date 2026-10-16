@@ -1,8 +1,8 @@
 # Product Analytics
 
-> **Status:** 🚧 Phase 0 implemented (2026-10-16); Phases 1–2 not started
+> **Status:** 🚧 Phases 0–2 implemented (2026-10-16); PostHog project setup and `POSTHOG_PROJECT_KEY` pending
 > **Created:** 2026-10-08
-> **Updated:** 2026-10-16 (v2: PostHog replaces the first-party event log; Phase 0 built)
+> **Updated:** 2026-10-16 (v2: PostHog replaces the first-party event log; Phases 0–2 built)
 > **Priority:** Medium, but Phases 0 and 1 must land before any launch driven by spec #94: a launch nobody can measure teaches nothing.
 > **Author:** Product & Engineering
 > **Related:** [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP `connect-src 'self'`), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) (read state), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#50 scheduled-briefings](50-scheduled-briefings.md) / [#84 scheduled-only-briefings](84-scheduled-only-briefings.md), [#66 aws-single-ec2-hosting](66-aws-single-ec2-hosting.md) (Caddy in front), [#75 llm-call-tracing](75-llm-call-tracing.md) (rejected PostHog for traces), [#78 remote-mcp-access](78-remote-mcp-access.md), [#80 share-to-thestill](80-share-to-thestill.md) (`next` through login), [#86 quality-feedback-loop](86-quality-feedback-loop.md), [#91 transcript-summary-export](91-transcript-summary-export.md), [#94 public-pages](94-public-pages.md), [#102 sign-in-page](102-sign-in-page.md)
@@ -556,6 +556,61 @@ key. A public page load requests no PostHog chunk and nothing under
   they can be maturity-gated.
 - Retention weeks are relative to each user's own signup (week k is days
   7k to 7k+7), so a cell fills only once the whole week has passed.
+
+## Phases 1–2 implementation notes
+
+What was built differs from the sections above in these places:
+
+- **Public page views use a first-party beacon.** After the first load the
+  public site navigates in the browser, so the server never sees later
+  views. `PublicApp` posts each route change to
+  `POST /api/public/pageview` (`{path, referrer}`, referrer on the first
+  view only). The server derives the kind with `public_page_kind`, logs
+  `public_page_view` (the spec #94 §7 line), and sends browsers, not
+  crawlers or link previews (`utils/user_agent.py`), to PostHog. Still no
+  third-party code on public pages.
+- **Not built:** `export` (spec #91 has no routes yet) and `narration_play`
+  (no narration audio player in the web app).
+- **`search`** is counted only on `/api/search/corpus` and not for
+  in-episode expansion (`episode_id`); command-bar quick search fires per
+  keystroke and is not counted.
+- **`mcp_tool_call.ok`** is false for an error result and for a result whose
+  JSON says `"success": false` or carries an `error`, because most tool
+  failures come back as ordinary results.
+- **`delete_person` is not on the sink.** PostHog's Python SDK has no
+  deletion call; it needs the REST API and a personal API key. Add both
+  when account deletion exists.
+- **Caddy strips `Cookie`, `Authorization` and `Referer`** on `/ingest`:
+  the browser sends its session cookie with same-origin requests, and the
+  page URL (query string included) as `Referer`, which would bypass the
+  event filter.
+- **Sign-in events are anonymous, one id per attempt.** `login_started`
+  happens before there is an account, so `login_completed` uses the same
+  id rather than the user's: an HMAC of the OAuth `state`, which both ends
+  know. The funnel joins without a cookie, and nothing links the visitor
+  key or the account to it. Opted-out readers send no completion.
+- **Remote MCP honours GPC:** the guard stores `Sec-GPC` on the request
+  state and the tool-call event carries it.
+- **The browser SDK is bootstrapped with the user id**, so memory
+  persistence never mints an anonymous id to merge, and it sends no
+  `$identify`: the `is_admin` person property comes only from server
+  events (`$set` on identified captures).
+- **Stopping is an in-memory flag, not posthog-js opt-out**, because the
+  SDK writes opt-out consent to `localStorage` even with memory
+  persistence. `before_send` drops everything while stopped.
+- **The browser filter allowlists the SDK's own props too.** posthog-js
+  adds `$session_entry_url`, `$prev_pageview_pathname` and similar to every
+  event; anything not on the list is dropped, URL props are rewritten.
+- **posthog-js drops headless browsers as bots** (`navigator.webdriver` and
+  a `HeadlessChrome` brand); `tests/usage-events.spec.ts` masks both.
+- **Config:** `ANALYTICS_ENABLED` defaults to `true` and is ignored in
+  single-user mode; with no `POSTHOG_PROJECT_KEY` the sink is `NullSink`.
+- **Settings switch:** `PATCH /api/auth/me` with `usage_analytics_enabled`;
+  the handler now changes only the fields sent, so the switch cannot clear
+  a region. Column via alembic `0018`.
+
+Operator steps (PostHog project settings, SSM key, dashboard) are in
+[docs/analytics.md](../docs/analytics.md).
 
 ## Decisions
 

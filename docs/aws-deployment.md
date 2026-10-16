@@ -156,6 +156,8 @@ aws ssm put-parameter --type String --name /thestill/prod/PUBLIC_BASE_URL --valu
 aws ssm put-parameter --type String --name /thestill/prod/ALLOWED_ORIGINS --value 'https://thestill.example.com'
 aws ssm put-parameter --type String --name /thestill/prod/DALSTON_BASE_URL --value 'http://<dalston-private-dns>:<port>'
 aws ssm put-parameter --type String --name /thestill/prod/URL_GUARD_ALLOWLIST --value '<dalston-private-dns>'
+# Optional — usage events (spec #95); see docs/analytics.md first.
+aws ssm put-parameter --type SecureString --name /thestill/prod/POSTHOG_PROJECT_KEY --value 'phc_...'
 
 ./fetch-secrets.sh
 ```

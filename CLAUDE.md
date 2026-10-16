@@ -172,6 +172,7 @@ These IDs enable tracing requests across all layers of the application.
 - [mcp-usage.md](docs/mcp-usage.md) - MCP server usage
 - [transcript-cleaning.md](docs/transcript-cleaning.md) - Cleaning configuration
 - [evals.md](docs/evals.md) - LLM-as-judge quality eval runs (`thestill eval`)
+- [analytics.md](docs/analytics.md) - Product analytics: the `/analytics` funnel and PostHog usage events (spec #95)
 - [code-guidelines.md](docs/code-guidelines.md) - Development standards
 
 ### Technical Specs (`specs/`)

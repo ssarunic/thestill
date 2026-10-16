@@ -7,6 +7,7 @@ import { PlayerProvider } from './contexts/PlayerContext'
 import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 import { useAuth } from './contexts/AuthContext'
+import AnalyticsBridge from './analytics/AnalyticsBridge'
 
 // Lazy load pages for code splitting
 const Status = lazy(() => import('./pages/Dashboard'))
@@ -66,6 +67,8 @@ function App() {
 
   return (
     <PlayerProvider>
+    {/* Spec #95 — outside the page Routes, so it sees the real URL. */}
+    <AnalyticsBridge />
     <Routes location={backgroundLocation ?? location}>
       {/* Login page - outside protected routes */}
       <Route path="/login" element={

@@ -28,7 +28,8 @@ from the context, argument validation, result wrapping, error results.
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List
+import json
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import jsonschema
 from mcp import types
@@ -42,21 +43,52 @@ ListToolsFn = Callable[[McpIdentity], Awaitable[List[types.Tool]]]
 CallToolFn = Callable[[str, Dict[str, Any], McpIdentity], Awaitable[List[types.TextContent]]]
 ListResourcesFn = Callable[[McpIdentity], Awaitable[List[types.Resource]]]
 ReadResourceFn = Callable[[str, McpIdentity], Awaitable[str]]
+# Spec #95 — told about every tools/call once it has a result.
+ToolCalledFn = Callable[[McpIdentity, str, bool], None]
 
 
 def _error_result(message: str) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=message)], is_error=True)
 
 
-def register_tools(server: Server, *, list_tools: ListToolsFn, call_tool: CallToolFn) -> None:
-    """Serve ``tools/list`` and ``tools/call`` from the given callables."""
+def tool_result_ok(result: types.CallToolResult) -> bool:
+    """Whether a tool call succeeded. Most tool failures come back as an
+    ordinary result whose JSON says ``"success": false`` or carries an
+    ``error``, not as ``is_error``, so both count as failures."""
+    if result.is_error:
+        return False
+    first = result.content[0] if result.content else None
+    text = getattr(first, "text", "") or ""
+    if not text.lstrip().startswith("{"):
+        return True
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return True
+    if not isinstance(payload, dict):
+        return True
+    return payload.get("success") is not False and not payload.get("error")
+
+
+def register_tools(
+    server: Server,
+    *,
+    list_tools: ListToolsFn,
+    call_tool: CallToolFn,
+    on_tool_called: Optional[ToolCalledFn] = None,
+) -> None:
+    """Serve ``tools/list`` and ``tools/call`` from the given callables.
+
+    ``on_tool_called(identity, name, ok)`` observes every call's outcome
+    (spec #95 usage events); it must not raise.
+    """
 
     async def on_list_tools(
         ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         return types.ListToolsResult(tools=await list_tools(current_mcp_identity(ctx)))
 
-    async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+    async def _call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
         identity = current_mcp_identity(ctx)
         arguments = params.arguments or {}
 
@@ -79,6 +111,15 @@ def register_tools(server: Server, *, list_tools: ListToolsFn, call_tool: CallTo
             # catch-all; this is the backstop for anything that escapes it.
             return _error_result(public_error_message(exc, operation=params.name, remote=identity.is_remote))
         return types.CallToolResult(content=list(content))
+
+    async def on_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+        result = await _call_tool(ctx, params)
+        if on_tool_called is not None:
+            try:
+                on_tool_called(current_mcp_identity(ctx), params.name, tool_result_ok(result))
+            except Exception:  # pylint: disable=broad-except
+                pass  # observing a call must never change its result
+        return result
 
     server.add_request_handler("tools/list", types.PaginatedRequestParams, on_list_tools)
     server.add_request_handler("tools/call", types.CallToolRequestParams, on_call_tool)

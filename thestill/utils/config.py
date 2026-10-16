@@ -548,6 +548,13 @@ class Config(BaseModel):
     public_pages_enabled: bool = True
     # OpenAPI docs / redoc. On in dev; on in prod only if explicitly enabled.
     enable_docs: bool = False
+    # Spec #95 Layer B — product usage events to PostHog Cloud (EU). Off
+    # unless a project key is set, and always off in single-user mode. The
+    # browser sends through the same-origin ``/ingest`` proxy (Caddy); the
+    # server SDK sends to ``posthog_host`` directly.
+    posthog_project_key: str = ""
+    posthog_host: str = "https://eu.i.posthog.com"
+    analytics_events_enabled: bool = True
     # Hard cap on any user-triggered audio download. Attackers controlling an
     # RSS feed can otherwise point us at a 100 GB file. Default 2 GiB.
     max_audio_bytes: int = 2 * 1024 * 1024 * 1024
@@ -901,6 +908,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "public_base_url": os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
         "public_pages_enabled": _env_bool("PUBLIC_PAGES_ENABLED", True),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
+        # Product usage events (spec #95 Layer B)
+        "posthog_project_key": os.getenv("POSTHOG_PROJECT_KEY", "").strip(),
+        "posthog_host": os.getenv("POSTHOG_HOST", "https://eu.i.posthog.com").rstrip("/"),
+        "analytics_events_enabled": _env_bool("ANALYTICS_ENABLED", True),
         "max_audio_bytes": int(os.getenv("MAX_AUDIO_BYTES", str(2 * 1024 * 1024 * 1024))),
         "max_webhook_body_bytes": int(os.getenv("MAX_WEBHOOK_BODY_BYTES", str(1 * 1024 * 1024))),
         # Remote MCP (spec #78)

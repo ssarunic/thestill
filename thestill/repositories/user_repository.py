@@ -89,6 +89,11 @@ class UserRepository(ABC):
         pass
 
     @abstractmethod
+    def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
+        """Set the user's usage-events switch (spec #95). Returns True if a
+        row was updated."""
+
+    @abstractmethod
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
         """
         Update the user's region and lock flag.
