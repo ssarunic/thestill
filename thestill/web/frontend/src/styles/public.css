@@ -293,6 +293,10 @@
 .ts-error-line { font-size: 13px; color: var(--error); }
 .ts-empty { padding: 64px 0; text-align: center; }
 .ts-legal { max-width: var(--main-column); }
+.ts-legal table { display: block; overflow-x: auto; border-collapse: collapse; margin: var(--space-sm) 0 var(--space-lg); font-size: 15px; line-height: 22px; }
+.ts-legal th, .ts-legal td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--outline-variant); text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.ts-legal p, .ts-legal ul { margin: 0 0 var(--space-md); }
+.ts-legal th { color: var(--on-surface-variant); font-weight: 600; }
 .ts-legal-draft { padding: 12px 16px; border-radius: var(--radius-lg); background: #fff7e6; border: 1px solid #f5d38a; color: #5c4400; font-size: 14px; line-height: 20px; }
 
 @media (prefers-reduced-motion: reduce) {
