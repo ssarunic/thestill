@@ -229,6 +229,7 @@ class TestAliasDomains:
         assert ingest.count("header_up -Cookie") == 2
         assert ingest.count("header_up -Authorization") == 2
         assert ingest.count("header_up -Referer") == 2  # carries the page URL and its query
+        assert ingest.count("header_up -X-Forwarded-For") == 2  # no reader IP reaches PostHog
         assert "reverse_proxy thestill:8000" in caddyfile[caddyfile.index("handle {") :]
 
     def test_compose_mounts_the_redirects_file(self):

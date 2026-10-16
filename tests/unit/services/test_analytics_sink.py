@@ -51,7 +51,7 @@ def test_identified_event_uses_the_user_id_and_is_admin_only(sink, client):
     [(name, kwargs)] = client.calls
     assert name == "search"
     assert kwargs["distinct_id"] == "u-1"
-    assert kwargs["properties"] == {"result_count": 3, "mode": "hybrid", "$set": {"is_admin": True}}
+    assert kwargs["properties"] == {"result_count": 3, "mode": "hybrid", "app": "thestill", "$set": {"is_admin": True}}
 
 
 def test_opted_out_user_and_gpc_send_nothing(sink, client):
@@ -66,6 +66,7 @@ def test_anonymous_event_never_creates_a_person(sink, client):
     (_, first), (_, second) = client.calls
     assert first["distinct_id"] == "v" * 32
     assert first["properties"]["$process_person_profile"] is False
+    assert first["properties"]["app"] == "thestill"
     assert second["distinct_id"] and second["distinct_id"] != first["distinct_id"]  # one-off id
     assert second["properties"]["$process_person_profile"] is False
 

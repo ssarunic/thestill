@@ -46,7 +46,7 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
     const out = sanitizeEvent(
       event('share', { kind: 'episode', url: `${origin}/podcasts/x?ref=y`, title: 'Private briefing', $raw_user_agent: 'UA' }),
     )!
-    expect(out.properties).toEqual({ kind: 'episode' })
+    expect(out.properties).toEqual({ kind: 'episode', app: 'thestill' })
   })
 
   it('drops SDK props that are not allowlisted, including session-entry URLs', () => {
@@ -63,7 +63,7 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
         $session_id: 's-1',
       }),
     )!
-    expect(out.properties).toEqual({ path_kind: '/search', $os: 'Mac OS X', $session_id: 's-1' })
+    expect(out.properties).toEqual({ path_kind: '/search', $os: 'Mac OS X', $session_id: 's-1', app: 'thestill' })
   })
 
   it('never sends person properties or $identify', () => {
@@ -82,5 +82,10 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
   it('caps long strings', () => {
     const out = sanitizeEvent(event('entity_open', { entity_type: 'x'.repeat(500) }))!
     expect(String(out.properties.entity_type)).toHaveLength(200)
+  })
+
+  it('labels every event as thestill, whatever the page tried to set', () => {
+    const out = sanitizeEvent(event('entity_open', { entity_type: 'person', app: 'sarunic.com' }))!
+    expect(out.properties.app).toBe('thestill')
   })
 })

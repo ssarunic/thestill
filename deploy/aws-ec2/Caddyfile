@@ -13,13 +13,16 @@
 	# 'self' and content blockers do not drop events. Cookies and auth
 	# headers are stripped (PostHog must never see the session), and so is
 	# Referer: the browser sends the page URL with it, query string and
-	# all, which would bypass the in-app event filter.
+	# all, which would bypass the in-app event filter. X-Forwarded-For is
+	# dropped too, so PostHog only ever sees this server's address and no
+	# reader's IP, whatever the PostHog project's own IP setting is.
 	handle_path /ingest/static/* {
 		rewrite * /static{path}
 		reverse_proxy https://eu-assets.i.posthog.com:443 {
 			header_up -Cookie
 			header_up -Authorization
 			header_up -Referer
+			header_up -X-Forwarded-For
 		}
 	}
 	handle_path /ingest/* {
@@ -27,6 +30,7 @@
 			header_up -Cookie
 			header_up -Authorization
 			header_up -Referer
+			header_up -X-Forwarded-For
 		}
 	}
 

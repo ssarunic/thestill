@@ -55,6 +55,9 @@ const URL_PROPS: Record<string, 'pattern' | 'url' | 'host'> = {
   $initial_referring_domain: 'host',
 }
 const MAX_STRING = 200
+// Labels every event for a PostHog project shared with another site; set
+// here, never taken from the page.
+const APP = 'thestill'
 
 function hostOf(value: unknown): string {
   if (typeof value !== 'string' || !value || value === '$direct') return '$direct'
@@ -98,7 +101,7 @@ export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null
   return {
     uuid: event.uuid,
     event: event.event,
-    properties: cleanProps(event.properties, allowed),
+    properties: { ...cleanProps(event.properties, allowed), app: APP },
     ...(event.timestamp ? { timestamp: event.timestamp } : {}),
   }
 }

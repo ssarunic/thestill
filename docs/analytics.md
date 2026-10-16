@@ -51,9 +51,16 @@ Not built yet: `export` (no spec #91 export routes exist) and
   `POST /api/public/pageview`.
 - **No CSP change.** The browser sends to `/ingest` on our own domain;
   Caddy forwards it to `eu.i.posthog.com` and strips `Cookie`,
-  `Authorization` and `Referer`, so PostHog never sees the session or the
-  page URL the browser would otherwise put in `Referer`
-  ([Caddyfile](../deploy/aws-ec2/Caddyfile)).
+  `Authorization`, `Referer` and `X-Forwarded-For`, so PostHog never sees
+  the session, the page URL the browser would otherwise put in `Referer`,
+  or the reader's IP ([Caddyfile](../deploy/aws-ec2/Caddyfile)).
+- **No reader IP at PostHog.** Browser events arrive from this server's
+  address (no `X-Forwarded-For`) and server events are sent by it, so the
+  privacy policy's IP promise does not depend on any PostHog project
+  setting.
+- **Labelled.** Every event carries `app: "thestill"` (set by the server
+  sink and by `sanitizeEvent`), so a project shared with another site can
+  separate the two.
 - **No cookie, no storage.** `persistence: 'memory'`, bootstrapped with the
   user id.
 - **Opt-outs on the server.** `users.usage_analytics_enabled` (Settings →
@@ -64,8 +71,8 @@ Not built yet: `export` (no spec #91 export routes exist) and
 
 ## Turning it on (production)
 
-1. In PostHog, create a project in the **EU** region and apply the settings
-   below.
+1. Pick a PostHog project in the **EU** region: a new one, or an existing
+   one shared with another site (see below), and apply the settings below.
 2. Add the project key to SSM:
 
    ```bash
@@ -79,27 +86,41 @@ Not built yet: `export` (no spec #91 export routes exist) and
 
 ## PostHog project settings
 
-These live outside the repo; apply them before step 2.
+These live outside the repo; check them before step 2.
 
-- **Discard client IP data:** on.
-- **Autocapture, heatmaps, web vitals, dead clicks, exception capture,
-  session replay, surveys:** all off (the SDK disables them too, so an SDK
-  upgrade that changes a default still sends nothing).
-- **Person profiles:** identified only.
-- **Filter out internal and test users:** `is_admin = true`, applied to
-  every insight by default.
-- **Billing limit:** at the free tier.
-- **Organisation members:** the operator only (PostHog shows each person's
-  event stream by UUID).
+thestill does not rely on project-wide feature toggles: its SDK turns off
+autocapture, replay, surveys, heatmaps, web vitals, dead clicks, exception
+capture, flags and extra script loads in code, and no reader's IP reaches
+PostHog. So it can share a project with another site (for example
+sarunic.com) without changing that site's settings, including its
+cookieless setup: thestill never sends PostHog's cookieless id.
+
+Required, shared project or not:
+
+- **Region: EU.** Caddy, `POSTHOG_HOST`, the SDK's `ui_host` and the privacy
+  policy all say EU. A US-region project needs those changed, or a separate
+  EU project.
+- **Filter out internal and test users:** add `is_admin = true`, applied to
+  every insight by default. It only matches persons with that property.
+- **Data retention:** the privacy policy quotes `analytics_retention` from
+  `thestill/web/frontend/public/legal/operator.json`. In a shared project
+  the retention is the project's; change `operator.json` to match it, not
+  the other way round.
 - **DPA:** accepted in organisation settings, after checking it covers UK
   GDPR transfers.
-- **Data retention:** must match `analytics_retention` in
-  `thestill/web/frontend/public/legal/operator.json` (the privacy policy
-  quotes it).
+- **Billing limit:** set, remembering the free tier is shared by every site
+  in the project.
+- **Organisation members:** the operator only (PostHog shows each person's
+  event stream by UUID).
+
+Belt and braces, only if the project is thestill's alone: turn off the
+toggles above at project level as well, set person profiles to identified
+only, and turn on "Discard client IP data".
 
 ## Dashboard: "thestill: product"
 
-Rebuild from this list if the project is ever recreated.
+Rebuild from this list if the project is ever recreated. In a shared
+project, filter every insight on `app = thestill`.
 
 | Insight | Definition |
 |---|---|

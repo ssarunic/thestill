@@ -102,6 +102,7 @@ test('a signed-in session sends only allowlisted events, without URLs or search 
   await navigate('/settings')
   await expect.poll(kinds, { timeout: 15_000 }).toContain('/settings')
   for (const e of sent()) expect(ALLOWED_EVENTS).toContain(e.event)
+  for (const e of sent()) expect(e.properties.app).toBe('thestill')
   for (const e of sent()) expect(String(e.properties.$current_url ?? '')).not.toContain('?')
 
   const everything = JSON.stringify(ingest)

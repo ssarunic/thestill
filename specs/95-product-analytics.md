@@ -589,6 +589,11 @@ What was built differs from the sections above in these places:
   id rather than the user's: an HMAC of the OAuth `state`, which both ends
   know. The funnel joins without a cookie, and nothing links the visitor
   key or the account to it. Opted-out readers send no completion.
+- **Shared PostHog project ready.** Caddy also strips `X-Forwarded-For`,
+  so no reader IP reaches PostHog whatever the project's IP setting, and
+  every event carries `app: "thestill"` (server events have no `$host`).
+  thestill can share a project with another site without touching its
+  settings; see [docs/analytics.md](../docs/analytics.md).
 - **Remote MCP honours GPC:** the guard stores `Sec-GPC` on the request
   state and the tool-call event carries it.
 - **The browser SDK is bootstrapped with the user id**, so memory
