@@ -580,6 +580,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
                 logger.info("Migration complete: is_admin column added to users")
 
+            # Spec #95 — kind of public page the account was created from.
+            # Written once on insert, never updated (Postgres migration 0016).
+            if "signup_source" not in user_columns:
+                conn.execute("ALTER TABLE users ADD COLUMN signup_source TEXT NULL")
+
         # Digest retirement: the legacy global digests tables are dropped.
         # Briefings (spec #36/#50) are the only consumer-facing concept;
         # historical digest markdown under data/digests/ stays on disk.
@@ -1419,6 +1424,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     created_at      TIMESTAMP NOT NULL
                                     DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
                     listened_at     TIMESTAMP NULL,
+                    opened_at       TIMESTAMP NULL,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     CHECK (length(id) = 36),
                     CHECK (cursor_to > cursor_from),
@@ -1430,6 +1436,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
             )
             logger.info("Migration complete: user_briefings table created")
+
+        # Spec #95 — first time the owner opened a briefing (Postgres
+        # migration 0016). Briefings already marked listened were opened, so
+        # backfill once, when the column is added.
+        briefing_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_briefings)").fetchall()}
+        if "opened_at" not in briefing_columns:
+            conn.execute("ALTER TABLE user_briefings ADD COLUMN opened_at TIMESTAMP NULL")
+            conn.execute(
+                "UPDATE user_briefings SET opened_at = listened_at WHERE opened_at IS NULL AND listened_at IS NOT NULL"
+            )
 
         # Briefing schedules (spec #50). One row per user: when (hour_local
         # in timezone) and how often (frequency + weekday) their briefing is
@@ -2505,6 +2521,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 region TEXT NULL,
                 region_locked INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
+                signup_source TEXT NULL,
                 CHECK (length(id) = 36),
                 CHECK (length(email) > 0),
                 CHECK (region IS NULL OR length(region) = 2),

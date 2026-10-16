@@ -61,6 +61,7 @@ ADMIN_ROUTES = {
     ("GET", "/api/dashboard/stats"),
     ("GET", "/api/dashboard/activity"),
     ("GET", "/api/dashboard/narration"),
+    ("GET", "/api/dashboard/analytics"),
     ("GET", "/webhook/elevenlabs/results"),
     ("GET", "/webhook/elevenlabs/results/{transcription_id}"),
     ("DELETE", "/webhook/elevenlabs/results/{transcription_id}"),

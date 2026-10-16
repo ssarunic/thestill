@@ -38,6 +38,7 @@ from .evals.compare import compare_runs
 from .evals.rubrics import ENTITY_LINKING, RUBRICS, get_rubric
 from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
+from .models.analytics import COHORT_ROWS, SMALL_GROUP
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.briefing_repository import BriefingRepository
@@ -49,6 +50,7 @@ from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollow
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
 from .services import PodcastService, RefreshService, StatsService
+from .services.analytics_service import ALLOWED_RANGES, DEFAULT_RANGE, AnalyticsService
 from .services.auth_service import AuthService
 from .services.inbox_service import InboxService
 from .utils.cli_formatter import CLIFormatter
@@ -94,6 +96,7 @@ class CLIContext:
         follower_service=None,
         legacy_claim_service=None,
         link_decision_repository=None,
+        analytics_service=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -130,6 +133,8 @@ class CLIContext:
         # Spec #40 — pending transcription operations now live in SQLite.
         # Optional for tests; production CLI always passes one.
         self.pending_ops_repository = pending_ops_repository
+        # Spec #95 — Layer A product analytics (``thestill analytics``).
+        self.analytics_service = analytics_service
 
 
 def require_config(f):
@@ -278,6 +283,7 @@ def main(ctx, config, quiet):
             follower_service=follower_service,
             legacy_claim_service=legacy_claim_service,
             link_decision_repository=repos.link_decision,
+            analytics_service=AnalyticsService(repos.analytics, enabled=config_obj.multi_user),
         )
 
     except Exception as e:
@@ -5520,6 +5526,92 @@ def _grade_one(repo, question: dict, limit: int) -> dict:
         "status": status,
         "notes": notes,
     }
+
+
+def _pct_cell(numerator: int, denominator: int, pct, width: int = 0) -> str:
+    """``42.0% (21/50)`` right-aligned to ``width``, dimmed when the group is
+    too small to read into. Pads before styling: ANSI codes would otherwise
+    count towards the width and break the columns."""
+    if denominator == 0:
+        text = "—"
+    else:
+        shown = f"{pct * 100:.1f}%" if pct is not None else "—"
+        text = f"{shown} ({numerator}/{denominator})"
+    text = text.rjust(width)
+    return click.style(text, dim=True) if denominator < SMALL_GROUP else text
+
+
+def _render_analytics(report) -> None:
+    """Plain-text Layer A report for the operator's terminal."""
+    window = report.window
+    click.echo(CLIFormatter.format_header(f"Product analytics — last {report.range}"))
+    click.echo(f"Window: {window.start:%Y-%m-%d} → {window.end:%Y-%m-%d %H:%M} UTC\n")
+
+    click.echo(f"Signups: {report.signups.total}")
+    for source, n in sorted(report.signups.by_source.items(), key=lambda kv: -kv[1]):
+        click.echo(f"  {source:<16} {n}")
+
+    click.echo("\nActivation (all sources)")
+    for step in report.activation.overall.steps:
+        median = f"median {step.median_hours:.1f} h" if step.median_hours is not None else ""
+        click.echo(f"  {step.label:<38} {_pct_cell(step.reached, step.eligible, step.pct, 18)}  {median}")
+    for group in report.activation.by_source:
+        cells = "  ".join(_pct_cell(s.reached, s.eligible, s.pct) for s in group.steps)
+        click.echo(f"  · {group.source} ({group.signups}): {cells}")
+
+    weeks = report.cohorts.weeks
+    click.echo(f"\nRetention by signup week, last {len(report.cohorts.rows)} weeks (active in week N after signup)")
+    click.echo("  " + f"{'Week of':<11} {'Users':>5}  " + "  ".join(f"{'Wk ' + str(w):>18}" for w in weeks))
+    for row in report.cohorts.rows:
+        cells = "  ".join(_pct_cell(c.active, c.eligible, c.pct, 18) if c.eligible else " " * 18 for c in row.cells)
+        click.echo(f"  {row.week_start:%Y-%m-%d}  {row.size:>5}  {cells}")
+
+    e = report.engagement
+    click.echo("\nEngagement")
+    click.echo(f"  Active users: {e.active_users}")
+    per_week = f"{e.reads_per_active_user_per_week:.2f}" if e.reads_per_active_user_per_week is not None else "—"
+    click.echo(f"  Episodes read: {e.reads} ({per_week} per active user per week)")
+    opened = f"{e.opened_ratio * 100:.0f}%" if e.opened_ratio is not None else "—"
+    click.echo(f"  Briefings opened: {e.briefings_opened} of {e.briefings_generated} ({opened})")
+    click.echo(f"  Follows: {e.follows}")
+
+    click.echo("")
+    for note in report.notes:
+        click.echo(click.style(f"Note: {note}", dim=True))
+
+
+@main.command()
+@click.option(
+    "--range",
+    "range_",
+    type=click.Choice(list(ALLOWED_RANGES)),
+    default=DEFAULT_RANGE,
+    show_default=True,
+    help=f"Window for signups, activation and engagement (retention always covers {COHORT_ROWS} weeks).",
+)
+@click.option("--json", "json_output", is_flag=True, help="Print the report as JSON.")
+@click.pass_context
+@require_config
+@log_command
+def analytics(ctx, range_, json_output):
+    """Product analytics from product tables: signups, activation, retention (spec #95).
+
+    Admin accounts and the single-user local account are excluded. Needs
+    multi-user mode on Postgres; otherwise says so and exits 0.
+    """
+    service = ctx.obj.analytics_service
+    if service is None or not service.available:
+        if json_output:
+            click.echo(json.dumps({"available": False}))
+        else:
+            click.echo("Analytics is off (needs MULTI_USER=true and Postgres).")
+        return
+
+    report = service.report(range_)
+    if json_output:
+        click.echo(json.dumps({"available": True, **report.model_dump(mode="json")}, indent=2))
+        return
+    _render_analytics(report)
 
 
 @main.command()

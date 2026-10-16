@@ -99,7 +99,8 @@ Commands below).
 | `/api/briefings/{briefing_id}/script` | GET | Rendered script markdown |
 | `/api/briefings/{briefing_id}/episodes` | GET | Episodes the briefing covers, grouped by podcast, with artwork and gist (the page's index) |
 | `/api/briefings/{briefing_id}/narrate` | POST | Generate a narration variant (spec #33) |
-| `/api/briefings/{briefing_id}/listened` | POST | Mark briefing listened |
+| `/api/briefings/{briefing_id}/listened` | POST | Mark briefing listened (also sets `opened_at` if it is still empty) |
+| `/api/briefings/{briefing_id}/opened` | POST | Spec #95: record the first time the owner opened the briefing. Idempotent; the first time is kept. Fired by the briefing page once it has loaded, never by a GET |
 
 ### Inbox (`/api/inbox`)
 
@@ -122,6 +123,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/dashboard/stats` | GET | Dashboard statistics |
 | `/api/dashboard/activity` | GET | Recent activity feed (paginated) |
 | `/api/dashboard/narration` | GET | Aggregated narration runs for the dashboard tile |
+| `/api/dashboard/analytics` | GET | Spec #95 Layer A product analytics: signups by source, activation funnel, 12-week cohort retention, engagement. Query: `range` = `7d`/`28d`/`90d` (default `28d`). Aggregates only; admins and the single-user local account excluded; cached 10 min per range. Returns `{"available": false}` in single-user mode or on SQLite |
 
 ### Search (`/api/search`)
 

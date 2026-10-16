@@ -19,6 +19,8 @@ const Briefings = lazy(() => import('./pages/Briefings'))
 const BriefingDetail = lazy(() => import('./pages/BriefingDetail'))
 const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const QueueViewer = lazy(() => import('./pages/QueueViewer'))
+// Spec #95 — product analytics (admin).
+const Analytics = lazy(() => import('./pages/Analytics'))
 const Settings = lazy(() => import('./pages/Settings'))
 const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
@@ -149,6 +151,13 @@ function App() {
           <AdminRoute>
             <Suspense fallback={<PageLoader />}>
               <QueueViewer />
+            </Suspense>
+          </AdminRoute>
+        } />
+        <Route path="analytics" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <Analytics />
             </Suspense>
           </AdminRoute>
         } />

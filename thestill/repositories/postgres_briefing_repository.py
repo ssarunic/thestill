@@ -38,7 +38,9 @@ logger = get_logger(__name__)
 # post-processing never holds a briefing (spec #55, decision 2026-07-10).
 _USER_CHAIN_SQL = ", ".join(f"'{v}'" for v in USER_CHAIN_STAGE_VALUES)
 
-_COLS = "id, user_id, cursor_from, cursor_to, episode_count, script_path, audio_path, created_at, listened_at"
+_COLS = (
+    "id, user_id, cursor_from, cursor_to, episode_count, script_path, audio_path, created_at, listened_at, opened_at"
+)
 
 
 class PostgresBriefingRepository(BriefingRepository):
@@ -54,8 +56,8 @@ class PostgresBriefingRepository(BriefingRepository):
                 """
                 INSERT INTO user_briefings
                     (id, user_id, cursor_from, cursor_to, episode_count,
-                     script_path, audio_path, created_at, listened_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     script_path, audio_path, created_at, listened_at, opened_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     briefing.id,
@@ -67,6 +69,7 @@ class PostgresBriefingRepository(BriefingRepository):
                     briefing.audio_path,
                     briefing.created_at,
                     briefing.listened_at,
+                    briefing.opened_at,
                 ),
             )
         return briefing
@@ -166,11 +169,24 @@ class PostgresBriefingRepository(BriefingRepository):
             row = conn.execute(
                 f"""
                 UPDATE user_briefings
-                   SET listened_at = %s
+                   SET listened_at = %s, opened_at = COALESCE(opened_at, %s)
                  WHERE id = %s
                 RETURNING {_COLS}
                 """,
-                (listened_at, briefing_id),
+                (listened_at, listened_at, briefing_id),
+            ).fetchone()
+            return self._row_to_briefing(row) if row else None
+
+    def mark_opened(self, briefing_id: str, opened_at: datetime) -> Optional[Briefing]:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                f"""
+                UPDATE user_briefings
+                   SET opened_at = COALESCE(opened_at, %s)
+                 WHERE id = %s
+                RETURNING {_COLS}
+                """,
+                (opened_at, briefing_id),
             ).fetchone()
             return self._row_to_briefing(row) if row else None
 
@@ -186,4 +202,5 @@ class PostgresBriefingRepository(BriefingRepository):
             audio_path=row["audio_path"],
             created_at=row["created_at"],
             listened_at=row["listened_at"],
+            opened_at=row["opened_at"],
         )

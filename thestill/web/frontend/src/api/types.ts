@@ -39,6 +39,64 @@ export interface NarrationLatestSummary {
   latency_ms: number | null
 }
 
+// Spec #95 — Layer A product analytics (admin). Mirrors
+// thestill/models/analytics.py; served by GET /api/dashboard/analytics.
+export type AnalyticsRange = '7d' | '28d' | '90d'
+
+export interface AnalyticsStepStat {
+  key: string
+  label: string  // the server owns step names (thestill/models/analytics.py STEPS)
+  horizon_hours: number
+  eligible: number
+  reached: number
+  pct: number | null
+  median_hours: number | null
+}
+
+export interface AnalyticsActivationGroup {
+  source: string
+  signups: number
+  steps: AnalyticsStepStat[]
+}
+
+export interface AnalyticsCohortCell {
+  week: number
+  eligible: number
+  active: number
+  pct: number | null
+}
+
+export interface AnalyticsReport {
+  generated_at: string
+  range: AnalyticsRange
+  window: { start: string; end: string; days: number }
+  signups: {
+    total: number
+    by_source: Record<string, number>
+    days: { day: string; total: number; by_source: Record<string, number> }[]
+  }
+  activation: { overall: AnalyticsActivationGroup; by_source: AnalyticsActivationGroup[] }
+  cohorts: {
+    weeks: number[]
+    rows: { week_start: string; size: number; cells: AnalyticsCohortCell[] }[]
+  }
+  engagement: {
+    active_users: number
+    reads: number
+    reads_per_active_user_per_week: number | null
+    briefings_generated: number
+    briefings_opened: number
+    opened_ratio: number | null
+    follows: number
+    follows_per_active_user: number | null
+  }
+  notes: string[]
+}
+
+export type AnalyticsResponse =
+  | { status: string; timestamp: string; available: false }
+  | ({ status: string; timestamp: string; available: true } & AnalyticsReport)
+
 export interface NarrationDashboardStats {
   status: string
   timestamp: string
@@ -1366,6 +1424,8 @@ export interface Briefing {
   audio_path: string | null
   created_at: string
   listened_at: string | null
+  // Spec #95 — first time the owner opened it.
+  opened_at: string | null
 }
 
 export interface BriefingResponse extends Briefing {

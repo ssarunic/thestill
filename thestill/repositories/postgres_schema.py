@@ -61,9 +61,12 @@ CREATE TABLE IF NOT EXISTS users (
     last_login_at timestamptz NULL,
     region text NULL CHECK (region IS NULL OR length(region) = 2),
     region_locked boolean NOT NULL DEFAULT false,
-    is_admin boolean NOT NULL DEFAULT false
+    is_admin boolean NOT NULL DEFAULT false,
+    signup_source text NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+-- Spec #95 — converge databases bootstrapped before signup_source (alembic 0016).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source text NULL;
 CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -313,9 +316,13 @@ CREATE TABLE IF NOT EXISTS user_briefings (
     audio_path text NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     listened_at timestamptz NULL,
+    opened_at timestamptz NULL,
     CHECK (cursor_to > cursor_from)
 );
 CREATE INDEX IF NOT EXISTS idx_user_briefings_user ON user_briefings(user_id, created_at DESC);
+-- Spec #95 — converge databases bootstrapped before opened_at (alembic 0016;
+-- the listened_at backfill lives only in the migration).
+ALTER TABLE user_briefings ADD COLUMN IF NOT EXISTS opened_at timestamptz NULL;
 
 CREATE TABLE IF NOT EXISTS user_briefing_schedules (
     user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

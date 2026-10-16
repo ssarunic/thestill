@@ -448,7 +448,10 @@ def test_sign_in_returns_to_next_once(anon, app_state, monkeypatch):
     auth = app_state.auth_service
     monkeypatch.setattr(auth, "get_google_auth_url", lambda redirect_uri: ("https://accounts.example/o", "st"))
 
-    async def callback(code, redirect_uri):
+    sources = []
+
+    async def callback(code, redirect_uri, signup_source=None):
+        sources.append(signup_source)
         return SimpleNamespace(email="reader@example.com"), "jwt-token", False
 
     async def no_region(user, ip):
@@ -464,6 +467,7 @@ def test_sign_in_returns_to_next_once(anon, app_state, monkeypatch):
     assert done.status_code == 302
     assert done.headers["location"] == "/entities/person/x"
     assert anon.cookies.get("oauth_next") is None
+    assert sources == ["entity"]  # spec #95: the page a new account came from
 
     # An abandoned flow's return path never steers a later plain sign-in.
     anon.cookies.set("oauth_next", "/inbox", domain="testserver.local")
@@ -475,6 +479,7 @@ def test_sign_in_returns_to_next_once(anon, app_state, monkeypatch):
         ]
         == "/"
     )
+    assert sources == ["entity", "direct"]
 
 
 def test_sitemap_and_page_count_quotes_the_same_way(anon, app_state):

@@ -70,5 +70,12 @@ class BriefingRepository(ABC):
 
     @abstractmethod
     def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:
-        """Set ``listened_at`` on the row. Returns the updated briefing,
-        or ``None`` if no row exists."""
+        """Set ``listened_at`` on the row, and ``opened_at`` too when it is
+        still empty (listening implies opening, spec #95). Returns the
+        updated briefing, or ``None`` if no row exists."""
+
+    @abstractmethod
+    def mark_opened(self, briefing_id: str, opened_at: datetime) -> Optional[Briefing]:
+        """Set ``opened_at`` if it is still empty (spec #95). Idempotent:
+        the first timestamp wins. Returns the briefing, or ``None`` if no
+        row exists."""

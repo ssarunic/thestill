@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
+    from ..services.analytics_service import AnalyticsService
     from ..services.auth_service import AuthService
     from ..services.briefing_delivery_service import BriefingDeliveryService
     from ..services.briefing_service import BriefingService
@@ -178,6 +179,9 @@ class AppState:
     # Spec #78 Phase 2 — per-user remote MCP tokens. ``Optional`` only for
     # hand-built test fixtures; production wiring always passes it.
     mcp_token_service: "Optional[McpTokenService]" = None
+    # Spec #95 — Layer A product analytics. ``Optional`` only for
+    # hand-built test fixtures; production wiring always passes it.
+    analytics_service: "Optional[AnalyticsService]" = None
 
 
 def get_app_state(request: Request) -> AppState:

@@ -31,6 +31,7 @@ import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from .analytics_repository import AnalyticsRepository, UnavailableAnalyticsRepository
 from .briefing_delivery_repository import BriefingDeliveryRepository
 from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
@@ -130,6 +131,8 @@ class RepositoryBundle:
     pending_ops: Any
     entity: Any
     queue_manager: Any
+    # Spec #95 Layer A; Postgres only, the unavailable stub on SQLite.
+    analytics: AnalyticsRepository
 
 
 def make_repositories(config: "Config") -> RepositoryBundle:
@@ -139,6 +142,8 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         _ensure_pg_schema(dsn, config)
 
         from ..core.postgres_queue_manager import PostgresQueueManager
+        from ..models.user import DEFAULT_USER_EMAIL
+        from .postgres_analytics_repository import PostgresAnalyticsRepository
         from .postgres_briefing_delivery_repository import PostgresBriefingDeliveryRepository
         from .postgres_briefing_repository import PostgresBriefingRepository
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
@@ -167,6 +172,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             pending_ops=PostgresPendingOperationsRepository(dsn),
             entity=PostgresEntityRepository(dsn),
             queue_manager=PostgresQueueManager(dsn),
+            analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
         )
 
     db_path = str(config.database_path)
@@ -199,6 +205,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         pending_ops=SqlitePendingOperationsRepository(db_path=db_path),
         entity=SqliteEntityRepository(db_path=db_path),
         queue_manager=QueueManager(db_path),
+        analytics=UnavailableAnalyticsRepository(),
     )
 
 

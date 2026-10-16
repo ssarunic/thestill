@@ -35,6 +35,10 @@ from .user_repository import UserRepository
 
 logger = get_logger(__name__)
 
+_SELECT_COLS = (
+    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source"
+)
+
 
 class SqliteUserRepository(UserRepository):
     """
@@ -63,9 +67,8 @@ class SqliteUserRepository(UserRepository):
         """Get user by internal UUID (primary key)."""
         with self._get_connection() as conn:
             cursor = conn.execute(
-                """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked, is_admin
+                f"""
+                SELECT {_SELECT_COLS}
                 FROM users
                 WHERE id = ?
                 """,
@@ -79,9 +82,8 @@ class SqliteUserRepository(UserRepository):
         """Get user by email address."""
         with self._get_connection() as conn:
             cursor = conn.execute(
-                """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked, is_admin
+                f"""
+                SELECT {_SELECT_COLS}
                 FROM users
                 WHERE email = ?
                 """,
@@ -95,9 +97,8 @@ class SqliteUserRepository(UserRepository):
         """Get user by Google's unique user ID."""
         with self._get_connection() as conn:
             cursor = conn.execute(
-                """
-                SELECT id, email, name, picture, google_id, created_at, last_login_at,
-                       region, region_locked, is_admin
+                f"""
+                SELECT {_SELECT_COLS}
                 FROM users
                 WHERE google_id = ?
                 """,
@@ -113,9 +114,10 @@ class SqliteUserRepository(UserRepository):
 
         Uses UPSERT (INSERT ... ON CONFLICT) for atomic create-or-update.
 
-        ``region`` / ``region_locked`` / ``is_admin`` are intentionally NOT
-        updated by this path — preserving the user's stored region and admin
-        grant across logins. Use ``update_region`` to mutate region state
+        ``region`` / ``region_locked`` / ``is_admin`` / ``signup_source`` are
+        intentionally NOT updated by this path — preserving the user's stored
+        region and admin grant across logins, and keeping the signup source
+        set-once (spec #95). Use ``update_region`` to mutate region state
         explicitly; ``is_admin`` is set manually in the database.
         """
         with self._get_connection() as conn:
@@ -123,9 +125,10 @@ class SqliteUserRepository(UserRepository):
                 """
                 INSERT INTO users (
                     id, email, name, picture, google_id,
-                    created_at, last_login_at, region, region_locked, is_admin
+                    created_at, last_login_at, region, region_locked, is_admin,
+                    signup_source
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     name = excluded.name,
                     picture = excluded.picture,
@@ -143,6 +146,7 @@ class SqliteUserRepository(UserRepository):
                     user.region,
                     1 if user.region_locked else 0,
                     1 if user.is_admin else 0,
+                    user.signup_source,
                 ),
             )
 
@@ -265,4 +269,5 @@ class SqliteUserRepository(UserRepository):
             region=row["region"],
             region_locked=bool(row["region_locked"]),
             is_admin=bool(row["is_admin"]),
+            signup_source=row["signup_source"],
         )

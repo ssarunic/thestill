@@ -8,7 +8,7 @@ import UserMenu from './UserMenu'
 import CommandBar from './CommandBar'
 import { abovePlayer } from '../constants/layers'
 import { useAuth } from '../contexts/AuthContext'
-import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM } from '../constants/navigation'
+import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM, visibleNavItems } from '../constants/navigation'
 import { useIsNavActive } from '../hooks/useBackgroundLocation'
 import { useScrollRestoration } from '../hooks/useScrollRestoration'
 
@@ -86,7 +86,7 @@ function LayoutContent() {
   }
   const toggleNowPlaying = () => setIsNowPlayingOpen((open) => !open)
   const screenSize = useScreenSize()
-  const { isAdmin } = useAuth()
+  const { isAdmin, isMultiUser } = useAuth()
 
   // Close sidebar/drawer when screen size changes (same adjust-during-render
   // pattern as the Now Playing reset above).
@@ -239,7 +239,7 @@ function LayoutContent() {
                       <div className="mx-2 border-t border-hairline" />
                     )}
                   </div>
-                  {ADMIN_NAV_ITEMS.map((item) => (
+                  {visibleNavItems(ADMIN_NAV_ITEMS, isMultiUser).map((item) => (
                     <NavItem
                       key={item.to}
                       to={item.to}

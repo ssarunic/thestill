@@ -374,3 +374,25 @@ class BriefingService:
             raise BriefingNotFoundError(f"No briefing with id={briefing_id!r}")
         logger.info("briefing_listened", briefing_id=briefing_id)
         return updated
+
+    def mark_opened(
+        self,
+        briefing_id: str,
+        *,
+        now: Optional[datetime] = None,
+    ) -> Briefing:
+        """
+        Record that the owner opened the briefing (spec #95).
+
+        Idempotent and set-once: the first ``opened_at`` is kept, so this
+        is safe to call on every page open.
+
+        Raises:
+            BriefingNotFoundError: if ``briefing_id`` is unknown.
+        """
+        clock_now = now or datetime.now(timezone.utc)
+        updated = self._briefings.mark_opened(briefing_id, clock_now)
+        if updated is None:
+            raise BriefingNotFoundError(f"No briefing with id={briefing_id!r}")
+        logger.info("briefing_opened", briefing_id=briefing_id)
+        return updated

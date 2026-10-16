@@ -48,6 +48,7 @@ from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
+from ..services.analytics_service import AnalyticsService
 from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
 from ..services.briefing_script_generator import BriefingScriptGenerator
@@ -402,6 +403,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         health_service=HealthService(config),
         refresh_on_open=refresh_on_open,
         mcp_token_service=McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days),
+        analytics_service=AnalyticsService(repos.analytics, enabled=config.multi_user),
     )
 
     # Create task worker with handlers that have access to app_state.

@@ -34,6 +34,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
+from ...utils.page_kind import signup_source_for
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
 from ..responses import api_response
@@ -297,11 +298,17 @@ async def google_callback(
         logger.warning("OAuth state mismatch - possible CSRF attack")
         raise HTTPException(status_code=400, detail="Invalid state parameter")
 
+    # Spec #94 return path, read once: it steers the redirect below and,
+    # for a brand-new account, records which public page it came from
+    # (spec #95; signup_source_for is total, so it cannot fail the login).
+    next_path = safe_next_path(request.cookies.get(NEXT_COOKIE))
+
     try:
         redirect_uri = _get_redirect_uri(request, app_state)
         user, jwt_token, is_new_user = await app_state.auth_service.handle_google_callback(
             code=code,
             redirect_uri=redirect_uri,
+            signup_source=signup_source_for(next_path),
         )
 
         # Spec #64 — a brand-new real user claims the legacy single-user
@@ -317,7 +324,7 @@ async def google_callback(
         await app_state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
 
         # Redirect back to where sign-in started (spec #94), else home.
-        destination = safe_next_path(request.cookies.get(NEXT_COOKIE)) or "/"
+        destination = next_path or "/"
         response = RedirectResponse(url=destination, status_code=302)
         _set_auth_cookie(response, jwt_token, app_state)
 
