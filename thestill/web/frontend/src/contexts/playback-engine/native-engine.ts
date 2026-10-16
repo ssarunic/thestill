@@ -137,6 +137,9 @@ export class NativeEngine implements PlaybackEngine {
   seekTo(seconds: number): void {
     if (!Number.isFinite(seconds)) return
     this.userSeeked = true
+    // An explicit seek supersedes a deferred one (a resume position queued
+    // for loadedmetadata), or metadata would jump back to it.
+    this.pendingSeek = null
     this.el.currentTime = Math.max(0, seconds)
   }
 

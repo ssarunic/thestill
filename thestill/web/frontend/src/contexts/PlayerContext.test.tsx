@@ -829,6 +829,15 @@ describe('spec #90 — listening progress', () => {
       expect(video.currentTime).toBe(500)
     })
 
+    it('a transcript click while the source loads beats a resume already queued', () => {
+      listeningCache.seed('ep-audio', stored(1934))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack)) // queues the resume seek for metadata
+      act(() => ctx.play(audioTrack, { startAt: 42 })) // segment click, same episode
+      metadata(video)
+      expect(video.currentTime).toBe(42)
+    })
+
     it('an explicit startAt beats the stored position', () => {
       listeningCache.seed('ep-audio', stored(500))
       const { video } = renderPlayer()

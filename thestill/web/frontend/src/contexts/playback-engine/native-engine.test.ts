@@ -72,6 +72,23 @@ describe('NativeEngine.setPendingSeek', () => {
     expect(t.time()).toBe(42)
   })
 
+  it('a user seek before metadata supersedes an already-queued resume seek', () => {
+    // Cached resume: queued by load().
+    const cached = makeEngine()
+    cached.engine.load({ url: 'https://cdn.test/a.mp3' }, { seekTo: 1934 })
+    cached.engine.seekTo(42)
+    cached.metadataLoaded()
+    expect(cached.time()).toBe(42)
+
+    // Fetched resume: queued by setPendingSeek().
+    const fetched = makeEngine()
+    fetched.engine.load({ url: 'https://cdn.test/a.mp3' })
+    expect(fetched.engine.setPendingSeek(1934)).toBe(true)
+    fetched.engine.seekTo(42)
+    fetched.metadataLoaded()
+    expect(fetched.time()).toBe(42)
+  })
+
   it('a replacement engine on the same element keeps a deferred seek (StrictMode remount)', () => {
     const t = makeEngine()
     t.engine.load({ url: 'https://cdn.test/a.mp3' }, { seekTo: 1234 })
