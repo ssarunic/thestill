@@ -292,6 +292,64 @@ export interface EpisodeDetailResponse {
   status: string
   timestamp: string
   episode: EpisodeDetail
+  // Spec #90 — the caller's listening progress, null when never played.
+  listening?: ListeningSummary | null
+}
+
+// ---------------------------------------------------------------------------
+// Spec #90 — listening progress. Positions are on the logical (transcript)
+// timeline; timestamps are server time.
+// ---------------------------------------------------------------------------
+export interface ListeningSummary {
+  position_seconds: number
+  duration_seconds: number | null
+  completed_at: string | null
+  updated_at: string
+}
+
+export type ListeningEvent =
+  | 'tick'
+  | 'pause'
+  | 'seek'
+  | 'ended'
+  | 'stop'
+  | 'mark_played'
+  | 'mark_unplayed'
+
+export interface ProgressBody {
+  event: ListeningEvent
+  position_seconds: number
+  duration_seconds: number | null
+  session_id: string
+  seq: number
+}
+
+export interface ProgressAck {
+  accepted: boolean
+  completed: boolean
+  // The stored row after the write (the winner when rejected).
+  listening: ListeningSummary | null
+}
+
+// The episode fields needed to start or restore playback — a subset of
+// EpisodeDetail under the same keys.
+export interface TrackEpisode {
+  id: string
+  slug: string
+  title: string
+  podcast_id: string
+  podcast_slug: string
+  podcast_title: string
+  audio_url: string
+  image_url: string | null
+  podcast_image_url: string | null
+  duration: number | null
+  playback?: PlaybackManifest | null
+}
+
+export interface ResumableItem {
+  listening: ListeningSummary
+  episode: TrackEpisode
 }
 
 export type TranscriptType = 'cleaned' | 'raw'
@@ -1278,6 +1336,8 @@ export interface InboxItem {
   entry: InboxEntry
   episode: Episode
   podcast: InboxPodcastSummary
+  // Spec #90 — the user's listening progress, null when never played.
+  listening?: ListeningSummary | null
 }
 
 export interface InboxListResponse {

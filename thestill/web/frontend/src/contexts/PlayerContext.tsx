@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import {
 } from '../utils/mediaSession'
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
+import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
 import { NativeEngine } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
@@ -70,6 +72,10 @@ export interface PlayOptions {
   // deferred until the media element reports metadata (duration) is
   // available; browsers silently clamp seeks on unloaded media.
   startAt?: number
+  // Spec #90 "Play from beginning" — ignore the stored listening position
+  // and start at the top of the asset. Without startAt/restart, a fresh
+  // play of a part-listened episode resumes where it stopped.
+  restart?: boolean
 }
 
 export interface PlayerContextValue {
@@ -91,6 +97,9 @@ export interface PlayerContextValue {
   skip: (deltaSeconds: number) => void
   setRate: (rate: number) => void
   stop: () => void
+  // Spec #90 — manual Mark as played / unplayed. Marking the current track
+  // played pauses it and rewinds the bar to the top.
+  markListened: (episodeId: string, played: boolean) => Promise<void>
   isCurrent: (episodeId: string) => boolean
   // Spec #38 — stable getter so a rAF loop can read the media element's
   // ``currentTime`` at 60 fps without subscribing to ``usePlayerTime``
@@ -254,6 +263,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setActiveEngine(kind)
   }, [])
 
+  // Spec #90 — listening progress persistence. Engine event bodies are
+  // created before the hook runs (the hook needs the engines), so they
+  // reach it through this ref.
+  const persistenceRef = useRef<PlaybackPersistence | null>(null)
+
   const syncPositionState = useCallback(() => {
     const engine = engineKindRef.current === 'youtube' ? youtubeEngineRef.current : nativeEngineRef.current
     if (!engine) return
@@ -270,15 +284,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onPlay: () => {
         setIsPlaying(true)
         syncPositionState()
+        persistenceRef.current?.onEngineEvent('play')
       },
-      onPause: () => setIsPlaying(false),
+      onPause: () => {
+        setIsPlaying(false)
+        persistenceRef.current?.onEngineEvent('pause')
+      },
       onPlaying: () => {
         setIsPlaying(true)
         setIsLoading(false)
       },
       onWaiting: () => setIsLoading(true),
       onCanPlay: () => setIsLoading(false),
-      onTimeUpdate: (seconds: number) => setCurrentTime(seconds),
+      onTimeUpdate: (seconds: number) => {
+        setCurrentTime(seconds)
+        persistenceRef.current?.onEngineEvent('timeupdate')
+      },
       onDurationChange: (seconds: number) => {
         setDuration(seconds)
         syncPositionState()
@@ -287,7 +308,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setPlaybackRate(rate)
         syncPositionState()
       },
-      onSeeked: () => syncPositionState(),
+      onSeeked: () => {
+        syncPositionState()
+        persistenceRef.current?.onEngineEvent('seeked')
+      },
       onVolumeChange: (volume: number, muted: boolean) => {
         setVolumeState(volume)
         setMuted(muted)
@@ -297,6 +321,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setIsLoading(false)
       },
       onEnded: () => {
+        persistenceRef.current?.onEngineEvent('ended')
         setIsPlaying(false)
         setCurrentTime(0)
       },
@@ -362,6 +387,64 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setMediaError(null)
   }, [])
 
+  // Spec #90 — the persistence layer reads and drives the player through
+  // this port. Built over refs and stable callbacks, so it is created once.
+  const port = useMemo<PlayerPort>(
+    () => ({
+      getTrack: () => trackRef.current,
+      getLogicalPosition: () => {
+        if (engineKindRef.current === 'youtube') return Math.max(0, youtubeEngineRef.current?.getCurrentTime() ?? 0)
+        return Math.max(0, (nativeEngineRef.current?.getCurrentTime() ?? 0) - activeOffsetRef.current)
+      },
+      getLogicalDuration: () => {
+        const engineDuration = currentEngine()?.getDuration() ?? 0
+        if (!Number.isFinite(engineDuration) || engineDuration <= 0) return null
+        const logical = engineKindRef.current === 'youtube' ? engineDuration : engineDuration - activeOffsetRef.current
+        return logical > 0 ? logical : null
+      },
+      isPlaying: () => currentEngine()?.isPlaying() ?? false,
+      isEnded: () => engineKindRef.current === 'native' && Boolean(mediaRef.current?.ended),
+      getRendition: () => renditionRef.current,
+      // Restored sessions always start on the native engine; the YouTube
+      // rendition needs a visible surface and is opt-in per episode.
+      restore: (next, { logicalPosition, rendition, autoplay }) => {
+        const native = nativeEngineRef.current
+        if (!native || trackRef.current) return
+        const desired = selectSource(next, rendition ?? (trackMediaKind(next) === 'video' ? 'video' : 'audio'))
+        const seekTo = logicalPosition > 0 ? logicalPosition + desired.offset : null
+        setRendition(desired.rendition)
+        activeOffsetRef.current = desired.offset
+        trackRef.current = next
+        setTrack(next)
+        setCurrentTime(seekTo ?? 0)
+        setDuration(next.durationHint ?? 0)
+        beginSource(desired.url, seekTo, preferredRateRef.current)
+        // Best-effort: a refused autoplay (NotAllowedError) leaves the bar
+        // paused at the position — the guaranteed outcome, not an error.
+        if (autoplay) native.play().catch(() => setIsPlaying(false))
+      },
+      applyLateSeek: (episodeId, logicalPosition) => {
+        if (trackRef.current?.episodeId !== episodeId || engineKindRef.current !== 'native') return false
+        return nativeEngineRef.current?.setPendingSeek(logicalPosition + activeOffsetRef.current) ?? false
+      },
+      rewindToStart: () => {
+        const engine = currentEngine()
+        if (!engine) return
+        engine.pause()
+        const top = engineKindRef.current === 'youtube' ? 0 : activeOffsetRef.current
+        engine.seekTo(top)
+        setCurrentTime(top)
+      },
+    }),
+    [beginSource, currentEngine, preferredRateRef, setRendition]
+  )
+  // Declared after the native-engine effect: its restore effect needs the
+  // engine to exist.
+  const persistence = usePlaybackPersistence(port)
+  useLayoutEffect(() => {
+    persistenceRef.current = persistence
+  }, [persistence])
+
   const play = useCallback((next: PlayerTrack, options?: PlayOptions) => {
     const native = nativeEngineRef.current
     if (!native) return
@@ -374,6 +457,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       // rather than a user choice — adopt the manifest's kind; otherwise
       // respect the rendition the user is on.
       const hadManifest = Boolean(current.playback)
+      persistence.noteUserAction()
       trackRef.current = next
       setTrack(next)
       if (engineKindRef.current === 'youtube') {
@@ -383,6 +467,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const yt = youtubeEngineRef.current
         if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
           yt?.seekTo(Math.max(0, options.startAt))
+        } else if (options?.restart) {
+          yt?.seekTo(0)
         }
         void yt?.play()
         return
@@ -399,7 +485,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const resumeAt =
           options?.startAt !== undefined && Number.isFinite(options.startAt)
             ? Math.max(0, options.startAt)
-            : Math.max(0, native.getCurrentTime() - activeOffsetRef.current + desired.offset)
+            : options?.restart
+              ? 0
+              : Math.max(0, native.getCurrentTime() - activeOffsetRef.current + desired.offset)
         const rate = native.getRate()
         activeOffsetRef.current = desired.offset
         beginSource(desired.url, resumeAt, rate)
@@ -408,6 +496,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
         native.seekTo(Math.max(0, options.startAt))
+      } else if (options?.restart) {
+        native.seekTo(0)
       }
       // Still inside user-gesture stack.
       native.play().catch(() => setIsPlaying(false))
@@ -418,29 +508,27 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // source and call play() synchronously so the initial play request
     // stays inside the click handler, otherwise Safari/iOS reject it as
     // autoplay (NotAllowedError).
+    const kind = trackMediaKind(next)
+    const desired = selectSource(next, kind === 'video' ? 'video' : 'audio')
+    // Spec #90 — flushes the outgoing track while the engines still report
+    // it, then resolves where this one starts: an explicit startAt, else the
+    // stored position (logical → this asset's timeline), else the top.
+    const seekTo = persistence.startTrack(next, options, desired.offset)
     if (engineKindRef.current === 'youtube') {
       youtubeEngineRef.current?.pause()
       setEngineKind('native')
       setAvailableRates(null)
     }
-    const kind = trackMediaKind(next)
-    const desired = selectSource(next, kind === 'video' ? 'video' : 'audio')
     setRendition(desired.rendition)
     activeOffsetRef.current = desired.offset
     trackRef.current = next
     setTrack(next)
-    setCurrentTime(0)
+    setCurrentTime(seekTo ?? 0)
     setDuration(next.durationHint ?? 0)
-    beginSource(
-      desired.url,
-      options?.startAt !== undefined && Number.isFinite(options.startAt)
-        ? Math.max(0, options.startAt)
-        : null,
-      // Spec #72 §5 — a fresh source starts at the persisted preference.
-      preferredRateRef.current
-    )
+    // Spec #72 §5 — a fresh source starts at the persisted preference.
+    beginSource(desired.url, seekTo, preferredRateRef.current)
     native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, preferredRateRef, setEngineKind, setRendition])
+  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition])
 
   const pause = useCallback(() => {
     currentEngine()?.pause()
@@ -490,6 +578,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   )
 
   const stop = useCallback(() => {
+    // Spec #90 — record the Stop before teardown: it needs the track and
+    // position, and hides the episode from restore on every device.
+    persistence.onStop()
     // Full session teardown: the iframe player is destroyed (spec #62 §5 —
     // this is the one path that does), the native engine just detaches its
     // source; the stable nodes themselves stay mounted.
@@ -510,7 +601,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setMediaError(null)
     setAvailableRates(null)
-  }, [setEngineKind, setRendition])
+  }, [persistence, setEngineKind, setRendition])
 
   const isCurrent = useCallback(
     (episodeId: string) => track?.episodeId === episodeId,
@@ -613,6 +704,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       // same-episode entry carries the native engine's live rate instead.
       let rate: number | null = preferredRateRef.current
       if (current && current.episodeId === next.episodeId) {
+        persistence.noteUserAction()
         if (engineKindRef.current === 'youtube') {
           // Already on the YouTube rendition — just make sure it plays.
           trackRef.current = next
@@ -623,6 +715,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         startAt = Math.max(0, (native?.getCurrentTime() ?? 0) - activeOffsetRef.current)
         rate = native?.getRate() ?? null
       } else {
+        // A new episode enters YouTube at the top (no offset mapping to
+        // resume onto, spec #62 §8); the outgoing track is flushed first.
+        persistence.startTrack(next, { restart: true }, 0)
         setCurrentTime(0)
         setDuration(next.durationHint ?? 0)
       }
@@ -637,7 +732,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setMediaError(null)
       engine.load({ videoId }, { seekTo: startAt, rate, autoplay: true })
     },
-    [ensureYouTubeEngine, preferredRateRef, setEngineKind, setRendition]
+    [ensureYouTubeEngine, persistence, preferredRateRef, setEngineKind, setRendition]
   )
 
   const registerTheaterSlot = useCallback((episodeId: string, el: HTMLElement) => {
@@ -833,6 +928,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return () => cancelAnimationFrame(handle)
   }, [positionTarget])
 
+  const markListened = persistence.markListened
+
   const showNativeControls = presentation === 'theater' || presentation === 'floating'
   const captionsUrl = track?.playback?.captions_url ?? null
   const posterUrl = track?.playback?.poster_url ?? track?.artworkUrl ?? undefined
@@ -856,6 +953,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       skip,
       setRate,
       stop,
+      markListened,
       isCurrent,
       getCurrentTime,
       mediaKind,
@@ -897,6 +995,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       skip,
       setRate,
       stop,
+      markListened,
       isCurrent,
       getCurrentTime,
       mediaKind,

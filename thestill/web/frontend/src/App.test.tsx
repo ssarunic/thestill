@@ -11,6 +11,8 @@ import App from './App'
 const auth = vi.hoisted(() => ({ isAnonymous: false }))
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => auth,
+  // The player's restore waits on auth; null = no AuthProvider to wait for.
+  useOptionalAuth: () => null,
 }))
 
 vi.mock('./PublicApp', () => ({

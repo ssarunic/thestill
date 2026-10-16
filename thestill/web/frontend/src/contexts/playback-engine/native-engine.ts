@@ -23,6 +23,9 @@ function describeMediaError(error: MediaError | null): string {
   }
 }
 
+// A late resume seek only moves a source that has barely started.
+const LATE_SEEK_WINDOW_SECONDS = 5
+
 export class NativeEngine implements PlaybackEngine {
   readonly kind = 'native' as const
 
@@ -31,6 +34,9 @@ export class NativeEngine implements PlaybackEngine {
   // Deferred to loadedmetadata — browsers silently clamp seeks on
   // unloaded media.
   private pendingSeek: number | null = null
+  // A seek the user made on this source. A late resume position (spec #90)
+  // never overrides it.
+  private userSeeked = false
   // Last URL assigned. Also the error-suppression guard: clearing src
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
@@ -86,6 +92,7 @@ export class NativeEngine implements PlaybackEngine {
     this.el.src = source.url
     this.url = source.url
     this.pendingSeek = opts?.seekTo ?? null
+    this.userSeeked = false
     const rate = opts?.rate
     if (rate != null && Number.isFinite(rate) && rate > 0) {
       // Loading resets playbackRate to defaultPlaybackRate; set both so
@@ -103,6 +110,7 @@ export class NativeEngine implements PlaybackEngine {
     this.el.load()
     this.url = null
     this.pendingSeek = null
+    this.userSeeked = false
   }
 
   play(): Promise<void> {
@@ -114,7 +122,25 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   seekTo(seconds: number): void {
-    if (Number.isFinite(seconds)) this.el.currentTime = Math.max(0, seconds)
+    if (!Number.isFinite(seconds)) return
+    this.userSeeked = true
+    this.el.currentTime = Math.max(0, seconds)
+  }
+
+  // Spec #90 — apply a resume position learned after the source was
+  // assigned (a parallel fetch for surfaces whose payload had none). Before
+  // metadata it replaces the deferred seek; afterwards it seeks only while
+  // the source is still near its start and the user has not seeked.
+  // Returns false when the position no longer applies.
+  setPendingSeek(seconds: number): boolean {
+    if (this.url === null || !Number.isFinite(seconds) || seconds < 0) return false
+    if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) {
+      this.pendingSeek = seconds
+      return true
+    }
+    if (this.userSeeked || this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
+    this.el.currentTime = seconds
+    return true
   }
 
   setRate(rate: number): void {

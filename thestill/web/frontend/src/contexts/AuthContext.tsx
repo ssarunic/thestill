@@ -156,3 +156,9 @@ export function useAuth() {
   }
   return context
 }
+
+// For providers that also render outside an AuthProvider (isolated tests):
+// null instead of a throw.
+export function useOptionalAuth(): AuthContextType | null {
+  return useContext(AuthContext)
+}

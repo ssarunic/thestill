@@ -37,6 +37,7 @@ import EntityFilterBar from './episode-entities/EntityFilterBar'
 import EntityBranchProgress from './EntityBranchProgress'
 import type { FailureType, EntityType, EpisodeEntity, EpisodeState, EpisodeTask, MentionLite, SummaryCitation } from '../api/types'
 import { ENTITY_BRANCH_STAGES } from '../constants/stages'
+import { buildPlayerTrack } from '../utils/playerTrack'
 
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
@@ -375,23 +376,7 @@ export default function EpisodeReader({
   // One track object for every play entry point on this page (play button,
   // segment seek, theater surface) — includes the spec #61 playback-asset
   // manifest so video episodes start on the video rendition.
-  const playerTrack = useMemo(
-    () =>
-      episode
-        ? {
-            episodeId: episode.id,
-            podcastSlug: podcastSlug!,
-            episodeSlug: episodeSlug!,
-            title: episode.title,
-            podcastTitle: episode.podcast_title,
-            audioUrl: episode.audio_url,
-            artworkUrl: episode.image_url ?? episode.podcast_image_url,
-            durationHint: episode.duration,
-            playback: episode.playback ?? null,
-          }
-        : null,
-    [episode, podcastSlug, episodeSlug],
-  )
+  const playerTrack = useMemo(() => (episode ? buildPlayerTrack(episode) : null), [episode])
 
   const handleSegmentSeek = useCallback(
     (seconds: number) => {

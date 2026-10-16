@@ -13,6 +13,9 @@ import {
   type PlayerTrack,
 } from './PlayerContext'
 import type { PlaybackManifest } from '../api/types'
+import * as listeningApi from '../api/listening'
+import { listeningCache } from './listening/listeningCache'
+import { readSnapshot, writeSnapshot } from './listening/sessionSnapshot'
 
 // ---------------------------------------------------------------------------
 // YouTube IFrame API mock (spec #62) — shared fixture; no script tag is
@@ -20,6 +23,16 @@ import type { PlaybackManifest } from '../api/types'
 // ---------------------------------------------------------------------------
 
 import { fakePlayers, resetFakePlayers } from './playback-engine/youtube-player-fake'
+
+// Spec #90 — the listening transport is the one seam the player's
+// persistence layer talks to; every test starts with "never played".
+vi.mock('../api/listening', () => ({
+  putListening: vi.fn(),
+  getListening: vi.fn(),
+  getLatestListening: vi.fn(),
+  listInProgress: vi.fn(),
+}))
+const listening = vi.mocked(listeningApi)
 
 vi.mock('./playback-engine/youtube-iframe-api', async () => {
   const { fakeYouTubeApi } = await import('./playback-engine/youtube-player-fake')
@@ -206,6 +219,14 @@ beforeEach(() => {
   installMediaStubs()
   mediaSessionMock = installMediaSessionMock()
   localStorage.clear()
+  sessionStorage.clear()
+  listeningCache.clear()
+  listening.putListening.mockReset().mockResolvedValue({
+    kind: 'ok',
+    ack: { accepted: true, completed: false, listening: null },
+  })
+  listening.getListening.mockReset().mockResolvedValue(null)
+  listening.getLatestListening.mockReset().mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -775,5 +796,262 @@ describe('media layer z-index follows the slot host (spec #71 ladder, #72 2c)', 
     })
     expect(layer().style.zIndex).toBe('71')
     act(() => unregister())
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Spec #90 — continue listening
+// ---------------------------------------------------------------------------
+
+describe('spec #90 — listening progress', () => {
+  const stored = (position: number, overrides: Record<string, unknown> = {}) => ({
+    position_seconds: position,
+    duration_seconds: 3600,
+    completed_at: null,
+    updated_at: '2026-10-16T09:00:00Z',
+    ...overrides,
+  })
+  const writes = () =>
+    listening.putListening.mock.calls.map(([episodeId, body, options]) => ({ episodeId, ...body, ...options }))
+  const settle = () => act(async () => {})
+  const metadata = (video: HTMLVideoElement) =>
+    act(() => {
+      video.dispatchEvent(new Event('loadedmetadata'))
+      video.dispatchEvent(new Event('seeked'))
+    })
+
+  describe('resume on play', () => {
+    it('resumes a part-listened episode at its stored position', () => {
+      listeningCache.seed('ep-audio', stored(500))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      metadata(video)
+      expect(video.currentTime).toBe(500)
+    })
+
+    it('an explicit startAt beats the stored position', () => {
+      listeningCache.seed('ep-audio', stored(500))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack, { startAt: 30 }))
+      metadata(video)
+      expect(video.currentTime).toBe(30)
+    })
+
+    it('a completed episode, or restart, starts at the top', () => {
+      listeningCache.seed('ep-audio', stored(0, { completed_at: '2026-10-16T09:00:00Z' }))
+      listeningCache.seed('ep-video', stored(500))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      metadata(video)
+      expect(video.currentTime).toBe(0)
+      act(() => ctx.play(videoTrack, { restart: true }))
+      metadata(video)
+      expect(video.currentTime).toBe(0)
+    })
+
+    it('maps logical positions onto a video rendition with a timeline offset, both ways', async () => {
+      listeningCache.seed('ep-video', stored(100))
+      const { video } = renderPlayer()
+      act(() => ctx.play(videoTrack)) // video asset: timeline_offset 2
+      metadata(video)
+      expect(video.currentTime).toBe(102)
+
+      video.currentTime = 150
+      act(() => ctx.pause())
+      await settle()
+      expect(writes().at(-1)).toMatchObject({ episodeId: 'ep-video', event: 'pause', position_seconds: 148 })
+    })
+
+    it('fetches an unknown position in parallel and applies it as a late seek', async () => {
+      listening.getListening.mockResolvedValue(stored(700))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      expect(listening.getListening).toHaveBeenCalledWith('ep-audio')
+      await settle()
+      metadata(video)
+      expect(video.currentTime).toBe(700)
+    })
+
+    it('writes nothing until the resume seek lands', async () => {
+      listeningCache.seed('ep-audio', stored(1934))
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      act(() => ctx.pause()) // engine still at 0:00 — must not overwrite 1934
+      await settle()
+      expect(listening.putListening).not.toHaveBeenCalled()
+
+      metadata(video)
+      act(() => ctx.resume())
+      act(() => ctx.pause())
+      await settle()
+      expect(writes()).toEqual([expect.objectContaining({ event: 'pause', position_seconds: 1934 })])
+    })
+  })
+
+  describe('write cadence', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('ticks every 15 s of playback with the logical position', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+      listeningCache.seed('ep-audio', null) // known never played: no lookup, no hold
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 20
+      act(() => {
+        vi.advanceTimersByTime(14_000)
+        video.dispatchEvent(new Event('timeupdate'))
+      })
+      expect(listening.putListening).not.toHaveBeenCalled()
+      act(() => {
+        vi.advanceTimersByTime(1_000)
+        video.dispatchEvent(new Event('timeupdate'))
+      })
+      await settle()
+      expect(writes()).toEqual([
+        expect.objectContaining({ episodeId: 'ep-audio', event: 'tick', position_seconds: 20, seq: 1 }),
+      ])
+    })
+
+    it('flushes on pagehide with keepalive while playing', async () => {
+      listeningCache.seed('ep-audio', null)
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 42
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'))
+      })
+      expect(writes()).toEqual([expect.objectContaining({ event: 'pause', position_seconds: 42, keepalive: true })])
+    })
+
+    it('flushes the outgoing episode before a track change', async () => {
+      listeningCache.seed('ep-audio', null)
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 61
+      act(() => ctx.play(videoTrack))
+      await settle()
+      expect(writes()[0]).toMatchObject({ episodeId: 'ep-audio', event: 'pause', position_seconds: 61 })
+    })
+
+    it('Stop writes before teardown and clears the tab snapshot', async () => {
+      listeningCache.seed('ep-audio', null)
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 90
+      act(() => ctx.stop())
+      await settle()
+      expect(writes().at(-1)).toMatchObject({ episodeId: 'ep-audio', event: 'stop', position_seconds: 90 })
+      expect(readSnapshot()).toBeNull()
+      expect(ctx.track).toBeNull()
+    })
+
+    it('marking the current track played pauses and rewinds it, and its session stops writing', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 300
+      await act(() => ctx.markListened('ep-audio', true))
+      expect(ctx.isPlaying).toBe(false)
+      expect(video.currentTime).toBe(0)
+      expect(writes().at(-1)).toMatchObject({ event: 'mark_played', seq: 0 })
+
+      listening.putListening.mockClear()
+      act(() => {
+        vi.advanceTimersByTime(30_000)
+        video.dispatchEvent(new Event('timeupdate'))
+      })
+      await settle()
+      expect(listening.putListening).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('restore on load', () => {
+    const snapshot = (overrides: Partial<Parameters<typeof writeSnapshot>[0]> = {}) =>
+      writeSnapshot({
+        track: audioTrack,
+        logicalPosition: 1234,
+        wasPlaying: false,
+        rendition: 'audio',
+        pending: null,
+        savedAt: Date.now() - 10_000,
+        ...overrides,
+      })
+
+    it('restores a same-tab reload from the snapshot without the network', () => {
+      snapshot()
+      const { video } = renderPlayer()
+      expect(ctx.track?.episodeId).toBe('ep-audio')
+      expect(video.src).toBe('https://cdn.test/ep1.mp3')
+      expect(listening.getLatestListening).not.toHaveBeenCalled()
+      expect(playSpy).not.toHaveBeenCalled()
+      metadata(video)
+      expect(video.currentTime).toBe(1234)
+    })
+
+    it('re-sends the pending write carried by the snapshot', async () => {
+      const body = { event: 'tick' as const, position_seconds: 1234, duration_seconds: 3600, session_id: 'old', seq: 9 }
+      snapshot({ pending: { episodeId: 'ep-audio', body } })
+      renderPlayer()
+      await settle()
+      expect(listening.putListening).toHaveBeenCalledWith('ep-audio', body, { keepalive: false })
+    })
+
+    it('a refused autoplay leaves the bar paused, without a media error', async () => {
+      snapshot({ wasPlaying: true })
+      const play = HTMLMediaElement.prototype.play
+      HTMLMediaElement.prototype.play = () => Promise.reject(new DOMException('blocked', 'NotAllowedError'))
+      try {
+        renderPlayer()
+        await settle()
+      } finally {
+        HTMLMediaElement.prototype.play = play
+      }
+      expect(ctx.track?.episodeId).toBe('ep-audio')
+      expect(ctx.isPlaying).toBe(false)
+      expect(ctx.mediaError).toBeNull()
+    })
+
+    it('resumes playing after a reload when the browser allows it', async () => {
+      snapshot({ wasPlaying: true })
+      renderPlayer()
+      await settle()
+      expect(playSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('falls back to the latest unfinished episode, paused', async () => {
+      snapshot({ savedAt: Date.now() - 31 * 60_000 })
+      listening.getLatestListening.mockResolvedValue({
+        listening: stored(321),
+        episode: {
+          id: 'ep-latest',
+          slug: 'latest',
+          title: 'Latest',
+          podcast_id: 'p',
+          podcast_slug: 'pod',
+          podcast_title: 'The Pod',
+          audio_url: 'https://cdn.test/latest.mp3',
+          image_url: null,
+          podcast_image_url: null,
+          duration: 3600,
+          playback: null,
+        },
+      })
+      const { video } = renderPlayer()
+      await settle()
+      expect(ctx.track?.episodeId).toBe('ep-latest')
+      expect(playSpy).not.toHaveBeenCalled()
+      metadata(video)
+      expect(video.currentTime).toBe(321)
+    })
+
+    it('a user play before the restore lands wins', async () => {
+      let resolveLatest: (v: unknown) => void = () => {}
+      listening.getLatestListening.mockReturnValue(new Promise((r) => (resolveLatest = r)) as never)
+      renderPlayer()
+      act(() => ctx.play(audioTrack))
+      resolveLatest({ listening: stored(321), episode: { id: 'ep-latest' } })
+      await settle()
+      expect(ctx.track?.episodeId).toBe('ep-audio')
+    })
   })
 })
