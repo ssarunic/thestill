@@ -673,7 +673,7 @@ anonymous e2e contract. Transcripts stay behind sign-in.
 | Public quote SQL in the entity repositories (D1) | One shared module, `repositories/public_quotes.py`, run by both backends through `public_quote_queries()` | One SQL text for SQLite and Postgres; the contract test runs it on both |
 | Quote gate: ≥ 12 words, skip the last 60 s | ≥ 60 characters, skip the first 90 s, sponsor phrases excluded, one row per segment | Characters are cheap in SQL; the noise on real data was at the start (cold opens, ad reads), not the end |
 | Featured quote from the last 90 days only | Last 90 days first, then any age; prefers a sentence that stands alone | Quiet people would otherwise have no featured quote; mid-sentence openers ("He said…") read badly |
-| Follow on a public page follows after sign-in | Sign-in returns to the page; the visitor presses Follow again | Auto-follow needs a signed intent token through OAuth; deferred |
+| Follow on a public page follows after sign-in | Built in [#102](102-sign-in-page.md): a pending follow set on `/login`, completed on the signed-in show page | No token through OAuth needed; `sessionStorage` set by the click keeps a URL from following anything |
 | Separate `Person.tsx` / `Entity.tsx`, `layouts/` | One `EntityPage.tsx` (person vs thing by type), `components/public/PublicLayout.tsx`, `ui.tsx` + `helpers.ts` | The two pages share 80 % of their modules |
 | Summary route with `allow_generate=False` | Calls only the stored-summary service methods | Same guarantee, no new flag |
 | `?q=` quote-specific OG description | Not built | The page lands on and highlights the quote; the share preview uses the episode description |
@@ -727,4 +727,4 @@ anonymous e2e contract. Transcripts stay behind sign-in.
   summary; the positioning line "Keep up with your favourite podcasts in
   minutes. Read the key ideas, check the source, and get your morning
   briefing."; curating launch examples and suppressing unreviewed entity
-  links on public pages; Follow intent that survives sign-in.
+  links on public pages. (Follow surviving sign-in is built in spec #102.)
