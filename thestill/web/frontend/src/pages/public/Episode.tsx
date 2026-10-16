@@ -173,7 +173,7 @@ export default function Episode() {
               {summary.data && summary.data.more_sections.length > 0 && (
                 <div className="ts-summary-more">
                   <Button variant="secondary" to={readFullSummary}>
-                    Sign in to read the full summary
+                    Read the full summary
                   </Button>
                   <span className="ts-meta">Also: {summary.data.more_sections.join(' · ')}</span>
                 </div>

@@ -198,7 +198,7 @@ exists), with section numbers dropped. The other sections never leave
 the server; `more_sections` lists their titles so the page can show
 what sign-in unlocks. The split happens in `api_public._summary_lead`,
 not in the browser, so scrapers get the same partial text as readers.
-The episode page's "Sign in to read the full summary" button goes to
+The episode page's "Read the full summary" button goes to
 `/login?intent=summary` and returns to the episode.
 
 Implemented as a keyword flag on the service call
