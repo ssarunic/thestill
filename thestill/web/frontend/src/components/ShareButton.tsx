@@ -1,5 +1,4 @@
-import { useCallback } from 'react'
-import { useToast } from './Toast'
+import { useShareAction } from '../hooks/useShareAction'
 import Button, { LinkIcon, ShareIcon } from './Button'
 
 interface ShareButtonProps {
@@ -15,38 +14,7 @@ interface ShareButtonProps {
  * falling back to copy-to-clipboard on desktop/unsupported browsers.
  */
 export default function ShareButton({ title, url, className = '', iconOnly = false }: ShareButtonProps) {
-  const { showToast } = useToast()
-  // Check if Web Share API is available
-  const canShare = typeof navigator !== 'undefined' && !!navigator.share
-
-  const handleShare = useCallback(async () => {
-    if (canShare) {
-      try {
-        await navigator.share({
-          title,
-          url,
-        })
-        // Note: No success toast for native share - OS handles feedback
-      } catch (err) {
-        // User cancelled share or error occurred
-        if (err instanceof Error && err.name !== 'AbortError') {
-          // Only show error if it wasn't user cancellation
-          showToast('Failed to share', 'error')
-        }
-      }
-    } else {
-      // Fallback: copy to clipboard
-      try {
-        await navigator.clipboard.writeText(url)
-        showToast('Link copied to clipboard', 'success')
-      } catch {
-        showToast('Failed to copy link', 'error')
-      }
-    }
-  }, [canShare, title, url, showToast])
-
-  const label = canShare ? 'Share' : 'Copy link'
-  const hint = canShare ? 'Share episode' : 'Copy link to clipboard'
+  const { share: handleShare, canShare, label, hint } = useShareAction(title, url)
 
   if (iconOnly) {
     return (

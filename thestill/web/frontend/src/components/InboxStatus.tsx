@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { InboxEntry, InboxState } from '../api/types'
 import { useInboxEntry, useSendToInbox, useSetInboxState } from '../hooks/useApi'
+import { useDismissablePopover } from '../hooks/useDismissablePopover'
 import Button, { InboxFilledIcon, InboxIcon } from './Button'
 import { formatDeliveredDate, SAVED_VIEW_HREF } from '../utils/inbox'
 
@@ -87,26 +88,7 @@ export function InboxActionButton({ episodeId }: { episodeId: string }) {
   const { data, isLoading, isError } = useInboxEntry(episodeId)
   const { mutate: send, isPending } = useSendToInbox()
   const [error, setError] = useState<string | null>(null)
-  const [open, setOpen] = useState(false)
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    const onPointer = (e: MouseEvent | TouchEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onPointer)
-    document.addEventListener('touchstart', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onPointer)
-      document.removeEventListener('touchstart', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  const { open, setOpen, wrapRef } = useDismissablePopover()
 
   // Unknown is not "not in inbox": render nothing rather than guess.
   if (isLoading || isError || !data) return null

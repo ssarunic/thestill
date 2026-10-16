@@ -1,15 +1,17 @@
 import type { ReactNode, Ref } from 'react'
 import { Link } from 'react-router-dom'
-import type { EpisodeDetail } from '../../api/types'
+import type { EpisodeDetail, ListeningSummary } from '../../api/types'
 import PageHero from '../PageHero'
 import ActionRow from '../ActionRow'
 import Artwork from '../Artwork'
 import { artworkFrameClass } from '../artworkRoles'
 import MetaEyebrow from '../MetaEyebrow'
 import Button, { ChevronRightIcon, PauseIcon, PlayIcon, YouTubeIcon } from '../Button'
-import ShareButton from '../ShareButton'
+import EpisodeMoreMenu from '../EpisodeMoreMenu'
 import ExpandableDescription from '../ExpandableDescription'
+import { ListeningLabel, ListeningMeter } from '../ListeningProgress'
 import { episodeNumberLabel, episodeTypeLabel, formatEyebrowDate, formatMinutes } from '../../utils/episodeFormat'
+import { listeningState, progressFraction, timeLeftLabel } from '../../utils/listeningFormat'
 
 export interface EpisodePlaybackState {
   /** The player's loaded track is this episode. */
@@ -35,6 +37,10 @@ interface EpisodeHeaderProps {
    * its four slots at 320 px (spec #76 §3.2).
    */
   inboxAction?: ReactNode
+  /** Spec #90 — the user's listening progress on this episode. */
+  listening?: ListeningSummary | null
+  onPlayFromStart?: () => void
+  onMarkPlayed?: (played: boolean) => Promise<void>
 }
 
 /**
@@ -52,11 +58,27 @@ export default function EpisodeHeader({
   onWatchVideo,
   shareUrl,
   inboxAction,
+  listening = null,
+  onPlayFromStart = () => {},
+  onMarkPlayed = () => Promise.resolve(),
 }: EpisodeHeaderProps) {
   const { isCurrent, isPlaying, isLoading, onToggle } = playback
   const minutes = formatMinutes(episode.duration)
-  const primaryLabel = isPlaying ? 'Pause' : isCurrent ? 'Resume' : (minutes ?? 'Play')
-  const primaryName = isPlaying ? 'Pause' : isCurrent ? 'Resume' : `Play episode${minutes ? `, ${minutes}` : ''}`
+  // Spec #90 — a part-listened episode's primary action carries the time
+  // left the way an unplayed one carries its duration; a played one plays
+  // from the top and reads like an unplayed one.
+  const state = listeningState(listening)
+  const left = timeLeftLabel(listening, episode.duration)
+  const fraction = progressFraction(listening, episode.duration)
+  const resumable = state === 'in_progress'
+  const primaryLabel = isPlaying ? 'Pause' : isCurrent ? 'Resume' : resumable ? (left ?? 'Resume') : (minutes ?? 'Play')
+  const primaryName = isPlaying
+    ? 'Pause'
+    : isCurrent
+      ? 'Resume'
+      : resumable
+        ? `Resume episode${left ? `, ${left}` : ''}`
+        : `Play episode${minutes ? `, ${minutes}` : ''}`
   const busy = isLoading && !isPlaying
   const description = episode.description_html || episode.description
 
@@ -79,6 +101,8 @@ export default function EpisodeHeader({
             episodeNumberLabel(episode.season_number, episode.episode_number),
             episodeTypeLabel(episode.episode_type),
             episode.explicit ? 'Explicit' : null,
+            state === 'played' ? <ListeningLabel label={null} played /> : null,
+            resumable && fraction !== null ? <ListeningMeter fraction={fraction} label={left ?? 'Listening progress'} /> : null,
           ]}
         />
       }
@@ -120,7 +144,14 @@ export default function EpisodeHeader({
                 <span className="sr-only">Watch video</span>
               </Button>
             )}
-            <ShareButton iconOnly title={`${episode.title} - ${episode.podcast_title}`} url={shareUrl} />
+            <EpisodeMoreMenu
+              shareTitle={`${episode.title} - ${episode.podcast_title}`}
+              shareUrl={shareUrl}
+              canPlayFromStart={resumable || (isCurrent && !isPlaying)}
+              onPlayFromStart={onPlayFromStart}
+              played={state === 'played'}
+              onMarkPlayed={onMarkPlayed}
+            />
             {inboxAction}
           </>
         }

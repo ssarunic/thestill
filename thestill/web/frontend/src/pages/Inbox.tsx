@@ -4,13 +4,17 @@ import { useArrivingSoon, useInboxInfinite } from '../hooks/useApi'
 import { useDebouncedSearchParam } from '../hooks/useDebouncedSearchParam'
 import type { InboxItem, InboxState } from '../api/types'
 import BriefingCard from '../components/BriefingCard'
+import ContinueListening from '../components/ContinueListening'
 import Button, { PlusIcon } from '../components/Button'
 import ImportEpisodeModal from '../components/ImportEpisodeModal'
 import ListGroup from '../components/ListGroup'
 import ListRow, { ListRowArtwork } from '../components/ListRow'
 import SearchBox from '../components/SearchBox'
 import { ProgressPill } from '../components/InboxProgress'
+import { ArtworkWithProgress, ListeningLabel } from '../components/ListeningProgress'
+import { useResolvedListening } from '../hooks/useListening'
 import { arrivingProgress, deriveProgress } from '../utils/inbox'
+import { listeningState, progressFraction, timeLeftLabel } from '../utils/listeningFormat'
 
 // Compact, single-token timestamp: today → "12:50", this year → "8 Aug",
 // older → "8 Aug 24". Never wraps, so the meta row stays one line on phones.
@@ -72,6 +76,11 @@ function InboxRow({ item }: { item: InboxItem }) {
   // means to the reader); the list stays sorted by delivery, and the delivery
   // time lives in the tooltip. Feeds without a pub date fall back to delivery.
   const shownAt = episode.pub_date ?? entry.delivered_at
+  // Spec #90 — listening progress in the existing artwork and meta line;
+  // no extra row height (spec #73).
+  const listening = useResolvedListening(episode.id, item.listening)
+  const played = listeningState(listening) === 'played'
+  const timeLeft = timeLeftLabel(listening, episode.duration)
   return (
     <ListRow
       align="start"
@@ -80,7 +89,12 @@ function InboxRow({ item }: { item: InboxItem }) {
       className={isDismissed ? 'opacity-60' : ''}
       // Episode artwork first (matches the reader header), podcast artwork as
       // the fallback when the feed item carries none.
-      leading={<ListRowArtwork sources={[episode.image_url, podcast.image_url]} />}
+      leading={
+        <ArtworkWithProgress
+          artwork={<ListRowArtwork sources={[episode.image_url, podcast.image_url]} />}
+          fraction={progressFraction(listening, episode.duration)}
+        />
+      }
       overline={
         <div className="flex items-center gap-1.5">
           {entry.state === 'saved' && <SavedIcon />}
@@ -89,6 +103,11 @@ function InboxRow({ item }: { item: InboxItem }) {
           </p>
           {entry.source === 'import' && (
             <span className="text-xs text-gray-400 italic flex-shrink-0">imported</span>
+          )}
+          {(played || timeLeft) && (
+            <span className="text-xs text-gray-500">
+              <ListeningLabel label={timeLeft} played={played} />
+            </span>
           )}
           <time
             dateTime={shownAt}
@@ -289,9 +308,10 @@ export default function Inbox() {
 
       <ViewSwitch view={view} onChange={setView} />
 
-      {/* The briefing and the arriving strip belong to the whole inbox, not
-          to a search result or a state-filtered view. */}
+      {/* The briefing, Continue listening and the arriving strip belong to
+          the whole inbox, not to a search result or a state-filtered view. */}
       {!isFiltering && view === 'all' && <BriefingCard />}
+      {!isFiltering && view === 'all' && <ContinueListening />}
       {!isFiltering && view === 'all' && <ArrivingSoon />}
 
       {isLoading ? (

@@ -23,11 +23,24 @@ test.describe('episode hero on a phone (spec #76)', () => {
     const titleBox = (await title.boundingBox())!
     // 22 px / 1.2 → one line is ~26 px; the gate must be exercised by a wrap.
     expect(titleBox.height).toBeGreaterThanOrEqual(50)
-    await expect(page.getByRole('button', { name: 'More' })).toBeVisible()
+    // Exact: the action row's ⋯ "More actions" (spec #90) also contains it.
+    await expect(page.getByRole('button', { name: 'More', exact: true })).toBeVisible()
 
     const tab = page.getByRole('button', { name: 'Summary' })
     await expect(tab).toBeVisible()
     const tabBox = (await tab.boundingBox())!
+    expect(tabBox.y + tabBox.height).toBeLessThanOrEqual(PHONE.height)
+  })
+
+  test('a part-listened episode keeps the tabs inside the first viewport', async ({ page }) => {
+    // Spec #90 — the eyebrow gains a progress meter; it must not wrap the
+    // hero onto an extra line.
+    await mockEpisodeApi(page, {
+      listening: { position_seconds: 1560, duration_seconds: 3480, completed_at: null, updated_at: '2026-10-16T09:00:00Z' },
+    })
+    await page.goto(EPISODE_PATH)
+    await expect(page.getByRole('progressbar', { name: '32 min left' })).toBeVisible()
+    const tabBox = (await page.getByRole('button', { name: 'Summary' }).boundingBox())!
     expect(tabBox.y + tabBox.height).toBeLessThanOrEqual(PHONE.height)
   })
 
@@ -166,13 +179,13 @@ test.describe('action row at the narrowest supported width', () => {
   test('all four slots are 44 px targets and nothing overflows', async ({ page }) => {
     await mockEpisodeApi(page)
     await page.goto(EPISODE_PATH)
-    // Primary + Watch video + Share + Send to my inbox (spec #88; show notes
-    // live in the Information list): the full slot set the deferred overflow
-    // menu (spec §3.2) would have to handle.
+    // Primary + Watch video + More (Share, Play from beginning, Mark as
+    // played — spec #90) + Send to my inbox (spec #88; show notes live in the
+    // Information list): the full slot set.
     const controls = [
       page.getByRole('button', { name: 'Play episode, 58 min' }),
       page.getByRole('button', { name: 'Watch video' }),
-      page.getByRole('button', { name: /^(share|copy link)$/i }),
+      page.getByRole('button', { name: 'More actions' }),
       page.getByRole('button', { name: 'Send to my inbox' }),
     ]
     for (const control of controls) {
@@ -190,6 +203,33 @@ test.describe('action row at the narrowest supported width', () => {
     expect(Math.max(...centres) - Math.min(...centres)).toBeLessThanOrEqual(1)
     for (let i = 1; i < boxes.length; i += 1) expect(boxes[i]!.x).toBeGreaterThan(boxes[i - 1]!.x)
     expect(boxes[3]!.x + boxes[3]!.width).toBeLessThanOrEqual(320)
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+    expect(overflow).toBeLessThanOrEqual(0)
+  })
+
+  test('a part-listened episode keeps the four slots: the time left replaces the duration', async ({ page }) => {
+    // Spec #90 — "32 min left" is wider than "58 min"; the row must still fit.
+    await mockEpisodeApi(page, {
+      listening: {
+        position_seconds: 1560,
+        duration_seconds: 3480,
+        completed_at: null,
+        updated_at: '2026-10-16T09:00:00Z',
+      },
+    })
+    await page.goto(EPISODE_PATH)
+    const controls = [
+      page.getByRole('button', { name: 'Resume episode, 32 min left' }),
+      page.getByRole('button', { name: 'Watch video' }),
+      page.getByRole('button', { name: 'More actions' }),
+      page.getByRole('button', { name: 'Send to my inbox' }),
+    ]
+    for (const control of controls) await expect(control).toBeVisible()
+    const boxes = await Promise.all(controls.map((c) => c.boundingBox()))
+    const centres = boxes.map((b) => Math.round(b!.y + b!.height / 2))
+    expect(Math.max(...centres) - Math.min(...centres)).toBeLessThanOrEqual(1)
+    expect(boxes[3]!.x + boxes[3]!.width).toBeLessThanOrEqual(320)
+    await expect(page.getByRole('progressbar', { name: '32 min left' })).toBeVisible()
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     expect(overflow).toBeLessThanOrEqual(0)
   })

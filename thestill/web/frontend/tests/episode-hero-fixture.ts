@@ -37,7 +37,16 @@ function segment(id: number, start: number, speaker: string, text: string) {
   }
 }
 
-export async function mockEpisodeApi(page: Page) {
+// Spec #90 — the caller's listening progress on the episode, when a test
+// needs one (the default is "never played").
+export interface ListeningFixture {
+  position_seconds: number
+  duration_seconds: number | null
+  completed_at: string | null
+  updated_at: string
+}
+
+export async function mockEpisodeApi(page: Page, { listening = null }: { listening?: ListeningFixture | null } = {}) {
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       json: {
@@ -103,6 +112,7 @@ export async function mockEpisodeApi(page: Page) {
       json: {
         status: 'ok',
         timestamp: '2026-09-07T00:00:00Z',
+        listening,
         episode: {
           id: 'ep-uuid-1',
           podcast_id: 'p-1',
@@ -152,4 +162,14 @@ export async function mockEpisodeApi(page: Page) {
   await page.route('**/api/episodes/*/related*', (route) => route.fulfill({ json: { status: 'ok', episodes: [] } }))
   await page.route('**/api/inbox/**', (route) => route.fulfill({ json: { status: 'ok' } }))
   await page.route('**/api/briefings/**', (route) => route.fulfill({ status: 404, json: {} }))
+  // Spec #90 — the player restores on load and writes progress; by default
+  // nothing was ever played and every write is accepted.
+  await page.route('**/api/me/listening**', (route) => {
+    const request = route.request()
+    if (request.method() === 'PUT') {
+      return route.fulfill({ json: { status: 'ok', accepted: true, completed: false, listening: null } })
+    }
+    if (new URL(request.url()).pathname.endsWith('/listening')) return route.fulfill({ json: { status: 'ok', items: [] } })
+    return route.fulfill({ json: { status: 'ok', item: null } })
+  })
 }
