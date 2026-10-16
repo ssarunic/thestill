@@ -357,6 +357,59 @@ export function EpisodeRow({
   )
 }
 
+const GROUP_ORDER: PublicEntityType[] = ['person', 'company', 'product', 'topic']
+const GROUP_VISIBLE = 8
+
+/** People, companies, products and topics as separate titled lists, in the
+ * signed-in reader's order (EntityRail); each keeps the server's order and
+ * folds past eight behind "Show all". */
+export function EntityGroups<T extends { name: string; type: PublicEntityType; slug: string }>({
+  items,
+  titles,
+  count,
+}: {
+  items: T[]
+  titles: Record<PublicEntityType, string>
+  count: (item: T) => string
+}) {
+  const [open, setOpen] = useState<ReadonlySet<PublicEntityType>>(new Set())
+  return (
+    <>
+      {GROUP_ORDER.map((type) => {
+        const group = items.filter((item) => item.type === type)
+        if (group.length === 0) return null
+        const shown = open.has(type) ? group : group.slice(0, GROUP_VISIBLE)
+        return (
+          <section key={type} className="ts-rail-module">
+            <h3 className="ts-rail-label">{titles[type]}</h3>
+            <ul className="ts-related">
+              {shown.map((item) => (
+                <li key={item.slug}>
+                  <Link to={entityPath(item)}>
+                    <EntityDot type={item.type} />
+                    <span>{item.name}</span>
+                  </Link>
+                  <span className="ts-related-count">{count(item)}</span>
+                </li>
+              ))}
+            </ul>
+            {group.length > shown.length && (
+              <button
+                type="button"
+                className="ts-link ts-link-button"
+                style={{ fontSize: 13 }}
+                onClick={() => setOpen((prev) => new Set(prev).add(type))}
+              >
+                Show all ({group.length})
+              </button>
+            )}
+          </section>
+        )
+      })}
+    </>
+  )
+}
+
 export function GuestLine({ guests }: { guests: { name: string; slug: string; type: PublicEntityType }[] }) {
   if (!guests.length) return null
   return (

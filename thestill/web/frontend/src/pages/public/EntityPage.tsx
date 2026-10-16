@@ -2,7 +2,7 @@
 // People: what they said (filterable by topic, the filter lives in the URL
 // as ?about=), where they're heard, what others say about them. Things:
 // who's talking about it and the latest quotes naming it.
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, formatDate, type PublicEntityType, type PublicQuote } from '../../api/public'
 import {
@@ -10,6 +10,7 @@ import {
   Avatar,
   Button,
   EntityDot,
+  EntityGroups,
   EpisodeGroupHead,
   FactList,
   FilterChip,
@@ -23,6 +24,13 @@ import { usePublicEntity, usePublicEntityQuotes } from '../../hooks/usePublicApi
 import NotFound, { ModuleError } from './NotFound'
 
 const ENTITY_TYPES: PublicEntityType[] = ['person', 'company', 'product', 'topic']
+
+const RELATED_TITLES = {
+  person: 'Often discussed with: people',
+  company: 'Often discussed with: companies',
+  product: 'Often discussed with: products',
+  topic: 'Often discussed with: topics',
+} as const
 
 function QuoteStream({
   quotes,
@@ -389,22 +397,7 @@ export default function EntityPage() {
             </section>
           )}
           {data && data.related.length >= 3 && (
-            <section className="ts-rail-module">
-              <h3 className="ts-rail-label">Often discussed with</h3>
-              <ul className="ts-related">
-                {data.related.map((other) => (
-                  <Fragment key={`${other.type}-${other.slug}`}>
-                    <li>
-                      <Link to={entityPath(other)}>
-                        <EntityDot type={other.type} />
-                        <span>{other.name}</span>
-                      </Link>
-                      <span className="ts-related-count">{other.episode_count} ep</span>
-                    </li>
-                  </Fragment>
-                ))}
-              </ul>
-            </section>
+            <EntityGroups items={data.related} titles={RELATED_TITLES} count={(other) => `${other.episode_count} ep`} />
           )}
         </aside>
       </div>

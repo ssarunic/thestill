@@ -26,7 +26,6 @@ function SiteHeader() {
 }
 
 function SiteFooter() {
-  const signIn = useSignIn()
   return (
     <footer className="ts-footer">
       <div className="ts-footer-inner">
@@ -37,9 +36,6 @@ function SiteFooter() {
             </Link>
             <span className="ts-footer-line">Read your podcasts.</span>
           </div>
-          <Link to={signIn} className="ts-footer-signin">
-            Sign in
-          </Link>
         </div>
         <p className="ts-footer-legal">
           <a href="https://github.com/ssarunic/thestill" target="_blank" rel="noopener noreferrer">

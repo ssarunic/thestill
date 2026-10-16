@@ -466,6 +466,8 @@ def list_public_top_podcasts(
 # ---------------------------------------------------------------------------
 
 _QUOTE_PAGE = 12
+_MENTIONED_PER_TYPE = 20
+_RELATED_PER_TYPE = 6
 _FEATURED_WINDOW_DAYS = 90
 _SPEAKERS_WINDOW_DAYS = 365
 _ACTIVITY_WEEKS = 26
@@ -474,6 +476,17 @@ _ENTITY_TTL_SECONDS = 120.0
 _ABOUT_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
 
 _entity_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=512)
+
+
+def _per_type(items: List[Dict[str, Any]], cap: int) -> List[Dict[str, Any]]:
+    """The first ``cap`` items of each ``type``, order kept (pages group by type)."""
+    seen: Dict[str, int] = {}
+    kept = []
+    for item in items:
+        seen[item["type"]] = seen.get(item["type"], 0) + 1
+        if seen[item["type"]] <= cap:
+            kept.append(item)
+    return kept
 
 
 def _entity_type_str(value: Any) -> str:
@@ -718,7 +731,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             "guest_episodes": guest_episodes,
         },
         "most_discussed_on": podcast_refs(summary.get("most_discussed_on", []), "mention_count")[:8],
-        "related": related[:10],
+        "related": _per_type(related, _RELATED_PER_TYPE),
         "featured_quote": featured_quote,
         "topics": topics,
         "speakers": speakers,
@@ -819,20 +832,24 @@ def list_public_episode_quotes(
         entry = speakers.setdefault(item["speaker"]["slug"], {**item["speaker"], "quotes": 0})
         entry["quotes"] += 1
     hidden = visibility.hidden_entity_ids()
+    # Grouped by type on the page (people, companies, products, topics, as
+    # in the signed-in reader), so the cap is per type, in the reader's
+    # order: hosts and guests first, then by mentions.
     mentioned = []
+    per_type: Dict[str, int] = {}
     for row in get_episode_entities(episode.id, min_confidence=0.0, state=state).entities:
-        if row.entity.id in hidden:
+        kind = _entity_type_str(row.entity.type)
+        if row.entity.id in hidden or per_type.get(kind, 0) >= _MENTIONED_PER_TYPE:
             continue
+        per_type[kind] = per_type.get(kind, 0) + 1
         mentioned.append(
             {
                 "name": display_name(row.entity.canonical_name),
-                "type": row.entity.type,
+                "type": kind,
                 "slug": entity_slug(row.entity.id),
                 "count": row.mention_count,
             }
         )
-        if len(mentioned) >= 12:
-            break
     apply_public_cache_headers(request, response)
     return api_response(
         {

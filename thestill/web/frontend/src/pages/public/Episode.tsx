@@ -6,7 +6,7 @@ import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/p
 import {
   Avatar,
   Button,
-  EntityDot,
+  EntityGroups,
   FilterChip,
   ListenOn,
   QuoteCard,
@@ -14,7 +14,7 @@ import {
   SignInCard,
   Skeleton,
 } from '../../components/public/ui'
-import { splitSummary, typeLabel, useSignIn } from '../../components/public/helpers'
+import { splitSummary, useSignIn } from '../../components/public/helpers'
 import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
@@ -24,6 +24,14 @@ import {
 import NotFound, { ModuleError } from './NotFound'
 
 const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
+
+// The signed-in reader's section names (EntityRail).
+const MENTIONED_TITLES = {
+  person: 'People in this episode',
+  company: 'Companies mentioned',
+  product: 'Products',
+  topic: 'Topics',
+} as const
 
 export default function Episode() {
   const { podcastSlug = '', episodeSlug = '' } = useParams()
@@ -241,22 +249,12 @@ export default function Episode() {
         </div>
 
         <aside className="ts-rail" aria-label="About this episode">
-          {firstPage && firstPage.mentioned.length >= 3 && (
-            <section className="ts-rail-module">
-              <h3 className="ts-rail-label">Mentioned in this episode</h3>
-              <ul className="ts-related">
-                {firstPage.mentioned.map((entity) => (
-                  <li key={`${entity.type}-${entity.slug}`}>
-                    <Link to={entityPath(entity)}>
-                      <EntityDot type={entity.type} />
-                      <span>{entity.name}</span>
-                      <span className="ts-visually-hidden"> ({typeLabel(entity.type)})</span>
-                    </Link>
-                    <span className="ts-related-count">{entity.count}×</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
+          {firstPage && (
+            <EntityGroups
+              items={firstPage.mentioned}
+              titles={MENTIONED_TITLES}
+              count={(entity) => `${entity.count}×`}
+            />
           )}
           {episode?.description && (
             <section className="ts-rail-module">

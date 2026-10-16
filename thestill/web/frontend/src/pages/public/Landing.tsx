@@ -5,14 +5,13 @@ import { Link } from 'react-router-dom'
 import { entityPath, episodePath, formatDate } from '../../api/public'
 import {
   Avatar,
-  Button,
   EntityDot,
   EpisodeRow,
   QuoteCard,
   QuoteSkeleton,
   Skeleton,
 } from '../../components/public/ui'
-import { splitSummary, useSignIn } from '../../components/public/helpers'
+import { splitSummary } from '../../components/public/helpers'
 import { usePublicRecentSummaries, usePublicSummary, usePublicWhoSaidWhat } from '../../hooks/usePublicApi'
 
 const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
@@ -134,7 +133,6 @@ const OUTCOMES = [
 ]
 
 export default function Landing() {
-  const signIn = useSignIn()
   return (
     <div className="ts-container">
       <section className="ts-hero" style={{ flexDirection: 'column', gap: 16, paddingTop: 56 }}>
@@ -145,9 +143,6 @@ export default function Landing() {
           thestill turns every episode you follow into a summary you can read in three minutes, with every quote
           attributed and timed, and a morning briefing across all of them.
         </p>
-        <div>
-          <Button to={signIn}>Sign in</Button>
-        </div>
       </section>
       <div className="ts-stack" style={{ maxWidth: 'var(--main-column)', paddingTop: 40 }}>
         <LatestSummary />

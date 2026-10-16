@@ -17,7 +17,7 @@ This spec makes `/login` the one place sign-in happens. Every button on the publ
 
 ## Goals
 
-1. Buttons keep the names signed-in users know: "Follow", "Transcript", "Read the transcript". Signed out, the same button leads to `/login` and back. Only buttons whose action is signing in say "Sign in". No button names a provider or says "Sign in to …".
+1. Buttons keep the names signed-in users know: "Follow", "Transcript", "Read the transcript". Signed out, the same button leads to `/login` and back. Only the header button says "Sign in". No button names a provider or says "Sign in to …".
 2. One page decides how to sign in. Adding a provider changes `/login` only.
 3. `/login` looks like the public site (Thestill Editorial), in the public app and the signed-in app alike (logout lands there too).
 4. A visitor who clicks Follow, signs in and comes back is following the show, with no second click.
@@ -59,8 +59,7 @@ Rule (decided 2026-10-16): an action keeps its usual label and icon; signed out,
 
 | Where | Label | Link |
 |-------|-------|------|
-| Header, footer | Sign in | `/login?next=<page>` |
-| Landing hero | Sign in | `/login?next=/` |
+| Header (the only plain "Sign in"; the footer and the landing hero have none) | Sign in | `/login?next=<page>` |
 | Episode Transcript tab (no lock icon) and the "Read the transcript" cards | Transcript / Read the transcript | `/login?next=<episode>?view=transcript&intent=transcript` (the signed-in reader opens on the transcript) |
 | Show page Follow (hero + card) | Follow | `/login?next=/podcasts/<slug>&intent=follow` |
 | Person and entity page card | See every mention | `/login?next=<page>` (signed in, the entity page lists every mention) |
