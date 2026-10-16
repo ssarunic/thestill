@@ -165,6 +165,13 @@ class TestUserDataIdempotency:
         # would abort the whole script under `set -e`.
         assert "mkdir " not in user_data.replace("mkdir -p", "")
 
+    def test_caddy_reloads_after_compose_up(self, user_data):
+        # `up -d` leaves Caddy on its old config when only the mounted
+        # Caddyfile changed; the reconcile must reload it explicitly.
+        reload = "caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
+        assert reload in user_data
+        assert user_data.index(reload) > user_data.index("docker compose -f docker-compose.prod.yml up -d")
+
     def test_no_step_assumes_a_clean_box(self, user_data):
         for convergent in (
             "dnf install -y",

@@ -980,6 +980,25 @@ docker image prune -f >/dev/null
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 
+# The Caddyfile is re-downloaded above and bind-mounted, but `up -d` never
+# restarts a container whose only change is a mounted file's content, and
+# Caddy does not watch its config: without this, Caddyfile changes never
+# reach the running proxy (v1.24.0's /ingest did not, 2026-10-16). Reload
+# validates first and keeps the old config on error, so a bad Caddyfile
+# fails the reconcile without taking the site down. Retried because on a
+# first boot Caddy's admin endpoint may still be starting.
+for attempt in 1 2 3 4 5; do
+    if docker compose -f docker-compose.prod.yml exec -T caddy \
+        caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile; then
+        break
+    fi
+    if [ "$attempt" = 5 ]; then
+        echo "caddy reload failed; the previous Caddyfile is still serving" >&2
+        exit 1
+    fi
+    sleep 3
+done
+
 # Nightly backup as a systemd timer — AL2023 minimal ships no cron.
 cat > /etc/systemd/system/thestill-backup.service <<EOF
 [Unit]
