@@ -32,12 +32,22 @@ from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.episode_origin import derive_episode_origin
 from ...utils.language_config import normalize_language_code
-from ..dependencies import AppState, get_app_state, get_current_user, require_auth
+from ..dependencies import AppState, get_app_state, get_current_user, is_effective_admin, require_auth
 from ..responses import api_response, conflict, etag_json_response, not_found, paginated_response
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _visible_failure_reason(reason: Optional[str], user: User, state: AppState) -> Optional[str]:
+    """Raw failure reasons are operator information.
+
+    They carry provider error strings, URLs and storage details; ordinary
+    users see that an episode failed (``is_failed`` / ``failure_type``)
+    but not why. Admins (and the single-user operator) get the text.
+    """
+    return reason if is_effective_admin(user, state.config) else None
 
 
 class ResolvePodcastRequest(BaseModel):
@@ -275,6 +285,7 @@ def get_podcast_episodes(
     offset: int = 0,
     since_hours: Optional[int] = None,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> dict:
     """
     Get episodes for a specific podcast with pagination.
@@ -302,8 +313,14 @@ def get_podcast_episodes(
     if episodes is None:
         not_found("Podcast", podcast_slug)
 
+    items = []
+    for e in episodes:
+        item = e.model_dump()
+        item["failure_reason"] = _visible_failure_reason(item.get("failure_reason"), user, state)
+        items.append(item)
+
     return paginated_response(
-        items=[e.model_dump() for e in episodes],
+        items=items,
         total=total,
         offset=offset,
         limit=limit,
@@ -386,7 +403,7 @@ def get_episode_by_slugs(
                 # Failure info
                 "is_failed": episode.is_failed,
                 "failed_at_stage": episode.failed_at_stage,
-                "failure_reason": episode.failure_reason,
+                "failure_reason": _visible_failure_reason(episode.failure_reason, user, state),
                 "failure_type": episode.failure_type.value if episode.failure_type else None,
                 "failed_at": episode.failed_at.isoformat() if episode.failed_at else None,
             },

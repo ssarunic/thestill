@@ -3,7 +3,8 @@ import { render, screen } from '@testing-library/react'
 import FailureBanner from './FailureBanner'
 
 // Mirrors the server-side require_admin on POST /api/episodes/{id}/retry.
-// Non-admins keep the failure info — only the action is admin-only.
+// Stage, error text and Retry are operator information; non-admins get
+// one plain line.
 let mockIsAdmin = true
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ isAdmin: mockIsAdmin }),
@@ -35,11 +36,20 @@ describe('FailureBanner admin gating', () => {
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
   })
 
-  it('hides Retry but keeps failure info for non-admins', () => {
-    mockIsAdmin = false
+  it('shows admins the stage and error details', () => {
     renderBanner()
     expect(screen.getByText(/processing failed \(fatal error\)/i)).toBeInTheDocument()
     expect(screen.getByText(/transcription/i)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /^retry/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /show error details/i })).toBeInTheDocument()
+  })
+
+  it('shows non-admins one plain line, no stage, details or Retry', () => {
+    mockIsAdmin = false
+    renderBanner()
+    expect(screen.getByText(/couldn.t prepare a summary and transcript/i)).toBeInTheDocument()
+    expect(screen.queryByText(/processing failed/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/transcription/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/whisper exploded/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

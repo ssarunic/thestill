@@ -14,9 +14,11 @@
 
 """Auth gating for /api/episodes.
 
-``bulk/process`` and ``{id}/retry`` mutate the pipeline and are
-admin-only; the list/failure reads require any authenticated session
-(via the router-level require_auth applied at registration).
+Every endpoint here is operator-only. ``bulk/process`` and ``{id}/retry``
+mutate the pipeline; the corpus-wide list (every episode in the database,
+filterable by pipeline state) and the failure reads (raw provider errors)
+are operator information. Users browse via their inbox, followed shows
+and search.
 """
 
 import pytest
@@ -30,9 +32,6 @@ ROUTERS = [(api_episodes.router, "/api/episodes")]
 ADMIN_ENDPOINTS = [
     ("POST", "/api/episodes/bulk/process", {"episode_ids": ["ep-1"]}),
     ("POST", "/api/episodes/ep-1/retry", None),
-]
-
-READ_ENDPOINTS = [
     ("GET", "/api/episodes", None),
     ("GET", "/api/episodes/failed", None),
     ("GET", "/api/episodes/ep-1/failure", None),
@@ -58,16 +57,4 @@ class TestAdminEndpoints:
     @pytest.mark.parametrize("method,path,body", ADMIN_ENDPOINTS)
     def test_single_user_mode_passes_gate(self, method, path, body):
         client, _ = auth_client(ROUTERS, multi_user=False, current_user=PLAIN_USER)
-        assert client.request(method, path, json=body).status_code not in (401, 403)
-
-
-class TestReadEndpoints:
-    @pytest.mark.parametrize("method,path,body", READ_ENDPOINTS)
-    def test_anonymous_gets_401(self, method, path, body):
-        client, _ = auth_client(ROUTERS, multi_user=True, current_user=None)
-        assert client.request(method, path, json=body).status_code == 401
-
-    @pytest.mark.parametrize("method,path,body", READ_ENDPOINTS)
-    def test_non_admin_passes_gate(self, method, path, body):
-        client, _ = auth_client(ROUTERS, multi_user=True, current_user=PLAIN_USER)
         assert client.request(method, path, json=body).status_code not in (401, 403)

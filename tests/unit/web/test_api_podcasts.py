@@ -21,7 +21,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from thestill.models.podcast import Episode, Podcast
+from thestill.models.podcast import Episode, FailureType, Podcast
 from thestill.models.user import User
 from thestill.services.podcast_service import PodcastWithIndex
 from thestill.web.routes import api_podcasts
@@ -392,3 +392,62 @@ class TestEpisodeSummaryLanguages:
             target_language="hr",
             provider=provider,
         )
+
+
+class TestFailureReasonVisibility:
+    """Raw failure reasons are operator information: non-admins see that an
+    episode failed, never the provider error text."""
+
+    REASON = "Dalston 503 from http://10.0.0.5:8000/v1/transcribe"
+
+    @classmethod
+    def _failed(cls):
+        episode = Episode(
+            title="Broken",
+            description="d",
+            audio_url="https://example.com/broken.mp3",
+            external_id="broken-1",
+            slug="broken",
+            failed_at_stage="transcribe",
+            failure_reason=cls.REASON,
+            failure_type=FailureType.FATAL,
+        )
+        podcast = Podcast(
+            title="Show", description="d", rss_url="https://example.com/show.rss", slug="show", episodes=[episode]
+        )
+        return podcast, episode
+
+    def _detail(self, client, mock_app_state):
+        mock_app_state.repository.get_episode_by_slug.return_value = self._failed()
+        mock_app_state.repository.get_alternate_enclosures.return_value = []
+        mock_app_state.repository.get_platform_links.return_value = []
+        response = client.get("/api/podcasts/show/episodes/broken")
+        assert response.status_code == 200
+        return response.json()["episode"]
+
+    def _list(self, client, mock_app_state):
+        podcast, episode = self._failed()
+        mock_app_state.repository.get_by_slug.return_value = podcast
+        mock_app_state.podcast_service.get_episodes_count.return_value = 1
+        mock_app_state.podcast_service.get_episodes.return_value = [episode]
+        response = client.get("/api/podcasts/show/episodes")
+        assert response.status_code == 200
+        return response.json()["episodes"][0]
+
+    @pytest.mark.parametrize("fetch", ["_detail", "_list"])
+    def test_non_admin_sees_failure_without_reason(self, client, mock_app_state, fetch):
+        mock_app_state.config.multi_user = True
+        data = getattr(self, fetch)(client, mock_app_state)
+        assert data["failed_at_stage"] == "transcribe"
+        assert data["failure_reason"] is None
+
+    @pytest.mark.parametrize("fetch", ["_detail", "_list"])
+    def test_admin_sees_reason(self, client, mock_app_state, mock_user, fetch):
+        mock_app_state.config.multi_user = True
+        mock_user.is_admin = True
+        assert getattr(self, fetch)(client, mock_app_state)["failure_reason"] == self.REASON
+
+    @pytest.mark.parametrize("fetch", ["_detail", "_list"])
+    def test_single_user_operator_sees_reason(self, client, mock_app_state, fetch):
+        mock_app_state.config.multi_user = False
+        assert getattr(self, fetch)(client, mock_app_state)["failure_reason"] == self.REASON

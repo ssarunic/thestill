@@ -1,7 +1,12 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import EntityBranchProgress from './EntityBranchProgress'
 import type { EpisodeTask } from '../api/types'
+
+let mockIsAdmin = true
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({ isAdmin: mockIsAdmin }),
+}))
 
 // Spec #68 D2 — tasks arrive as a prop; `EpisodeReader` owns the single
 // task query, so there is no hook to mock here any more.
@@ -26,6 +31,14 @@ function withTasks(tasks: Array<ReturnType<typeof task>>) {
 describe('EntityBranchProgress', () => {
   beforeEach(() => {
     currentTasks = []
+    mockIsAdmin = true
+  })
+
+  it('renders nothing for non-admins, even when a stage failed', () => {
+    mockIsAdmin = false
+    withTasks([task('extract-entities', 'failed')])
+    const { container } = render(<EntityBranchProgress tasks={currentTasks} episodeId="ep1" />)
+    expect(container.firstChild).toBeNull()
   })
 
   it('renders nothing when no entity-branch tasks exist for the episode', () => {

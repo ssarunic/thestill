@@ -80,9 +80,14 @@ def get_all_episodes(
     sort_by: str = "pub_date",
     sort_order: str = "desc",
     app_state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> dict:
     """
     Get episodes across all podcasts with filtering and pagination.
+
+    Operator-only: this is the corpus-wide browser behind the admin
+    Episodes page (every episode in the database, filterable by pipeline
+    state). Users browse through their inbox, followed shows and search.
 
     Args:
         limit: Maximum number of episodes to return (default 20)
@@ -307,6 +312,7 @@ class FailedEpisodeListResponse(BaseModel):
 def list_failed_episodes(
     limit: int = 100,
     app_state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> FailedEpisodeListResponse:
     """
     List all episodes in failed state.
@@ -353,6 +359,7 @@ def list_failed_episodes(
 def get_episode_failure(
     episode_id: str,
     app_state: AppState = Depends(get_app_state),
+    _: User = Depends(require_admin),
 ) -> EpisodeFailureResponse:
     """
     Get failure details for an episode.

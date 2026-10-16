@@ -57,6 +57,9 @@ export default function EpisodeCard({
   const [showFailureModal, setShowFailureModal] = useState(false)
   // Retry mirrors the server-side require_admin gate on
   // POST /api/episodes/{id}/retry (always satisfied in single-user mode).
+  // Pipeline state, failure stage/reason and the details modal are
+  // operator information too (spec #76 §5.5); ordinary users only learn
+  // that an episode is unavailable.
   const { isAdmin } = useAuth()
   const retryMutation = useRetryFailedEpisode()
 
@@ -89,7 +92,7 @@ export default function EpisodeCard({
   // Determine card border style based on failure and selection state
   const cardBorderClass = isSelected
     ? 'border-primary-500 ring-2 ring-primary-200'
-    : isFailed
+    : isFailed && isAdmin
       ? episode.failure_type === 'fatal'
         ? 'border-red-300 hover:border-red-400'
         : 'border-yellow-300 hover:border-yellow-400'
@@ -110,11 +113,15 @@ export default function EpisodeCard({
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0 self-start">
             {/* Show failure badge if failed */}
-            {isFailed && episode.failure_type && (
+            {isFailed && episode.failure_type && (isAdmin ? (
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${failureTypeColors[episode.failure_type]}`}>
                 {failureTypeLabels[episode.failure_type]}
               </span>
-            )}
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                Unavailable
+              </span>
+            ))}
             {processingStage && (() => {
               const ps = typeof processingStage === 'string'
                 ? { stage: processingStage, status: 'processing' as const }
@@ -139,10 +146,11 @@ export default function EpisodeCard({
                 </span>
               )
             })()}
-            {/* Always show state badge */}
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATE_BADGE_COLOR[episode.state]}`}>
-              {STATE_LABEL[episode.state]}
-            </span>
+            {isAdmin && (
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATE_BADGE_COLOR[episode.state]}`}>
+                {STATE_LABEL[episode.state]}
+              </span>
+            )}
           </div>
         </div>
 
@@ -162,7 +170,7 @@ export default function EpisodeCard({
         </div>
 
         {/* Failure info */}
-        {isFailed && episode.failed_at_stage && (
+        {isAdmin && isFailed && episode.failed_at_stage && (
           <div className={`mt-2 text-xs ${
             episode.failure_type === 'fatal' ? 'text-red-600' : 'text-yellow-600'
           }`}>
@@ -229,7 +237,7 @@ export default function EpisodeCard({
       </div>
 
       {/* Failure details modal */}
-      {isFailed && episode.failure_type && episode.failed_at_stage && (
+      {isAdmin && isFailed && episode.failure_type && episode.failed_at_stage && (
         <FailureDetailsModal
           isOpen={showFailureModal}
           onClose={() => setShowFailureModal(false)}
@@ -241,7 +249,7 @@ export default function EpisodeCard({
           failureReason={episode.failure_reason ?? null}
           failureType={episode.failure_type}
           failedAt={episode.failed_at ?? null}
-          onRetry={isAdmin ? handleRetry : undefined}
+          onRetry={handleRetry}
           isRetrying={retryMutation.isPending}
         />
       )}
