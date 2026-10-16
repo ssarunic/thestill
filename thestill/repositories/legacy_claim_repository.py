@@ -17,8 +17,8 @@
 The single-user identity (``local@thestill.me``) owns per-user rows
 accumulated before a deployment switched to multi-user mode:
 ``podcast_followers``, ``user_episode_inbox``, ``user_briefings`` (with
-``briefing_deliveries`` hanging off them by ``briefing_id``), and
-``user_briefing_schedules``. This repository moves that data onto a real
+``briefing_deliveries`` hanging off them by ``briefing_id``),
+``user_briefing_schedules`` and ``user_episode_progress`` (spec #90). This repository moves that data onto a real
 account — or discards it — as ONE transaction, row-locked on the local
 ``users`` row, so concurrent callers (two racing first logins, a login
 racing the CLI) resolve to exactly one winner; the loser observes
@@ -64,7 +64,9 @@ class LegacyClaimRepository(ABC):
         and ``user_episode_inbox`` (skipping rows the target already has),
         reassign ``user_briefings`` (deliveries ride along via
         ``briefing_id``), move ``user_briefing_schedules`` only if the
-        target has none, grant ``is_admin`` to the target, then delete the
+        target has none, reassign ``user_episode_progress`` (on a collision
+        the row with the later ``updated_at`` wins), grant ``is_admin`` to
+        the target, then delete the
         local ``users`` row. ``dry_run=True`` only counts — no writes.
 
         Returns ``found=False`` when no local account exists (steady state

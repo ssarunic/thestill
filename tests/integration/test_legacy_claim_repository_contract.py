@@ -182,12 +182,31 @@ def _schedule(ex, user_id: str, tz="Europe/Berlin") -> None:
     )
 
 
+def _progress(ex, user_id: str, episode_id: str, position: float, updated_at=_NOW) -> None:
+    ex(
+        "INSERT INTO user_episode_progress"
+        " (user_id, episode_id, position_seconds, session_id, seq, updated_at)"
+        " VALUES (?, ?, ?, 'seed', 1, ?)",
+        (user_id, episode_id, position, _ts(ex, updated_at)),
+    )
+
+
+def _position(ex, user_id: str, episode_id: str) -> float:
+    rows = ex(
+        "SELECT position_seconds FROM user_episode_progress WHERE user_id = ? AND episode_id = ?",
+        (user_id, episode_id),
+        fetch=True,
+    )
+    return rows[0]["position_seconds"]
+
+
 def _count(ex, table: str, user_id: str) -> int:
     return ex(f"SELECT COUNT(*) AS n FROM {table} WHERE user_id = ?", (user_id,), fetch=True)[0]["n"]
 
 
 def _seed_local_with_everything(ex):
-    """Local user with 2 follows, 2 inbox rows, 1 briefing (+delivery), 1 schedule."""
+    """Local user with 2 follows, 2 inbox rows, 1 briefing (+delivery), 1 schedule,
+    2 listening positions."""
     local = _mk_user(ex, email=LOCAL_EMAIL, is_admin=True)
     p1, p2 = _mk_podcast(ex), _mk_podcast(ex)
     e1, e2 = _mk_episode(ex, p1), _mk_episode(ex, p2)
@@ -198,6 +217,8 @@ def _seed_local_with_everything(ex):
     bid = _briefing(ex, local)
     _delivery(ex, bid)
     _schedule(ex, local)
+    _progress(ex, local, e1, 100.0)
+    _progress(ex, local, e2, 200.0)
     return local, (p1, p2), (e1, e2), bid
 
 
@@ -212,12 +233,13 @@ def test_claim_moves_everything_and_deletes_local(claim_ctx):
     result = repo.claim_local_account(local_email=LOCAL_EMAIL, target_user_id=target)
 
     assert result.found and result.claimed
-    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1}
+    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1, "progress": 2}
     # Everything now belongs to target.
     assert _count(ex, "podcast_followers", target) == 2
     assert _count(ex, "user_episode_inbox", target) == 2
     assert _count(ex, "user_briefings", target) == 1
     assert _count(ex, "user_briefing_schedules", target) == 1
+    assert _count(ex, "user_episode_progress", target) == 2
     # Deliveries rode along via briefing_id (untouched, still attached).
     assert ex("SELECT COUNT(*) AS n FROM briefing_deliveries WHERE briefing_id = ?", (bid,), fetch=True)[0]["n"] == 1
     # Target inherited admin; local row is gone.
@@ -233,12 +255,15 @@ def test_claim_skips_collisions_and_existing_schedule(claim_ctx):
     _follow(ex, target, p1)
     _inbox(ex, target, e1)
     _schedule(ex, target, tz="America/New_York")
+    # Target's own e1 position is newer than the local one: it stays.
+    _progress(ex, target, e1, 999.0, updated_at=_NOW + timedelta(hours=1))
 
     result = repo.claim_local_account(local_email=LOCAL_EMAIL, target_user_id=target)
 
     assert result.claimed
     # Only the non-colliding rows moved; schedule stayed the target's own.
-    assert result.counts == {"followers": 1, "inbox": 1, "briefings": 1, "schedule": 0}
+    assert result.counts == {"followers": 1, "inbox": 1, "briefings": 1, "schedule": 0, "progress": 1}
+    assert _position(ex, target, e1) == 999.0
     assert _count(ex, "podcast_followers", target) == 2  # own + moved
     assert _count(ex, "user_episode_inbox", target) == 2
     row = ex("SELECT timezone FROM user_briefing_schedules WHERE user_id = ?", (target,), fetch=True)
@@ -248,6 +273,24 @@ def test_claim_skips_collisions_and_existing_schedule(claim_ctx):
     assert _count(ex, "podcast_followers", local) == 0
     assert _count(ex, "user_episode_inbox", local) == 0
     assert _count(ex, "user_briefing_schedules", local) == 0
+    assert _count(ex, "user_episode_progress", local) == 0
+
+
+def test_claim_progress_collision_later_updated_at_wins(claim_ctx):
+    """Spec #90 — unlike follows/inbox, a colliding position is not simply
+    the target's: whichever row was updated later survives."""
+    repo, ex = claim_ctx
+    local, _, (e1, e2), _ = _seed_local_with_everything(ex)
+    target = _mk_user(ex)
+    _progress(ex, target, e1, 999.0, updated_at=_NOW + timedelta(hours=1))  # target newer
+    _progress(ex, target, e2, 5.0, updated_at=_NOW - timedelta(hours=1))  # local newer
+
+    result = repo.claim_local_account(local_email=LOCAL_EMAIL, target_user_id=target)
+
+    assert result.counts["progress"] == 1
+    assert _position(ex, target, e1) == 999.0
+    assert _position(ex, target, e2) == 200.0
+    assert _count(ex, "user_episode_progress", target) == 2
 
 
 def test_claim_missing_local_is_noop(claim_ctx):
@@ -274,7 +317,7 @@ def test_claim_dry_run_writes_nothing(claim_ctx):
     result = repo.claim_local_account(local_email=LOCAL_EMAIL, target_user_id=target, dry_run=True)
 
     assert result.found and not result.claimed
-    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1}
+    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1, "progress": 2}
     # Nothing moved, local row intact, no admin grant.
     assert _count(ex, "podcast_followers", local) == 2
     assert _count(ex, "podcast_followers", target) == 0
@@ -300,12 +343,13 @@ def test_discard_cascades_all_per_user_rows(claim_ctx):
     result = repo.discard_local_account(local_email=LOCAL_EMAIL)
 
     assert result.found and result.claimed
-    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1}
+    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1, "progress": 2}
     assert ex("SELECT COUNT(*) AS n FROM users WHERE email = ?", (LOCAL_EMAIL,), fetch=True)[0]["n"] == 0
     assert _count(ex, "podcast_followers", local) == 0
     assert _count(ex, "user_episode_inbox", local) == 0
     assert _count(ex, "user_briefings", local) == 0
     assert _count(ex, "user_briefing_schedules", local) == 0
+    assert _count(ex, "user_episode_progress", local) == 0
     # briefing_deliveries cascade transitively through user_briefings.
     assert ex("SELECT COUNT(*) AS n FROM briefing_deliveries WHERE briefing_id = ?", (bid,), fetch=True)[0]["n"] == 0
 
@@ -317,7 +361,7 @@ def test_discard_dry_run_and_missing(claim_ctx):
     local, _, _, _ = _seed_local_with_everything(ex)
     result = repo.discard_local_account(local_email=LOCAL_EMAIL, dry_run=True)
     assert result.found and not result.claimed
-    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1}
+    assert result.counts == {"followers": 2, "inbox": 2, "briefings": 1, "schedule": 1, "progress": 2}
     assert _count(ex, "podcast_followers", local) == 2
     assert ex("SELECT COUNT(*) AS n FROM users WHERE email = ?", (LOCAL_EMAIL,), fetch=True)[0]["n"] == 1
 

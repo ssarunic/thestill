@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 
 from structlog import get_logger
 
-from ..models.podcast import AlternateEnclosure, Episode
+from ..models.podcast import AlternateEnclosure, Episode, Podcast
 from ..utils.url_patterns import extract_youtube_video_id
 
 logger = get_logger(__name__)
@@ -137,4 +137,29 @@ def build_playback_manifest(
         "youtube": youtube,
         "poster_url": episode.image_url if youtube else None,
         "captions_url": None,
+    }
+
+
+def build_track_payload(
+    podcast: Podcast,
+    episode: Episode,
+    alternate_enclosures: Optional[List[AlternateEnclosure]] = None,
+) -> Dict[str, Any]:
+    """The episode fields a client needs to start or restore playback (spec #90).
+
+    A subset of the episode-detail payload, under the same keys, so the
+    frontend builds its player track from either with one helper.
+    """
+    return {
+        "id": episode.id,
+        "slug": episode.slug,
+        "title": episode.title,
+        "podcast_id": podcast.id,
+        "podcast_slug": podcast.slug,
+        "podcast_title": podcast.title,
+        "audio_url": str(episode.audio_url),
+        "image_url": episode.image_url,
+        "podcast_image_url": podcast.image_url,
+        "duration": episode.duration,
+        "playback": build_playback_manifest(episode, alternate_enclosures),
     }

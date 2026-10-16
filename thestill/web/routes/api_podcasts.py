@@ -316,6 +316,7 @@ def get_episode_by_slugs(
     podcast_slug: str,
     episode_slug: str,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> dict:
     """
     Get a specific episode by podcast slug and episode slug.
@@ -339,6 +340,7 @@ def get_episode_by_slugs(
     platform_links = [
         {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
     ]
+    listening = state.listening_service.get_summary(user.id, episode.id) if state.listening_service else None
 
     return api_response(
         {
@@ -388,6 +390,8 @@ def get_episode_by_slugs(
                 "failure_type": episode.failure_type.value if episode.failure_type else None,
                 "failed_at": episode.failed_at.isoformat() if episode.failed_at else None,
             },
+            # Spec #90 — the caller's listening progress, or null.
+            "listening": listening.model_dump(mode="json") if listening else None,
         }
     )
 

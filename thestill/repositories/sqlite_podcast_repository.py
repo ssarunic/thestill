@@ -1397,6 +1397,36 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_episode_inbox table created")
 
+        # Per-user listening progress (spec #90). One row per user and
+        # episode; writes ordered by (session_id, seq), updated_at is server
+        # time in ISO-8601 with +00:00.
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_episode_progress'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating user_episode_progress")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS user_episode_progress (
+                    user_id          TEXT NOT NULL,
+                    episode_id       TEXT NOT NULL,
+                    position_seconds REAL NOT NULL CHECK (position_seconds >= 0),
+                    duration_seconds REAL NULL
+                                     CHECK (duration_seconds IS NULL OR duration_seconds > 0),
+                    completed_at     TIMESTAMP NULL,
+                    stopped_at       TIMESTAMP NULL,
+                    session_id       TEXT NOT NULL,
+                    seq              INTEGER NOT NULL,
+                    updated_at       TIMESTAMP NOT NULL,
+                    PRIMARY KEY (user_id, episode_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_progress_user_updated
+                    ON user_episode_progress(user_id, updated_at DESC);
+                """
+            )
+            logger.info("Migration complete: user_episode_progress table created")
+
         # Per-user briefings (spec #36). Cursor (cursor_from, cursor_to)
         # makes "what inbox window did this briefing cover" reproducible
         # without joining back to the inbox at the same moment in time.

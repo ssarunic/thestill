@@ -222,6 +222,10 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
+| `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position |
+| `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
+| `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
+| `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes, newest first, for the Continue listening strip |
 
 ### Webhooks
 

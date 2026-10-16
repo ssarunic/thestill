@@ -37,6 +37,7 @@ from typing import Literal, Optional, get_args
 
 from pydantic import BaseModel, Field
 
+from .listening import ListeningSummary
 from .podcast import Episode
 
 InboxSource = Literal["follow_new", "follow_seed", "ad_hoc", "import"]
@@ -110,3 +111,5 @@ class InboxItem(BaseModel):
     entry: InboxEntry
     episode: Episode
     podcast: PodcastInboxSummary
+    # Spec #90 — the user's listening progress on the episode, or None.
+    listening: Optional[ListeningSummary] = None
