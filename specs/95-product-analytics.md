@@ -60,7 +60,7 @@ table and never also sent as an event.
 | # | Outcome | Verified by |
 |---|---|---|
 | O1 | An admin can read, for any 7/28/90-day window: signups, % who followed ≥1 show within 7 days, % whose first briefing was opened, weekly cohort retention | Postgres contract tests on the funnel queries, `@live` check after deploy |
-| O2 | PostHog shows public page views by kind and referrer, sign-in starts by page kind, and signups by the public page they came through | pytest on the server emitters with a fake sink |
+| O2 | PostHog shows public page views by kind and referrer, and sign-in starts and completions by page kind. The admin page shows signups and activation by the public page they came through. | pytest on the server emitters with a fake sink; Postgres contract test on `signup_source` |
 | O3 | Feature use is countable in PostHog: search, export, share, narration play, entity page opens, remote MCP tool calls | pytest per server emitter, Vitest per client emitter |
 | O4 | Nothing identifies a person beyond the internal user id. No cookie or browser storage is written. CSP is unchanged. The browser never contacts a PostHog domain. | header test, Playwright storage and network assertions |
 | O5 | GPC and the per-user Settings switch stop events on both the client and the server | pytest + Vitest |
@@ -119,13 +119,14 @@ drift into collecting things it does not need.
 |---|---|---|---|
 | Acquisition | Public page views per day by kind (landing, episode, podcast, entity, top), excluding bots | B | server `public_page_view` |
 | Acquisition | Top referrer hosts for public views | B | same event, `referrer_host` |
-| Acquisition | Sign-in starts from public pages, and which page kind | B | server `login_started`, `from_kind` |
-| Acquisition | Signups per day, and how many arrived through a public page | A + B | `users.created_at`; server `login_completed` with `new_user` and `next_kind` |
+| Acquisition | Sign-in starts from public pages, which page kind, and how many complete | B | server `login_started` (`from_kind`) → `login_completed` (`next_kind`) |
+| Acquisition | Signups per day, and how many arrived through each kind of public page | A | `users.created_at`, `users.signup_source` (§2) |
+| Activation | Every activation step below, broken down by signup source | A | `users.signup_source` |
 | Activation | % of new users who followed ≥1 podcast within 24 h and 7 d, and median time to first follow | A | `podcast_followers` |
-| Activation | % whose first briefing was generated, and % who opened it | A + B | `briefings.created_at`, `listened_at`; client `briefing_open` |
+| Activation | % whose first briefing was generated, and % who opened it | A | `briefings.created_at`, `briefings.opened_at` (§2) |
 | Activation | % who read ≥3 episodes in their first week | A | `inbox_entries.state = read`, `state_changed_at` |
 | Engagement | Weekly and monthly active users | B | PostHog, any identified event in the window |
-| Engagement | Briefings opened ÷ briefings generated, per week | A + B | `briefings` + `briefing_open` |
+| Engagement | Briefings opened ÷ briefings generated, per week | A | `briefings.created_at`, `opened_at` |
 | Engagement | Episodes read per active user per week | A | inbox read transitions |
 | Engagement | Searches, exports, shares, narration plays, entity page opens per week | B | events below |
 | Engagement | Remote MCP tool calls per user per week, by tool | B | server `mcp_tool_call` |
@@ -152,20 +153,23 @@ Events exist only for things that leave no durable state: a view, a
 click, a search, an export, a tool call.
 
 This means PostHog alone cannot draw the activation funnel. That is
-deliberate: the activation funnel is Layer A. Mirroring state into
-PostHog for self-serve funnels is open question 3.
+deliberate: the activation funnel is Layer A, and follows and briefings
+are not mirrored into PostHog (decision D3). When a question needs a
+fact that no table holds, the fix is to store that fact once, as the two
+new columns below do, not to send an event.
 
 ### 2. Layer A: the derived funnel
 
-Unchanged from v1. A new `AnalyticsRepository` with a Postgres
-implementation and a single-user stub that reports "unavailable". It
-exposes four read methods, each one SQL statement over existing tables,
-parameterised by a window:
+A new `AnalyticsRepository` with a Postgres implementation and a
+single-user stub that reports "unavailable". It exposes four read
+methods, each one SQL statement over existing tables, parameterised by
+a window:
 
-- `signups(window)`: daily counts.
+- `signups(window)`: daily counts, split by `signup_source`.
 - `activation(window)`: for users created in the window, the follow /
   briefing-generated / briefing-opened / three-reads steps with counts,
-  percentages and median hours to each step.
+  percentages and median hours to each step, overall and per
+  `signup_source`.
 - `cohorts(weeks)`: signup-week rows × activity-week columns.
 - `engagement(window)`: reads per active user, briefings opened ÷
   generated, follows per user.
@@ -174,6 +178,29 @@ Results are plain Pydantic models (constitution §5). Queries are indexed
 by columns that already exist; the one addition is an index on
 `inbox_entries (state, state_changed_at)` if the planner wants it, decided
 by `EXPLAIN` on a production-sized copy, not guessed.
+
+**Two new columns**, one Alembic migration, Postgres and SQLite:
+
+- **`users.signup_source`** (text, null). Set once, in the OAuth
+  callback, when the user row is created: the public page kind parsed
+  from the `oauth_next` cookie (`episode`, `podcast`, `entity`, `top`,
+  `landing`), `share` for a spec #80 share target, or `direct`. Never
+  updated afterwards. Existing users stay `null` and are reported as
+  "before tracking". It answers "which pages bring users who stay"
+  without any vendor, ad blocker or opt-out in the way.
+- **`briefings.opened_at`** (timestamptz, null). The first time the
+  owner opened the briefing, by either reading it on the web or playing
+  its narration. `listened_at` can't serve this, because it's only set
+  by the manual "Mark listened" button on
+  [BriefingDetail.tsx](../thestill/web/frontend/src/pages/BriefingDetail.tsx).
+  It's set by a new `POST /api/briefings/{id}/opened`, idempotent
+  (`… WHERE opened_at IS NULL`), owner-only. The briefing page calls it
+  on mount and the narration player calls it on first play. It's a POST
+  rather than a side effect of the GET so React Query prefetches and
+  refetches can't mark a briefing opened. The migration backfills
+  `opened_at = listened_at` where that is set; older briefings opened
+  without the button stay `null`, and the admin page says opens before
+  the migration date are undercounted.
 
 ### 3. Layer B: PostHog
 
@@ -189,6 +216,11 @@ they live outside the repo:
   session replay, surveys:** all off at project level as well as in the
   SDK, so an SDK upgrade that changes a default still sends nothing.
 - **Person profiles:** identified users only.
+- **Filter out internal and test users:** on, matching the person
+  property `is_admin = true`, and applied by default to every insight.
+  Admin events are still sent, so production can be checked end to
+  end, but no chart counts them unless someone turns the filter off on
+  purpose (decision D5).
 - **Billing limit** set at the free tier, so a bug can't run up a bill.
 - **Organisation members:** the operator only. PostHog shows each
   person's event stream by UUID, which is a per-user view thestill
@@ -264,8 +296,8 @@ posthog.identify(user.id, { is_admin: user.is_admin });
 ```
 
 - **Identity.** `identify` is called with the internal UUID and one
-  person property, `is_admin`, so the operator's own use can be filtered
-  out. `posthog.reset()` runs on sign-out.
+  person property, `is_admin`, which the project's internal-users
+  filter (§3.1) keys on. `posthog.reset()` runs on sign-out.
 - **Page views.** The router sends `$pageview` on each route change,
   with `$current_url` and `$pathname` replaced by the route pattern
   (`/episodes/:slug`, `/briefings/:id`, …). PostHog's web analytics
@@ -318,8 +350,7 @@ counts as a view and not as a visitor.
 | `$pageview` | client, router | `path_kind` |
 | `public_page_view` | server, #94 public routes | `kind`, `referrer_host` (browsers only; bots are not sent and are counted in the #94 §7 log line, which this phase adds) |
 | `login_started` | server, `/api/auth/google/login` | `from_kind`: the public page kind parsed from `next`, or `none` |
-| `login_completed` | server, OAuth callback | `next_kind`, `new_user` |
-| `briefing_open` | client, briefing page mount | `briefing_id` |
+| `login_completed` | server, OAuth callback | `next_kind` (whether the user is new is in `users`, not here) |
 | `search` | server, search route | `result_count`, `mode`; **never** the query text |
 | `export` | server, #91 export routes | `artifact`, `format` |
 | `share` | client, copy link / Web Share | `kind` |
@@ -350,15 +381,18 @@ dashboard. It sits under the admin section in
 [navigation.tsx](../thestill/web/frontend/src/constants/navigation.tsx),
 so it appears in both the sidebar and the mobile drawer. It uses tables
 and inline bars from the existing tokens; no charting library is added.
-It shows aggregates only.
+It shows aggregates only. Every percentage has its count next to it,
+and cohorts or source groups with fewer than five users are shown
+greyed out rather than hidden (decision D1).
 
 **CLI.** `thestill analytics [--range 28d] [--json]` prints the Layer A
 payload. In single-user mode it says analytics is off and exits 0.
 
 **PostHog dashboard.** One dashboard, "thestill: product", with
 Acquisition (public views by kind, referrers, `login_started` by
-`from_kind`, new users by `next_kind`) and Engagement (WAU/MAU excluding
-`is_admin`, feature counts, MCP calls by tool). Its insights are listed
+`from_kind`, completion rate `login_started` → `login_completed`) and
+Engagement (WAU/MAU, feature counts, MCP calls by tool), all with the
+internal-users filter on. Its insights are listed
 in `docs/analytics.md`, so it can be rebuilt if the project is ever
 recreated.
 
@@ -450,18 +484,27 @@ sanitiser enforces that on the client.
 
 | Phase | Scope | Ships alone? |
 |---|---|---|
-| 0 | `AnalyticsRepository` (Layer A), `GET /api/dashboard/analytics`, `/analytics` admin page, `thestill analytics` | Yes; no vendor, answers the activation questions today |
+| 0 | `users.signup_source` + `briefings.opened_at` migration and backfill; set `signup_source` in the OAuth callback; `POST /api/briefings/{id}/opened` called from the briefing page and the narration player; `AnalyticsRepository` (Layer A); `GET /api/dashboard/analytics`; `/analytics` admin page; `thestill analytics` | Yes; no vendor, answers the activation questions from the first deploy |
 | 1 | PostHog project and settings checklist; config; `AnalyticsSink` + `PostHogSink` + `NullSink`; Caddy `/ingest`; lazy client SDK with sanitiser; `$pageview`; `login_started`, `login_completed`, `public_page_view` (plus the #94 §7 log line); visitor key; GPC; Settings switch and column; privacy policy changes; `docs/analytics.md` | Yes |
-| 2 | Remaining emitters (`briefing_open`, `search`, `export`, `share`, `narration_play`, `entity_open`, `mcp_tool_call`); the PostHog dashboard | Yes |
+| 2 | Remaining emitters (`search`, `export`, `share`, `narration_play`, `entity_open`, `mcp_tool_call`); the PostHog dashboard | Yes |
 
 ## Testing
 
 **pytest** (Postgres contract tests via `TEST_DATABASE_URL`, as spec #85
 established):
 
-- Funnel queries against a seeded fixture: known signups, follows at
-  known offsets, briefings with and without `listened_at`, reads;
-  expected percentages and medians asserted exactly.
+- Funnel queries against a seeded fixture: known signups with mixed
+  `signup_source` (including `null`), follows at known offsets,
+  briefings with and without `opened_at`, reads; expected percentages
+  and medians asserted exactly, overall and per source.
+- `signup_source`: a new user whose `oauth_next` is `/episodes/x` gets
+  `episode`; no cookie gets `direct`; a returning user's value never
+  changes on a later login.
+- `POST /briefings/{id}/opened`: first call sets `opened_at`, a second
+  call leaves it unchanged, another user's briefing is 404, and a GET of
+  the briefing never sets it.
+- Migration backfill: `opened_at = listened_at` where set, `null`
+  otherwise.
 - Cohort table: a user active in week 4 but not 2 lands in the right
   cells.
 - Each server emitter, with a recording fake sink: the right event and
@@ -482,8 +525,11 @@ established):
 **Vitest:** the sanitiser strips query strings and fragments, maps paths
 to route patterns and drops unknown events and props. The SDK is not
 imported on public routes, when the key is null, or under GPC. `identify`
-carries the UUID and `is_admin` only. The admin nav shows `/analytics`
-only for admins, in both the sidebar and the drawer.
+carries the UUID and `is_admin` only. The briefing page calls `opened`
+once on mount, and the narration player calls it on first play only.
+Cohorts under five users render greyed out with their count. The admin
+nav shows `/analytics` only for admins, in both the sidebar and the
+drawer.
 
 **Playwright:** with a fake key and `/ingest` intercepted, a signed-in
 session that searches with a query string, opens a briefing and exports
@@ -492,22 +538,28 @@ transcript text in any payload, and leaves no `ph_` cookie or storage
 key. A public page load requests no PostHog chunk and nothing under
 `/ingest`.
 
-## Open questions
+## Decisions
 
-1. **Minimum cohort size.** Should percentages hide below, say, five
-   users in a cohort? Default: show the count next to every percentage
-   and let the reader judge.
-2. **Layer A and the opt-out.** The switch stops events but not derived
-   metrics. Is that the right line, and is the Settings copy honest
-   enough about it?
-3. **Mirroring state into PostHog.** Sending `podcast_followed` or
-   `briefing_generated` server-side would let PostHog draw the
-   activation funnel and break it down by acquisition source. It also
-   breaks the §1 rule. Default: no, until a question needs it. If it
-   happens, the table stays authoritative and a weekly check compares
-   counts.
-4. **Narration listened.** `briefings.listened_at` is set by an explicit
-   call today. Should `narration_play` set it too, so Layer A and
-   PostHog agree on "opened"?
-5. **Admins.** Send their events flagged `is_admin` and filter them in
-   insights (the default), or don't send them at all?
+Settled on 2026-10-16; these were the open questions in the first v2
+draft.
+
+1. **D1. Small cohorts are shown, not hidden.** At current user counts a
+   cutoff would hide almost every cohort. Every percentage carries its
+   count, and groups under five users are greyed out (§4).
+2. **D2. The opt-out stops events, not table-based metrics.** Follows,
+   reads and briefings are product state the service needs to run, so
+   Layer A counts every user. The Settings copy says so in one line.
+3. **D3. Follows and briefings are not mirrored into PostHog.** The
+   reason to mirror was activation by acquisition source. That is
+   answered instead by `users.signup_source` (§2): one fact, stored
+   once, unaffected by ad blockers or opt-outs. For the same reason
+   `login_completed` carries no `new_user` prop.
+4. **D4. "Opened" is state, not an event.** `briefings.opened_at` is
+   set on first web open or first narration play (§2). The v1
+   `briefing_open` event is dropped. `narration_play` stays an event,
+   because it counts every play, not just the first. `listened_at`
+   keeps its meaning: the user pressed "Mark listened".
+5. **D5. Admin events are sent and filtered inside PostHog.** The
+   project's internal-users filter on `is_admin = true` applies to every
+   insight by default (§3.1), so production can be checked end to end
+   without the operator's own use skewing the numbers.
