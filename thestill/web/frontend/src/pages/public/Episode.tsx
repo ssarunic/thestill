@@ -49,6 +49,8 @@ export default function Episode() {
   // the summary is behind sign-in and comes back to this episode.
   const episodeHref = episodePath(podcastSlug, episodeSlug)
   const readFullSummary = useSignIn('summary', episodeHref)
+  // A response cached from before the cut has no ``more_sections``.
+  const moreSections = summary.data?.more_sections ?? []
   // The signed-in reader opens on the transcript with ?view=transcript.
   const transcriptPath = `${episodeHref}?view=transcript`
   const readTranscript = useSignIn('transcript', transcriptPath)
@@ -170,12 +172,12 @@ export default function Episode() {
                   <SummaryViewer content={summary.data.content} available />
                 </Suspense>
               )}
-              {summary.data && summary.data.more_sections.length > 0 && (
+              {moreSections.length > 0 && (
                 <div className="ts-summary-more">
                   <Button variant="secondary" to={readFullSummary}>
                     Read the full summary
                   </Button>
-                  <span className="ts-meta">Also: {summary.data.more_sections.join(' · ')}</span>
+                  <span className="ts-meta">Also: {moreSections.join(' · ')}</span>
                 </div>
               )}
             </article>

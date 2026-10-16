@@ -79,7 +79,13 @@ async function mockPublicApi(page: Page): Promise<string[]> {
       })
     if (path === '/podcasts/public-show/episodes/chips/summary')
       return route.fulfill({
-        json: { content: '## The Gist\n\nTwo hosts argue about chips.', language: 'en', canonical_language: 'en', available_languages: ['en'] },
+        json: {
+          content: '## The Gist\n\nTwo hosts argue about chips.',
+          more_sections: ['Timeline', 'Best Quotes'],
+          language: 'en',
+          canonical_language: 'en',
+          available_languages: ['en'],
+        },
       })
     if (path === '/podcasts/public-show/episodes/chips/quotes')
       return route.fulfill({
@@ -109,6 +115,10 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await expect(page.getByText('Linked quote')).toBeVisible()
   await expect(page.getByText('one sign-in away')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute('href', /^\/login\?.*intent=transcript/)
+  // Only the lead is served; the rest of the summary is one sign-in away.
+  await expect(page.getByText('Two hosts argue about chips.')).toBeVisible()
+  await expect(page.getByText('Also: Timeline · Best Quotes')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Read the full summary' })).toHaveAttribute('href', /^\/login\?.*intent=summary/)
   expect(privateCalls).toEqual([])
 })
 
