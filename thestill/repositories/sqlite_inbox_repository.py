@@ -37,6 +37,7 @@ from ..models.inbox import (
     InboxState,
     PodcastInboxSummary,
 )
+from ..models.listening import ListeningSummary
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from ..utils.sqlite_ext import connect
 from .inbox_repository import ARRIVING_TASK_COLUMNS_SQL, ARRIVING_WHERE_SQL, InboxRepository
@@ -267,10 +268,17 @@ class SqliteInboxRepository(InboxRepository):
                     p.id AS p_id,
                     p.title AS p_title,
                     p.slug AS p_slug,
-                    p.image_url AS p_image_url
+                    p.image_url AS p_image_url,
+                    lp.position_seconds AS lp_position_seconds,
+                    lp.duration_seconds AS lp_duration_seconds,
+                    lp.completed_at AS lp_completed_at,
+                    lp.updated_at AS lp_updated_at
                   FROM user_episode_inbox i
                   JOIN episodes e ON e.id = i.episode_id
                   JOIN podcasts p ON p.id = e.podcast_id
+                  -- Spec #90 — the caller's listening progress, on the PK.
+                  LEFT JOIN user_episode_progress lp
+                    ON lp.user_id = i.user_id AND lp.episode_id = i.episode_id
                  WHERE {where}
                  ORDER BY i.delivered_at DESC
                  LIMIT ?
@@ -489,7 +497,13 @@ class SqliteInboxRepository(InboxRepository):
             slug=row["p_slug"] or "",
             image_url=row["p_image_url"],
         )
-        return InboxItem(entry=entry, episode=episode, podcast=podcast)
+        listening = ListeningSummary.from_columns(
+            row["lp_position_seconds"],
+            row["lp_duration_seconds"],
+            datetime.fromisoformat(row["lp_completed_at"]) if row["lp_completed_at"] else None,
+            datetime.fromisoformat(row["lp_updated_at"]) if row["lp_updated_at"] else None,
+        )
+        return InboxItem(entry=entry, episode=episode, podcast=podcast, listening=listening)
 
 
 __all__: Iterable[str] = ("SqliteInboxRepository",)

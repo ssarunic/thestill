@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..services.legacy_claim_service import LegacyClaimService
+    from ..services.listening_progress_service import ListeningProgressService
     from ..services.mcp_token_service import McpTokenService
     from ..services.narration import NarrationRunner
     from ..services.platform_link_service import PlatformLinkService
@@ -178,6 +179,9 @@ class AppState:
     # Spec #78 Phase 2 — per-user remote MCP tokens. ``Optional`` only for
     # hand-built test fixtures; production wiring always passes it.
     mcp_token_service: "Optional[McpTokenService]" = None
+    # Spec #90 — per-user listening progress. ``Optional`` only for
+    # hand-built test fixtures; production wiring always passes it.
+    listening_service: "Optional[ListeningProgressService]" = None
 
 
 def get_app_state(request: Request) -> AppState:

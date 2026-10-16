@@ -54,6 +54,7 @@ from ..services.briefing_script_generator import BriefingScriptGenerator
 from ..services.briefing_service import BriefingService
 from ..services.import_service import ImportService
 from ..services.inbox_service import InboxService
+from ..services.listening_progress_service import ListeningProgressService
 from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
@@ -92,6 +93,7 @@ from .routes import (
     api_episodes,
     api_imports,
     api_inbox,
+    api_me_listening,
     api_me_mcp_token,
     api_narrations,
     api_podcasts,
@@ -402,6 +404,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         health_service=HealthService(config),
         refresh_on_open=refresh_on_open,
         mcp_token_service=McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days),
+        listening_service=ListeningProgressService(
+            repos.listening_progress, repository, mark_read=inbox_service.mark_read
+        ),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -746,6 +751,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Spec #78 Phase 2 — per-user remote MCP tokens: user-authenticated,
     # deliberately NOT on the admin router.
     app.include_router(api_me_mcp_token.router, prefix="/api/me/mcp-token", tags=["mcp"], dependencies=require_session)
+    # Spec #90 — per-user listening progress.
+    app.include_router(
+        api_me_listening.router, prefix="/api/me/listening", tags=["listening"], dependencies=require_session
+    )
     app.include_router(
         api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
     )

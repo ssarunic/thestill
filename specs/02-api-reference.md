@@ -478,9 +478,19 @@ Get a specific episode by podcast and episode slugs.
     "failure_reason": null,
     "failure_type": null,
     "failed_at": null
+  },
+  "listening": {
+    "position_seconds": 1934.2,
+    "duration_seconds": 7412.0,
+    "completed_at": null,
+    "updated_at": "2026-10-16T09:00:00Z"
   }
 }
 ```
+
+**Listening (spec #90):**
+
+- `listening`: the caller's progress on the episode, or `null` when never played. `position_seconds` is on the logical (transcript) timeline; `duration_seconds` is the player-reported duration; `completed_at` is set once finished or marked played (the position is then 0). The same object rides on each `GET /api/inbox` item. Writes go through [`/api/me/listening`](#listening-progress).
 
 **Provenance Fields (spec #76 §3.6):**
 
@@ -1072,6 +1082,56 @@ Or omit `task_ids` to retry all dead tasks.
 ```
 
 ---
+
+## Listening Progress
+
+Per-user listening positions (spec #90). Every route acts on the authenticated user (the default user in single-user mode). Positions are on the logical (transcript) timeline.
+
+### PUT /api/me/listening/{episode_id}
+
+Record a position. Writes from one tab are ordered by `session_id` + `seq`, never by client clocks: a write is accepted when its `session_id` differs from the stored one or its `seq` is higher. `mark_played` / `mark_unplayed` always win and ignore `position_seconds`.
+
+**Request:**
+
+```json
+{
+  "event": "tick",
+  "position_seconds": 1934.2,
+  "duration_seconds": 7412.0,
+  "session_id": "b1f0c6…",
+  "seq": 41
+}
+```
+
+`event` is one of `tick`, `pause`, `seek`, `ended`, `stop`, `mark_played`, `mark_unplayed`. `ended`, `mark_played`, or a `pause` / `stop` with no more than 45 s of a known duration left, completes the episode: the position resets to 0 and an unread inbox row becomes read. `stop` hides the episode from `latest` until its next write. A position beyond `duration_seconds + 5` is clamped.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "timestamp": "...",
+  "accepted": true,
+  "completed": false,
+  "listening": {"position_seconds": 1934.2, "duration_seconds": 7412.0, "completed_at": null, "updated_at": "..."}
+}
+```
+
+`accepted: false` means an older write from the same tab was ignored; `listening` is then the stored, newer row. 404 for an unknown episode, 400 for a non-finite or negative position or a bad `session_id`.
+
+### GET /api/me/listening/{episode_id}
+
+`{"item": {position_seconds, duration_seconds, completed_at, updated_at}}`, or `{"item": null}` when never played.
+
+### GET /api/me/listening/latest
+
+The restore candidate: the most recently updated unfinished episode with a position and no Stop since, however old. `{"item": {"listening": {…}, "episode": {…}}}` where `episode` carries `id`, `slug`, `title`, `podcast_id`, `podcast_slug`, `podcast_title`, `audio_url`, `image_url`, `podcast_image_url`, `duration` and the `playback` manifest; `{"item": null}` when there is none.
+
+### GET /api/me/listening
+
+**Query Parameters:** `state=in_progress` (the only value), `limit` (1–20, default 3).
+
+Unfinished episodes with a position written in the last 3 days, newest first, in the same `{listening, episode}` shape as `latest`. Stop does not remove an episode from this list; an older one drops out but keeps its position.
 
 ## Webhooks
 

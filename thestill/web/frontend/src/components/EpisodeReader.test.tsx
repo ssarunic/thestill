@@ -126,8 +126,12 @@ async function expectReaderContent() {
   expect(screen.queryByText('Ready')).toBeNull()
   // Spec #76 §3.2 — the primary action carries the duration.
   expect(screen.getByRole('button', { name: 'Play episode, 60 min' })).toHaveTextContent('60 min')
+  // Spec #90 — Share lives in the ⋯ More menu (it took the Share slot);
   // jsdom has no Web Share API, so the share action names its fallback.
+  await userEvent.setup().click(screen.getByRole('button', { name: 'More actions' }))
   expect(screen.getByRole('button', { name: 'Copy link' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Mark as played' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Play from beginning' })).toBeNull()
   expect(screen.getByRole('button', { name: /summary/i })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /transcript/i })).toBeInTheDocument()
   // Lazy viewer resolves async

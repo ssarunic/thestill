@@ -57,6 +57,7 @@ class PostgresLegacyClaimRepository(LegacyClaimRepository):
             "inbox": one("SELECT COUNT(*) AS n FROM user_episode_inbox WHERE user_id = %s"),
             "briefings": one("SELECT COUNT(*) AS n FROM user_briefings WHERE user_id = %s"),
             "schedule": one("SELECT COUNT(*) AS n FROM user_briefing_schedules WHERE user_id = %s"),
+            "progress": one("SELECT COUNT(*) AS n FROM user_episode_progress WHERE user_id = %s"),
         }
 
     def claim_local_account(self, *, local_email: str, target_user_id: str, dry_run: bool = False) -> LegacyClaimResult:
@@ -100,6 +101,32 @@ class PostgresLegacyClaimRepository(LegacyClaimRepository):
                 UPDATE user_briefing_schedules SET user_id = %(to)s
                 WHERE user_id = %(frm)s
                   AND NOT EXISTS (SELECT 1 FROM user_briefing_schedules WHERE user_id = %(to)s)
+                """,
+                {"to": target_user_id, "frm": local_id},
+            ).rowcount
+            # Spec #90 — on a collision the later position wins: drop the
+            # target's older rows first so the move below takes the local one.
+            conn.execute(
+                """
+                DELETE FROM user_episode_progress t
+                WHERE t.user_id = %(to)s
+                  AND EXISTS (
+                    SELECT 1 FROM user_episode_progress l
+                    WHERE l.user_id = %(frm)s
+                      AND l.episode_id = t.episode_id
+                      AND l.updated_at > t.updated_at
+                  )
+                """,
+                {"to": target_user_id, "frm": local_id},
+            )
+            moved["progress"] = conn.execute(
+                """
+                UPDATE user_episode_progress SET user_id = %(to)s
+                WHERE user_id = %(frm)s
+                  AND NOT EXISTS (
+                    SELECT 1 FROM user_episode_progress x
+                    WHERE x.user_id = %(to)s AND x.episode_id = user_episode_progress.episode_id
+                  )
                 """,
                 {"to": target_user_id, "frm": local_id},
             ).rowcount

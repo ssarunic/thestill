@@ -23,6 +23,17 @@ function describeMediaError(error: MediaError | null): string {
   }
 }
 
+// A late resume seek only moves a source that has barely started.
+const LATE_SEEK_WINDOW_SECONDS = 5
+
+// What a replaced engine on the same element hands to its successor: the
+// element keeps its source across the swap, the engine's own state would not.
+export interface NativeEngineState {
+  url: string | null
+  pendingSeek: number | null
+  userSeeked: boolean
+}
+
 export class NativeEngine implements PlaybackEngine {
   readonly kind = 'native' as const
 
@@ -31,14 +42,22 @@ export class NativeEngine implements PlaybackEngine {
   // Deferred to loadedmetadata — browsers silently clamp seeks on
   // unloaded media.
   private pendingSeek: number | null = null
+  // A seek the user made on this source. A late resume position (spec #90)
+  // never overrides it.
+  private userSeeked = false
   // Last URL assigned. Also the error-suppression guard: clearing src
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
   private unbind: () => void
 
-  constructor(el: HTMLVideoElement, events: EngineEvents) {
+  constructor(el: HTMLVideoElement, events: EngineEvents, carried?: NativeEngineState | null) {
     this.el = el
     this.events = events
+    if (carried) {
+      this.url = carried.url
+      this.pendingSeek = carried.pendingSeek
+      this.userSeeked = carried.userSeeked
+    }
 
     const listeners: Array<[string, EventListener]> = [
       ['play', () => this.events.onPlay()],
@@ -86,6 +105,7 @@ export class NativeEngine implements PlaybackEngine {
     this.el.src = source.url
     this.url = source.url
     this.pendingSeek = opts?.seekTo ?? null
+    this.userSeeked = false
     const rate = opts?.rate
     if (rate != null && Number.isFinite(rate) && rate > 0) {
       // Loading resets playbackRate to defaultPlaybackRate; set both so
@@ -103,6 +123,7 @@ export class NativeEngine implements PlaybackEngine {
     this.el.load()
     this.url = null
     this.pendingSeek = null
+    this.userSeeked = false
   }
 
   play(): Promise<void> {
@@ -114,7 +135,32 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   seekTo(seconds: number): void {
-    if (Number.isFinite(seconds)) this.el.currentTime = Math.max(0, seconds)
+    if (!Number.isFinite(seconds)) return
+    this.userSeeked = true
+    // An explicit seek supersedes a deferred one (a resume position queued
+    // for loadedmetadata), or metadata would jump back to it.
+    this.pendingSeek = null
+    this.el.currentTime = Math.max(0, seconds)
+  }
+
+  // Spec #90 — apply a resume position learned after the source was
+  // assigned (a parallel fetch for surfaces whose payload had none). Never
+  // after a user seek on this source. Otherwise, before metadata it replaces
+  // the deferred seek; afterwards it seeks only while the source is still
+  // near its start.
+  // Returns false when the position no longer applies.
+  setPendingSeek(seconds: number): boolean {
+    if (this.url === null || !Number.isFinite(seconds) || seconds < 0) return false
+    // A seek the user made wins, metadata or not (a transcript click while
+    // the source is still loading).
+    if (this.userSeeked) return false
+    if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) {
+      this.pendingSeek = seconds
+      return true
+    }
+    if (this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
+    this.el.currentTime = seconds
+    return true
   }
 
   setRate(rate: number): void {
@@ -147,7 +193,13 @@ export class NativeEngine implements PlaybackEngine {
     return this.el.playbackRate
   }
 
-  destroy(): void {
+  /**
+   * Unbind from the element. Returns the state a successor on the same
+   * element needs — StrictMode's dev remount replaces the engine while a
+   * deferred seek (a restore landing on loadedmetadata) is still pending.
+   */
+  destroy(): NativeEngineState {
     this.unbind()
+    return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked }
   }
 }

@@ -246,3 +246,11 @@ export const ChevronRightIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
   </svg>
 )
+
+export const MoreIcon = () => (
+  <svg fill="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <circle cx="5" cy="12" r="1.75" />
+    <circle cx="12" cy="12" r="1.75" />
+    <circle cx="19" cy="12" r="1.75" />
+  </svg>
+)

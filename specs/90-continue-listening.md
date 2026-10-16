@@ -1,8 +1,8 @@
 # Continue Listening
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 Implemented on `feat/90-continue-listening` (2026-10-16)
 > **Created:** 2026-09-30
-> **Updated:** 2026-09-30
+> **Updated:** 2026-10-16
 > **Priority:** Medium
 > **Author:** Product & Engineering
 > **Related:** [#61 unified-av-playback-session](61-unified-av-playback-session.md), [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#64 legacy-account-claim](64-legacy-account-claim.md), [#71 player-shell-layer](71-player-shell-layer.md), [#72 now-playing-sheet](72-now-playing-sheet.md), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md)
@@ -136,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_progress_user_updated
 
 The DDL lives in the usual three places: `postgres_schema.SCHEMA_SQL`, the
 SQLite migration block in `sqlite_podcast_repository.py`, and Alembic
-revision `0014`. A repository pair
+revision `0016` (`0014` and `0015` were taken by the time this shipped). A repository pair
 (`ListeningProgressRepository`, SQLite + Postgres) owns the table; a
 `ListeningProgressService` owns the rules below.
 
@@ -166,8 +166,10 @@ single-user mode).
 `event` is one of `tick`, `pause`, `seek`, `ended`, `stop`, `mark_played`,
 `mark_unplayed`. The two `mark_*` events come from the manual action (see
 [Mark as played](#mark-as-played)) and ignore `position_seconds`. The response is
-`{"accepted": true|false, "completed": bool}`; `accepted: false` means the
-write was older than the stored one and was ignored. The route returns 404
+`{"accepted": true|false, "completed": bool, "listening": {…}}`;
+`accepted: false` means the write was older than the stored one and was
+ignored. `listening` is the stored row after the write (the newer one when
+rejected), so the client cache only ever holds server-stamped state. The route returns 404
 for an unknown episode and 400 for a non-finite or negative position. A
 position beyond `duration_seconds + 5` is clamped to the duration.
 
@@ -184,7 +186,8 @@ podcast title, artwork, `audio_url`, `playback` manifest, duration). It
 returns `{"item": null}` when there is none.
 
 **`GET /api/me/listening?state=in_progress&limit=`** lists unfinished rows
-newest first for the Continue listening strip (Phase 3).
+written in the last 3 days, newest first, for the Continue listening strip
+(Phase 3).
 
 **Read payloads.** Inbox items (`GET /api/inbox`, `GET /api/inbox/{id}`)
 and the episode detail response
@@ -214,8 +217,14 @@ logical position:
 - every 15 s of playback (wall clock, throttled off `timeupdate`);
 - on pause, on seek end (debounced 1 s), on Stop, and on `ended`;
 - before a track change, for the outgoing episode;
-- on `pagehide` and on `visibilitychange` to `hidden`, with
-  `fetch(…, {keepalive: true})` so the write outlives the document.
+- on `pagehide` (as `pause`) and on `visibilitychange` to `hidden` (as
+  `tick`, because a backgrounded phone tab usually keeps playing and must
+  not complete the episode), with `fetch(…, {keepalive: true})` so the
+  write outlives the document.
+
+Until a resume or restore seek lands, the engine reports 0:00. The writer
+holds every write for that session until the seek's `seeked` event, so a
+pause or page hide in that window can never overwrite the stored position.
 
 A paused tab never writes, so a forgotten tab on another device cannot
 overwrite newer progress. Writes are fire-and-forget: a failure never
@@ -301,7 +310,7 @@ length of an outro ad read. On completion the service sets `completed_at`
 and resets `position_seconds` to 0, so the next play starts from the top.
 
 Completing an episode also marks its inbox row read if it was unread, via
-the existing `mark_read_if_unread`
+the existing `InboxService.mark_read`
 ([inbox_service.py:382](../thestill/services/inbox_service.py#L382)).
 Listening to the end is consuming the episode, just as opening its summary
 is. Rows in `saved` or `dismissed` are untouched.
@@ -325,7 +334,8 @@ Apple Podcasts:
   and rewinds the bar to 0 so a later tick cannot undo the mark.
 - **Mark as unplayed** sends `event: "mark_unplayed"`. It clears
   `completed_at`, leaves the position at 0 and does not touch the inbox
-  row; reading state is the inbox's own control.
+  row; reading state is the inbox's own control. With no position the
+  episode is in neither `latest` nor the Continue listening list.
 
 The manual action writes with its own `session_id` per click, so it always
 wins over whatever was stored and is never rejected as out of order.
@@ -336,15 +346,23 @@ wins over whatever was stored and is never rejected as out of order.
   existing bar ([#71](71-player-shell-layer.md)) paused at the position.
 - **Inbox rows.** A 2 px progress line along the bottom of the artwork and
   "32 min left" in the existing metadata line; "Played" with a check once
-  completed. No extra row height (spec #73 density rules). Mark as played /
-  unplayed sits in the row's existing actions menu.
-- **Episode page.** The primary play button reads "Resume · 32 min left"
-  when there is a position, with a quiet "Play from beginning" link next to
-  it. A completed episode shows "Played" and the button plays from 0.
-  Mark as played / unplayed sits with the page's other episode actions.
+  completed. No extra row height (spec #73 density rules). Rows have no
+  actions menu, and adding one would narrow every title, so marking lives
+  on the episode page, which an inbox row opens as an overlay.
+- **Episode page.** Following Spotify: the primary button reads
+  "32 min left" when there is a position (accessible name "Resume episode,
+  32 min left"), the way an unplayed episode's reads "58 min"; the full
+  "Resume · 32 min left" does not fit the 320 px action row. The eyebrow
+  carries a small progress meter, or "✓ Played" once completed, and a
+  completed episode's button plays from 0. A ⋯ More menu takes the Share
+  icon's slot (the row is held to four 44 px slots) and holds Share, Play
+  from beginning (`play(track, {restart: true})`, only with a position)
+  and Mark as played / unplayed.
 - **Continue listening strip (Phase 3).** Above the inbox list, up to three
   unfinished episodes from `GET /api/me/listening?state=in_progress`,
   styled like the Arriving soon strip ([#88](88-import-outcomes-and-arriving-soon.md)).
+  Only episodes listened to in the last 3 days: an abandoned episode drops
+  out on its own and keeps its position (resume, inbox row, restore).
   Each item resumes in place. Hidden when empty and while `?q=` filters the
   inbox (spec #85).
 
@@ -352,7 +370,7 @@ wins over whatever was stored and is never rejected as out of order.
 
 | Failure | Behaviour | Why it is not silent |
 | --- | --- | --- |
-| Write fails (offline, 5xx, server restart) | Playback continues; the pending write stays in memory and the tab snapshot and is re-sent on the next tick or load | `console.warn` once per failure streak; server errors are logged by the route |
+| Write fails (offline, 5xx, server restart) | Playback continues; the pending write stays in memory and the tab snapshot and is re-sent on the next tick or load | `console.warn` once per failure streak; server errors are logged by the app's unhandled-exception handler (`unhandled_exception`) |
 | Late or duplicate write from the same tab | Rejected by `session_id` + `seq`; response `accepted: false` | Logged at debug with both `seq` values |
 | Browser refuses automatic playback after reload | Bar restored paused at the position | Expected outcome, documented above; not a `mediaError` |
 | Restore target deleted or unknown | `latest` never returns it (cascade); a stale tab snapshot gets a 404 on its re-sent write and is cleared | Route returns 404, client drops the snapshot |
@@ -368,7 +386,7 @@ never log positions at info level, and no position is sent to analytics.
 ### Phase 1 — Store and API
 
 - Table in `postgres_schema`, the SQLite migration block and Alembic
-  `0014`; repository pair with a shared contract test run against both
+  `0016`; repository pair with a shared contract test run against both
   backends (Postgres via `TEST_DATABASE_URL`).
 - `ListeningProgressService`: write ordering, clamping, completion,
   mark played / unplayed, mark-read on completion.
@@ -383,14 +401,18 @@ never log positions at info level, and no position is sent to analytics.
 
 ### Phase 2 — Player
 
-- `useListeningProgressWriter`: cadence, keepalive flush on
-  `pagehide`/`visibilitychange`, pending-write retry.
+- `ProgressWriter` (framework-free) behind one `usePlaybackPersistence`
+  hook: cadence, keepalive flush on `pagehide`/`visibilitychange`,
+  pending-write retry, the hold until a resume seek lands.
+- Tab snapshot keyed to the signed-in user, so a shared tab never restores
+  or re-sends another account's session.
 - Tab snapshot mirror.
 - Restore on mount (snapshot, then `latest`), best-effort autoplay,
   abandon on user action.
 - Resume on play from the cache, parallel fetch plus
   `NativeEngine.setPendingSeek` for surfaces without `listening`.
-- Marking the current track played pauses and rewinds it.
+- Marking the current track played pauses and rewinds it; marking it
+  unplayed while it plays opens a fresh session so the listen keeps saving.
 - Tests in `PlayerContext.test.tsx` with fake timers: 15 s cadence,
   flush on `pagehide`, restore from snapshot without network, autoplay
   rejection leaves the bar paused with no error, explicit `startAt` beats
@@ -401,9 +423,11 @@ never log positions at info level, and no position is sent to analytics.
 
 ### Phase 3 — Surfaces
 
-- Inbox row progress line, time left, Played, and Mark as played /
-  unplayed in the row actions.
-- Episode page Resume / Play from beginning / Played / Mark as played.
+- Inbox row progress line, time left and Played (no row actions; see
+  Surfaces).
+- Episode page: time left on the primary button, eyebrow meter or Played,
+  and the ⋯ More menu with Share, Play from beginning and Mark as played /
+  unplayed.
 - Continue listening strip on `/inbox`.
 
 ## Known Gaps
@@ -435,3 +459,8 @@ None.
 | 2026-09-30 | Finishing marks the inbox row read (unread only) | Listening to the end is consuming the episode; Spotify likewise ties finishing to list tidying (Remove played episodes), and the manual toggle covers mistakes |
 | 2026-09-30 | Played episodes are never removed from the inbox | Product rule: the inbox never drops a row on its own; completion only moves unread to read |
 | 2026-09-30 | Fixed 45 s completion threshold plus a manual Mark as played / unplayed | No player publishes its rule; a manual correction matters more than tuning the number |
+| 2026-10-16 | Episode-page actions follow Spotify: a ⋯ More menu in the Share slot, "32 min left" on the primary button | The action row is held to four 44 px slots at 320 px; Spotify keeps Mark as played in a ⋯ menu beside Share |
+| 2026-10-16 | No Mark as played on inbox rows | Rows have no actions menu; a per-row ⋯ would narrow every title (spec #73) |
+| 2026-10-16 | Hidden visibility writes a `tick`, page hide a `pause` | A backgrounded phone tab keeps playing; only a dying document should be able to complete an episode |
+| 2026-10-16 | Writes hold until the resume seek lands | The engine reports 0:00 before metadata; a pause in that window would erase the stored position |
+| 2026-10-16 | Continue listening shows only the last 3 days | Unfinished rows never expire, so without a window the strip keeps resurfacing episodes the user gave up on; Stop only dismisses the bar, and Mark as played would wrongly mark the inbox row read. Restore keeps no age limit |

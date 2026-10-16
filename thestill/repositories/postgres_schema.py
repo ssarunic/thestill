@@ -303,6 +303,23 @@ CREATE INDEX IF NOT EXISTS idx_inbox_user_all ON user_episode_inbox(user_id, del
 CREATE INDEX IF NOT EXISTS idx_inbox_user_source ON user_episode_inbox(user_id, source, delivered_at);
 CREATE INDEX IF NOT EXISTS idx_inbox_episode ON user_episode_inbox(episode_id);
 
+-- Spec #90 — one listening position per user and episode, on the logical
+-- (transcript) timeline. Writes are ordered by (session_id, seq), never by
+-- client clocks; updated_at is server time.
+CREATE TABLE IF NOT EXISTS user_episode_progress (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    position_seconds double precision NOT NULL CHECK (position_seconds >= 0),
+    duration_seconds double precision NULL CHECK (duration_seconds IS NULL OR duration_seconds > 0),
+    completed_at timestamptz NULL,
+    stopped_at timestamptz NULL,
+    session_id text NOT NULL,
+    seq bigint NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (user_id, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_progress_user_updated ON user_episode_progress(user_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS user_briefings (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,

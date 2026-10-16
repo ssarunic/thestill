@@ -12,6 +12,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import { createQueryClient } from './queryClient'
 import ErrorBoundary from './components/ErrorBoundary'
 import { installChunkReloadHandler } from './utils/chunkReload'
+import { ListeningQuerySync } from './hooks/useListening'
 
 const queryClient = createQueryClient()
 
@@ -21,6 +22,8 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
+      {/* Spec #90 — listening writes refresh the queries they invalidate. */}
+      <ListeningQuerySync />
       <BrowserRouter>
         <AuthProvider>
           <ToastProvider>

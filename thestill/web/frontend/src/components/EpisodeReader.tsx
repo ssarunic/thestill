@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh } from '../hooks/useApi'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer } from '../contexts/PlayerContext'
+import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
 
@@ -37,6 +38,7 @@ import EntityFilterBar from './episode-entities/EntityFilterBar'
 import EntityBranchProgress from './EntityBranchProgress'
 import type { FailureType, EntityType, EpisodeEntity, EpisodeState, EpisodeTask, MentionLite, SummaryCitation } from '../api/types'
 import { ENTITY_BRANCH_STAGES } from '../constants/stages'
+import { buildPlayerTrack } from '../utils/playerTrack'
 
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
@@ -375,23 +377,7 @@ export default function EpisodeReader({
   // One track object for every play entry point on this page (play button,
   // segment seek, theater surface) — includes the spec #61 playback-asset
   // manifest so video episodes start on the video rendition.
-  const playerTrack = useMemo(
-    () =>
-      episode
-        ? {
-            episodeId: episode.id,
-            podcastSlug: podcastSlug!,
-            episodeSlug: episodeSlug!,
-            title: episode.title,
-            podcastTitle: episode.podcast_title,
-            audioUrl: episode.audio_url,
-            artworkUrl: episode.image_url ?? episode.podcast_image_url,
-            durationHint: episode.duration,
-            playback: episode.playback ?? null,
-          }
-        : null,
-    [episode, podcastSlug, episodeSlug],
-  )
+  const playerTrack = useMemo(() => (episode ? buildPlayerTrack(episode) : null), [episode])
 
   const handleSegmentSeek = useCallback(
     (seconds: number) => {
@@ -429,6 +415,15 @@ export default function EpisodeReader({
   const handleWatchVideo = useCallback(() => {
     if (playerTrack) player.playYouTube(playerTrack)
   }, [player, playerTrack])
+  // Spec #90 — the payload's position, or the player's newer one.
+  const listening = useResolvedListening(episode?.id, episodeData?.listening)
+  const handlePlayFromStart = useCallback(() => {
+    if (playerTrack) player.play(playerTrack, { restart: true })
+  }, [player, playerTrack])
+  const handleMarkPlayed = useCallback(
+    (played: boolean) => (episode ? player.markListened(episode.id, played) : Promise.resolve()),
+    [episode, player],
+  )
 
   const { titleRef, collapsed } = useCollapsingHeader(scrollContainerRef, collapseTopOffset)
   useEffect(() => {
@@ -531,6 +526,9 @@ export default function EpisodeReader({
             onWatchVideo={handleWatchVideo}
             shareUrl={window.location.href}
             inboxAction={<InboxActionButton episodeId={episode.id} />}
+            listening={listening}
+            onPlayFromStart={handlePlayFromStart}
+            onMarkPlayed={handleMarkPlayed}
           />
 
           {episode.is_failed && episode.failed_at_stage && (

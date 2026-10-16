@@ -240,6 +240,31 @@ class TestGetEpisodeBySlugs:
         assert data["platform_links"] == [{"platform": "apple", "url": "https://podcasts.apple.com/x?i=1"}]
         mock_app_state.repository.get_platform_links.assert_called_once_with(data["id"])
 
+    def test_listening_is_the_callers_progress_or_null(self, client, mock_app_state, mock_user):
+        """Spec #90 — a top-level ``listening`` sibling of ``episode``."""
+        from datetime import datetime, timezone
+
+        from thestill.models.listening import ListeningSummary
+
+        podcast, episode = self._result()
+        mock_app_state.repository.get_episode_by_slug.return_value = (podcast, episode)
+        mock_app_state.repository.get_alternate_enclosures.return_value = []
+        mock_app_state.repository.get_platform_links.return_value = []
+        url = "/api/podcasts/prof-g-markets/episodes/why-nobody-trusts-the-news"
+
+        mock_app_state.listening_service.get_summary.return_value = None
+        assert client.get(url).json()["listening"] is None
+
+        updated = datetime(2026, 10, 1, tzinfo=timezone.utc)
+        mock_app_state.listening_service.get_summary.return_value = ListeningSummary(
+            position_seconds=1934.2, duration_seconds=7412.0, updated_at=updated
+        )
+        listening = client.get(url).json()["listening"]
+        assert listening["position_seconds"] == 1934.2
+        assert listening["duration_seconds"] == 7412.0
+        assert listening["completed_at"] is None
+        mock_app_state.listening_service.get_summary.assert_called_with(mock_user.id, episode.id)
+
     def test_no_platform_links_is_an_empty_list(self, client, mock_app_state):
         assert self._get(client, mock_app_state)["platform_links"] == []
 

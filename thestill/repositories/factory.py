@@ -36,6 +36,7 @@ from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
 from .inbox_repository import InboxRepository
 from .link_decision_repository import LinkDecisionRepository
+from .listening_progress_repository import ListeningProgressRepository
 from .mcp_token_repository import McpTokenRepository
 from .podcast_follower_repository import PodcastFollowerRepository
 from .user_repository import UserRepository
@@ -125,6 +126,7 @@ class RepositoryBundle:
     briefing_schedule: BriefingScheduleRepository
     briefing_delivery: BriefingDeliveryRepository
     mcp_token: McpTokenRepository
+    listening_progress: ListeningProgressRepository
     link_decision: LinkDecisionRepository
     legacy_claim: Any
     pending_ops: Any
@@ -146,6 +148,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_inbox_repository import PostgresInboxRepository
         from .postgres_legacy_claim_repository import PostgresLegacyClaimRepository
         from .postgres_link_decision_repository import PostgresLinkDecisionRepository
+        from .postgres_listening_progress_repository import PostgresListeningProgressRepository
         from .postgres_mcp_token_repository import PostgresMcpTokenRepository
         from .postgres_pending_operations_repository import PostgresPendingOperationsRepository
         from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
@@ -162,6 +165,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             briefing_schedule=PostgresBriefingScheduleRepository(dsn),
             briefing_delivery=PostgresBriefingDeliveryRepository(dsn),
             mcp_token=PostgresMcpTokenRepository(dsn),
+            listening_progress=PostgresListeningProgressRepository(dsn),
             link_decision=PostgresLinkDecisionRepository(dsn),
             legacy_claim=PostgresLegacyClaimRepository(dsn),
             pending_ops=PostgresPendingOperationsRepository(dsn),
@@ -178,6 +182,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_inbox_repository import SqliteInboxRepository
     from .sqlite_legacy_claim_repository import SqliteLegacyClaimRepository
     from .sqlite_link_decision_repository import SqliteLinkDecisionRepository
+    from .sqlite_listening_progress_repository import SqliteListeningProgressRepository
     from .sqlite_mcp_token_repository import SqliteMcpTokenRepository
     from .sqlite_pending_operations_repository import SqlitePendingOperationsRepository
     from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
@@ -194,6 +199,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
         briefing_delivery=SqliteBriefingDeliveryRepository(db_path=db_path),
         mcp_token=SqliteMcpTokenRepository(db_path=db_path),
+        listening_progress=SqliteListeningProgressRepository(db_path=db_path),
         link_decision=SqliteLinkDecisionRepository(db_path=db_path),
         legacy_claim=SqliteLegacyClaimRepository(db_path=db_path),
         pending_ops=SqlitePendingOperationsRepository(db_path=db_path),

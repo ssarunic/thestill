@@ -51,7 +51,7 @@ Commands below).
 | `/api/episodes/failed` | GET | List episodes with pipeline failures |
 | `/api/episodes/bulk/process` | POST | Queue full pipeline processing for multiple episodes |
 | `/api/podcasts/{podcast_slug}/episodes` | GET | List episodes (filterable) |
-| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details, plus the caller's `listening` progress (spec #90; `null` when never played) |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
@@ -107,7 +107,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`) |
+| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`). Each item carries the user's `listening` progress (spec #90), `null` when never played |
 | `/api/inbox/unread-count` | GET | Lightweight unread count for badge rendering |
 | `/api/inbox/arriving` | GET | Spec #88 "Arriving soon": episodes of podcasts you follow that have an active pipeline task, no `published_at`, no failure, and no row in your inbox. Query: `limit` (1–20, default 5). Returns `items` (`episode` + `podcast`), `count` and `total`. Read-only; these are not inbox rows |
 | `/api/inbox/{episode_id}` | GET | Spec #88: your row for one episode, `{"entry": …}` or `{"entry": null}` when never delivered |
@@ -222,6 +222,10 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
+| `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position |
+| `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
+| `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
+| `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes written in the last 3 days, newest first, for the Continue listening strip |
 
 ### Webhooks
 
