@@ -598,8 +598,9 @@ What was built differs from the sections above in these places:
   state and the tool-call event carries it.
 - **The browser SDK is bootstrapped with the user id**, so memory
   persistence never mints an anonymous id to merge, and it sends no
-  `$identify`: the `is_admin` person property comes only from server
-  events (`$set` on identified captures).
+  `$identify`. It sends one `$set` per load with `is_admin` and nothing
+  else (sign-in events are anonymous, so they cannot carry it), for the
+  internal-users filter.
 - **Stopping is an in-memory flag, not posthog-js opt-out**, because the
   SDK writes opt-out consent to `localStorage` even with memory
   persistence. `before_send` drops everything while stopped.

@@ -26,7 +26,7 @@ export function gpcEnabled(): boolean {
   return (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true
 }
 
-export function startAnalytics(key: string, user: { id: string }): void {
+export function startAnalytics(key: string, user: { id: string; is_admin: boolean }): void {
   if (gpcEnabled()) return
   stopped = false
   if (posthog || loading) return
@@ -37,7 +37,7 @@ export function startAnalytics(key: string, user: { id: string }): void {
         ui_host: 'https://eu.posthog.com',
         persistence: 'memory',
         // Start as the reader: no anonymous id is minted and nothing has to
-        // be merged. ``is_admin`` reaches the person from the server's events.
+        // be merged.
         bootstrap: { distinctID: user.id, isIdentifiedID: true },
         person_profiles: 'identified_only',
         autocapture: false,
@@ -58,6 +58,9 @@ export function startAnalytics(key: string, user: { id: string }): void {
         before_send: beforeSend,
       })
       posthog = client
+      // The one person property: lets PostHog's internal-users filter hide
+      // the operator. Sent once per load; nothing else about the person.
+      if (!stopped) client.setPersonProperties({ is_admin: user.is_admin })
       for (const [event, props] of pending.splice(0)) client.capture(event, props)
       return client
     })

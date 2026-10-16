@@ -21,6 +21,7 @@ else.
 | Event | Sent by | Props |
 |---|---|---|
 | `$pageview` | signed-in app, on route change | `path_kind` (the route pattern, e.g. `/podcasts/:podcastSlug`) |
+| `$set` | signed-in app, once per load | person property `is_admin` only (for the internal-users filter) |
 | `share` | signed-in app (episode share button, transcript timestamp link) | `kind`: `episode` or `moment` |
 | `entity_open` | signed-in app, entity page | `entity_type` |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |

@@ -31,7 +31,7 @@ describe('AnalyticsBridge (spec #95)', () => {
 
   it('starts for a signed-in reader with a key and reports route patterns', async () => {
     renderAt('/podcasts/hard-fork/episodes/ep-1?t=30')
-    expect(startAnalytics).toHaveBeenCalledWith('phc_test', { id: 'u-1' })
+    expect(startAnalytics).toHaveBeenCalledWith('phc_test', { id: 'u-1', is_admin: true })
     expect(track).toHaveBeenCalledWith('$pageview', { path_kind: '/podcasts/:podcastSlug/episodes/:episodeSlug' })
 
     await userEvent.setup().click(document.querySelector('a')!)
