@@ -152,3 +152,38 @@ describe('PodcastDetail header (spec #76 phase 3)', () => {
     expect(screen.queryByRole('link', { name: 'Website' })).toBeNull()
   })
 })
+
+describe('PodcastDetail pending follow (spec #102)', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  async function followMutate() {
+    const { useFollowPodcast } = await import('../hooks/useApi')
+    const mutate = vi.fn()
+    ;(useFollowPodcast as ReturnType<typeof vi.fn>).mockReturnValue({ mutate })
+    return mutate
+  }
+
+  it('follows the show a visitor chose to follow before signing in', async () => {
+    const mutate = await followMutate()
+    mockUsePodcast.mockReturnValue({ data: podcast(), isLoading: false, error: null })
+    window.sessionStorage.setItem('thestill.pendingFollow', JSON.stringify({ slug: 'prof-g-markets', at: Date.now() }))
+    renderPage()
+    expect(mutate).toHaveBeenCalledTimes(1)
+    expect(mutate.mock.calls[0][0]).toBe('prof-g-markets')
+    expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
+  })
+
+  it('does nothing without a pending follow, or when already following', async () => {
+    const mutate = await followMutate()
+    mockUsePodcast.mockReturnValue({ data: podcast(), isLoading: false, error: null })
+    renderPage()
+    expect(mutate).not.toHaveBeenCalled()
+
+    window.sessionStorage.setItem('thestill.pendingFollow', JSON.stringify({ slug: 'prof-g-markets', at: Date.now() }))
+    mockUsePodcast.mockReturnValue({ data: podcast({ is_following: true }), isLoading: false, error: null })
+    renderPage()
+    expect(mutate).not.toHaveBeenCalled()
+  })
+})

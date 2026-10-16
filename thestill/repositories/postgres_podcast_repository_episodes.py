@@ -1823,6 +1823,38 @@ class EpisodesMixin(CategoryCacheMixin):
             ).fetchone()
             return as_str(row["id"]) if row else None
 
+    def list_public_episode_rows(
+        self,
+        *,
+        podcast_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        order_by: str = "pub_date",
+    ) -> Tuple[List[Dict], int]:
+        order_column = {"pub_date": "e.pub_date", "published_at": "e.published_at"}[order_by]
+        params: list = []
+        podcast_filter = ""
+        if podcast_id is not None:
+            podcast_filter = "AND e.podcast_id = %s"
+            params.append(podcast_id)
+        sql = f"""
+        SELECT e.id, e.slug, e.title, e.pub_date, e.duration, e.image_url, e.summary_preview,
+               e.published_at, e.guest_entity_ids,
+               p.id AS podcast_id, p.slug AS podcast_slug, p.title AS podcast_title,
+               p.image_url AS podcast_image_url,
+               COUNT(*) OVER () AS total_count
+          FROM episodes e
+          JOIN podcasts p ON p.id = e.podcast_id
+         WHERE e.summary_path IS NOT NULL AND COALESCE(e.summary_preview, '') <> '' AND e.slug <> '' AND p.slug <> '' AND p.public_pages AND NOT p.synthetic
+           {podcast_filter}
+         ORDER BY {order_column} DESC NULLS LAST, e.id
+         LIMIT %s OFFSET %s
+"""
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (*params, limit, offset)).fetchall()
+        total = int(rows[0]["total_count"]) if rows else 0
+        return [dict(row) for row in rows], total
+
     def set_episode_summary_preview(self, episode_id: str, preview: Optional[str]) -> None:
         # No updated_at bump on purpose — see the interface docstring.
         with connect(self.dsn) as conn:

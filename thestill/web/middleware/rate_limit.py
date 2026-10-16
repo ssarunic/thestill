@@ -80,6 +80,13 @@ MCP_MISS_LIMIT = RateLimit(
     window_seconds=_int_env("RATE_LIMIT_MCP_MISS_WINDOW_SECONDS", 60),
 )
 
+# Spec #94 — signed-out reads of the public pages (API + page shell lookups),
+# per client IP. One page view costs 3-6 requests, so 120/min is ~20 pages a
+# minute for a person and a hard ceiling for a scraper.
+PUBLIC_LIMIT = RateLimit(
+    max_events=_int_env("RATE_LIMIT_PUBLIC_MAX", 120),
+    window_seconds=_int_env("RATE_LIMIT_PUBLIC_WINDOW_SECONDS", 60),
+)
 
 # Once the bucket table grows past this size, each allow() call evicts any
 # keys whose newest entry is older than the current window. Keeps the
@@ -267,12 +274,28 @@ def record_mcp_token_miss(client_ip: str) -> None:
         logger.warning("mcp_token_miss_budget_exhausted", client_ip=client_ip, max_events=MCP_MISS_LIMIT.max_events)
 
 
+def allow_public_request(request: Request) -> bool:
+    """Charge one signed-out public read to the caller's IP bucket (spec #94).
+
+    Returns False once :data:`PUBLIC_LIMIT` is exhausted; the caller answers
+    429. A plain function (not a dependency) so the page shell can use it
+    without raising ``HTTPException``.
+    """
+    key = _client_key(request, "public")
+    allowed = _LIMITER.allow(key, PUBLIC_LIMIT)
+    if not allowed:
+        logger.warning("rate_limit_exceeded", key=key, max_events=PUBLIC_LIMIT.max_events)
+    return allowed
+
+
 def reset_for_testing() -> None:
     """Flush all buckets — call from test fixtures, never production."""
     _LIMITER.reset()
 
 
 __all__ = [
+    "PUBLIC_LIMIT",
+    "allow_public_request",
     "AUTH_LIMIT",
     "WEBHOOK_LIMIT",
     "MCP_MUTATION_LIMIT",

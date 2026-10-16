@@ -260,6 +260,7 @@ Both default as shown. The only port-related environment variable is
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `WEBHOOK_SERVER_PORT` | Port advertised for transcription webhook callbacks | `8000` |
+| `THESTILL_STATIC_DIR` | Directory of the built web frontend the server serves (the SPA shell and its assets) | `thestill/web/static` |
 
 ## Authentication
 
@@ -304,6 +305,7 @@ When `MULTI_USER=true`:
 | `ALLOWED_ORIGINS` | Comma-separated CORS origins | - (empty) |
 | `TRUSTED_PROXIES` | Comma-separated proxy IPs whose forwarded headers are honored | - (empty) |
 | `PUBLIC_BASE_URL` | Operator-declared external base URL (OAuth callbacks, email links) | - |
+| `PUBLIC_PAGES_ENABLED` | Serve the signed-out public pages, `/api/public`, `robots.txt` and `sitemap.xml` in multi-user mode (spec #94); `false` restores the sign-in wall | `true` |
 | `ENABLE_DOCS` | Expose FastAPI docs endpoints (`/docs`, `/redoc`) | `false` |
 | `MAX_AUDIO_BYTES` | Upper bound on downloaded audio size | `2147483648` (2 GiB) |
 | `MAX_WEBHOOK_BODY_BYTES` | Upper bound on webhook request bodies | `1048576` (1 MiB) |
@@ -323,6 +325,8 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 |----------|-------------|---------|
 | `RATE_LIMIT_MCP_MISS_MAX` | Unknown/revoked/expired remote-MCP tokens per client IP per window before the guard stops looking them up (spec #78) | `120` |
 | `RATE_LIMIT_MCP_MISS_WINDOW_SECONDS` | Window for the MCP token-miss budget | `60` |
+| `RATE_LIMIT_PUBLIC_MAX` | Signed-out `/api/public` and page-shell lookups per client IP per window (spec #94); signed-in requests skip it | `120` |
+| `RATE_LIMIT_PUBLIC_WINDOW_SECONDS` | Public budget window length | `60` |
 | `RATE_LIMIT_AUTH_MAX` | Auth endpoint requests per window | `10` |
 | `RATE_LIMIT_AUTH_WINDOW_SECONDS` | Auth window length | `60` |
 | `RATE_LIMIT_WEBHOOK_MAX` | Webhook requests per window | `60` |

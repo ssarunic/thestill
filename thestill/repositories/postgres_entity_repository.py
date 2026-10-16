@@ -38,7 +38,7 @@ The one deliberate contract quirk kept for fidelity:
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from psycopg.types.json import Jsonb
 from structlog import get_logger
@@ -57,6 +57,7 @@ from .entity_repository import (
     EntityRepository,
     MentionContext,
 )
+from .public_quotes import PublicQuoteQueries
 
 logger = get_logger(__name__)
 
@@ -984,6 +985,18 @@ class PostgresEntityRepository(EntityRepository):
             ).fetchone()
         return _row_to_enrichment(row) if row else None
 
+    def get_entity_image_urls(self, entity_ids: Sequence[str]) -> Dict[str, str]:
+        ids = [i for i in dict.fromkeys(entity_ids) if i]
+        if not ids:
+            return {}
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT entity_id, image_url FROM entity_enrichment "
+                "WHERE entity_id = ANY(%s) AND COALESCE(image_url, '') <> ''",
+                (ids,),
+            ).fetchall()
+        return {r["entity_id"]: r["image_url"] for r in rows}
+
     def delete_enrichment(self, entity_id: str) -> bool:
         """Drop an entity's ``entity_enrichment`` row so it re-enriches."""
         with connect(self.dsn) as conn:
@@ -1672,6 +1685,23 @@ class PostgresEntityRepository(EntityRepository):
             for entry in entries[1:]:
                 pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def public_quote_queries(self) -> PublicQuoteQueries:
+        def fetch(sql: str, params) -> List[dict]:
+            with connect(self.dsn) as conn:
+                return [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
+
+        return PublicQuoteQueries(fetch, "%s")
+
+    def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute("UPDATE entities SET public_hidden = %s WHERE id = %s", (hidden, entity_id))
+            return cursor.rowcount > 0
+
+    def list_hidden_entity_ids(self) -> Set[str]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute("SELECT id FROM entities WHERE public_hidden = true").fetchall()
+        return {row["id"] for row in rows}
 
     def find_mistyped_entities(
         self,

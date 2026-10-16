@@ -30,16 +30,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from structlog import get_logger
 
 from ..models.enrichment import EnrichmentStatus, EntityAffiliation, EntityEnrichment, EntityFact
 from ..models.entities import EntityMention, EntityRecord, EntityType, MentionRole, ResolutionMethod, ResolutionStatus
-
-# ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
-# spec #44; re-exported here so existing call sites keep importing them
-# from this module.
 from .entity_repository import (
     ANCHOR_SCAN_OVERLAPS_SQL,
     RECENT_MENTIONS_BY_EPISODE_SQL,
@@ -51,6 +47,11 @@ from .entity_repository import (
     EntityRepository,
     MentionContext,
 )
+
+# ``EntityHit`` / ``MentionContext`` moved to the shared ABC module with
+# spec #44; re-exported here so existing call sites keep importing them
+# from this module.
+from .public_quotes import PublicQuoteQueries
 
 __all__ = ["SqliteEntityRepository", "EntityHit", "MentionContext"]
 
@@ -1134,6 +1135,22 @@ class SqliteEntityRepository(EntityRepository):
             ).fetchone()
         return _row_to_enrichment(row) if row else None
 
+    def get_entity_image_urls(self, entity_ids: Sequence[str]) -> Dict[str, str]:
+        ids = [i for i in dict.fromkeys(entity_ids) if i]
+        if not ids:
+            return {}
+        found: Dict[str, str] = {}
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), 500):  # stay under SQLite's variable limit
+                chunk = ids[start : start + 500]
+                rows = conn.execute(
+                    f"SELECT entity_id, image_url FROM entity_enrichment "
+                    f"WHERE entity_id IN ({','.join('?' * len(chunk))}) AND COALESCE(image_url, '') <> ''",
+                    chunk,
+                ).fetchall()
+                found.update({r["entity_id"]: r["image_url"] for r in rows})
+        return found
+
     def delete_enrichment(self, entity_id: str) -> bool:
         """Drop an entity's ``entity_enrichment`` row so it re-enriches.
 
@@ -1906,6 +1923,23 @@ class SqliteEntityRepository(EntityRepository):
             for entry in entries[1:]:
                 pairs.append((qid, keeper, entry["id"]))
         return pairs
+
+    def public_quote_queries(self) -> PublicQuoteQueries:
+        def fetch(sql: str, params) -> List[dict]:
+            with self._get_connection() as conn:
+                return [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
+
+        return PublicQuoteQueries(fetch, "?")
+
+    def set_entity_public_hidden(self, entity_id: str, hidden: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE entities SET public_hidden = ? WHERE id = ?", (1 if hidden else 0, entity_id))
+            return cursor.rowcount > 0
+
+    def list_hidden_entity_ids(self) -> Set[str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT id FROM entities WHERE public_hidden = 1").fetchall()
+        return {row["id"] for row in rows}
 
     def find_mistyped_entities(
         self,

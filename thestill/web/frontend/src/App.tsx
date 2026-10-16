@@ -6,6 +6,7 @@ import AdminRoute from './components/AdminRoute'
 import { PlayerProvider } from './contexts/PlayerContext'
 import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
+import { useAuth } from './contexts/AuthContext'
 
 // Lazy load pages for code splitting
 const Status = lazy(() => import('./pages/Dashboard'))
@@ -23,6 +24,9 @@ const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
+// Spec #94 — the signed-out public site, its own chunk (no player, no inbox).
+const PublicApp = lazy(() => import('./PublicApp'))
+const LegalPage = lazy(() => import('./pages/public/LegalPage'))
 const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 
 // Loading fallback for page transitions
@@ -44,6 +48,19 @@ function App() {
   // in a reader overlay above it. Refresh/direct links have no state and
   // fall through to the standalone EpisodeDetail route as before.
   const backgroundLocation = useBackgroundLocation()
+  const { isAnonymous } = useAuth()
+
+  // Spec #94 — a signed-out visitor in multi-user mode gets the public site:
+  // editorial pages for shows, episodes, people and entities, and sign-in
+  // for everything else. ``isAnonymous`` stays false while the auth status
+  // loads, so a signed-in deep link never flashes the public layout.
+  if (isAnonymous) {
+    return (
+      <Suspense fallback={<PageLoader />}>
+        <PublicApp />
+      </Suspense>
+    )
+  }
 
   return (
     <PlayerProvider>
@@ -54,6 +71,15 @@ function App() {
           <Login />
         </Suspense>
       } />
+
+      {/* Spec #94 — Terms and Privacy are readable signed in or not. */}
+      {(['terms', 'privacy'] as const).map((doc) => (
+        <Route key={doc} path={`/${doc}`} element={
+          <Suspense fallback={<PageLoader />}>
+            <LegalPage doc={doc} />
+          </Suspense>
+        } />
+      ))}
 
       {/* Protected routes with layout */}
       <Route path="/" element={

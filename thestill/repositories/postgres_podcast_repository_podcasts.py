@@ -642,6 +642,23 @@ class PodcastsMixin(CategoryCacheMixin):
     _PLATFORM_URL_COLUMNS = {"apple": "apple_url", "youtube": "youtube_url", "spotify": "spotify_url"}
     _PLATFORM_URL_SOURCES = ("chart", "publisher", "resolver", "curated")
 
+    def set_podcast_public_pages(self, podcast_id: str, public: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE podcasts SET public_pages = %s WHERE id = %s", (public, podcast_id))
+            return cursor.rowcount > 0
+
+    def is_podcast_public(self, podcast_id: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT public_pages AND NOT synthetic AS public FROM podcasts WHERE id = %s", (podcast_id,)
+            ).fetchone()
+        return bool(row and row["public"])
+
+    def list_hidden_podcasts(self) -> Dict[str, str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT id, slug FROM podcasts WHERE public_pages = false").fetchall()
+        return {str(row["id"]): row["slug"] for row in rows}
+
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
         """Store a show link + its source (spec #87 Phase 3c); a curated value only yields to 'curated'."""
         column = self._PLATFORM_URL_COLUMNS[platform]

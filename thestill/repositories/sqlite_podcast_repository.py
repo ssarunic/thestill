@@ -853,6 +853,12 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             if "wikidata_instance_of" not in entity_columns_now:
                 logger.info("Migrating database: adding wikidata_instance_of to entities")
                 conn.execute("ALTER TABLE entities ADD COLUMN wikidata_instance_of TEXT NOT NULL DEFAULT '[]'")
+            # Spec #94 — public-page hide switch (Postgres migration 0015).
+            if "public_hidden" not in entity_columns_now:
+                conn.execute("ALTER TABLE entities ADD COLUMN public_hidden INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mentions_episode_segment ON entity_mentions(episode_id, segment_id)"
+            )
 
         # spec #28 §1.13.7 — mention_overrides + resolution_blacklist tables.
         # The override layer is what guarantees human corrections survive
@@ -1746,6 +1752,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             logger.info("Migrating database: adding chart store-link columns to podcasts")
             conn.execute("ALTER TABLE podcasts ADD COLUMN apple_url TEXT NULL")
             conn.execute("ALTER TABLE podcasts ADD COLUMN youtube_url TEXT NULL")
+        # Spec #94 — publisher takedown switch for public pages (Postgres migration 0015).
+        if "public_pages" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN public_pages INTEGER NOT NULL DEFAULT 1")
         # Spec #87 — publisher-provided Spotify show link (never chart-sourced).
         if "spotify_url" not in podcast_columns_now:
             conn.execute("ALTER TABLE podcasts ADD COLUMN spotify_url TEXT NULL")
@@ -5686,6 +5695,24 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             return empty
         return {"apple_url": row["apple_url"], "youtube_url": row["youtube_url"], "spotify_url": row["spotify_url"]}
 
+    def set_podcast_public_pages(self, podcast_id: str, public: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE podcasts SET public_pages = ? WHERE id = ?", (1 if public else 0, podcast_id))
+            return cursor.rowcount > 0
+
+    def is_podcast_public(self, podcast_id: str) -> bool:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT public_pages = 1 AND COALESCE(synthetic, 0) = 0 AS public FROM podcasts WHERE id = ?",
+                (podcast_id,),
+            ).fetchone()
+        return bool(row and row["public"])
+
+    def list_hidden_podcasts(self) -> Dict[str, str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT id, slug FROM podcasts WHERE public_pages = 0").fetchall()
+        return {str(row["id"]): row["slug"] for row in rows}
+
     def set_podcast_platform_url(self, podcast_id: str, platform: str, url: Optional[str], *, source: str) -> bool:
         column = _PLATFORM_URL_COLUMNS[platform]  # KeyError on an unknown platform is the right failure
         if source not in PLATFORM_URL_SOURCES:
@@ -5887,6 +5914,38 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (podcast_id, audio_url),
             ).fetchone()
             return row["id"] if row else None
+
+    def list_public_episode_rows(
+        self,
+        *,
+        podcast_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+        order_by: str = "pub_date",
+    ) -> Tuple[List[Dict], int]:
+        order_column = {"pub_date": "e.pub_date", "published_at": "e.published_at"}[order_by]
+        params: list = []
+        podcast_filter = ""
+        if podcast_id is not None:
+            podcast_filter = "AND e.podcast_id = ?"
+            params.append(podcast_id)
+        sql = f"""
+        SELECT e.id, e.slug, e.title, e.pub_date, e.duration, e.image_url, e.summary_preview,
+               e.published_at, e.guest_entity_ids,
+               p.id AS podcast_id, p.slug AS podcast_slug, p.title AS podcast_title,
+               p.image_url AS podcast_image_url,
+               COUNT(*) OVER () AS total_count
+          FROM episodes e
+          JOIN podcasts p ON p.id = e.podcast_id
+         WHERE e.summary_path IS NOT NULL AND COALESCE(e.summary_preview, '') <> '' AND e.slug <> '' AND p.slug <> '' AND p.public_pages = 1 AND COALESCE(p.synthetic, 0) = 0
+           {podcast_filter}
+         ORDER BY {order_column} DESC NULLS LAST, e.id
+         LIMIT ? OFFSET ?
+"""
+        with self._get_connection() as conn:
+            rows = conn.execute(sql, (*params, limit, offset)).fetchall()
+        total = int(rows[0]["total_count"]) if rows else 0
+        return [dict(row) for row in rows], total
 
     def set_episode_summary_preview(self, episode_id: str, preview: Optional[str]) -> None:
         # No updated_at bump on purpose — see the interface docstring.

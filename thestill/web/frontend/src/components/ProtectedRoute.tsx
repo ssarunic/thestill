@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
 interface ProtectedRouteProps {
@@ -13,6 +13,7 @@ interface ProtectedRouteProps {
  */
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const { isAuthenticated, isLoading, isMultiUser } = useAuth()
+  const location = useLocation()
 
   // Show loading state while checking auth
   if (isLoading) {
@@ -30,7 +31,9 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
   // In multi-user mode, require authentication
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    // Spec #94 — come back here after signing in.
+    const next = encodeURIComponent(location.pathname + location.search)
+    return <Navigate to={`/login?next=${next}`} replace />
   }
 
   return <>{children}</>
