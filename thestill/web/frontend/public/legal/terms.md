@@ -10,7 +10,7 @@ thestill is run by {{operator_name}}, {{operator_description}} ("we", "us"). You
 
 ## What thestill does
 
-thestill reads publicly available podcast feeds, transcribes episodes with speech recognition and writes summaries with a language model. Signed-out visitors can read summaries and short quotes. Signed-in users can also read full transcripts, follow shows, import episodes and receive briefings.
+thestill reads publicly available podcast feeds, transcribes episodes with speech recognition and writes summaries with a language model. Signed-out visitors can read the opening of each summary and short quotes. Signed-in users can also read full summaries and transcripts, follow shows, import episodes and receive briefings.
 
 thestill is free. It is an early product: features will change, and we may pause, limit or stop any part of it, or the whole service, at any time. If we plan to shut thestill down, we will try to give signed-in users at least 30 days' notice.
 

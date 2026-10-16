@@ -11,7 +11,6 @@ import {
   QuoteSkeleton,
   Skeleton,
 } from '../../components/public/ui'
-import { splitSummary } from '../../components/public/helpers'
 import { usePublicRecentSummaries, usePublicSummary, usePublicWhoSaidWhat } from '../../hooks/usePublicApi'
 
 const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
@@ -49,7 +48,7 @@ function LatestSummary() {
       <div className="ts-summary">
         {summary.data ? (
           <Suspense fallback={<Skeleton width="100%" height={160} />}>
-            <SummaryViewer content={splitSummary(summary.data.content).lead} available />
+            <SummaryViewer content={summary.data.content} available />
           </Suspense>
         ) : (
           <p className="ts-standfirst">{episode.summary_preview}</p>

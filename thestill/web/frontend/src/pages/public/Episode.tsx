@@ -1,6 +1,6 @@
 // Spec #94 — a public episode: the summary, who spoke and their best
 // lines. The transcript exists behind sign-in; the tab says so.
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
 import {
@@ -14,7 +14,7 @@ import {
   SignInCard,
   Skeleton,
 } from '../../components/public/ui'
-import { splitSummary, useSignIn } from '../../components/public/helpers'
+import { useSignIn } from '../../components/public/helpers'
 import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
@@ -45,12 +45,12 @@ export default function Episode() {
 
   const episodeQuery = usePublicEpisode(podcastSlug, episodeSlug)
   const summary = usePublicSummary(podcastSlug, episodeSlug)
-  // The gist and key takeaways first; the rest one click away (the promise
-  // is a three-minute read).
-  const summaryParts = useMemo(() => (summary.data ? splitSummary(summary.data.content) : null), [summary.data])
-  const [fullSummary, setFullSummary] = useState(false)
+  // Signed out, the API serves only the gist and key takeaways; the rest of
+  // the summary is behind sign-in and comes back to this episode.
+  const episodeHref = episodePath(podcastSlug, episodeSlug)
+  const readFullSummary = useSignIn('summary', episodeHref)
   // The signed-in reader opens on the transcript with ?view=transcript.
-  const transcriptPath = `${episodePath(podcastSlug, episodeSlug)}?view=transcript`
+  const transcriptPath = `${episodeHref}?view=transcript`
   const readTranscript = useSignIn('transcript', transcriptPath)
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]
@@ -165,20 +165,17 @@ export default function Episode() {
                 </>
               )}
               {summary.isError && <ModuleError onRetry={() => summary.refetch()} />}
-              {summaryParts && (
+              {summary.data && (
                 <Suspense fallback={<Skeleton width="100%" height={200} />}>
-                  <SummaryViewer
-                    content={fullSummary ? `${summaryParts.lead}\n${summaryParts.rest}` : summaryParts.lead}
-                    available
-                  />
+                  <SummaryViewer content={summary.data.content} available />
                 </Suspense>
               )}
-              {summaryParts && summaryParts.rest && !fullSummary && (
+              {summary.data && summary.data.more_sections.length > 0 && (
                 <div className="ts-summary-more">
-                  <Button variant="secondary" onClick={() => setFullSummary(true)}>
-                    Read the full summary
+                  <Button variant="secondary" to={readFullSummary}>
+                    Sign in to read the full summary
                   </Button>
-                  <span className="ts-meta">Also: {summaryParts.restTitles.join(' · ')}</span>
+                  <span className="ts-meta">Also: {summary.data.more_sections.join(' · ')}</span>
                 </div>
               )}
             </article>

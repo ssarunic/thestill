@@ -214,6 +214,40 @@ def test_summary_never_calls_an_llm_or_translates(anon, app_state, monkeypatch):
     assert anon.get("/api/public/podcasts/public-show/episodes/summarised/summary?lang=fr").status_code == 404
 
 
+def test_summary_serves_only_the_lead(anon, app_state):
+    _seed(app_state)
+    response = anon.get("/api/public/podcasts/public-show/episodes/summarised/summary")
+    assert response.status_code == 200, response.text
+    assert "[01:00] Start" not in response.text
+    assert response.json()["more_sections"] == ["Timeline"]
+
+
+def test_summary_lead_keeps_gist_and_takeaways_and_names_the_rest():
+    summary = "\n".join(
+        [
+            "## 1. 🎙️ The Gist",
+            "Two hosts argue about chips.",
+            "## 2. ⏱️ Timeline",
+            "- [01:00] Start",
+            "## 3. 🧠 Key Takeaways",
+            "- Chips are hard.",
+            "## 5. 💬 Best Quotes",
+            "> A secret quote",
+            '## 9. 💩 The "BS" Test',
+            "Mostly fine.",
+        ]
+    )
+    lead, more = api_public._summary_lead(summary)
+    assert lead == "## 🎙️ The Gist\nTwo hosts argue about chips.\n## 🧠 Key Takeaways\n- Chips are hard."
+    assert more == ["Timeline", "Best Quotes", 'The "BS" Test']
+
+
+def test_summary_lead_without_known_sections_keeps_the_first():
+    lead, more = api_public._summary_lead("Intro line\n## Overview\nBody\n## Details\nHidden")
+    assert lead == "Intro line\n## Overview\nBody"
+    assert more == ["Details"]
+
+
 def test_opening_a_show_never_enqueues_a_refresh(anon, app_state, monkeypatch):
     _seed(app_state)
 
