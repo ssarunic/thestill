@@ -271,10 +271,9 @@
 .ts-signin-action { margin-top: var(--space-md); }
 .ts-tabs { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md); padding: 4px; background: var(--surface-container-lowest); border: 1px solid var(--divider); border-radius: var(--radius-xl); }
 .ts-tabs-list { display: flex; gap: 4px; }
-.ts-tab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; min-height: 40px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--on-surface-variant); font-family: inherit; font-size: 15px; line-height: 23px; font-weight: 500; cursor: pointer; }
+.ts-tab { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; min-height: 40px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--on-surface-variant); font-family: inherit; font-size: 15px; line-height: 23px; font-weight: 500; text-decoration: none; cursor: pointer; }
 .ts-tab:hover { color: var(--on-surface); }
 .ts-tab-active { background: var(--surface); color: var(--primary); font-weight: 600; }
-.ts-tab-lock { display: inline-flex; color: var(--on-surface-variant); }
 .ts-tabs-meta { padding-right: 12px; font-size: 12px; line-height: 16px; color: var(--on-surface-variant); }
 .ts-summary { font-family: var(--font-serif); font-size: 17px; line-height: 27px; color: var(--on-surface); }
 .ts-summary h1, .ts-summary h2, .ts-summary h3 { font-family: var(--font-sans); color: var(--on-surface); letter-spacing: -0.015em; }

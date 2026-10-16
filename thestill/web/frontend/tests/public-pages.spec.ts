@@ -107,8 +107,8 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await page.goto('/podcasts/public-show/episodes/chips?t=460')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Chips and Cheese')
   await expect(page.getByText('Linked quote')).toBeVisible()
-  await page.getByRole('tab', { name: /Transcript/ }).click()
   await expect(page.getByText('one sign-in away')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute('href', /^\/login\?.*intent=transcript/)
   expect(privateCalls).toEqual([])
 })
 
@@ -180,9 +180,10 @@ test('every sign-in goes through the sign-in page and back (spec #102)', async (
   await page.getByRole('link', { name: 'Not now' }).click()
   await expect(page).toHaveURL(/\/podcasts\/public-show\/episodes\/chips$/)
 
-  await page.getByRole('tab', { name: /Transcript/ }).click()
-  await page.getByRole('link', { name: 'Sign in to read the transcript' }).click()
-  await expect(page).toHaveURL(/intent=transcript/)
+  // Transcript is a normal tab; signed out it asks for sign-in and comes
+  // back to the transcript view.
+  await page.getByRole('tab', { name: 'Transcript' }).click()
+  await expect(page).toHaveURL(/\/login\?next=%2Fpodcasts%2Fpublic-show%2Fepisodes%2Fchips%3Fview%3Dtranscript&intent=transcript$/)
   await expect(page.getByText('Sign in to read the full transcript')).toBeVisible()
   expect(privateCalls).toEqual([])
 })

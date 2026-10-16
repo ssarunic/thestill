@@ -235,13 +235,16 @@ export function SignInCard({
   children,
   buttonLabel = 'Sign in',
   intent,
+  next,
 }: {
   title: string
   children?: ReactNode
+  /** The action, as signed-in users know it (Follow, Read the transcript). */
   buttonLabel?: string
   intent?: SignInIntent
+  next?: string
 }) {
-  const signIn = useSignIn(intent)
+  const signIn = useSignIn(intent, next)
   return (
     <section className="ts-signin">
       <h3 className="ts-signin-title">{title}</h3>

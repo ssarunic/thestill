@@ -14,7 +14,7 @@ import {
   SignInCard,
   Skeleton,
 } from '../../components/public/ui'
-import { splitSummary, typeLabel } from '../../components/public/helpers'
+import { splitSummary, typeLabel, useSignIn } from '../../components/public/helpers'
 import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
@@ -24,15 +24,6 @@ import {
 import NotFound, { ModuleError } from './NotFound'
 
 const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
-
-function LockIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width={13} height={13} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-      <rect x={5} y={11} width={14} height={10} rx={2} />
-      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-    </svg>
-  )
-}
 
 export default function Episode() {
   const { podcastSlug = '', episodeSlug = '' } = useParams()
@@ -50,6 +41,9 @@ export default function Episode() {
   // is a three-minute read).
   const summaryParts = useMemo(() => (summary.data ? splitSummary(summary.data.content) : null), [summary.data])
   const [fullSummary, setFullSummary] = useState(false)
+  // The signed-in reader opens on the transcript with ?view=transcript.
+  const transcriptPath = `${episodePath(podcastSlug, episodeSlug)}?view=transcript`
+  const readTranscript = useSignIn('transcript', transcriptPath)
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]
   const more = usePublicPodcastEpisodes(podcastSlug)
@@ -139,18 +133,16 @@ export default function Episode() {
               <button type="button" role="tab" aria-selected={tab === 'summary'} className={`ts-tab ${tab === 'summary' ? 'ts-tab-active' : ''}`} onClick={() => setTab('summary')}>
                 Summary
               </button>
-              <button type="button" role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} onClick={() => setTab('transcript')}>
-                <span>Transcript</span>
-                <span className="ts-tab-lock">
-                  <LockIcon />
-                  <span className="ts-visually-hidden"> (sign in to read)</span>
-                </span>
-              </button>
+              {/* Spec #102 — the tab works as it does signed in; signed out it
+                  asks for sign-in and comes back to the transcript. */}
+              <Link role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} to={readTranscript}>
+                Transcript
+              </Link>
             </div>
           </div>
 
           {tab === 'transcript' ? (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Sign in to read the transcript" intent="transcript">
+            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
               Sign in to read every word, search across every show, and get each new episode summarised in your inbox.
             </SignInCard>
           ) : (
@@ -242,7 +234,7 @@ export default function Episode() {
           )}
 
           {tab === 'summary' && (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Sign in to read the transcript" intent="transcript">
+            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
               Sign in to read every word, with speaker names and timestamps.
             </SignInCard>
           )}

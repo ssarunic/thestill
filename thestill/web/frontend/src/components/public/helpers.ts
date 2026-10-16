@@ -4,11 +4,13 @@ import { useLocation } from 'react-router-dom'
 import { episodePath, type PublicEntityType, type PublicQuote } from '../../api/public'
 import { signInPath, type SignInIntent } from '../../utils/signIn'
 
-/** Spec #102 — the sign-in page link for this page: every public sign-in
- * button goes to /login, which offers the providers and comes back here. */
-export function useSignIn(intent?: SignInIntent): string {
+/** Spec #102 — the sign-in page link for an action on this page. Buttons
+ * keep their usual names (Follow, Transcript); signed out, they lead to
+ * /login, which offers the providers and returns to ``next`` (default:
+ * this page). */
+export function useSignIn(intent?: SignInIntent, next?: string): string {
   const location = useLocation()
-  return signInPath(location.pathname + location.search, intent)
+  return signInPath(next ?? location.pathname + location.search, intent)
 }
 
 const TYPE_LABEL: Record<PublicEntityType, string> = {

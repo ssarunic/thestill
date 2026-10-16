@@ -17,7 +17,7 @@ This spec makes `/login` the one place sign-in happens. Every button on the publ
 
 ## Goals
 
-1. One label family: "Sign in" everywhere, "Sign in to follow" only where the action needs it. No button names a provider.
+1. Buttons keep the names signed-in users know: "Follow", "Transcript", "Read the transcript". Signed out, the same button leads to `/login` and back. Only buttons whose action is signing in say "Sign in". No button names a provider or says "Sign in to …".
 2. One page decides how to sign in. Adding a provider changes `/login` only.
 3. `/login` looks like the public site (Thestill Editorial), in the public app and the signed-in app alike (logout lands there too).
 4. A visitor who clicks Follow, signs in and comes back is following the show, with no second click.
@@ -53,15 +53,17 @@ Unknown `intent` values fall back to the default line. `next` is validated with 
 
 ### Buttons on the public site
 
-`useSignIn(intent?)` (helpers) now returns the `/login` URL for the current page. Buttons become links (`Button` gains `to`), so they open in a new tab and show their target.
+`useSignIn(intent?, next?)` (helpers) returns the `/login` URL for an action (default `next`: the current page). Buttons become links (`Button` gains `to`), so they open in a new tab and show their target.
+
+Rule (decided 2026-10-16): an action keeps its usual label and icon; signed out, it redirects to sign-in with the matching `intent` and comes back to where the action would have taken a signed-in user.
 
 | Where | Label | Link |
 |-------|-------|------|
 | Header, footer | Sign in | `/login?next=<page>` |
 | Landing hero | Sign in | `/login?next=/` |
-| Sign-in cards | Sign in | `/login?next=<page>` |
-| Transcript tab card | Sign in to read the transcript | `/login?next=<page>&intent=transcript` |
-| Show page Follow (hero + card) | Sign in to follow | `/login?next=/podcasts/<slug>&intent=follow` |
+| Episode Transcript tab (no lock icon) and the "Read the transcript" cards | Transcript / Read the transcript | `/login?next=<episode>?view=transcript&intent=transcript` (the signed-in reader opens on the transcript) |
+| Show page Follow (hero + card) | Follow | `/login?next=/podcasts/<slug>&intent=follow` |
+| Person and entity page card | See every mention | `/login?next=<page>` (signed in, the entity page lists every mention) |
 
 ### Follow survives sign-in
 

@@ -334,6 +334,7 @@ export default function EntityPage() {
           {data && (
             <SignInCard
               title={isPerson ? `Everything ${name} said, word for word.` : `Search every mention of ${name} across every show you follow.`}
+              buttonLabel="See every mention"
             >
               Sign in to read the full transcripts, search every show, and get a summary of each new episode in your inbox.
             </SignInCard>

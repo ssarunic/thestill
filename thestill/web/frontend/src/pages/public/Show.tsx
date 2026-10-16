@@ -67,7 +67,7 @@ export default function Show() {
                 )}
               </div>
               <div style={{ marginTop: 8 }}>
-                <Button to={signInToFollow}>Sign in to follow</Button>
+                <Button to={signInToFollow}>Follow</Button>
               </div>
               {show.copyright && <span className="ts-meta" style={{ fontSize: 11 }}>{show.copyright}</span>}
             </>
@@ -142,7 +142,7 @@ export default function Show() {
             )}
           </section>
           {show && (
-            <SignInCard title={`Get every new episode of ${show.title} summarised in your inbox.`} buttonLabel="Sign in to follow" intent="follow">
+            <SignInCard title={`Get every new episode of ${show.title} summarised in your inbox.`} buttonLabel="Follow" intent="follow">
               We follow the show for you once you&apos;re signed in, and each new episode&apos;s summary arrives in your thestill inbox.
             </SignInCard>
           )}
