@@ -1,0 +1,13 @@
+{
+  "draft": true,
+  "effective_date": "[EFFECTIVE DATE, e.g. 1 November 2026]",
+  "operator_name": "[YOUR FULL LEGAL NAME]",
+  "operator_description": "an individual based in the United Kingdom",
+  "operator_address": "[POSTAL ADDRESS FOR LEGAL NOTICES]",
+  "contact_email": "[hello@thestill.ai]",
+  "privacy_email": "[privacy@thestill.ai]",
+  "governing_law": "England and Wales",
+  "supervisory_authority": "the Information Commissioner's Office (ICO), ico.org.uk",
+  "liability_cap": "£100",
+  "log_retention": "30 days"
+}
