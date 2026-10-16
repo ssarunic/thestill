@@ -212,7 +212,7 @@ class TestAliasDomains:
         caddyfile = (SCRIPT.parent / "Caddyfile").read_text()
         assert "import /etc/caddy/redirects.caddy" in caddyfile
 
-    def test_caddyfile_proxies_usage_events_without_the_session(self):
+    def test_caddyfile_proxies_usage_events_without_the_session_or_page_url(self):
         # Spec #95: /ingest is PostHog EU on our own origin; the browser's
         # cookies (the session) and auth headers must never be forwarded.
         caddyfile = (SCRIPT.parent / "Caddyfile").read_text()
@@ -221,6 +221,7 @@ class TestAliasDomains:
         assert "reverse_proxy https://eu-assets.i.posthog.com:443" in ingest
         assert ingest.count("header_up -Cookie") == 2
         assert ingest.count("header_up -Authorization") == 2
+        assert ingest.count("header_up -Referer") == 2  # carries the page URL and its query
         assert "reverse_proxy thestill:8000" in caddyfile[caddyfile.index("handle {") :]
 
     def test_compose_mounts_the_redirects_file(self):

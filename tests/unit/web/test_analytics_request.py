@@ -7,7 +7,7 @@ from starlette.requests import Request
 
 from tests.unit.analytics_fakes import RecordingSink
 from thestill.services.analytics_sink import LoginStarted
-from thestill.web.analytics_request import capture_event, daily_visitor_key, request_gpc, visitor_key
+from thestill.web.analytics_request import capture_event, daily_visitor_key, login_flow_key, request_gpc, visitor_key
 
 
 def _request(headers=None, ip="203.0.113.7"):
@@ -57,3 +57,18 @@ def test_capture_event_never_raises():
             raise RuntimeError("boom")
 
     capture_event(_state(Exploding()), _request(), LoginStarted(from_kind="none"))
+
+
+def test_login_flow_key_is_stable_per_attempt_and_hides_the_state():
+    a = login_flow_key("secret", "oauth-state-1")
+    assert a == login_flow_key("secret", "oauth-state-1")
+    assert a != login_flow_key("secret", "oauth-state-2")
+    assert a != login_flow_key("other", "oauth-state-1")
+    assert "oauth-state" not in a and len(a) == 32
+
+
+def test_capture_event_uses_an_explicit_anonymous_key_but_not_under_gpc():
+    sink = RecordingSink()
+    capture_event(_state(sink), _request(), LoginStarted(from_kind="none"), anonymous_key="flow-1")
+    capture_event(_state(sink), _request({"Sec-GPC": "1"}), LoginStarted(from_kind="none"), anonymous_key="flow-1")
+    assert [c["visitor_key"] for c in sink.captured] == ["flow-1", None]

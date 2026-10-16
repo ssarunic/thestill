@@ -38,9 +38,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
-from ..mcp.identity import STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
+from ..mcp.identity import STATE_GPC, STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
 from ..services.mcp_token_service import McpTokenService
 from ..utils.datetime_utils import now_utc
+from .analytics_request import request_gpc
 from .dependencies import is_effective_admin
 from .middleware.rate_limit import (
     check_mcp_token_rate_limit,
@@ -118,7 +119,7 @@ class McpHttpRuntime:
         try:
             from ..services.analytics_sink import McpToolCall
 
-            self._analytics.capture(McpToolCall(tool=tool, ok=ok), user=identity.user)
+            self._analytics.capture(McpToolCall(tool=tool, ok=ok), user=identity.user, gpc=identity.gpc)
         except Exception as exc:  # noqa: BLE001 - e.g. a malformed tool name; never fails the call
             logger.warning("analytics_mcp_tool_call_skipped", error=str(exc))
 
@@ -183,6 +184,7 @@ class McpHttpRuntime:
         state[STATE_USER] = user
         state[STATE_IS_ADMIN] = is_effective_admin(user, self._config)
         state[STATE_SCOPES] = frozenset(token.scopes)
+        state[STATE_GPC] = request_gpc(Request(scope, receive))
 
         await self.session_manager.handle_request(scope, receive, send)
 

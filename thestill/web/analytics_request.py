@@ -44,6 +44,18 @@ def daily_visitor_key(secret: str, client_ip: str, user_agent: str, day: date) -
     return hmac.new(key, f"{client_ip}|{user_agent}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
+def login_flow_key(secret: str, oauth_state: str) -> str:
+    """One sign-in attempt's anonymous id, derived from its OAuth ``state``.
+
+    Both ends of the flow know the state (the login route mints it, the
+    callback verifies it), so ``login_started`` and ``login_completed`` share
+    this id and form a funnel without a new cookie, without the visitor key
+    and without ever being merged into the account's person. The HMAC keeps
+    the id from revealing the CSRF state it comes from.
+    """
+    return hmac.new(f"{secret}|login-flow".encode(), oauth_state.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def visitor_key(request: Request, secret: str, config=None) -> Optional[str]:
     """Today's key for this visitor, or None under GPC."""
     if request_gpc(request):
@@ -56,18 +68,33 @@ def visitor_key(request: Request, secret: str, config=None) -> Optional[str]:
     )
 
 
-def capture_event(state, request: Request, event, *, user=None) -> None:
+def capture_event(
+    state,
+    request: Request,
+    event,
+    *,
+    user=None,
+    anonymous_key: Optional[str] = None,
+    consent_of=None,
+) -> None:
     """Send one spec #95 usage event for this request, if events are on.
 
-    Identified when ``user`` is given, else anonymous with today's visitor
-    key. Total: called from inside the OAuth callback, whose catch-all turns
-    any exception into a failed sign-in.
+    Identified when ``user`` is given, else anonymous with ``anonymous_key``
+    or today's visitor key (neither under GPC). ``consent_of`` applies a
+    reader's opt-out to an event that is anonymous on purpose. Total: called
+    from inside the OAuth callback, whose catch-all turns any exception into
+    a failed sign-in.
     """
     sink = getattr(state, "analytics_sink", None)
     if sink is None or not sink.enabled:
         return
     try:
-        key = None if user is not None else visitor_key(request, state.config.jwt_secret_key, state.config)
-        sink.capture(event, user=user, visitor_key=key, gpc=request_gpc(request))
+        if consent_of is not None and not consent_of.usage_analytics_enabled:
+            return
+        gpc = request_gpc(request)
+        key = None
+        if user is None and not gpc:
+            key = anonymous_key or visitor_key(request, state.config.jwt_secret_key, state.config)
+        sink.capture(event, user=user, visitor_key=key, gpc=gpc)
     except Exception as exc:  # noqa: BLE001 - analytics never breaks the request it describes
         logger.warning("analytics_capture_failed", analytics_event=getattr(event, "name", "?"), error=str(exc))

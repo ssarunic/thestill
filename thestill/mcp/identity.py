@@ -47,6 +47,8 @@ logger = structlog.get_logger(__name__)
 STATE_USER = "mcp_user"
 STATE_IS_ADMIN = "mcp_is_admin"
 STATE_SCOPES = "mcp_scopes"
+# Spec #95: the request carried Global Privacy Control (``Sec-GPC: 1``).
+STATE_GPC = "mcp_gpc"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,8 @@ class McpIdentity:
     is_admin: bool
     scopes: FrozenSet[str]
     remote: bool
+    # Spec #95: the caller sent Global Privacy Control; no usage events.
+    gpc: bool = False
 
     @property
     def is_remote(self) -> bool:
@@ -125,6 +129,7 @@ def current_mcp_identity(ctx: "ServerRequestContext") -> McpIdentity:
         is_admin=bool(state.get(STATE_IS_ADMIN, False)),
         scopes=frozenset(state.get(STATE_SCOPES) or ()),
         remote=True,
+        gpc=bool(state.get(STATE_GPC, False)),
     )
 
 

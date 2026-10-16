@@ -109,10 +109,11 @@ def test_oversized_page_view_is_rejected(client, sink):
 # -- sign-in -----------------------------------------------------------------
 
 
-def test_sign_in_reports_where_it_started_and_completed(client, sink, app_state, monkeypatch):
+def _stub_oauth(app_state, monkeypatch, user, states):
+    """Google round trip without Google: each login mints the next state."""
     auth = app_state.auth_service
-    monkeypatch.setattr(auth, "get_google_auth_url", lambda redirect_uri: ("https://accounts.example/o", "st"))
-    user = auth.user_repository.save(User(email="new@example.com"))
+    pending = iter(states)
+    monkeypatch.setattr(auth, "get_google_auth_url", lambda redirect_uri: ("https://accounts.example/o", next(pending)))
 
     async def callback(code, redirect_uri, signup_source=None):
         return user, "jwt-token", True
@@ -123,14 +124,48 @@ def test_sign_in_reports_where_it_started_and_completed(client, sink, app_state,
     monkeypatch.setattr(auth, "handle_google_callback", callback)
     monkeypatch.setattr(auth, "maybe_infer_region", no_region)
 
-    client.get("/api/auth/google/login", params={"next": "/entities/person/x"}, follow_redirects=False)
-    done = client.get("/api/auth/google/callback", params={"code": "c", "state": "st"}, follow_redirects=False)
+
+def _sign_in_round_trip(client, state, next_path="/entities/person/x", headers=None):
+    client.get("/api/auth/google/login", params={"next": next_path}, follow_redirects=False, headers=headers)
+    done = client.get(
+        "/api/auth/google/callback", params={"code": "c", "state": state}, follow_redirects=False, headers=headers
+    )
     assert done.status_code == 302
 
-    started, completed = sink.captured
-    assert (started["event"].name, started["event"].from_kind, started["user"]) == ("login_started", "entity", None)
-    assert (completed["event"].name, completed["event"].next_kind) == ("login_completed", "entity")
-    assert completed["user"].id == user.id
+
+def test_sign_in_events_form_one_anonymous_funnel_per_attempt(client, sink, app_state, monkeypatch):
+    from thestill.web.analytics_request import login_flow_key
+
+    user = app_state.auth_service.user_repository.save(User(email="new@example.com"))
+    _stub_oauth(app_state, monkeypatch, user, ["state-1", "state-2"])
+
+    _sign_in_round_trip(client, "state-1")
+    _sign_in_round_trip(client, "state-2", next_path="/top")
+
+    first_start, first_done, second_start, second_done = sink.captured
+    assert [c["event"].name for c in sink.captured] == ["login_started", "login_completed"] * 2
+    assert (first_start["event"].from_kind, first_done["event"].next_kind) == ("entity", "entity")
+    assert second_done["event"].next_kind == "top"
+
+    # Start and completion share one anonymous attempt id, never the account.
+    assert first_start["visitor_key"] == first_done["visitor_key"] == login_flow_key("test" * 16, "state-1")
+    assert second_start["visitor_key"] == second_done["visitor_key"] != first_start["visitor_key"]
+    assert all(c["user"] is None for c in sink.captured)
+    assert "state-1" not in first_start["visitor_key"]
+
+
+def test_sign_in_events_respect_opt_out_and_gpc(client, sink, app_state, monkeypatch):
+    opted_out = app_state.auth_service.user_repository.save(
+        User(email="quiet@example.com", usage_analytics_enabled=False)
+    )
+    _stub_oauth(app_state, monkeypatch, opted_out, ["state-a", "state-b"])
+
+    _sign_in_round_trip(client, "state-a")
+    assert [c["event"].name for c in sink.captured] == ["login_started"]  # no completion for an opted-out reader
+
+    sink.captured.clear()
+    _sign_in_round_trip(client, "state-b", headers={"Sec-GPC": "1"})
+    assert all(c["visitor_key"] is None and c["gpc"] is True for c in sink.captured)
 
 
 # -- /api/auth/status and the Settings switch --------------------------------
@@ -168,3 +203,11 @@ def test_status_without_usage_events(client, app_state):
     _sign_in(client, app_state)
     body = client.get("/api/auth/status").json()
     assert body["analytics"] is None and body["usage_analytics_available"] is False
+
+
+def test_analytics_can_never_fail_a_sign_in(client, sink, app_state, monkeypatch):
+    """The OAuth callback turns any exception into a failed sign-in, so the
+    usage-event path inside it must be total, even for an odd user object."""
+    _stub_oauth(app_state, monkeypatch, SimpleNamespace(email="odd@example.com"), ["state-x"])
+    _sign_in_round_trip(client, "state-x")  # asserts the 302
+    assert [c["event"].name for c in sink.captured] == ["login_started"]

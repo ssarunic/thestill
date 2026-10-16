@@ -78,15 +78,32 @@ def _runtime(sink) -> McpHttpRuntime:
 def test_remote_calls_by_a_user_are_counted():
     sink = RecordingSink()
     user = User(id="u-1", email="a@example.com")
-    _runtime(sink)._count_tool_call(SimpleNamespace(user=user), "search_corpus", True)
+    _runtime(sink)._count_tool_call(SimpleNamespace(user=user, gpc=False), "search_corpus", True)
     [call] = sink.captured
     assert (call["event"].tool, call["event"].ok, call["user"].id) == ("search_corpus", True, "u-1")
+
+
+def test_global_privacy_control_travels_with_the_call():
+    sink = RecordingSink()
+    user = User(id="u-1", email="a@example.com")
+    _runtime(sink)._count_tool_call(SimpleNamespace(user=user, gpc=True), "search_corpus", True)
+    assert sink.captured[0]["gpc"] is True
+
+
+def test_identity_reads_gpc_from_the_request_state():
+    from thestill.mcp.identity import STATE_GPC, STATE_USER, current_mcp_identity
+
+    user = User(id="u-1", email="a@example.com")
+    ctx = SimpleNamespace(request=SimpleNamespace(scope={"state": {STATE_USER: user, STATE_GPC: True}}))
+    assert current_mcp_identity(ctx).gpc is True
+    ctx = SimpleNamespace(request=SimpleNamespace(scope={"state": {STATE_USER: user}}))
+    assert current_mcp_identity(ctx).gpc is False
 
 
 def test_calls_without_a_user_or_with_odd_names_are_skipped_quietly():
     sink = RecordingSink()
     runtime = _runtime(sink)
-    runtime._count_tool_call(SimpleNamespace(user=None), "search_corpus", True)
-    runtime._count_tool_call(SimpleNamespace(user=User(email="a@example.com")), "Not A Tool!", False)
+    runtime._count_tool_call(SimpleNamespace(user=None, gpc=False), "search_corpus", True)
+    runtime._count_tool_call(SimpleNamespace(user=User(email="a@example.com"), gpc=False), "Not A Tool!", False)
     assert sink.captured == []
-    _runtime(None)._count_tool_call(SimpleNamespace(user=User(email="a@example.com")), "x", True)
+    _runtime(None)._count_tool_call(SimpleNamespace(user=User(email="a@example.com"), gpc=False), "x", True)

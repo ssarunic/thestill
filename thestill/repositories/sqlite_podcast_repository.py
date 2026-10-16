@@ -584,7 +584,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Written once on insert, never updated (Postgres migration 0017).
             if "signup_source" not in user_columns:
                 conn.execute("ALTER TABLE users ADD COLUMN signup_source TEXT NULL")
-            # Spec #95 Layer B — the Settings switch for usage events (0017).
+            # Spec #95 Layer B — the Settings switch for usage events (0018).
             if "usage_analytics_enabled" not in user_columns:
                 conn.execute("ALTER TABLE users ADD COLUMN usage_analytics_enabled INTEGER NOT NULL DEFAULT 1")
 

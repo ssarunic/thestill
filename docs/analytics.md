@@ -25,7 +25,7 @@ else.
 | `entity_open` | signed-in app, entity page | `entity_type` |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
-| `login_completed` | server, OAuth callback | `next_kind` |
+| `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
 | `search` | server, `/api/search/corpus` (not in-episode expansion) | `result_count`, `mode` |
 | `mcp_tool_call` | server, remote MCP | `tool`, `ok` |
 
@@ -33,6 +33,12 @@ Never sent: email, name, search text, page text, full URLs or query
 strings. Signed-in events carry the internal user UUID and the person
 property `is_admin`; anonymous events carry a visitor key that rotates at
 midnight UTC (none under Global Privacy Control) and never create a person.
+
+The two sign-in events are anonymous and share one id per sign-in attempt,
+an HMAC of the OAuth `state` (`login_flow_key`), so they form a funnel
+without a cookie and without ever joining the account's person or the
+visitor's public page views. Remote MCP calls carrying `Sec-GPC: 1` send
+nothing.
 
 Not built yet: `export` (no spec #91 export routes exist) and
 `narration_play` (no narration audio player in the web app).
@@ -44,8 +50,9 @@ Not built yet: `export` (no spec #91 export routes exist) and
   Public pages and `/login` never load it; they report views to our own
   `POST /api/public/pageview`.
 - **No CSP change.** The browser sends to `/ingest` on our own domain;
-  Caddy forwards it to `eu.i.posthog.com` and strips `Cookie` and
-  `Authorization` so PostHog never sees the session
+  Caddy forwards it to `eu.i.posthog.com` and strips `Cookie`,
+  `Authorization` and `Referer`, so PostHog never sees the session or the
+  page URL the browser would otherwise put in `Referer`
   ([Caddyfile](../deploy/aws-ec2/Caddyfile)).
 - **No cookie, no storage.** `persistence: 'memory'`, bootstrapped with the
   user id.

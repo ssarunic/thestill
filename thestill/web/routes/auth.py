@@ -36,7 +36,7 @@ from structlog import get_logger
 
 from ...services.analytics_sink import LoginCompleted, LoginStarted
 from ...utils.page_kind import public_page_kind, signup_source_for
-from ..analytics_request import capture_event, request_gpc
+from ..analytics_request import capture_event, login_flow_key, request_gpc
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
 from ..responses import api_response
@@ -274,8 +274,14 @@ def google_login(
         # An abandoned earlier flow must not steer this sign-in.
         response.delete_cookie(key=NEXT_COOKIE)
 
-    # Spec #95: which public page sign-in started from (anonymous).
-    capture_event(state, request, LoginStarted(from_kind=public_page_kind(safe_next) or "none"))
+    # Spec #95: which public page sign-in started from. Anonymous, keyed to
+    # this attempt so the callback's login_completed joins it in a funnel.
+    capture_event(
+        state,
+        request,
+        LoginStarted(from_kind=public_page_kind(safe_next) or "none"),
+        anonymous_key=login_flow_key(state.config.jwt_secret_key, state_token),
+    )
     logger.info("Redirecting to Google OAuth")
     return response
 
@@ -349,7 +355,15 @@ async def google_callback(
         response.delete_cookie(key="oauth_state")
         response.delete_cookie(key=NEXT_COOKIE)
 
-        capture_event(app_state, request, LoginCompleted(next_kind=public_page_kind(next_path) or "none"), user=user)
+        # Spec #95: the same anonymous attempt id as login_started, never
+        # linked to the account; skipped for a reader who opted out.
+        capture_event(
+            app_state,
+            request,
+            LoginCompleted(next_kind=public_page_kind(next_path) or "none"),
+            anonymous_key=login_flow_key(app_state.config.jwt_secret_key, state),
+            consent_of=user,
+        )
         logger.info("user_authenticated", email=user.email)
         return response
 
