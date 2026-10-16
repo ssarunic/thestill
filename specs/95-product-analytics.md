@@ -1,8 +1,8 @@
 # Product Analytics
 
-> **Status:** 📝 Draft v2
+> **Status:** 🚧 Phase 0 implemented (2026-10-16); Phases 1–2 not started
 > **Created:** 2026-10-08
-> **Updated:** 2026-10-16 (v2: PostHog replaces the first-party event log)
+> **Updated:** 2026-10-16 (v2: PostHog replaces the first-party event log; Phase 0 built)
 > **Priority:** Medium, but Phases 0 and 1 must land before any launch driven by spec #94: a launch nobody can measure teaches nothing.
 > **Author:** Product & Engineering
 > **Related:** [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP `connect-src 'self'`), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) (read state), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#50 scheduled-briefings](50-scheduled-briefings.md) / [#84 scheduled-only-briefings](84-scheduled-only-briefings.md), [#66 aws-single-ec2-hosting](66-aws-single-ec2-hosting.md) (Caddy in front), [#75 llm-call-tracing](75-llm-call-tracing.md) (rejected PostHog for traces), [#78 remote-mcp-access](78-remote-mcp-access.md), [#80 share-to-thestill](80-share-to-thestill.md) (`next` through login), [#86 quality-feedback-loop](86-quality-feedback-loop.md), [#91 transcript-summary-export](91-transcript-summary-export.md), [#94 public-pages](94-public-pages.md), [#102 sign-in-page](102-sign-in-page.md)
@@ -92,7 +92,7 @@ table and never also sent as an event.
   ends are where the sign-in events go.
 - **State with timestamps already present.** `users.created_at`,
   `users.last_login_at`; `podcast_followers.created_at`;
-  `inbox_entries.delivered_at` and `state_changed_at` with
+  `user_episode_inbox.delivered_at` and `state_changed_at` with
   `state ∈ {unread, read, saved, dismissed}`; `briefings.created_at`,
   `listened_at`, `episode_count`; `mcp_tokens.created_at`,
   `last_used_at`.
@@ -123,8 +123,8 @@ drift into collecting things it does not need.
 | Acquisition | Signups per day, and how many arrived through each kind of public page | A | `users.created_at`, `users.signup_source` (§2) |
 | Activation | Every activation step below, broken down by signup source | A | `users.signup_source` |
 | Activation | % of new users who followed ≥1 podcast within 24 h and 7 d, and median time to first follow | A | `podcast_followers` |
-| Activation | % whose first briefing was generated, and % who opened it | A | `briefings.created_at`, `briefings.opened_at` (§2) |
-| Activation | % who read ≥3 episodes in their first week | A | `inbox_entries.state = read`, `state_changed_at` |
+| Activation | % whose first briefing was generated, and % who opened it | A | `user_briefings.created_at`, `user_briefings.opened_at` (§2) |
+| Activation | % who read ≥3 episodes in their first week | A | `user_episode_inbox.state = read`, `state_changed_at` |
 | Engagement | Weekly and monthly active users | B | PostHog, any identified event in the window |
 | Engagement | Briefings opened ÷ briefings generated, per week | A | `briefings.created_at`, `opened_at` |
 | Engagement | Episodes read per active user per week | A | inbox read transitions |
@@ -176,7 +176,7 @@ a window:
 
 Results are plain Pydantic models (constitution §5). Queries are indexed
 by columns that already exist; the one addition is an index on
-`inbox_entries (state, state_changed_at)` if the planner wants it, decided
+`user_episode_inbox (state, state_changed_at)` if the planner wants it, decided
 by `EXPLAIN` on a production-sized copy, not guessed.
 
 **Two new columns**, one Alembic migration, Postgres and SQLite:
@@ -188,14 +188,16 @@ by `EXPLAIN` on a production-sized copy, not guessed.
   updated afterwards. Existing users stay `null` and are reported as
   "before tracking". It answers "which pages bring users who stay"
   without any vendor, ad blocker or opt-out in the way.
-- **`briefings.opened_at`** (timestamptz, null). The first time the
-  owner opened the briefing, by either reading it on the web or playing
-  its narration. `listened_at` can't serve this, because it's only set
-  by the manual "Mark listened" button on
+- **`user_briefings.opened_at`** (timestamptz, null). The first time
+  the owner opened the briefing. `listened_at` can't serve this, because
+  it's only set by the manual "Mark listened" button on
   [BriefingDetail.tsx](../thestill/web/frontend/src/pages/BriefingDetail.tsx).
   It's set by a new `POST /api/briefings/{id}/opened`, idempotent
-  (`… WHERE opened_at IS NULL`), owner-only. The briefing page calls it
-  on mount and the narration player calls it on first play. It's a POST
+  (`opened_at = COALESCE(opened_at, now)`), owner-only. The briefing page
+  calls it once the briefing has loaded. The web app has no narration
+  audio player yet (narrations are text on the same page), so a
+  first-play hook waits for briefing audio to ship. "Mark listened" also
+  fills `opened_at` when it is still empty. It's a POST
   rather than a side effect of the GET so React Query prefetches and
   refetches can't mark a briefing opened. The migration backfills
   `opened_at = listened_at` where that is set; older briefings opened
@@ -484,7 +486,7 @@ sanitiser enforces that on the client.
 
 | Phase | Scope | Ships alone? |
 |---|---|---|
-| 0 | `users.signup_source` + `briefings.opened_at` migration and backfill; set `signup_source` in the OAuth callback; `POST /api/briefings/{id}/opened` called from the briefing page and the narration player; `AnalyticsRepository` (Layer A); `GET /api/dashboard/analytics`; `/analytics` admin page; `thestill analytics` | Yes; no vendor, answers the activation questions from the first deploy |
+| 0 | `users.signup_source` + `briefings.opened_at` migration and backfill; set `signup_source` in the OAuth callback; `POST /api/briefings/{id}/opened` called from the briefing page; `AnalyticsRepository` (Layer A); `GET /api/dashboard/analytics`; `/analytics` admin page; `thestill analytics` | Yes; no vendor, answers the activation questions from the first deploy |
 | 1 | PostHog project and settings checklist; config; `AnalyticsSink` + `PostHogSink` + `NullSink`; Caddy `/ingest`; lazy client SDK with sanitiser; `$pageview`; `login_started`, `login_completed`, `public_page_view` (plus the #94 §7 log line); visitor key; GPC; Settings switch and column; privacy policy changes; `docs/analytics.md` | Yes |
 | 2 | Remaining emitters (`search`, `export`, `share`, `narration_play`, `entity_open`, `mcp_tool_call`); the PostHog dashboard | Yes |
 
@@ -526,7 +528,7 @@ established):
 to route patterns and drops unknown events and props. The SDK is not
 imported on public routes, when the key is null, or under GPC. `identify`
 carries the UUID and `is_admin` only. The briefing page calls `opened`
-once on mount, and the narration player calls it on first play only.
+once per briefing after it has loaded, also under StrictMode.
 Cohorts under five users render greyed out with their count. The admin
 nav shows `/analytics` only for admins, in both the sidebar and the
 drawer.
@@ -537,6 +539,23 @@ sends only allowlisted event names, with no query string and no
 transcript text in any payload, and leaves no `ph_` cookie or storage
 key. A public page load requests no PostHog chunk and nothing under
 `/ingest`.
+
+## Phase 0 implementation notes
+
+- The tables are `user_briefings` and `user_episode_inbox`; earlier
+  drafts called them `briefings` and `inbox_entries`.
+- Postgres gets the columns from alembic `0017_signup_source_briefing_opened`
+  (DDL mirrored in `SCHEMA_SQL`, backfill only in the migration); SQLite
+  adds them in `SqlitePodcastRepository`'s column guards.
+- The page-kind classifier lives in `thestill/utils/page_kind.py` so the
+  Phase 1 PostHog props (`from_kind`, `next_kind`, `kind`) reuse it.
+- `AnalyticsService` owns range, window and availability for both the
+  route and the CLI. On SQLite the repository is
+  `UnavailableAnalyticsRepository`, and both surfaces report "off".
+- Briefing steps use a 7-day horizon, like the other week-one steps, so
+  they can be maturity-gated.
+- Retention weeks are relative to each user's own signup (week k is days
+  7k to 7k+7), so a cell fills only once the whole week has passed.
 
 ## Decisions
 
@@ -554,8 +573,9 @@ draft.
    answered instead by `users.signup_source` (§2): one fact, stored
    once, unaffected by ad blockers or opt-outs. For the same reason
    `login_completed` carries no `new_user` prop.
-4. **D4. "Opened" is state, not an event.** `briefings.opened_at` is
-   set on first web open or first narration play (§2). The v1
+4. **D4. "Opened" is state, not an event.** `user_briefings.opened_at`
+   is set on first web open, and on first narration play once briefing
+   audio ships (§2). The v1
    `briefing_open` event is dropped. `narration_play` stays an event,
    because it counts every play, not just the first. `listened_at`
    keeps its meaning: the user pressed "Mark listened".

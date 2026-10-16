@@ -44,7 +44,9 @@ from .user_repository import UserRepository
 
 logger = get_logger(__name__)
 
-_SELECT_COLS = "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin"
+_SELECT_COLS = (
+    "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source"
+)
 
 
 class PostgresUserRepository(UserRepository):
@@ -103,17 +105,20 @@ class PostgresUserRepository(UserRepository):
         Save or update a user via ``INSERT ... ON CONFLICT`` upsert.
 
         As with the SQLite path, ``region`` / ``region_locked`` / ``is_admin``
-        are intentionally NOT updated on conflict — preserving stored region
-        and admin grant across logins. Use ``update_region`` to mutate region.
+        / ``signup_source`` are intentionally NOT updated on conflict —
+        preserving stored region and admin grant across logins, and keeping
+        the signup source set-once (spec #95). Use ``update_region`` to
+        mutate region.
         """
         with connect(self.dsn) as conn:
             conn.execute(
                 """
                 INSERT INTO users (
                     id, email, name, picture, google_id,
-                    created_at, last_login_at, region, region_locked, is_admin
+                    created_at, last_login_at, region, region_locked, is_admin,
+                    signup_source
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (email) DO UPDATE SET
                     name = EXCLUDED.name,
                     picture = EXCLUDED.picture,
@@ -131,6 +136,7 @@ class PostgresUserRepository(UserRepository):
                     user.region,
                     user.region_locked,
                     user.is_admin,
+                    user.signup_source,
                 ),
             )
             logger.debug("Saved user", email=user.email)
@@ -216,4 +222,5 @@ class PostgresUserRepository(UserRepository):
             region=row["region"],
             region_locked=bool(row["region_locked"]),
             is_admin=bool(row["is_admin"]),
+            signup_source=row["signup_source"],
         )

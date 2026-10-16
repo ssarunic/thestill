@@ -48,6 +48,7 @@ from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
+from ..services.analytics_service import AnalyticsService
 from ..services.auth_service import AuthService
 from ..services.briefing_renderer import BriefingRenderer
 from ..services.briefing_script_generator import BriefingScriptGenerator
@@ -407,6 +408,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         listening_service=ListeningProgressService(
             repos.listening_progress, repository, mark_read=inbox_service.mark_read
         ),
+        analytics_service=AnalyticsService(repos.analytics, enabled=config.multi_user),
     )
 
     # Create task worker with handlers that have access to app_state.

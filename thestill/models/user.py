@@ -20,6 +20,10 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+# The single-user mode account. Lives with the model (not the auth service)
+# so repositories can refer to it without importing a service.
+DEFAULT_USER_EMAIL = "local@thestill.me"
+
 
 class User(BaseModel):
     """
@@ -46,6 +50,11 @@ class User(BaseModel):
             (task queue + dead-letter queue). In single-user mode the default
             user is always an admin; in multi-user mode this is off by default
             and flipped manually in the database.
+        signup_source: Spec #95 — the kind of public page the account was
+            created from (``landing``, ``top``, ``podcast``, ``episode``,
+            ``entity``, ``share``) or ``direct``. Set once when the row is
+            created and never updated; None for accounts created before it
+            was tracked.
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -58,6 +67,7 @@ class User(BaseModel):
     region: Optional[str] = None
     region_locked: bool = False
     is_admin: bool = False
+    signup_source: Optional[str] = None
 
 
 class TokenPayload(BaseModel):

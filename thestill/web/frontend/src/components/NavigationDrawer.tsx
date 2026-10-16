@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM } from '../constants/navigation'
+import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM, visibleNavItems } from '../constants/navigation'
 import { useIsNavActive } from '../hooks/useBackgroundLocation'
 
 interface NavItemProps {
@@ -36,7 +36,7 @@ interface NavigationDrawerProps {
 }
 
 export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerProps) {
-  const { isAdmin } = useAuth()
+  const { isAdmin, isMultiUser } = useAuth()
 
   // Close on escape key
   useEffect(() => {
@@ -112,7 +112,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
                   Admin
                 </span>
               </div>
-              {ADMIN_NAV_ITEMS.map((item) => (
+              {visibleNavItems(ADMIN_NAV_ITEMS, isMultiUser).map((item) => (
                 <NavItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={onClose} />
               ))}
             </>

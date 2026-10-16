@@ -21,18 +21,24 @@ Provides statistics and recent activity for the dashboard.
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
+from ...services.analytics_service import ALLOWED_RANGES, DEFAULT_RANGE
 from ...services.narration import read_narration_header
 from ...utils.duration import format_duration
 from ..dependencies import AppState, get_app_state
+from ..public_access import TtlCache
 from ..responses import api_response, paginated_response
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+# Spec #95 — the Layer A report is the same for every admin and costs four
+# aggregate queries, so it is computed at most once per range per 10 min.
+_analytics_cache = TtlCache(600.0, max_size=8)
 
 
 class DashboardStats(BaseModel):
@@ -226,3 +232,22 @@ def get_narration_dashboard(state: AppState = Depends(get_app_state)) -> dict:
             "latest": latest,
         }
     )
+
+
+@router.get("/analytics")
+def get_analytics(
+    range_: str = Query(DEFAULT_RANGE, alias="range", pattern=f"^({'|'.join(ALLOWED_RANGES)})$"),
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """Layer A product analytics (spec #95): signups, activation, cohort
+    retention and engagement, read from product tables.
+
+    ``{"available": false}`` (200, never cached) in single-user mode or on
+    the SQLite backend, so the page and CLI can say so instead of erroring.
+    Admin-only via the router mount. Aggregates only; no per-user rows.
+    """
+    service = state.analytics_service
+    if service is None or not service.available:
+        return api_response({"available": False})
+    payload = _analytics_cache.get_or_compute(range_, lambda: service.report(range_).model_dump(mode="json"))
+    return api_response({"available": True, **payload})

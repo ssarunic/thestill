@@ -29,6 +29,10 @@ from .briefing_repository import BriefingRepository
 
 logger = get_logger(__name__)
 
+_COLS = (
+    "id, user_id, cursor_from, cursor_to, episode_count, script_path, audio_path, created_at, listened_at, opened_at"
+)
+
 # Values come from our own enum, never user input — safe to inline. The
 # wait-set tracks only the user chain (download → summarize); entity/corpus
 # post-processing never holds a briefing (spec #55, decision 2026-07-10).
@@ -54,8 +58,8 @@ class SqliteBriefingRepository(BriefingRepository):
                 """
                 INSERT INTO user_briefings
                     (id, user_id, cursor_from, cursor_to, episode_count,
-                     script_path, audio_path, created_at, listened_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     script_path, audio_path, created_at, listened_at, opened_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     briefing.id,
@@ -67,6 +71,7 @@ class SqliteBriefingRepository(BriefingRepository):
                     briefing.audio_path,
                     briefing.created_at.isoformat(),
                     briefing.listened_at.isoformat() if briefing.listened_at else None,
+                    briefing.opened_at.isoformat() if briefing.opened_at else None,
                 ),
             )
         return briefing
@@ -74,9 +79,8 @@ class SqliteBriefingRepository(BriefingRepository):
     def get(self, briefing_id: str) -> Optional[Briefing]:
         with self._get_connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, user_id, cursor_from, cursor_to, episode_count,
-                       script_path, audio_path, created_at, listened_at
+                f"""
+                SELECT {_COLS}
                   FROM user_briefings
                  WHERE id = ?
                 """,
@@ -87,9 +91,8 @@ class SqliteBriefingRepository(BriefingRepository):
     def latest_for_user(self, user_id: str) -> Optional[Briefing]:
         with self._get_connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, user_id, cursor_from, cursor_to, episode_count,
-                       script_path, audio_path, created_at, listened_at
+                f"""
+                SELECT {_COLS}
                   FROM user_briefings
                  WHERE user_id = ?
                  ORDER BY created_at DESC
@@ -153,9 +156,8 @@ class SqliteBriefingRepository(BriefingRepository):
     def list_for_user(self, user_id: str, *, limit: int, offset: int) -> List[Briefing]:
         with self._get_connection() as conn:
             rows = conn.execute(
-                """
-                SELECT id, user_id, cursor_from, cursor_to, episode_count,
-                       script_path, audio_path, created_at, listened_at
+                f"""
+                SELECT {_COLS}
                   FROM user_briefings
                  WHERE user_id = ?
                  ORDER BY created_at DESC
@@ -176,14 +178,26 @@ class SqliteBriefingRepository(BriefingRepository):
     def update_listened_at(self, briefing_id: str, listened_at: datetime) -> Optional[Briefing]:
         with self._get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 UPDATE user_briefings
-                   SET listened_at = ?
+                   SET listened_at = ?, opened_at = COALESCE(opened_at, ?)
                  WHERE id = ?
-                RETURNING id, user_id, cursor_from, cursor_to, episode_count,
-                          script_path, audio_path, created_at, listened_at
+                RETURNING {_COLS}
                 """,
-                (listened_at.isoformat(), briefing_id),
+                (listened_at.isoformat(), listened_at.isoformat(), briefing_id),
+            ).fetchone()
+            return self._row_to_briefing(row) if row else None
+
+    def mark_opened(self, briefing_id: str, opened_at: datetime) -> Optional[Briefing]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"""
+                UPDATE user_briefings
+                   SET opened_at = COALESCE(opened_at, ?)
+                 WHERE id = ?
+                RETURNING {_COLS}
+                """,
+                (opened_at.isoformat(), briefing_id),
             ).fetchone()
             return self._row_to_briefing(row) if row else None
 
@@ -199,4 +213,5 @@ class SqliteBriefingRepository(BriefingRepository):
             audio_path=row["audio_path"],
             created_at=datetime.fromisoformat(row["created_at"]),
             listened_at=(datetime.fromisoformat(row["listened_at"]) if row["listened_at"] else None),
+            opened_at=(datetime.fromisoformat(row["opened_at"]) if row["opened_at"] else None),
         )

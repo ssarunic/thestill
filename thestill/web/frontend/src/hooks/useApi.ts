@@ -10,6 +10,7 @@ import {
 import {
   getDashboardStats,
   getNarrationDashboardStats,
+  getAnalytics,
   getRecentActivity,
   getPodcasts,
   getTopPodcasts,
@@ -64,8 +65,9 @@ import {
   getBriefing,
   getBriefingScript,
   markBriefingListened,
+  markBriefingOpened,
 } from '../api/client'
-import type { RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -80,6 +82,15 @@ export function useNarrationDashboardStats() {
     queryKey: ['dashboard', 'narration'],
     queryFn: getNarrationDashboardStats,
     staleTime: 60_000,
+  })
+}
+
+// Spec #95 — the server caches each range for 10 minutes.
+export function useAnalytics(range: AnalyticsRange) {
+  return useQuery({
+    queryKey: ['dashboard', 'analytics', range],
+    queryFn: () => getAnalytics(range),
+    staleTime: 5 * 60_000,
   })
 }
 
@@ -1295,5 +1306,14 @@ export function useMarkBriefingListened() {
       queryClient.invalidateQueries({ queryKey: ['briefings', 'latest'] })
       queryClient.invalidateQueries({ queryKey: ['briefings', data.id] })
     },
+  })
+}
+
+// Spec #95 — fire-and-forget: nothing on screen shows ``opened_at``, so no
+// cache invalidation, and a failure never surfaces to the reader.
+export function useMarkBriefingOpened() {
+  return useMutation({
+    mutationFn: (briefingId: string) => markBriefingOpened(briefingId),
+    onError: () => {},
   })
 }

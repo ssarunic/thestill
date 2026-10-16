@@ -78,9 +78,8 @@ def repo(request, tmp_path):
         pytest.skip("Postgres not reachable — set TEST_DATABASE_URL to include this backend")
     import psycopg
 
-    from thestill.repositories.postgres_user_repository import PostgresUserRepository
-
     from thestill.repositories.postgres_schema import ensure_schema
+    from thestill.repositories.postgres_user_repository import PostgresUserRepository
 
     ensure_schema(PG_DSN)  # idempotent typed-schema bootstrap
     with psycopg.connect(PG_DSN) as conn:
@@ -137,6 +136,16 @@ def test_upsert_updates_mutable_but_preserves_region_and_admin(repo):
     assert got.region == "gb"  # preserved
     assert got.region_locked is True  # bool fidelity preserved
     assert got.is_admin is True  # preserved
+
+
+def test_signup_source_is_set_once(repo):
+    """Spec #95: written on insert, never by the upsert's update branch."""
+    repo.save(_mk_user(signup_source="episode"))
+    repo.save(_mk_user(name="Ada Lovelace", signup_source="direct"))
+    assert repo.get_by_email("ada@example.com").signup_source == "episode"
+
+    repo.save(_mk_user(email="old@example.com", google_id="g-2"))
+    assert repo.get_by_email("old@example.com").signup_source is None
 
 
 def test_update_region_normalises_lowercase(repo):

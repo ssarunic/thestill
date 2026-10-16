@@ -1,4 +1,6 @@
 import type {
+  AnalyticsRange,
+  AnalyticsResponse,
   DashboardStats,
   NarrationDashboardStats,
   ActivityResponse,
@@ -92,6 +94,11 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
 export async function getNarrationDashboardStats(): Promise<NarrationDashboardStats> {
   return fetchApi<NarrationDashboardStats>('/dashboard/narration')
+}
+
+// Spec #95 — Layer A product analytics (admin only).
+export async function getAnalytics(range: AnalyticsRange): Promise<AnalyticsResponse> {
+  return fetchApi<AnalyticsResponse>(`/dashboard/analytics?range=${range}`)
 }
 
 export async function getRecentActivity(limit = 10, offset = 0): Promise<ActivityResponse> {
@@ -831,6 +838,19 @@ export async function markBriefingListened(briefingId: string): Promise<Briefing
     throw new Error(message)
   }
 
+  return response.json()
+}
+
+// Spec #95 — record the first time the owner opened a briefing. Idempotent
+// server-side; callers fire and forget.
+export async function markBriefingOpened(briefingId: string): Promise<BriefingResponse> {
+  const response = await fetch(`${API_BASE}/briefings/${briefingId}/opened`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status}`)
+  }
   return response.json()
 }
 

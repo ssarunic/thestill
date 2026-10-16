@@ -48,3 +48,6 @@ class Briefing(BaseModel):
     audio_path: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     listened_at: Optional[datetime] = None
+    # Spec #95 — first time the owner opened it (web page today; narration
+    # play once briefing audio ships). Set once, never moved.
+    opened_at: Optional[datetime] = None

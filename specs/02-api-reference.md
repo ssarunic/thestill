@@ -313,6 +313,44 @@ Get recent processing activity with pagination.
 }
 ```
 
+### GET /api/dashboard/analytics
+
+Spec #95 Layer A product analytics, read from product tables (no event
+collection). Admin accounts and the single-user `local` account are
+excluded. Each activation step counts only users who signed up at least
+that step's horizon ago. Cached in-process for 10 minutes per range.
+
+**Query Parameters:**
+
+| Parameter | Type   | Default | Description                     |
+|-----------|--------|---------|---------------------------------|
+| range     | string | 28d     | `7d`, `28d` or `90d` (else 422) |
+
+**Response** (abridged):
+
+```json
+{
+  "status": "ok",
+  "timestamp": "...",
+  "available": true,
+  "range": "28d",
+  "window": {"start": "2026-09-17T00:00:00+00:00", "end": "...", "days": 28},
+  "signups": {"total": 12, "by_source": {"episode": 9, "before_tracking": 3}, "days": [...]},
+  "activation": {
+    "overall": {"source": "all", "signups": 12, "steps": [
+      {"key": "follow_24h", "horizon_hours": 24, "eligible": 10, "reached": 4, "pct": 0.4, "median_hours": 2.0}
+    ]},
+    "by_source": [...]
+  },
+  "cohorts": {"weeks": [1, 2, 4, 8], "rows": [{"week_start": "2026-08-03", "size": 7, "cells": [...]}]},
+  "engagement": {"active_users": 6, "reads": 30, "opened_ratio": 0.75, ...},
+  "notes": ["..."]
+}
+```
+
+In single-user mode or on the SQLite backend the response is
+`{"status": "ok", "timestamp": "...", "available": false}` with status 200.
+
 ---
 
 ## Podcasts

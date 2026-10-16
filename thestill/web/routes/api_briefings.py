@@ -614,3 +614,26 @@ def mark_briefing_listened(
         # Race: deleted between ownership check and update.
         not_found("Briefing", briefing_id)
     return api_response(_serialize(updated))
+
+
+@router.post("/{briefing_id}/opened")
+def mark_briefing_opened(
+    briefing_id: str,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+):
+    """Record the first time the owner opened the briefing (spec #95).
+
+    A POST rather than a side effect of the GET, so prefetches and
+    refetches never count as an open. Idempotent: the first time wins.
+    """
+    existing = app_state.briefing_repository.get(briefing_id)
+    if existing is None:
+        not_found("Briefing", briefing_id)
+    _require_owned(existing, user)
+    try:
+        updated = app_state.briefing_service.mark_opened(briefing_id)
+    except BriefingNotFoundError:
+        # Race: deleted between ownership check and update.
+        not_found("Briefing", briefing_id)
+    return api_response(_serialize(updated))

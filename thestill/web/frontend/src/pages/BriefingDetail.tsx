@@ -7,6 +7,7 @@ import {
   useBriefingScript,
   useMarkBriefingListened,
 } from '../hooks/useApi'
+import { useReportBriefingOpened } from '../hooks/useReportBriefingOpened'
 import Button from '../components/Button'
 import PageHero from '../components/PageHero'
 import ActionRow from '../components/ActionRow'
@@ -32,6 +33,8 @@ export default function BriefingDetail() {
   const briefingQuery = useBriefing(briefingId ?? null)
   const episodesQuery = useBriefingEpisodes(briefingId ?? null)
   const markListened = useMarkBriefingListened()
+  // Spec #95 — counts as opened only once the briefing has loaded.
+  useReportBriefingOpened(briefingQuery.data?.id ?? null)
 
   const podcasts = episodesQuery.data?.podcasts ?? []
   const hasIndex = podcasts.length > 0

@@ -10,6 +10,7 @@ import ImportEpisodeModal from '../components/ImportEpisodeModal'
 import ListGroup from '../components/ListGroup'
 import ListRow, { ListRowArtwork } from '../components/ListRow'
 import SearchBox from '../components/SearchBox'
+import SegmentedControl from '../components/SegmentedControl'
 import { ProgressPill } from '../components/InboxProgress'
 import { ArtworkWithProgress, ListeningLabel } from '../components/ListeningProgress'
 import { useResolvedListening } from '../hooks/useListening'
@@ -154,26 +155,6 @@ function parseView(raw: string | null): InboxView {
   return raw === 'unread' || raw === 'saved' ? raw : 'all'
 }
 
-function ViewSwitch({ view, onChange }: { view: InboxView; onChange: (view: InboxView) => void }) {
-  return (
-    <div role="group" aria-label="Inbox view" className="inline-flex rounded-lg bg-gray-100 p-0.5">
-      {VIEWS.map(({ key, label }) => (
-        <button
-          key={key}
-          type="button"
-          aria-pressed={view === key}
-          onClick={() => onChange(key)}
-          className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-            view === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 // Spec #88 "Arriving soon": followed podcasts' episodes still in the
 // pipeline. Read-only, not inbox rows; each leaves the strip when publish
 // fan-out delivers it. A failed request hides the strip rather than
@@ -306,7 +287,7 @@ export default function Inbox() {
         <SearchBox {...searchBoxProps} inputClassName="py-2 w-full" />
       </div>
 
-      <ViewSwitch view={view} onChange={setView} />
+      <SegmentedControl options={VIEWS} value={view} onChange={setView} ariaLabel="Inbox view" />
 
       {/* The briefing, Continue listening and the arriving strip belong to
           the whole inbox, not to a search result or a state-filtered view. */}
