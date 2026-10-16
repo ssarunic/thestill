@@ -583,6 +583,24 @@ def test_mark_listened_raises_for_unknown_briefing(service):
         service.mark_listened("00000000-0000-0000-0000-000000000000")
 
 
+def test_mark_opened_keeps_the_first_time(service, db_path, user_repo, inbox_repo):
+    user = _make_user(user_repo, "alice@example.com")
+    base = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    ep_id = _publish_episode(db_path, str(uuid.uuid4()), "ep")
+    _deliver_to_inbox(inbox_repo, user_id=user.id, episode_id=ep_id, delivered_at=base)
+    briefing = service.generate_for_user(user.id, now=base + timedelta(hours=1))
+
+    first = service.mark_opened(briefing.id, now=base + timedelta(hours=2))
+    again = service.mark_opened(briefing.id, now=base + timedelta(hours=5))
+
+    assert first.opened_at == again.opened_at == base + timedelta(hours=2)
+
+
+def test_mark_opened_raises_for_unknown_briefing(service):
+    with pytest.raises(BriefingNotFoundError):
+        service.mark_opened("00000000-0000-0000-0000-000000000000")
+
+
 # ============================================================================
 # Rendering (Phase 1.5)
 # ============================================================================

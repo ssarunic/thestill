@@ -441,6 +441,53 @@ class TestMarkListened:
 
 
 # ============================================================================
+# POST /api/briefings/{briefing_id}/opened (spec #95)
+# ============================================================================
+
+
+class TestMarkOpened:
+    def test_marks_opened_for_owner(self, client, mock_app_state):
+        opened_at = datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc)
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        opened = _briefing().model_copy(update={"opened_at": opened_at})
+        mock_app_state.briefing_service.mark_opened.return_value = opened
+
+        response = client.post("/api/briefings/00000000-0000-0000-0000-000000000001/opened")
+
+        assert response.status_code == 200
+        assert response.json()["opened_at"] is not None
+        mock_app_state.briefing_service.mark_opened.assert_called_once_with("00000000-0000-0000-0000-000000000001")
+
+    def test_404_when_briefing_missing(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = None
+
+        assert client.post("/api/briefings/missing-id/opened").status_code == 404
+
+    def test_404_for_other_users_briefing(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing(user_id="other-user")
+
+        response = client.post("/api/briefings/00000000-0000-0000-0000-000000000001/opened")
+
+        assert response.status_code == 404
+        mock_app_state.briefing_service.mark_opened.assert_not_called()
+
+    def test_404_when_service_raises_not_found(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+        mock_app_state.briefing_service.mark_opened.side_effect = BriefingNotFoundError("gone")
+
+        response = client.post("/api/briefings/00000000-0000-0000-0000-000000000001/opened")
+
+        assert response.status_code == 404
+
+    def test_reading_a_briefing_never_marks_it_opened(self, client, mock_app_state):
+        mock_app_state.briefing_repository.get.return_value = _briefing()
+
+        client.get("/api/briefings/00000000-0000-0000-0000-000000000001")
+
+        mock_app_state.briefing_service.mark_opened.assert_not_called()
+
+
+# ============================================================================
 # GET /api/briefings (paginated history)
 # ============================================================================
 

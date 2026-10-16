@@ -57,6 +57,9 @@ thestill set-show-link --podcast-id X --platform spotify --url https://open.spot
 # Narrate an existing briefing from the CLI:
 thestill narrate --briefing <briefing-id>
 
+# Product analytics from product tables (spec #95; multi-user + Postgres only):
+thestill analytics [--range 7d|28d|90d] [--json]
+
 # Web server
 thestill server                     # Start on localhost:8000
 ```

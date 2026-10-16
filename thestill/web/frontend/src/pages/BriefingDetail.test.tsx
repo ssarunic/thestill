@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,16 +10,24 @@ vi.mock('../hooks/useApi', () => ({
   useBriefingEpisodes: vi.fn(),
   useBriefingScript: vi.fn(() => ({ data: { markdown: '# Script' }, isLoading: false, error: null })),
   useMarkBriefingListened: vi.fn(),
+  useMarkBriefingOpened: vi.fn(() => ({ mutate: vi.fn() })),
 }))
 vi.mock('../components/NarrationView', () => ({
   default: ({ linkIndexFallback }: { linkIndexFallback: React.ReactNode }) => <div>NARRATION{linkIndexFallback}</div>,
 }))
 
-import { useBriefing, useBriefingEpisodes, useBriefingScript, useMarkBriefingListened } from '../hooks/useApi'
+import {
+  useBriefing,
+  useBriefingEpisodes,
+  useBriefingScript,
+  useMarkBriefingListened,
+  useMarkBriefingOpened,
+} from '../hooks/useApi'
 const mockUseBriefing = useBriefing as ReturnType<typeof vi.fn>
 const mockUseEpisodes = useBriefingEpisodes as ReturnType<typeof vi.fn>
 const mockUseScript = useBriefingScript as ReturnType<typeof vi.fn>
 const mockMarkListened = useMarkBriefingListened as ReturnType<typeof vi.fn>
+const mockMarkOpened = useMarkBriefingOpened as ReturnType<typeof vi.fn>
 
 const PODCASTS = [
   {
@@ -145,3 +154,49 @@ describe('BriefingDetail artwork index', () => {
   })
 })
 
+describe('BriefingDetail open tracking (spec #95)', () => {
+  const opened = vi.fn()
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockMarkOpened.mockReturnValue({ mutate: opened })
+    mockMarkListened.mockReturnValue({ mutate: vi.fn(), isPending: false })
+    mockUseEpisodes.mockReturnValue(episodesResult(PODCASTS))
+  })
+
+  it('reports the open once the briefing has loaded, once, even under StrictMode', () => {
+    mockUseBriefing.mockReturnValue({
+      data: { id: 'b1', episode_count: 1, created_at: '2026-09-06T07:00:00Z', listened_at: null, narrations: [] },
+      isLoading: false,
+      error: null,
+    })
+    const { rerender } = render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/briefings/b1']}>
+          <Routes>
+            <Route path="/briefings/:briefingId" element={<BriefingDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    )
+    rerender(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/briefings/b1']}>
+          <Routes>
+            <Route path="/briefings/:briefingId" element={<BriefingDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    )
+    expect(opened).toHaveBeenCalledTimes(1)
+    expect(opened).toHaveBeenCalledWith('b1')
+  })
+
+  it('does not report while loading or when the briefing is missing', () => {
+    mockUseBriefing.mockReturnValue({ data: undefined, isLoading: true, error: null })
+    const { unmount } = renderPage()
+    unmount()
+    mockUseBriefing.mockReturnValue({ data: undefined, isLoading: false, error: new Error('API error: 404') })
+    renderPage()
+    expect(opened).not.toHaveBeenCalled()
+  })
+})

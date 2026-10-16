@@ -29,7 +29,7 @@ import httpx
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from structlog import get_logger
 
-from ..models.user import TokenPayload, User
+from ..models.user import DEFAULT_USER_EMAIL, TokenPayload, User  # noqa: F401 - re-exported
 from ..repositories.user_repository import UserRepository
 from ..utils.config import Config
 from ..utils.geoip import lookup_country_from_ip
@@ -38,7 +38,6 @@ from ..utils.jwt import create_access_token, decode_token
 logger = get_logger(__name__)
 
 # Default user constants for single-user mode
-DEFAULT_USER_EMAIL = "local@thestill.me"
 DEFAULT_USER_NAME = "Local User"
 
 # Google OAuth endpoints
@@ -174,6 +173,7 @@ class AuthService:
         self,
         code: str,
         redirect_uri: str,
+        signup_source: Optional[str] = None,
     ) -> Tuple[User, str, bool]:
         """
         Handle Google OAuth callback.
@@ -184,6 +184,8 @@ class AuthService:
         Args:
             code: Authorization code from Google
             redirect_uri: The redirect URI used in the authorization request
+            signup_source: Spec #95 — recorded on the user row only when this
+                call creates it; existing and linked accounts keep theirs.
 
         Returns:
             Tuple of (User, JWT token, is_new_user). ``is_new_user`` is True
@@ -256,6 +258,7 @@ class AuthService:
                     google_id=google_id,
                     created_at=datetime.now(timezone.utc),
                     last_login_at=datetime.now(timezone.utc),
+                    signup_source=signup_source,
                 )
                 self.user_repository.save(user)
                 # Re-fetch to get correct ID (UPSERT may have updated existing user)
