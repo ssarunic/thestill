@@ -19,7 +19,7 @@ function SiteHeader() {
             Top podcasts
           </NavLink>
         </nav>
-        <Button onClick={signIn}>Sign in</Button>
+        <Button to={signIn}>Sign in</Button>
       </div>
     </header>
   )
@@ -37,9 +37,9 @@ function SiteFooter() {
             </Link>
             <span className="ts-footer-line">Read your podcasts.</span>
           </div>
-          <button type="button" className="ts-footer-signin" onClick={signIn}>
+          <Link to={signIn} className="ts-footer-signin">
             Sign in
-          </button>
+          </Link>
         </div>
         <p className="ts-footer-legal">
           <a href="https://github.com/ssarunic/thestill" target="_blank" rel="noopener noreferrer">

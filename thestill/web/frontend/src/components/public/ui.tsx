@@ -12,13 +12,14 @@ import {
   type PublicEpisodeListItem,
   type PublicQuote,
 } from '../../api/public'
+import type { SignInIntent } from '../../utils/signIn'
 import { quoteUrl, useSignIn } from './helpers'
 
 function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ')
 }
 
-function GoogleG() {
+export function GoogleG() {
   return (
     <svg className="ts-btn-icon" viewBox="0 0 18 18" width={18} height={18} aria-hidden="true">
       <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z" />
@@ -33,19 +34,35 @@ export function Button({
   variant = 'primary',
   google = false,
   onClick,
+  to,
   children,
   type = 'button',
 }: {
   variant?: 'primary' | 'secondary' | 'text'
   google?: boolean
   onClick?: () => void
+  /** Navigation (e.g. to /login): rendered as a link styled as a button. */
+  to?: string
   children: ReactNode
   type?: 'button' | 'submit'
 }) {
-  return (
-    <button type={type} className={cx('ts-btn', `ts-btn-${variant}`)} onClick={onClick}>
+  const className = cx('ts-btn', `ts-btn-${variant}`)
+  const content = (
+    <>
       {google && <GoogleG />}
       <span>{children}</span>
+    </>
+  )
+  if (to) {
+    return (
+      <Link to={to} className={className}>
+        {content}
+      </Link>
+    )
+  }
+  return (
+    <button type={type} className={className} onClick={onClick}>
+      {content}
     </button>
   )
 }
@@ -213,16 +230,24 @@ export function QuoteCard({
   )
 }
 
-export function SignInCard({ title, children, buttonLabel = 'Continue with Google' }: { title: string; children?: ReactNode; buttonLabel?: string }) {
-  const signIn = useSignIn()
+export function SignInCard({
+  title,
+  children,
+  buttonLabel = 'Sign in',
+  intent,
+}: {
+  title: string
+  children?: ReactNode
+  buttonLabel?: string
+  intent?: SignInIntent
+}) {
+  const signIn = useSignIn(intent)
   return (
     <section className="ts-signin">
       <h3 className="ts-signin-title">{title}</h3>
       {children && <p className="ts-signin-body">{children}</p>}
       <div className="ts-signin-action">
-        <Button google onClick={signIn}>
-          {buttonLabel}
-        </Button>
+        <Button to={signIn}>{buttonLabel}</Button>
       </div>
     </section>
   )

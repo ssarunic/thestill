@@ -169,3 +169,20 @@ test('with public pages off, a signed-out visitor gets the sign-in wall', async 
   await expect(page).toHaveURL(/\/login/)
   expect(privateCalls).toEqual([])
 })
+
+test('every sign-in goes through the sign-in page and back (spec #102)', async ({ page }) => {
+  const privateCalls = await mockPublicApi(page)
+  await page.goto('/podcasts/public-show/episodes/chips')
+  await page.getByRole('banner').getByRole('link', { name: 'Sign in' }).click()
+  await expect(page).toHaveURL(/\/login\?next=%2Fpodcasts%2Fpublic-show%2Fepisodes%2Fchips$/)
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Sign in to thestill')
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible()
+  await page.getByRole('link', { name: 'Not now' }).click()
+  await expect(page).toHaveURL(/\/podcasts\/public-show\/episodes\/chips$/)
+
+  await page.getByRole('tab', { name: /Transcript/ }).click()
+  await page.getByRole('link', { name: 'Sign in to read the transcript' }).click()
+  await expect(page).toHaveURL(/intent=transcript/)
+  await expect(page.getByText('Sign in to read the full transcript')).toBeVisible()
+  expect(privateCalls).toEqual([])
+})

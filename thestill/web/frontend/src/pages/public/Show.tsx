@@ -19,7 +19,7 @@ export default function Show() {
   const { podcastSlug = '' } = useParams()
   const podcast = usePublicPodcast(podcastSlug)
   const episodes = usePublicPodcastEpisodes(podcastSlug)
-  const signIn = useSignIn()
+  const signInToFollow = useSignIn('follow')
   const [expanded, setExpanded] = useState(false)
 
   if (podcast.error instanceof PublicNotFound) return <NotFound />
@@ -67,7 +67,7 @@ export default function Show() {
                 )}
               </div>
               <div style={{ marginTop: 8 }}>
-                <Button onClick={signIn}>Sign in to follow</Button>
+                <Button to={signInToFollow}>Sign in to follow</Button>
               </div>
               {show.copyright && <span className="ts-meta" style={{ fontSize: 11 }}>{show.copyright}</span>}
             </>
@@ -142,8 +142,8 @@ export default function Show() {
             )}
           </section>
           {show && (
-            <SignInCard title={`Get every new episode of ${show.title} summarised in your inbox.`} buttonLabel="Sign in to follow">
-              Sign in with Google, then press Follow on this page: each new episode&apos;s summary arrives in your thestill inbox.
+            <SignInCard title={`Get every new episode of ${show.title} summarised in your inbox.`} buttonLabel="Sign in to follow" intent="follow">
+              We follow the show for you once you&apos;re signed in, and each new episode&apos;s summary arrives in your thestill inbox.
             </SignInCard>
           )}
         </div>

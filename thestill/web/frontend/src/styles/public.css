@@ -303,3 +303,14 @@
 }
 
 .ts-summary-more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: var(--space-lg); }
+
+/* ---------- Sign-in page (spec #102) ---------- */
+.ts-login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 48px var(--gutter-sm); background: var(--surface); }
+.ts-login { width: 100%; max-width: 400px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: var(--space-md); }
+.ts-login-title { margin: var(--space-lg) 0 0; font-size: 28px; line-height: 34px; font-weight: 700; letter-spacing: -0.02em; color: var(--on-surface); }
+.ts-login-why { margin: 0; font-family: var(--font-serif); font-size: 17px; line-height: 26px; color: var(--on-surface-variant); text-wrap: balance; }
+.ts-login-providers { width: 100%; display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-md); }
+.ts-login-provider { width: 100%; min-height: 48px; font-size: 15px; }
+.ts-login-consent { margin: var(--space-sm) 0 0; font-size: 13px; line-height: 19px; color: var(--on-surface-variant); }
+.ts-login-back { margin-top: var(--space-md); font-size: 13px; font-weight: 500; color: var(--on-surface-variant); text-decoration: none; }
+.ts-login-back:hover { color: var(--on-surface); }

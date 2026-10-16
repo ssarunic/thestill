@@ -146,9 +146,7 @@ export default function Landing() {
           attributed and timed, and a morning briefing across all of them.
         </p>
         <div>
-          <Button google onClick={signIn}>
-            Continue with Google
-          </Button>
+          <Button to={signIn}>Sign in</Button>
         </div>
       </section>
       <div className="ts-stack" style={{ maxWidth: 'var(--main-column)', paddingTop: 40 }}>

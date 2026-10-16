@@ -22,6 +22,7 @@ import MetaEyebrow from '../components/MetaEyebrow'
 import DefinitionList from '../components/DefinitionList'
 import Panel from '../components/Panel'
 import { hostOf } from '../utils/episodeFormat'
+import { consumePendingFollow } from '../utils/signIn'
 
 export default function PodcastDetail() {
   const { podcastSlug } = useParams<{ podcastSlug: string }>()
@@ -67,6 +68,21 @@ export default function PodcastDetail() {
     observer.observe(element)
     return () => observer.disconnect()
   }, [handleObserver])
+
+  // Spec #102 — finish a Follow pressed on the public show page before
+  // signing in. The intent was stored on /login by that click (never read
+  // from the URL), and is consumed on the first load of this show.
+  const pendingFollowChecked = useRef(false)
+  const loadedPodcast = podcastData?.podcast
+  useEffect(() => {
+    if (!loadedPodcast || pendingFollowChecked.current) return
+    pendingFollowChecked.current = true
+    if (!consumePendingFollow(podcastSlug!) || loadedPodcast.is_following) return
+    follow(podcastSlug!, {
+      onSuccess: () => showToast(`Following ${loadedPodcast.title}`, 'success'),
+      onError: (error) => showToast(`Failed to follow: ${error.message}`, 'error'),
+    })
+  }, [loadedPodcast, podcastSlug, follow, showToast])
 
   // Flatten all pages into a single episodes array
   const allEpisodes = episodesData?.pages.flatMap((page) => page.episodes) ?? []

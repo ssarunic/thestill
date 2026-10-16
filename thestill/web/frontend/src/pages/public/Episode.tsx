@@ -150,7 +150,7 @@ export default function Episode() {
           </div>
 
           {tab === 'transcript' ? (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away.">
+            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Sign in to read the transcript" intent="transcript">
               Sign in to read every word, search across every show, and get each new episode summarised in your inbox.
             </SignInCard>
           ) : (
@@ -242,7 +242,7 @@ export default function Episode() {
           )}
 
           {tab === 'summary' && (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away.">
+            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Sign in to read the transcript" intent="transcript">
               Sign in to read every word, with speaker names and timestamps.
             </SignInCard>
           )}

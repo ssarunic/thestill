@@ -1,12 +1,14 @@
 // Spec #94 — non-component helpers for the public pages (kept apart from
 // ui.tsx so React fast refresh stays component-only).
-import { useAuth } from '../../contexts/AuthContext'
+import { useLocation } from 'react-router-dom'
 import { episodePath, type PublicEntityType, type PublicQuote } from '../../api/public'
+import { signInPath, type SignInIntent } from '../../utils/signIn'
 
-/** Starts Google sign-in and returns the visitor to the current page. */
-export function useSignIn() {
-  const { login } = useAuth()
-  return () => login(window.location.pathname + window.location.search)
+/** Spec #102 — the sign-in page link for this page: every public sign-in
+ * button goes to /login, which offers the providers and comes back here. */
+export function useSignIn(intent?: SignInIntent): string {
+  const location = useLocation()
+  return signInPath(location.pathname + location.search, intent)
 }
 
 const TYPE_LABEL: Record<PublicEntityType, string> = {
