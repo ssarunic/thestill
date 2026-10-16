@@ -260,6 +260,22 @@ class TestReads:
         service.record(USER, EP, _write(position=700.0, seq=1))
         assert service.latest(USER) is not None
 
+    def test_continue_listening_shows_only_the_last_3_days(self, svc):
+        """Abandoned episodes drop out of the list; they keep their position
+        and are still the restore candidate."""
+        service, _, clock = svc
+        clock.return_value = NOW - timedelta(days=3, minutes=1)
+        service.record(USER, EP, _write(position=700.0, seq=1))
+        clock.return_value = NOW
+        assert service.list_in_progress(USER, 3) == []
+        assert service.latest(USER).listening.position_seconds == 700.0
+        assert service.get_summary(USER, EP).position_seconds == 700.0
+
+        clock.return_value = NOW - timedelta(days=2)
+        service.record(USER, EP, _write(position=710.0, seq=2))
+        clock.return_value = NOW
+        assert [i.episode["id"] for i in service.list_in_progress(USER, 3)] == [EP]
+
     def test_completed_or_unplayed_rows_are_not_in_progress(self, svc):
         service, _, _ = svc
         service.record(USER, EP, _write("mark_played", seq=0))

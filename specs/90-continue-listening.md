@@ -186,7 +186,8 @@ podcast title, artwork, `audio_url`, `playback` manifest, duration). It
 returns `{"item": null}` when there is none.
 
 **`GET /api/me/listening?state=in_progress&limit=`** lists unfinished rows
-newest first for the Continue listening strip (Phase 3).
+written in the last 3 days, newest first, for the Continue listening strip
+(Phase 3).
 
 **Read payloads.** Inbox items (`GET /api/inbox`, `GET /api/inbox/{id}`)
 and the episode detail response
@@ -360,6 +361,8 @@ wins over whatever was stored and is never rejected as out of order.
 - **Continue listening strip (Phase 3).** Above the inbox list, up to three
   unfinished episodes from `GET /api/me/listening?state=in_progress`,
   styled like the Arriving soon strip ([#88](88-import-outcomes-and-arriving-soon.md)).
+  Only episodes listened to in the last 3 days: an abandoned episode drops
+  out on its own and keeps its position (resume, inbox row, restore).
   Each item resumes in place. Hidden when empty and while `?q=` filters the
   inbox (spec #85).
 
@@ -460,3 +463,4 @@ None.
 | 2026-10-16 | No Mark as played on inbox rows | Rows have no actions menu; a per-row ⋯ would narrow every title (spec #73) |
 | 2026-10-16 | Hidden visibility writes a `tick`, page hide a `pause` | A backgrounded phone tab keeps playing; only a dying document should be able to complete an episode |
 | 2026-10-16 | Writes hold until the resume seek lands | The engine reports 0:00 before metadata; a pause in that window would erase the stored position |
+| 2026-10-16 | Continue listening shows only the last 3 days | Unfinished rows never expire, so without a window the strip keeps resurfacing episodes the user gave up on; Stop only dismisses the bar, and Mark as played would wrongly mark the inbox row read. Restore keeps no age limit |

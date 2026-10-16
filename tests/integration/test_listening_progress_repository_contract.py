@@ -275,6 +275,20 @@ def test_list_unfinished_orders_newest_first_and_filters(env):
     assert [r.episode_id for r in env.repo.list_unfinished(user, limit=1, exclude_stopped=True)] == [new]
 
 
+def test_list_unfinished_updated_since_keeps_only_recent_rows(env):
+    user = env.add_user()
+    stale, boundary, fresh = (env.add_episode() for _ in range(3))
+    since = BASE - timedelta(days=3)
+    env.repo.upsert_if_newer(_row(user, stale, updated_at=since - timedelta(seconds=1)))
+    env.repo.upsert_if_newer(_row(user, boundary, updated_at=since))
+    env.repo.upsert_if_newer(_row(user, fresh, updated_at=BASE))
+
+    recent = env.repo.list_unfinished(user, limit=10, exclude_stopped=False, updated_since=since)
+    assert [r.episode_id for r in recent] == [fresh, boundary]
+    # No window: every unfinished row.
+    assert len(env.repo.list_unfinished(user, limit=10, exclude_stopped=False)) == 3
+
+
 def test_list_unfinished_is_per_user(env):
     alice, bob, ep = env.add_user(), env.add_user(), env.add_episode()
     env.repo.upsert_if_newer(_row(alice, ep))

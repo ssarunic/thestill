@@ -20,6 +20,7 @@ clamping, Stop) lives in ``ListeningProgressService``.
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import List, Optional
 
 from ..models.listening import ListeningProgress
@@ -44,10 +45,18 @@ class ListeningProgressRepository(ABC):
         """
 
     @abstractmethod
-    def list_unfinished(self, user_id: str, *, limit: int, exclude_stopped: bool) -> List[ListeningProgress]:
+    def list_unfinished(
+        self,
+        user_id: str,
+        *,
+        limit: int,
+        exclude_stopped: bool,
+        updated_since: Optional[datetime] = None,
+    ) -> List[ListeningProgress]:
         """Rows with a position and no completion, most recently updated first.
 
         ``exclude_stopped`` drops rows whose last write was a Stop — the
         restore candidate (``latest``) honours Stop; the Continue listening
-        list does not.
+        list does not. ``updated_since`` keeps only rows written at or after
+        that instant (the list's recency window; restore has none).
         """

@@ -1131,7 +1131,7 @@ The restore candidate: the most recently updated unfinished episode with a posit
 
 **Query Parameters:** `state=in_progress` (the only value), `limit` (1–20, default 3).
 
-Unfinished episodes with a position, newest first, in the same `{listening, episode}` shape as `latest`. Stop does not remove an episode from this list.
+Unfinished episodes with a position written in the last 3 days, newest first, in the same `{listening, episode}` shape as `latest`. Stop does not remove an episode from this list; an older one drops out but keeps its position.
 
 ## Webhooks
 

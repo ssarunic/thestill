@@ -98,8 +98,16 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
             )
             return cursor.rowcount == 1
 
-    def list_unfinished(self, user_id: str, *, limit: int, exclude_stopped: bool) -> List[ListeningProgress]:
+    def list_unfinished(
+        self,
+        user_id: str,
+        *,
+        limit: int,
+        exclude_stopped: bool,
+        updated_since: Optional[datetime] = None,
+    ) -> List[ListeningProgress]:
         stopped_clause = "AND stopped_at IS NULL" if exclude_stopped else ""
+        since_clause = "AND updated_at >= ?" if updated_since is not None else ""
         with self._get_connection() as conn:
             rows = conn.execute(
                 f"""
@@ -108,10 +116,11 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                    AND completed_at IS NULL
                    AND position_seconds > 0
                    {stopped_clause}
+                   {since_clause}
                  ORDER BY updated_at DESC
                  LIMIT ?
                 """,
-                (user_id, limit),
+                (user_id, *([updated_since.isoformat()] if updated_since is not None else []), limit),
             ).fetchall()
             return [self._row_to_progress(r) for r in rows]
 

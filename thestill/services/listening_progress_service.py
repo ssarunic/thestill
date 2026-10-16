@@ -24,7 +24,7 @@ Positions are personal data: they are never logged above debug level.
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from structlog import get_logger
@@ -51,6 +51,11 @@ logger = get_logger(__name__)
 
 # The Continue listening strip shows a handful; the API caps the page.
 MAX_IN_PROGRESS_LIMIT = 20
+
+# The Continue listening list shows what you are listening to now, not every
+# episode you ever started: an unfinished row drops out after this long
+# without a write. It keeps its position (resume, inbox rows, restore).
+CONTINUE_LISTENING_WINDOW = timedelta(days=3)
 
 MAX_SESSION_ID_LENGTH = 64
 
@@ -223,9 +228,12 @@ class ListeningProgressService:
         return items[0] if items else None
 
     def list_in_progress(self, user_id: str, limit: int) -> List[ResumableEpisode]:
-        """Unfinished episodes, newest first (Stop does not hide them)."""
+        """Unfinished episodes written in the last 3 days, newest first (Stop does not hide them)."""
         limit = max(1, min(limit, MAX_IN_PROGRESS_LIMIT))
-        return self._hydrate(self.repository.list_unfinished(user_id, limit=limit, exclude_stopped=False))
+        since = self.clock() - CONTINUE_LISTENING_WINDOW
+        return self._hydrate(
+            self.repository.list_unfinished(user_id, limit=limit, exclude_stopped=False, updated_since=since)
+        )
 
     def _hydrate(self, rows: List[ListeningProgress]) -> List[ResumableEpisode]:
         if not rows:

@@ -225,7 +225,7 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position |
 | `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
 | `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
-| `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes, newest first, for the Continue listening strip |
+| `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes written in the last 3 days, newest first, for the Continue listening strip |
 
 ### Webhooks
 

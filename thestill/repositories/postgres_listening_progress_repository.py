@@ -20,6 +20,7 @@ Follows the ``utils.postgres_ext`` conventions: native ``uuid`` ids,
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional
 
 from structlog import get_logger
@@ -89,10 +90,18 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
             )
             return cursor.rowcount == 1
 
-    def list_unfinished(self, user_id: str, *, limit: int, exclude_stopped: bool) -> List[ListeningProgress]:
+    def list_unfinished(
+        self,
+        user_id: str,
+        *,
+        limit: int,
+        exclude_stopped: bool,
+        updated_since: Optional[datetime] = None,
+    ) -> List[ListeningProgress]:
         if not is_uuid(user_id):
             return []
         stopped_clause = "AND stopped_at IS NULL" if exclude_stopped else ""
+        since_clause = "AND updated_at >= %s" if updated_since is not None else ""
         with connect(self.dsn) as conn:
             rows = conn.execute(
                 f"""
@@ -101,10 +110,11 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
                    AND completed_at IS NULL
                    AND position_seconds > 0
                    {stopped_clause}
+                   {since_clause}
                  ORDER BY updated_at DESC
                  LIMIT %s
                 """,
-                (user_id, limit),
+                (user_id, *([updated_since] if updated_since is not None else []), limit),
             ).fetchall()
             return [self._row_to_progress(r) for r in rows]
 
