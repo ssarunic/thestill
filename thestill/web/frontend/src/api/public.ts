@@ -71,7 +71,10 @@ export interface PublicEpisode {
 }
 
 export interface PublicSummary {
+  /** The gist and key takeaways only; the full summary needs sign-in. */
   content: string
+  /** Titles of the sections a signed-in reader also gets. */
+  more_sections: string[]
   language: string
   canonical_language: string
   available_languages: string[]

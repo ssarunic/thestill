@@ -28,6 +28,8 @@ few hard rules:
   every list.
 - **Bounded.** Page sizes are capped and the router carries the per-IP
   public rate limit plus the public cache policy.
+- **Summaries are partial.** Only the lead sections (the gist and key
+  takeaways) leave this module; the full summary is behind sign-in.
 """
 
 from __future__ import annotations
@@ -76,6 +78,38 @@ _RECENT_TTL_SECONDS = 300.0
 
 def _not_found(what: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{what} not found")
+
+
+_SUMMARY_HEADING_RE = re.compile(r"^##\s+(?:\d+\.\s+)?(.*)$")
+_LEAD_SECTION_RE = re.compile(r"\b(gist|key takeaways?|takeaways)\b", re.IGNORECASE)
+_TITLE_DECORATION_RE = re.compile(r'^[^\w"]+|^_+')
+
+
+def _summary_lead(markdown: str) -> tuple[str, List[str]]:
+    """Split a summary into the public lead and the titles of what is held back.
+
+    The lead is the gist and key-takeaways sections (the first section when
+    neither is present), with section numbers dropped so the gap does not
+    show; the rest stays behind sign-in and only its titles are returned.
+    The public pages render this split as is.
+    """
+    preamble: List[str] = []
+    sections: List[tuple[str, List[str]]] = []
+    for line in markdown.split("\n"):
+        heading = _SUMMARY_HEADING_RE.match(line)
+        if heading:
+            title = heading.group(1).strip()
+            sections.append((title, [f"## {title}"]))
+        elif sections:
+            sections[-1][1].append(line)
+        else:
+            preamble.append(line)
+    lead_idx = [i for i, (title, _) in enumerate(sections) if _LEAD_SECTION_RE.search(title)]
+    if not lead_idx and sections:
+        lead_idx = [0]
+    lead = "\n".join(preamble + ["\n".join(lines) for i, (_, lines) in enumerate(sections) if i in lead_idx])
+    held_back = [_TITLE_DECORATION_RE.sub("", title) for i, (title, _) in enumerate(sections) if i not in lead_idx]
+    return lead.strip(), held_back
 
 
 def _check_slug(value: str, what: str) -> str:
@@ -338,12 +372,13 @@ def get_public_episode_summary(
     lang: Optional[str] = Query(None, pattern=r"^[A-Za-z]{2,3}$"),
     state: AppState = Depends(get_app_state),
 ) -> Response:
-    """The stored summary, in a stored language only (spec #94 cost guard).
+    """The lead of the stored summary, in a stored language only (spec #94 cost guard).
 
     Never detects a language and never translates: an unrecorded canonical
     language falls back to the podcast's, and a ``lang`` that is not already
     stored is a 404. Citations are omitted (there is no public transcript to
-    jump into).
+    jump into). Only the gist and key takeaways are served; ``more_sections``
+    names the sections a signed-in reader also gets.
     """
     visibility = get_public_visibility(state)
     podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
@@ -358,10 +393,12 @@ def get_public_episode_summary(
     summary = state.podcast_service.get_summary_for_episode(episode, language=requested, canonical_language=canonical)
     if not summary or summary.startswith("N/A"):
         raise _not_found("Summary")
+    lead, more_sections = _summary_lead(summary)
     result = etag_json_response(
         request,
         {
-            "content": summary,
+            "content": lead,
+            "more_sections": more_sections,
             "language": requested,
             "canonical_language": canonical,
             "available_languages": available or [canonical],

@@ -26,7 +26,7 @@ multi-user mode only:
 |---|---|---|
 | Landing | `/` | One sentence, one real summary, three outcomes, Sign in |
 | Podcast | `/podcasts/:slug` | Artwork, description, Listen-on links, recent summarised episodes |
-| Episode | `/podcasts/:slug/episodes/:slug` | Header, description, the **summary**; the transcript stays behind sign-in |
+| Episode | `/podcasts/:slug/episodes/:slug` | Header, description, the **summary's gist and takeaways**; the full summary and the transcript stay behind sign-in |
 | Entity (Phase 2) | `/entities/:type/:slug` | Who or what it is, which shows discuss it, recent mentions |
 
 Plus `/top`, `/terms`, `/privacy`, `robots.txt` and `sitemap.xml`.
@@ -37,10 +37,13 @@ Three decisions shape the design:
    processes each podcast once for everyone, so a podcast or episode page
    reveals nothing about any individual. Inbox, read state, saved rows,
    follows, briefings, progress and search stay behind a session.
-2. **Summaries public, transcripts private.** The summary is a document
-   thestill wrote; the transcript is the publisher's show in text form.
-   The public episode page carries the summary, the publisher's own
-   description, and Listen-on links back to Apple, Spotify and YouTube.
+2. **Summary lead public, full summary and transcripts private.** The
+   summary is a document thestill wrote; the transcript is the
+   publisher's show in text form. The public episode page carries the
+   summary's gist and key takeaways, the publisher's own description,
+   and Listen-on links back to Apple, Spotify and YouTube. The rest of
+   the summary (timeline, quotes, drama and so on) needs sign-in; see
+   "Summary lead" below.
 3. **Crawlers get real `<head>` tags from the server, not a rendered
    React app.** The SPA shell gains per-URL title, description, Open
    Graph, canonical and JSON-LD injected by the catch-all route. No SSR.
@@ -188,6 +191,15 @@ routes make the allowlist explicit (constitution §5).
   with that one entry. Detection stays a signed-in side effect.
 - A `N/A` summary is a 404 on the public route, not a page that says
   "N/A" (FM-1 in reverse: a non-result must not render as content).
+
+**Summary lead (2026-10-16).** The public route serves only the lead:
+the gist and key-takeaways sections (the first section when neither
+exists), with section numbers dropped. The other sections never leave
+the server; `more_sections` lists their titles so the page can show
+what sign-in unlocks. The split happens in `api_public._summary_lead`,
+not in the browser, so scrapers get the same partial text as readers.
+The episode page's "Read the full summary" button goes to
+`/login?intent=summary` and returns to the episode.
 
 Implemented as a keyword flag on the service call
 (`allow_generate=False`), asserted by a test whose provider factory
