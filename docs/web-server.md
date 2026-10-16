@@ -51,7 +51,7 @@ Commands below).
 | `/api/episodes/failed` | GET | List episodes with pipeline failures |
 | `/api/episodes/bulk/process` | POST | Queue full pipeline processing for multiple episodes |
 | `/api/podcasts/{podcast_slug}/episodes` | GET | List episodes (filterable) |
-| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}` | GET | Get episode details, plus the caller's `listening` progress (spec #90; `null` when never played) |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
@@ -107,7 +107,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`) |
+| `/api/inbox` | GET | List inbox items, newest delivery first. Query: `state`, `limit`, `before` (cursor by `delivered_at`), `q` (spec #85: whitespace tokens ANDed, each a case-insensitive substring of episode title, podcast title or description; trimmed, max 200 chars, up to 8 tokens; composes with `state`/`before`). Each item carries the user's `listening` progress (spec #90), `null` when never played |
 | `/api/inbox/unread-count` | GET | Lightweight unread count for badge rendering |
 | `/api/inbox/arriving` | GET | Spec #88 "Arriving soon": episodes of podcasts you follow that have an active pipeline task, no `published_at`, no failure, and no row in your inbox. Query: `limit` (1–20, default 5). Returns `items` (`episode` + `podcast`), `count` and `total`. Read-only; these are not inbox rows |
 | `/api/inbox/{episode_id}` | GET | Spec #88: your row for one episode, `{"entry": …}` or `{"entry": null}` when never delivered |

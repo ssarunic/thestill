@@ -134,18 +134,18 @@ describe('sessions and ordering', () => {
 
   it('holds writes until the start seek lands, then the landing seek is not a write', async () => {
     const t = setup()
-    t.writer.startSession(EP, { heldAt: 1934 })
+    t.writer.startSession(EP, { target: 1934 })
     t.setSample({ position: 0 })
     vi.advanceTimersByTime(20_000)
     t.writer.tick()
     t.writer.flush('pause')
     expect(t.send).not.toHaveBeenCalled()
-    expect(t.writer.heldPosition()).toBe(1934)
+    expect(t.writer.heldTarget()).toBe(1934)
 
     t.writer.onSeeked() // the resume seek landing
     vi.advanceTimersByTime(2_000)
     expect(t.send).not.toHaveBeenCalled()
-    expect(t.writer.heldPosition()).toBeNull()
+    expect(t.writer.heldTarget()).toBeNull()
 
     t.setSample({ position: 1935 })
     t.writer.flush('pause')
@@ -155,13 +155,32 @@ describe('sessions and ordering', () => {
 
   it('a Stop during a hold records the held position', async () => {
     const t = setup()
-    t.writer.startSession(EP, { heldAt: 1934 })
+    t.writer.startSession(EP, { target: 1934 })
     t.setSample({ position: 0, playing: false })
-    t.writer.flush('stop', { evenIfHeld: true })
+    t.writer.stop()
     await flushPromises()
     expect(t.bodies()).toEqual([
       expect.objectContaining({ event: 'stop', position_seconds: 1934 }),
     ])
+    expect(t.writer.hasSession()).toBe(false)
+  })
+
+  it('a Stop while the held target is still unknown writes nothing (0:00 would erase it)', async () => {
+    const t = setup()
+    t.writer.startSession(EP, { target: null })
+    t.setSample({ position: 0 })
+    t.writer.stop()
+    await flushPromises()
+    expect(t.send).not.toHaveBeenCalled()
+  })
+
+  it('a Stop of an unheld session records the live position', async () => {
+    const t = setup()
+    t.writer.startSession(EP)
+    t.setSample({ position: 321 })
+    t.writer.stop()
+    await flushPromises()
+    expect(t.bodies()).toEqual([expect.objectContaining({ event: 'stop', position_seconds: 321 })])
   })
 
   it('a mark waits for an in-flight write to the same episode and uses its own session', async () => {

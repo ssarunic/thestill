@@ -14,13 +14,14 @@ interface EpisodeMoreMenuProps {
   onMarkPlayed: (played: boolean) => Promise<void>
 }
 
+// Plain buttons in a disclosure, not an ARIA menu: Tab moves between them
+// (an ARIA menu would promise arrow-key navigation). 44 px tall for touch.
 function MenuItem({ icon, onSelect, children }: { icon: ReactNode; onSelect: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
-      role="menuitem"
       onClick={onSelect}
-      className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+      className="flex min-h-[44px] w-full items-center gap-3 px-4 text-left text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
     >
       <span className="h-4 w-4 shrink-0 text-gray-500" aria-hidden="true">
         {icon}
@@ -60,8 +61,8 @@ export default function EpisodeMoreMenu({
         icon={<MoreIcon />}
         aria-label="More actions"
         title="More actions"
-        aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={open ? 'episode-more-actions' : undefined}
         onClick={() => {
           setError(null)
           setOpen((o) => !o)
@@ -69,7 +70,8 @@ export default function EpisodeMoreMenu({
       />
       {open && (
         <div
-          role="menu"
+          id="episode-more-actions"
+          role="group"
           aria-label="More actions"
           className="absolute right-0 top-full z-30 mt-2 w-60 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
         >

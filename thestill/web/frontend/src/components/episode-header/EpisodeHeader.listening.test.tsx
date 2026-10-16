@@ -74,31 +74,31 @@ describe('EpisodeHeader listening progress (spec #90)', () => {
   it('the More menu offers Play from beginning only with a position', async () => {
     const { onPlayFromStart } = renderHeader(progress(1680))
     await openMenu()
-    await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Play from beginning' }))
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Play from beginning' }))
     expect(onPlayFromStart).toHaveBeenCalled()
-    expect(screen.queryByRole('menu')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'More actions' })).toBeNull()
   })
 
   it('Mark as played / unplayed toggles on the completion', async () => {
     const { onMarkPlayed } = renderHeader(progress(1680))
     await openMenu()
-    await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Mark as played' }))
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Mark as played' }))
     expect(onMarkPlayed).toHaveBeenCalledWith(true)
   })
 
   it('offers Mark as unplayed on a played episode', async () => {
     const { onMarkPlayed } = renderHeader(progress(0, { completed_at: '2026-10-15T09:00:00Z' }))
     await openMenu()
-    expect(screen.queryByRole('menuitem', { name: 'Play from beginning' })).toBeNull()
-    await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Mark as unplayed' }))
+    expect(screen.queryByRole('button', { name: 'Play from beginning' })).toBeNull()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Mark as unplayed' }))
     expect(onMarkPlayed).toHaveBeenCalledWith(false)
   })
 
   it('a failed mark keeps the menu open with an error', async () => {
     renderHeader(progress(1680), { onMarkPlayed: vi.fn().mockRejectedValue(new Error('offline')) })
     await openMenu()
-    await userEvent.setup().click(screen.getByRole('menuitem', { name: 'Mark as played' }))
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Mark as played' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not update')
-    expect(screen.getByRole('menu')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'More actions' })).toBeInTheDocument()
   })
 })

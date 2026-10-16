@@ -26,6 +26,14 @@ function describeMediaError(error: MediaError | null): string {
 // A late resume seek only moves a source that has barely started.
 const LATE_SEEK_WINDOW_SECONDS = 5
 
+// What a replaced engine on the same element hands to its successor: the
+// element keeps its source across the swap, the engine's own state would not.
+export interface NativeEngineState {
+  url: string | null
+  pendingSeek: number | null
+  userSeeked: boolean
+}
+
 export class NativeEngine implements PlaybackEngine {
   readonly kind = 'native' as const
 
@@ -42,9 +50,14 @@ export class NativeEngine implements PlaybackEngine {
   private url: string | null = null
   private unbind: () => void
 
-  constructor(el: HTMLVideoElement, events: EngineEvents) {
+  constructor(el: HTMLVideoElement, events: EngineEvents, carried?: NativeEngineState | null) {
     this.el = el
     this.events = events
+    if (carried) {
+      this.url = carried.url
+      this.pendingSeek = carried.pendingSeek
+      this.userSeeked = carried.userSeeked
+    }
 
     const listeners: Array<[string, EventListener]> = [
       ['play', () => this.events.onPlay()],
@@ -173,7 +186,13 @@ export class NativeEngine implements PlaybackEngine {
     return this.el.playbackRate
   }
 
-  destroy(): void {
+  /**
+   * Unbind from the element. Returns the state a successor on the same
+   * element needs — StrictMode's dev remount replaces the engine while a
+   * deferred seek (a restore landing on loadedmetadata) is still pending.
+   */
+  destroy(): NativeEngineState {
     this.unbind()
+    return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked }
   }
 }

@@ -42,19 +42,11 @@ from ..models.inbox import (
 )
 from ..models.listening import ListeningSummary
 from ..models.podcast import Episode, FailureType
-from ..utils.postgres_ext import as_str, connect
+from ..utils.postgres_ext import as_str, connect, is_uuid
 from ..utils.sql_like import LIKE_ESCAPE_CLAUSE, substring_pattern
 from .inbox_repository import ARRIVING_TASK_COLUMNS_SQL, ARRIVING_WHERE_SQL, InboxRepository
 
 logger = get_logger(__name__)
-
-
-def _is_uuid(value: str) -> bool:
-    try:
-        uuid.UUID(str(value))
-    except ValueError:
-        return False
-    return True
 
 
 _ENTRY_COLS = "id, user_id, episode_id, source, state, delivered_at, state_changed_at"
@@ -254,9 +246,7 @@ class PostgresInboxRepository(InboxRepository):
         # ``episode_id`` comes straight from the URL path. On SQLite a
         # garbage id just matches nothing; here the ``uuid`` cast would
         # raise instead — pre-validate so an unparseable id stays a no-op.
-        try:
-            uuid.UUID(episode_id)
-        except ValueError:
+        if not is_uuid(episode_id):
             return False
         with connect(self.dsn) as conn:
             row = conn.execute(
@@ -359,13 +349,13 @@ class PostgresInboxRepository(InboxRepository):
         return [self._row_to_item(row) for row in rows]
 
     def get_item(self, user_id: str, episode_id: str) -> Optional[InboxItem]:
-        if not (_is_uuid(user_id) and _is_uuid(episode_id)):
+        if not (is_uuid(user_id) and is_uuid(episode_id)):
             return None
         items = self._select_items("i.user_id = %s AND i.episode_id = %s", [user_id, episode_id], 1)
         return items[0] if items else None
 
     def episode_exists(self, episode_id: str) -> bool:
-        if not _is_uuid(episode_id):
+        if not is_uuid(episode_id):
             return False  # a malformed id cannot name a row; don't let the cast raise
         with connect(self.dsn) as conn:
             return conn.execute("SELECT 1 FROM episodes WHERE id = %s", (episode_id,)).fetchone() is not None

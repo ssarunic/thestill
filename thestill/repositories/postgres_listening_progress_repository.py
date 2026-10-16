@@ -20,28 +20,17 @@ Follows the ``utils.postgres_ext`` conventions: native ``uuid`` ids,
 
 from __future__ import annotations
 
-import uuid
 from typing import List, Optional
 
 from structlog import get_logger
 
 from ..models.listening import ListeningProgress
-from ..utils.postgres_ext import as_str, connect
+from ..utils.postgres_ext import as_str, connect, is_uuid
 from .listening_progress_repository import ListeningProgressRepository
 
 logger = get_logger(__name__)
 
 _COLS = "user_id, episode_id, position_seconds, duration_seconds, completed_at, stopped_at, session_id, seq, updated_at"
-
-
-def _is_uuid(value: str) -> bool:
-    # Ids reach this repository straight from URL paths; a malformed one
-    # would raise on the ::uuid cast instead of matching nothing.
-    try:
-        uuid.UUID(str(value))
-    except ValueError:
-        return False
-    return True
 
 
 class PostgresListeningProgressRepository(ListeningProgressRepository):
@@ -52,7 +41,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
         logger.info("Initialized Postgres listening progress repository")
 
     def get(self, user_id: str, episode_id: str) -> Optional[ListeningProgress]:
-        if not (_is_uuid(user_id) and _is_uuid(episode_id)):
+        if not (is_uuid(user_id) and is_uuid(episode_id)):
             return None
         with connect(self.dsn) as conn:
             row = conn.execute(
@@ -62,7 +51,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
             return self._row_to_progress(row) if row else None
 
     def upsert_if_newer(self, row: ListeningProgress, *, force: bool = False) -> bool:
-        if not (_is_uuid(row.user_id) and _is_uuid(row.episode_id)):
+        if not (is_uuid(row.user_id) and is_uuid(row.episode_id)):
             return False
         with connect(self.dsn) as conn:
             cursor = conn.execute(
@@ -100,7 +89,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
             return cursor.rowcount == 1
 
     def list_unfinished(self, user_id: str, *, limit: int, exclude_stopped: bool) -> List[ListeningProgress]:
-        if not _is_uuid(user_id):
+        if not is_uuid(user_id):
             return []
         stopped_clause = "AND stopped_at IS NULL" if exclude_stopped else ""
         with connect(self.dsn) as conn:

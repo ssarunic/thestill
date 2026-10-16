@@ -24,9 +24,8 @@ Positions are personal data: they are never logged above debug level.
 """
 
 import math
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from structlog import get_logger
 
@@ -40,7 +39,9 @@ from ..models.listening import (
     ResumableEpisode,
     WriteOutcome,
 )
+from ..models.podcast import AlternateEnclosure, Episode, Podcast
 from ..repositories.listening_progress_repository import ListeningProgressRepository
+from ..utils.postgres_ext import is_uuid
 from .playback import build_track_payload
 
 logger = get_logger(__name__)
@@ -135,12 +136,14 @@ def plan_row(
     )
 
 
-def _is_uuid(value: str) -> bool:
-    try:
-        uuid.UUID(str(value))
-    except ValueError:
-        return False
-    return True
+class EpisodeLookups(Protocol):
+    """The podcast-repository reads this service needs (both backends provide them)."""
+
+    def get_episode(self, episode_id: str) -> Optional[Tuple[Podcast, Episode]]: ...
+
+    def get_episodes_by_ids(self, episode_ids: Sequence[str]) -> Dict[str, Tuple[Podcast, Episode]]: ...
+
+    def get_alternate_enclosures_for_episodes(self, episode_ids: List[str]) -> Dict[str, List[AlternateEnclosure]]: ...
 
 
 class ListeningProgressService:
@@ -149,7 +152,7 @@ class ListeningProgressService:
     def __init__(
         self,
         repository: ListeningProgressRepository,
-        podcast_repository: Any,
+        podcast_repository: EpisodeLookups,
         mark_read: Callable[[str, str], bool],
         clock: Callable[[], datetime] = _utcnow,
     ):
@@ -169,7 +172,7 @@ class ListeningProgressService:
     def _require_episode(self, episode_id: str) -> None:
         # Validate the shape first: on Postgres a malformed id raises on the
         # uuid cast instead of matching nothing.
-        if not _is_uuid(episode_id) or self.podcast_repository.get_episode(episode_id) is None:
+        if not is_uuid(episode_id) or self.podcast_repository.get_episode(episode_id) is None:
             raise ListeningEpisodeNotFoundError(episode_id)
 
     def record(self, user_id: str, episode_id: str, write: ProgressWrite) -> WriteOutcome:

@@ -9,7 +9,10 @@ import type { ProgressBody } from '../../api/types'
 import type { PlayerTrack, RenditionKind } from '../PlayerContext'
 
 export const PLAYER_SESSION_STORAGE_KEY = 'thestill:player:session'
-const VERSION = 1
+const VERSION = 2
+
+// The owner key of a player rendered without an AuthProvider (isolated tests).
+export const LOCAL_USER_KEY = 'local'
 
 // A write the server has not acknowledged yet, re-sent with its original
 // session_id and seq so server-side ordering still holds.
@@ -20,6 +23,8 @@ export interface PendingWrite {
 
 export interface SessionSnapshot {
   v: typeof VERSION
+  // Whose session this is: a snapshot is only ever restored by its owner.
+  userKey: string
   track: PlayerTrack
   // Logical (transcript-timeline) position, seconds.
   logicalPosition: number
@@ -43,6 +48,7 @@ function isSnapshot(value: unknown): value is SessionSnapshot {
   const s = value as Partial<SessionSnapshot>
   return (
     s.v === VERSION &&
+    typeof s.userKey === 'string' &&
     typeof s.savedAt === 'number' &&
     typeof s.logicalPosition === 'number' &&
     Number.isFinite(s.logicalPosition) &&
@@ -53,24 +59,25 @@ function isSnapshot(value: unknown): value is SessionSnapshot {
   )
 }
 
-export function readSnapshot(): SessionSnapshot | null {
+/** The tab's snapshot when it belongs to `userKey`, else null. */
+export function readSnapshot(userKey: string): SessionSnapshot | null {
   const store = storage()
   if (!store) return null
   try {
     const raw = store.getItem(PLAYER_SESSION_STORAGE_KEY)
     if (!raw) return null
     const parsed: unknown = JSON.parse(raw)
-    return isSnapshot(parsed) ? parsed : null
+    return isSnapshot(parsed) && parsed.userKey === userKey ? parsed : null
   } catch {
     return null
   }
 }
 
-export function writeSnapshot(snapshot: Omit<SessionSnapshot, 'v'>): void {
+export function writeSnapshot(userKey: string, snapshot: Omit<SessionSnapshot, 'v' | 'userKey'>): void {
   const store = storage()
   if (!store) return
   try {
-    store.setItem(PLAYER_SESSION_STORAGE_KEY, JSON.stringify({ v: VERSION, ...snapshot }))
+    store.setItem(PLAYER_SESSION_STORAGE_KEY, JSON.stringify({ v: VERSION, userKey, ...snapshot }))
   } catch {
     // Quota or private mode — the server path still covers restore.
   }

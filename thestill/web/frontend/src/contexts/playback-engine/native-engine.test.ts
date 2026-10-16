@@ -63,6 +63,16 @@ describe('NativeEngine.setPendingSeek', () => {
     expect(t.engine.setPendingSeek(1934)).toBe(false)
   })
 
+  it('a replacement engine on the same element keeps a deferred seek (StrictMode remount)', () => {
+    const t = makeEngine()
+    t.engine.load({ url: 'https://cdn.test/a.mp3' }, { seekTo: 1234 })
+    const carried = t.engine.destroy()
+    const successor = new NativeEngine(t.el, new Proxy({} as EngineEvents, { get: () => vi.fn() }), carried)
+    t.metadataLoaded()
+    expect(t.time()).toBe(1234)
+    expect(successor.setPendingSeek(10)).toBe(false) // metadata in, already past 5 s
+  })
+
   it('does nothing without a source', () => {
     const t = makeEngine()
     expect(t.engine.setPendingSeek(10)).toBe(false)

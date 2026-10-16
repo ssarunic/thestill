@@ -75,17 +75,23 @@ describe('session snapshot', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('round-trips and clears', () => {
-    writeSnapshot(fields)
-    expect(readSnapshot()).toEqual({ v: 1, ...fields })
+    writeSnapshot('u1', fields)
+    expect(readSnapshot('u1')).toEqual({ v: 2, userKey: 'u1', ...fields })
     clearSnapshot()
-    expect(readSnapshot()).toBeNull()
+    expect(readSnapshot('u1')).toBeNull()
+  })
+
+  it('is read back only by the user who wrote it', () => {
+    writeSnapshot('alice', fields)
+    expect(readSnapshot('bob')).toBeNull()
+    expect(readSnapshot('alice')).not.toBeNull()
   })
 
   it('ignores malformed or foreign values', () => {
     sessionStorage.setItem(PLAYER_SESSION_STORAGE_KEY, '{not json')
-    expect(readSnapshot()).toBeNull()
-    sessionStorage.setItem(PLAYER_SESSION_STORAGE_KEY, JSON.stringify({ v: 1, track: {} }))
-    expect(readSnapshot()).toBeNull()
+    expect(readSnapshot('u1')).toBeNull()
+    sessionStorage.setItem(PLAYER_SESSION_STORAGE_KEY, JSON.stringify({ v: 2, userKey: 'u1', track: {} }))
+    expect(readSnapshot('u1')).toBeNull()
   })
 
   it('blocked storage reads as empty and writes are dropped', () => {
@@ -95,8 +101,8 @@ describe('session snapshot', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('QuotaExceededError')
     })
-    expect(() => writeSnapshot(fields)).not.toThrow()
-    expect(readSnapshot()).toBeNull()
+    expect(() => writeSnapshot('u1', fields)).not.toThrow()
+    expect(readSnapshot('u1')).toBeNull()
   })
 })
 

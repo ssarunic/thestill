@@ -10,10 +10,10 @@ import { useOptionalAuth } from '../AuthContext'
 import type { PlayerTrack, PlayOptions, RenditionKind } from '../PlayerContext'
 import { buildPlayerTrack } from '../../utils/playerTrack'
 import { listeningCache, listeningWrites } from './listeningCache'
-import { ProgressWriter, type Sample } from './progressWriter'
+import { ProgressWriter, type Hold, type Sample } from './progressWriter'
 import { planRestore } from './restore'
 import { resolveResume, resumablePosition } from './resume'
-import { clearSnapshot, readSnapshot, writeSnapshot } from './sessionSnapshot'
+import { LOCAL_USER_KEY, clearSnapshot, readSnapshot, writeSnapshot, type SessionSnapshot } from './sessionSnapshot'
 
 /** What the persistence layer needs from the player — implemented over its refs. */
 export interface PlayerPort {
@@ -44,11 +44,52 @@ export interface PlaybackPersistence {
    * returns the engine-time seek for the new source (null = top).
    */
   startTrack(next: PlayerTrack, options: PlayOptions | undefined, offset: number): number | null
-  // Any other user playback action (resume, same-episode play): abandons a pending restore.
+  // Any other user playback action (resume, same-episode play): marks the
+  // restore as abandoned if it has not landed yet.
   noteUserAction(): void
   // Stop: writes `stop` (hides the episode from restore) and clears the tab snapshot.
   onStop(): void
   markListened(episodeId: string, played: boolean): Promise<void>
+}
+
+/**
+ * The tab snapshot, owned by one user: written only while someone is
+ * signed in, read back only by the same user. A tab shared across a logout
+ * and another sign-in never restores — or re-sends — the previous user's
+ * session.
+ */
+class SnapshotMirror {
+  private writer: ProgressWriter | null = null
+
+  constructor(
+    private readonly port: PlayerPort,
+    private userKey: string | null,
+  ) {}
+
+  attach(writer: ProgressWriter): void {
+    this.writer = writer
+  }
+
+  setUser(userKey: string | null): void {
+    this.userKey = userKey
+  }
+
+  read(): SessionSnapshot | null {
+    return this.userKey ? readSnapshot(this.userKey) : null
+  }
+
+  save(): void {
+    const track = this.port.getTrack()
+    if (!this.userKey || !track) return
+    writeSnapshot(this.userKey, {
+      track,
+      logicalPosition: this.writer?.heldTarget() ?? this.port.getLogicalPosition(),
+      wasPlaying: this.port.isPlaying(),
+      rendition: this.port.getRendition(),
+      pending: this.writer?.getPending() ?? null,
+      savedAt: Date.now(),
+    })
+  }
 }
 
 /** `port` must be stable (memoized over refs): it is captured once. */
@@ -56,27 +97,13 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
   const auth = useOptionalAuth()
   // Without an AuthProvider (isolated tests) there is nobody to wait for.
   const authReady = auth ? !auth.isLoading && auth.user !== null : true
-  const userId = auth?.user?.id ?? null
+  const userKey = auth ? (auth.user?.id ?? null) : LOCAL_USER_KEY
 
   const userActedRef = useRef(false)
 
-  // The writer and the snapshot mirror reference each other (a pending
-  // write is mirrored; the mirror asks whether the session is held), so
-  // both are created once, together.
-  const [{ writer, saveSnapshot }] = useState(() => {
-    const save = () => {
-      const track = port.getTrack()
-      if (!track) return
-      writeSnapshot({
-        track,
-        logicalPosition: created.heldPosition() ?? port.getLogicalPosition(),
-        wasPlaying: port.isPlaying(),
-        rendition: port.getRendition(),
-        pending: created.getPending(),
-        savedAt: Date.now(),
-      })
-    }
-    const created: ProgressWriter = new ProgressWriter({
+  const [{ writer, mirror }] = useState(() => {
+    const snapshots = new SnapshotMirror(port, userKey)
+    const created = new ProgressWriter({
       send: putListening,
       sample: (): Sample | null => {
         const track = port.getTrack()
@@ -93,16 +120,30 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
         listeningWrites.emit({ episodeId, event, completed: ack.completed })
       },
       onNotFound: (episodeId) => {
-        if (readSnapshot()?.track.episodeId === episodeId) clearSnapshot()
+        if (snapshots.read()?.track.episodeId === episodeId) clearSnapshot()
       },
       // Mirror before the network call settles, so a reload racing a
       // failed write still has the position.
-      onPendingChange: () => save(),
+      onPendingChange: () => snapshots.save(),
     })
-    return { writer: created, saveSnapshot: save }
+    snapshots.attach(created)
+    return { writer: created, mirror: snapshots }
   })
 
-  useEffect(() => () => writer.dispose(), [writer])
+  useEffect(() => () => writer.closeSession(), [writer])
+
+  // A different user signed in (or signed out): neither the cache nor the
+  // tab snapshot is theirs.
+  const lastUserKeyRef = useRef(userKey)
+  useEffect(() => {
+    mirror.setUser(userKey)
+    const previous = lastUserKeyRef.current
+    lastUserKeyRef.current = userKey
+    if (previous !== null && previous !== userKey) {
+      listeningCache.clear()
+      clearSnapshot()
+    }
+  }, [mirror, userKey])
 
   // Page hide: a keepalive write outlives the document. `pagehide` is the
   // document going away (a pause); `visibilitychange` to hidden is often a
@@ -110,12 +151,12 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
   useEffect(() => {
     const onPageHide = () => {
       if (port.isPlaying()) writer.flush('pause', { keepalive: true })
-      saveSnapshot()
+      mirror.save()
     }
     const onVisibility = () => {
       if (document.visibilityState !== 'hidden') return
       if (port.isPlaying()) writer.flush('tick', { keepalive: true })
-      saveSnapshot()
+      mirror.save()
     }
     window.addEventListener('pagehide', onPageHide)
     document.addEventListener('visibilitychange', onVisibility)
@@ -123,18 +164,7 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
       window.removeEventListener('pagehide', onPageHide)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [port, saveSnapshot, writer])
-
-  // A different user signed in: neither the cache nor the tab snapshot is theirs.
-  const lastUserIdRef = useRef(userId)
-  useEffect(() => {
-    const previous = lastUserIdRef.current
-    lastUserIdRef.current = userId
-    if (previous !== null && previous !== userId) {
-      listeningCache.clear()
-      clearSnapshot()
-    }
-  }, [userId])
+  }, [mirror, port, writer])
 
   // Restore on load: the tab snapshot first (no network), else the server's
   // latest unfinished episode, paused. A user action before it lands wins.
@@ -145,10 +175,10 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
     if (userActedRef.current || port.getTrack()) return
 
     const begin = (track: PlayerTrack, logicalPosition: number) => {
-      writer.startSession(track.episodeId, { heldAt: logicalPosition > 0 ? logicalPosition : undefined })
+      writer.startSession(track.episodeId, logicalPosition > 0 ? { target: logicalPosition } : null)
     }
 
-    const plan = planRestore(readSnapshot(), Date.now())
+    const plan = planRestore(mirror.read(), Date.now())
     if (plan.kind === 'snapshot') {
       const { snapshot } = plan
       begin(snapshot.track, snapshot.logicalPosition)
@@ -182,7 +212,7 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
       // StrictMode's dev remount aborts the first fetch; let the second run.
       if (!settled) restoredRef.current = false
     }
-  }, [authReady, port, writer])
+  }, [authReady, mirror, port, writer])
 
   const onEngineEvent = useCallback(
     (event: PersistedEngineEvent) => {
@@ -191,7 +221,7 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
           // Replay after `ended` or a mark: a fresh session.
           const track = port.getTrack()
           if (track && !writer.hasSession(track.episodeId)) writer.startSession(track.episodeId)
-          saveSnapshot()
+          mirror.save()
           return
         }
         case 'timeupdate':
@@ -206,7 +236,7 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
           if (!port.isEnded()) writer.flush('pause')
           // No session = Stop or a mark just closed it; the teardown's own
           // pause must not resurrect the snapshot Stop cleared.
-          if (writer.hasSession()) saveSnapshot()
+          if (writer.hasSession()) mirror.save()
           return
         case 'ended':
           writer.flush('ended')
@@ -214,7 +244,7 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
           return
       }
     },
-    [port, saveSnapshot, writer]
+    [mirror, port, writer]
   )
 
   const noteUserAction = useCallback(() => {
@@ -236,9 +266,10 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
       })
       // Hold writes until the start seek lands (or the late lookup settles):
       // until then the engine reports 0:00, not the position.
-      const heldAt =
-        decision.seekTo !== null && decision.seekTo > 0 ? Math.max(0, decision.seekTo - offset) : undefined
-      writer.startSession(next.episodeId, { heldAt, hold: decision.fetchLate })
+      let hold: Hold | null = null
+      if (decision.seekTo !== null && decision.seekTo > 0) hold = { target: Math.max(0, decision.seekTo - offset) }
+      else if (decision.fetchLate) hold = { target: null }
+      writer.startSession(next.episodeId, hold)
 
       if (decision.fetchLate) {
         // Surfaces without a `listening` payload (search, ⌘K, entities):
@@ -264,17 +295,22 @@ export function usePlaybackPersistence(port: PlayerPort): PlaybackPersistence {
 
   const onStop = useCallback(() => {
     userActedRef.current = true
-    writer.flush('stop', { evenIfHeld: true })
-    writer.closeSession()
+    writer.stop()
     clearSnapshot()
   }, [writer])
 
   const markListened = useCallback(
     async (episodeId: string, played: boolean) => {
       const isCurrent = port.getTrack()?.episodeId === episodeId
+      // The mark closes the episode's session so no late tick can undo it.
       const result = writer.mark(episodeId, played ? 'mark_played' : 'mark_unplayed')
-      // Rewind so the bar matches; the closed session cannot write it back.
-      if (isCurrent && played) port.rewindToStart()
+      if (isCurrent) {
+        // Played: rewind so the bar matches; the next play opens a session.
+        // Unplayed: listening may carry on, so it gets a fresh session now
+        // (queued behind the mark) instead of going unsaved until a pause.
+        if (played) port.rewindToStart()
+        else writer.startSession(episodeId)
+      }
       const outcome = await result
       if (outcome.kind !== 'ok') throw new Error('Could not update listening progress')
     },

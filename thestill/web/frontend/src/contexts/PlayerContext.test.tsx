@@ -15,7 +15,7 @@ import {
 import type { PlaybackManifest } from '../api/types'
 import * as listeningApi from '../api/listening'
 import { listeningCache } from './listening/listeningCache'
-import { readSnapshot, writeSnapshot } from './listening/sessionSnapshot'
+import { LOCAL_USER_KEY, readSnapshot, writeSnapshot } from './listening/sessionSnapshot'
 
 // ---------------------------------------------------------------------------
 // YouTube IFrame API mock (spec #62) — shared fixture; no script tag is
@@ -941,8 +941,27 @@ describe('spec #90 — listening progress', () => {
       act(() => ctx.stop())
       await settle()
       expect(writes().at(-1)).toMatchObject({ episodeId: 'ep-audio', event: 'stop', position_seconds: 90 })
-      expect(readSnapshot()).toBeNull()
+      expect(readSnapshot(LOCAL_USER_KEY)).toBeNull()
       expect(ctx.track).toBeNull()
+    })
+
+    it('marking the playing track unplayed keeps saving the listen', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+      listeningCache.seed('ep-audio', null)
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      await act(() => ctx.markListened('ep-audio', false))
+      expect(ctx.isPlaying).toBe(true)
+
+      video.currentTime = 400
+      act(() => {
+        vi.advanceTimersByTime(15_000)
+        video.dispatchEvent(new Event('timeupdate'))
+      })
+      await settle()
+      const last = writes().at(-1)!
+      expect(last).toMatchObject({ event: 'tick', position_seconds: 400, seq: 1 })
+      expect(last.session_id).not.toMatch(/^mark-/)
     })
 
     it('marking the current track played pauses and rewinds it, and its session stops writing', async () => {
@@ -966,8 +985,8 @@ describe('spec #90 — listening progress', () => {
   })
 
   describe('restore on load', () => {
-    const snapshot = (overrides: Partial<Parameters<typeof writeSnapshot>[0]> = {}) =>
-      writeSnapshot({
+    const snapshot = (overrides: Partial<Parameters<typeof writeSnapshot>[1]> = {}, userKey = LOCAL_USER_KEY) =>
+      writeSnapshot(userKey, {
         track: audioTrack,
         logicalPosition: 1234,
         wasPlaying: false,
@@ -976,6 +995,16 @@ describe('spec #90 — listening progress', () => {
         savedAt: Date.now() - 10_000,
         ...overrides,
       })
+
+    it("never restores, or re-sends, another user's snapshot", async () => {
+      const body = { event: 'pause' as const, position_seconds: 3590, duration_seconds: 3600, session_id: 'a', seq: 3 }
+      snapshot({ pending: { episodeId: 'ep-audio', body } }, 'previous-user')
+      renderPlayer()
+      await settle()
+      expect(ctx.track).toBeNull()
+      expect(listening.putListening).not.toHaveBeenCalled()
+      expect(listening.getLatestListening).toHaveBeenCalled()
+    })
 
     it('restores a same-tab reload from the snapshot without the network', () => {
       snapshot()

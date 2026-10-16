@@ -129,9 +129,9 @@ async function expectReaderContent() {
   // Spec #90 — Share lives in the ⋯ More menu (it took the Share slot);
   // jsdom has no Web Share API, so the share action names its fallback.
   await userEvent.setup().click(screen.getByRole('button', { name: 'More actions' }))
-  expect(screen.getByRole('menuitem', { name: 'Copy link' })).toBeInTheDocument()
-  expect(screen.getByRole('menuitem', { name: 'Mark as played' })).toBeInTheDocument()
-  expect(screen.queryByRole('menuitem', { name: 'Play from beginning' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Copy link' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Mark as played' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Play from beginning' })).toBeNull()
   expect(screen.getByRole('button', { name: /summary/i })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /transcript/i })).toBeInTheDocument()
   // Lazy viewer resolves async

@@ -8,7 +8,7 @@ export interface ResumeDecision {
   // Engine-time seek for the new source, or null to start at the top.
   seekTo: number | null
   // The position is unknown (no payload carried it): fetch it in parallel
-  // and apply it late via NativeEngine.setPendingSeek.
+  // and apply it late (PlayerPort.applyLateSeek → NativeEngine.setPendingSeek).
   fetchLate: boolean
 }
 

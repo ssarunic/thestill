@@ -5,10 +5,12 @@
 // with every write, so the server can order a tab's writes without trusting
 // its clock. Rules:
 // - ticks go out at most every 15 s of playback, seek writes are debounced
-//   1 s, pause/ended/stop flush immediately;
-// - a session started with `hold` (a resume or restore seek still pending)
-//   writes nothing until that seek lands, so the engine's 0:00 before
-//   metadata can never overwrite a stored position;
+//   1 s, pause/ended flush immediately;
+// - a held session (a resume or restore seek still pending) writes nothing
+//   until that seek lands, so the engine's 0:00 before metadata can never
+//   overwrite a stored position. Its target is what a Stop and the tab
+//   snapshot record meanwhile; a target still being looked up is unknown,
+//   and an unknown target is never written;
 // - writes to one episode go out in order (a per-episode promise chain), so
 //   a manual mark can never be overtaken by a tick already in flight;
 // - keepalive writes (page hide) leave synchronously — the document is going
@@ -31,8 +33,14 @@ export interface Sample {
   playing: boolean
 }
 
-export type FlushEvent = Extract<ListeningEvent, 'tick' | 'pause' | 'seek' | 'ended' | 'stop'>
+type WriteEvent = Extract<ListeningEvent, 'tick' | 'pause' | 'seek' | 'ended' | 'stop'>
+export type FlushEvent = Exclude<WriteEvent, 'stop'>
 export type MarkEvent = Extract<ListeningEvent, 'mark_played' | 'mark_unplayed'>
+
+/** A held session's target, in logical seconds; null while it is being looked up. */
+export interface Hold {
+  target: number | null
+}
 
 export interface ProgressWriterOptions {
   send: (episodeId: string, body: ProgressBody, options: { keepalive: boolean }) => Promise<SendResult>
@@ -40,21 +48,16 @@ export interface ProgressWriterOptions {
   onAck: (episodeId: string, ack: ProgressAck, event: ListeningEvent) => void
   onNotFound: (episodeId: string) => void
   onPendingChange: (pending: PendingWrite | null) => void
+  // Test seams.
   newId?: () => string
   now?: () => number
-  tickMs?: number
-  seekDebounceMs?: number
 }
 
 interface Session {
   episodeId: string
   id: string
   seq: number
-  hold: boolean
-  // Where a held session is headed (logical seconds) — what the snapshot
-  // and a Stop record while the engine still reports 0:00. Null while the
-  // target is still being looked up.
-  heldPosition: number | null
+  held: Hold | null
 }
 
 export function randomId(): string {
@@ -73,34 +76,15 @@ export class ProgressWriter {
   private pending: PendingWrite | null = null
   private chains = new Map<string, Promise<unknown>>()
   private failing = false
-  private readonly opts: Required<Omit<ProgressWriterOptions, 'newId' | 'now'>> & {
-    newId: () => string
-    now: () => number
-  }
+  private readonly opts: Required<ProgressWriterOptions>
 
   constructor(options: ProgressWriterOptions) {
-    this.opts = {
-      tickMs: TICK_INTERVAL_MS,
-      seekDebounceMs: SEEK_DEBOUNCE_MS,
-      newId: randomId,
-      now: () => Date.now(),
-      ...options,
-    }
+    this.opts = { newId: randomId, now: () => Date.now(), ...options }
   }
 
-  /**
-   * `heldAt` (logical seconds) holds the session until that seek lands;
-   * `hold` alone holds it while the target is still unknown.
-   */
-  startSession(episodeId: string, { heldAt, hold = false }: { heldAt?: number; hold?: boolean } = {}): void {
+  startSession(episodeId: string, hold: Hold | null = null): void {
     this.cancelSeek()
-    this.session = {
-      episodeId,
-      id: this.opts.newId(),
-      seq: 0,
-      hold: hold || heldAt !== undefined,
-      heldPosition: heldAt ?? null,
-    }
+    this.session = { episodeId, id: this.opts.newId(), seq: 0, held: hold }
     this.lastWriteAt = this.opts.now()
   }
 
@@ -113,18 +97,18 @@ export class ProgressWriter {
     return this.session !== null && (episodeId === undefined || this.session.episodeId === episodeId)
   }
 
-  // The held target while a hold is active and the target is known, else null.
-  heldPosition(): number | null {
-    return this.session?.hold ? this.session.heldPosition : null
+  /** The held target while a hold is active and its target is known, else null. */
+  heldTarget(): number | null {
+    return this.session?.held?.target ?? null
   }
 
   // A late-learned resume target for a held session.
-  retarget(episodeId: string, logicalPosition: number): void {
-    if (this.session?.episodeId === episodeId && this.session.hold) this.session.heldPosition = logicalPosition
+  retarget(episodeId: string, target: number): void {
+    if (this.session?.episodeId === episodeId && this.session.held) this.session.held.target = target
   }
 
   releaseHold(episodeId: string): void {
-    if (this.session?.episodeId === episodeId) this.session.hold = false
+    if (this.session?.episodeId === episodeId) this.session.held = null
   }
 
   getPending(): PendingWrite | null {
@@ -136,43 +120,44 @@ export class ProgressWriter {
   // and write (debounced) — also while paused, since a seek is an action.
   onSeeked(): void {
     if (!this.session) return
-    if (this.session.hold) {
-      this.session.hold = false
+    if (this.session.held) {
+      this.session.held = null
       return
     }
     this.cancelSeek()
     this.seekTimer = setTimeout(() => {
       this.seekTimer = null
       this.flush('seek')
-    }, this.opts.seekDebounceMs)
+    }, SEEK_DEBOUNCE_MS)
   }
 
   tick(): void {
     const sample = this.sessionSample()
     if (!sample || !sample.playing) return
-    if (this.opts.now() - this.lastWriteAt < this.opts.tickMs) return
+    if (this.opts.now() - this.lastWriteAt < TICK_INTERVAL_MS) return
     this.write('tick', sample, false)
   }
 
-  /**
-   * Write now. `evenIfHeld` lets a Stop during a hold (a restored bar whose
-   * seek never landed) still record the intended position.
-   */
-  flush(event: FlushEvent, { keepalive = false, evenIfHeld = false }: { keepalive?: boolean; evenIfHeld?: boolean } = {}): void {
+  flush(event: FlushEvent, { keepalive = false }: { keepalive?: boolean } = {}): void {
     if (event !== 'seek') this.cancelSeek()
-    const session = this.session
-    if (!session) return
-    let sample: Sample | null
-    if (session.hold) {
-      // An unknown target is never written: 0:00 would erase the position.
-      if (!evenIfHeld || session.heldPosition === null) return
-      const live = this.opts.sample()
-      if (!live || live.episodeId !== session.episodeId) return
-      sample = { ...live, position: session.heldPosition }
-    } else {
-      sample = this.sessionSample()
-    }
+    const sample = this.sessionSample()
     if (sample) this.write(event, sample, keepalive)
+  }
+
+  /**
+   * Stop: record the position (a held session's known target — a restored
+   * bar whose seek never landed — else the live one) and close the session.
+   */
+  stop(): void {
+    const session = this.session
+    if (session) {
+      const live = this.opts.sample()
+      const target = session.held ? session.held.target : live?.position
+      if (live && live.episodeId === session.episodeId && target != null) {
+        this.write('stop', { ...live, position: target }, false)
+      }
+    }
+    this.closeSession()
   }
 
   /**
@@ -205,13 +190,9 @@ export class ProgressWriter {
     void this.dispatch(pending, false)
   }
 
-  dispose(): void {
-    this.cancelSeek()
-  }
-
   private sessionSample(): Sample | null {
     const session = this.session
-    if (!session || session.hold) return null
+    if (!session || session.held) return null
     const sample = this.opts.sample()
     // A sample for another track (the engine mid-switch) is never written
     // under this session.
@@ -219,7 +200,7 @@ export class ProgressWriter {
     return sample
   }
 
-  private write(event: FlushEvent, sample: Sample, keepalive: boolean): void {
+  private write(event: WriteEvent, sample: Sample, keepalive: boolean): void {
     const session = this.session
     if (!session) return
     session.seq += 1

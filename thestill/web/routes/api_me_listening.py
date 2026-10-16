@@ -24,7 +24,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
-from ...models.listening import ListeningEvent, ProgressWrite
+from ...models.listening import ProgressWrite
 from ...models.user import User
 from ...services.listening_progress_service import InvalidProgressError, ListeningEpisodeNotFoundError
 from ..dependencies import AppState, get_app_state, require_auth
@@ -36,29 +36,24 @@ router = APIRouter()
 _MAX_SEQ = 2**62
 
 
-class ProgressWriteRequest(BaseModel):
+class ProgressWriteRequest(ProgressWrite):
     """One position write. ``mark_*`` events ignore ``position_seconds``.
 
     Position and session validation happens in the service so a bad value
-    is a 400, not a 422.
+    is a 400, not a 422; only the bigint bound on ``seq`` is checked here.
     """
 
-    event: ListeningEvent
-    position_seconds: float = 0.0
-    duration_seconds: Optional[float] = None
-    session_id: str
     seq: int = Field(ge=0, le=_MAX_SEQ)
 
 
-def _summary_json(summary) -> Optional[dict]:
-    return summary.model_dump(mode="json") if summary else None
+def _json(model: Optional[BaseModel]) -> Optional[dict]:
+    return model.model_dump(mode="json") if model else None
 
 
 @router.get("/latest")
 def get_latest(state: AppState = Depends(get_app_state), user: User = Depends(require_auth)) -> dict:
     """The restore candidate: most recently updated unfinished episode not stopped since."""
-    item = state.listening_service.latest(user.id)
-    return api_response({"item": item.model_dump(mode="json") if item else None})
+    return api_response({"item": _json(state.listening_service.latest(user.id))})
 
 
 @router.get("")
@@ -70,7 +65,7 @@ def list_listening(
 ) -> dict:
     """Unfinished episodes, newest first, for the Continue listening strip."""
     items = state.listening_service.list_in_progress(user.id, limit)
-    return api_response({"items": [i.model_dump(mode="json") for i in items]})
+    return api_response({"items": [_json(i) for i in items]})
 
 
 @router.get("/{episode_id}")
@@ -80,7 +75,7 @@ def get_listening(
     user: User = Depends(require_auth),
 ) -> dict:
     """The caller's progress on one episode, or ``{"item": null}``."""
-    return api_response({"item": _summary_json(state.listening_service.get_summary(user.id, episode_id))})
+    return api_response({"item": _json(state.listening_service.get_summary(user.id, episode_id))})
 
 
 @router.put("/{episode_id}")
@@ -92,7 +87,7 @@ def put_listening(
 ) -> dict:
     """Upsert the caller's position. ``accepted: false`` means an older write was ignored."""
     try:
-        outcome = state.listening_service.record(user.id, episode_id, ProgressWrite(**body.model_dump()))
+        outcome = state.listening_service.record(user.id, episode_id, body)
     except ListeningEpisodeNotFoundError:
         not_found("Episode", episode_id)
     except InvalidProgressError as e:
@@ -101,7 +96,7 @@ def put_listening(
         {
             "accepted": outcome.accepted,
             "completed": outcome.completed,
-            "listening": _summary_json(outcome.listening),
+            "listening": _json(outcome.listening),
         }
     )
 

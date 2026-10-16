@@ -4,12 +4,7 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listInProgress } from '../api/listening'
 import type { ListeningSummary } from '../api/types'
-import { listeningCache, listeningWrites } from '../contexts/listening/listeningCache'
-
-function stamp(summary: ListeningSummary): number {
-  const t = Date.parse(summary.updated_at)
-  return Number.isFinite(t) ? t : 0
-}
+import { listeningCache, listeningWrites, newerSummary } from '../contexts/listening/listeningCache'
 
 /**
  * The episode's progress: the payload's value, or the player's newer write.
@@ -31,17 +26,18 @@ export function useResolvedListening(
   )
   const cached = useSyncExternalStore(subscribe, () => (episodeId ? listeningCache.get(episodeId) : undefined))
 
-  if (cached && fromPayload) return stamp(cached) >= stamp(fromPayload) ? cached : fromPayload
+  if (cached && fromPayload) return newerSummary(cached, fromPayload)
   return cached ?? fromPayload ?? null
 }
 
 /**
- * Refresh query data a listening write invalidates. Lives outside the
- * player (which renders without a QueryClientProvider in its tests):
- * pauses, stops and marks refresh the Continue listening list; a
- * completion also flips the inbox row from unread to read server-side.
+ * Refreshes the query data a listening write invalidates; mounted once
+ * inside the app's QueryClientProvider. It lives outside the player, which
+ * renders without one in its tests. Pauses, stops and marks refresh the
+ * Continue listening list; a completion also flipped the inbox row from
+ * unread to read server-side.
  */
-export function useListeningQuerySync(): void {
+export function ListeningQuerySync(): null {
   const queryClient = useQueryClient()
   useEffect(
     () =>
@@ -52,20 +48,14 @@ export function useListeningQuerySync(): void {
       }),
     [queryClient],
   )
-}
-
-/** Mounts {@link useListeningQuerySync} inside the app's QueryClientProvider. */
-export function ListeningQuerySync(): null {
-  useListeningQuerySync()
   return null
 }
 
 /** Spec #90 Continue listening — unfinished episodes, newest first. */
-export function useInProgressListening(limit = 3, { enabled = true }: { enabled?: boolean } = {}) {
+export function useInProgressListening(limit = 3) {
   return useQuery({
     queryKey: ['listening', 'in-progress', limit],
     queryFn: () => listInProgress(limit),
-    enabled,
     staleTime: 15_000,
   })
 }

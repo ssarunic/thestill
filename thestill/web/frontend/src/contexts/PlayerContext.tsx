@@ -19,7 +19,7 @@ import {
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
-import { NativeEngine } from './playback-engine/native-engine'
+import { NativeEngine, type NativeEngineState } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
 
@@ -353,14 +353,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [engineEventBodies]
   )
 
-  // The native engine binds to the stable <video> once it mounts.
+  // The native engine binds to the stable <video> once it mounts. A
+  // replacement (StrictMode's dev remount) inherits its predecessor's state,
+  // so a restore's deferred seek survives the swap.
+  const nativeHandoffRef = useRef<NativeEngineState | null>(null)
   useEffect(() => {
     const el = mediaRef.current
     if (!el) return
-    const engine = new NativeEngine(el, guardedEvents('native'))
+    const engine = new NativeEngine(el, guardedEvents('native'), nativeHandoffRef.current)
     nativeEngineRef.current = engine
     return () => {
-      engine.destroy()
+      nativeHandoffRef.current = engine.destroy()
       nativeEngineRef.current = null
     }
   }, [guardedEvents])

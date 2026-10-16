@@ -367,7 +367,7 @@ wins over whatever was stored and is never rejected as out of order.
 
 | Failure | Behaviour | Why it is not silent |
 | --- | --- | --- |
-| Write fails (offline, 5xx, server restart) | Playback continues; the pending write stays in memory and the tab snapshot and is re-sent on the next tick or load | `console.warn` once per failure streak; server errors are logged by the route |
+| Write fails (offline, 5xx, server restart) | Playback continues; the pending write stays in memory and the tab snapshot and is re-sent on the next tick or load | `console.warn` once per failure streak; server errors are logged by the app's unhandled-exception handler (`unhandled_exception`) |
 | Late or duplicate write from the same tab | Rejected by `session_id` + `seq`; response `accepted: false` | Logged at debug with both `seq` values |
 | Browser refuses automatic playback after reload | Bar restored paused at the position | Expected outcome, documented above; not a `mediaError` |
 | Restore target deleted or unknown | `latest` never returns it (cascade); a stale tab snapshot gets a 404 on its re-sent write and is cleared | Route returns 404, client drops the snapshot |
@@ -383,7 +383,7 @@ never log positions at info level, and no position is sent to analytics.
 ### Phase 1 — Store and API
 
 - Table in `postgres_schema`, the SQLite migration block and Alembic
-  `0014`; repository pair with a shared contract test run against both
+  `0016`; repository pair with a shared contract test run against both
   backends (Postgres via `TEST_DATABASE_URL`).
 - `ListeningProgressService`: write ordering, clamping, completion,
   mark played / unplayed, mark-read on completion.
@@ -398,14 +398,18 @@ never log positions at info level, and no position is sent to analytics.
 
 ### Phase 2 — Player
 
-- `useListeningProgressWriter`: cadence, keepalive flush on
-  `pagehide`/`visibilitychange`, pending-write retry.
+- `ProgressWriter` (framework-free) behind one `usePlaybackPersistence`
+  hook: cadence, keepalive flush on `pagehide`/`visibilitychange`,
+  pending-write retry, the hold until a resume seek lands.
+- Tab snapshot keyed to the signed-in user, so a shared tab never restores
+  or re-sends another account's session.
 - Tab snapshot mirror.
 - Restore on mount (snapshot, then `latest`), best-effort autoplay,
   abandon on user action.
 - Resume on play from the cache, parallel fetch plus
   `NativeEngine.setPendingSeek` for surfaces without `listening`.
-- Marking the current track played pauses and rewinds it.
+- Marking the current track played pauses and rewinds it; marking it
+  unplayed while it plays opens a fresh session so the listen keeps saving.
 - Tests in `PlayerContext.test.tsx` with fake timers: 15 s cadence,
   flush on `pagehide`, restore from snapshot without network, autoplay
   rejection leaves the bar paused with no error, explicit `startAt` beats
@@ -416,9 +420,11 @@ never log positions at info level, and no position is sent to analytics.
 
 ### Phase 3 — Surfaces
 
-- Inbox row progress line, time left, Played, and Mark as played /
-  unplayed in the row actions.
-- Episode page Resume / Play from beginning / Played / Mark as played.
+- Inbox row progress line, time left and Played (no row actions; see
+  Surfaces).
+- Episode page: time left on the primary button, eyebrow meter or Played,
+  and the ⋯ More menu with Share, Play from beginning and Mark as played /
+  unplayed.
 - Continue listening strip on `/inbox`.
 
 ## Known Gaps

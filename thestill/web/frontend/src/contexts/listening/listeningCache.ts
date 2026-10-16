@@ -26,6 +26,11 @@ function updatedAt(summary: ListeningSummary): number {
   return Number.isFinite(t) ? t : 0
 }
 
+/** The summary the server stamped later; `a` on a tie. */
+export function newerSummary(a: ListeningSummary, b: ListeningSummary): ListeningSummary {
+  return updatedAt(b) > updatedAt(a) ? b : a
+}
+
 function notify(episodeId: string) {
   listeners.get(episodeId)?.forEach((cb) => cb())
 }
@@ -42,7 +47,7 @@ export const listeningCache = {
     const current = entries.get(episodeId)
     if (summary === null) {
       if (current !== undefined) return
-    } else if (current && updatedAt(current) > updatedAt(summary)) {
+    } else if (current && newerSummary(current, summary) === current) {
       return
     }
     if (current === summary) return
