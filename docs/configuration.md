@@ -260,6 +260,7 @@ Both default as shown. The only port-related environment variable is
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `WEBHOOK_SERVER_PORT` | Port advertised for transcription webhook callbacks | `8000` |
+| `THESTILL_STATIC_DIR` | Directory of the built web frontend the server serves (the SPA shell and its assets) | `thestill/web/static` |
 
 ## Authentication
 
