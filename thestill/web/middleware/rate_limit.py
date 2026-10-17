@@ -29,11 +29,13 @@ env vars when the real workload justifies it.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Deque, Dict, Optional
 
 from fastapi import HTTPException, Request, status
@@ -186,9 +188,49 @@ def resolve_client_ip(request: Request, config=None) -> str:
     return peer
 
 
-def trusted_proxy_set(config) -> frozenset:
-    """Coerce ``config.trusted_proxies`` to the shared frozenset form."""
-    return frozenset(getattr(config, "trusted_proxies", None) or ())
+class TrustedProxies:
+    """``config.trusted_proxies`` as a membership test: exact addresses and
+    CIDR ranges (``172.16.0.0/12``).
+
+    Ranges matter in Docker: the reverse proxy's container address is not
+    pinned and can change when containers are recreated, so production
+    trusts the private bridge range instead (only containers on that network
+    can reach the app; its port is not published). An entry that is not an
+    address or network is kept as an exact string match.
+    """
+
+    def __init__(self, entries: tuple[str, ...]):
+        self._networks: list = []
+        self._literals: set[str] = set()
+        for entry in entries:
+            try:
+                self._networks.append(ipaddress.ip_network(entry, strict=False))
+            except ValueError:
+                self._literals.add(entry)
+
+    def __bool__(self) -> bool:
+        return bool(self._networks or self._literals)
+
+    def __contains__(self, host: object) -> bool:
+        if not isinstance(host, str):
+            return False
+        if host in self._literals:
+            return True
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return any(address in network for network in self._networks)
+
+
+@lru_cache(maxsize=16)
+def _trusted_proxies(entries: tuple[str, ...]) -> TrustedProxies:
+    return TrustedProxies(entries)
+
+
+def trusted_proxy_set(config) -> TrustedProxies:
+    """``config.trusted_proxies`` as a membership test (addresses and CIDR ranges)."""
+    return _trusted_proxies(tuple(getattr(config, "trusted_proxies", None) or ()))
 
 
 def _client_key(request: Request, prefix: str) -> str:

@@ -303,7 +303,7 @@ When `MULTI_USER=true`:
 | `ENVIRONMENT` | Deployment mode: `production` or `development` | `production` |
 | `COOKIE_SECURE` | Set the `Secure` flag on auth cookies | `true` |
 | `ALLOWED_ORIGINS` | Comma-separated CORS origins | - (empty) |
-| `TRUSTED_PROXIES` | Comma-separated proxy IPs whose forwarded headers are honored | - (empty) |
+| `TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDR ranges (e.g. `172.16.0.0/12`) whose `X-Forwarded-*` headers are honored. Without it, every request behind a reverse proxy looks like the proxy: one shared rate-limit bucket, no IP region detection. The EC2 compose file sets it to Docker's bridge range | - (empty) |
 | `PUBLIC_BASE_URL` | Operator-declared external base URL (OAuth callbacks, email links) | - |
 | `PUBLIC_PAGES_ENABLED` | Serve the signed-out public pages, `/api/public`, `robots.txt` and `sitemap.xml` in multi-user mode (spec #94); `false` restores the sign-in wall | `true` |
 | `ENABLE_DOCS` | Expose FastAPI docs endpoints (`/docs`, `/redoc`) | `false` |
