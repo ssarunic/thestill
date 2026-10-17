@@ -88,14 +88,19 @@ test('a signed-in session sends only allowlisted events, without URLs or search 
       history.pushState({}, '', path)
       dispatchEvent(new PopStateEvent('popstate'))
     }, to)
-  await page.goto('/inbox')
-  await navigate('/search?q=secretword')
-  await navigate('/settings')
-
   type Sent = { event: string; properties: Record<string, unknown> }
   const sent = () => ingest.flatMap((r) => r.events) as Sent[]
   const kinds = () => sent().filter((e) => e.event === '$pageview').map((e) => e.properties.path_kind)
-  await expect.poll(kinds, { timeout: 15_000 }).toEqual(expect.arrayContaining(['/inbox', '/search']))
+
+  // Each page view is reported once the auth status (and with it the key)
+  // has arrived, so wait for one page's view before moving to the next: on
+  // a slow runner a navigation can otherwise beat the status request.
+  await page.goto('/inbox')
+  await expect.poll(kinds, { timeout: 15_000 }).toContain('/inbox')
+  await navigate('/search?q=secretword')
+  await expect.poll(kinds, { timeout: 15_000 }).toContain('/search')
+  await navigate('/settings')
+  await expect.poll(kinds, { timeout: 15_000 }).toContain('/settings')
   for (const e of sent()) expect(ALLOWED_EVENTS).toContain(e.event)
   for (const e of sent()) expect(String(e.properties.$current_url ?? '')).not.toContain('?')
 

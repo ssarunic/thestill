@@ -17,7 +17,6 @@
 	handle_path /ingest/static/* {
 		rewrite * /static{path}
 		reverse_proxy https://eu-assets.i.posthog.com:443 {
-			header_up Host {upstream_hostport}
 			header_up -Cookie
 			header_up -Authorization
 			header_up -Referer
@@ -25,7 +24,6 @@
 	}
 	handle_path /ingest/* {
 		reverse_proxy https://eu.i.posthog.com:443 {
-			header_up Host {upstream_hostport}
 			header_up -Cookie
 			header_up -Authorization
 			header_up -Referer
