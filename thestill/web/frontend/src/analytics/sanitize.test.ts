@@ -13,7 +13,6 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
     expect(sanitizeEvent(event('$autocapture', {}))).toBeNull()
     expect(sanitizeEvent(event('$pageleave', {}))).toBeNull()
     expect(sanitizeEvent(event('$opt_in', {}))).toBeNull()
-    expect(sanitizeEvent(event('$set', {}))).toBeNull()
     expect(sanitizeEvent(null)).toBeNull()
   })
 
@@ -46,7 +45,7 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
     const out = sanitizeEvent(
       event('share', { kind: 'episode', url: `${origin}/podcasts/x?ref=y`, title: 'Private briefing', $raw_user_agent: 'UA' }),
     )!
-    expect(out.properties).toEqual({ kind: 'episode' })
+    expect(out.properties).toEqual({ kind: 'episode', app: 'thestill' })
   })
 
   it('drops SDK props that are not allowlisted, including session-entry URLs', () => {
@@ -63,10 +62,20 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
         $session_id: 's-1',
       }),
     )!
-    expect(out.properties).toEqual({ path_kind: '/search', $os: 'Mac OS X', $session_id: 's-1' })
+    expect(out.properties).toEqual({ path_kind: '/search', $os: 'Mac OS X', $session_id: 's-1', app: 'thestill' })
   })
 
-  it('never sends person properties or $identify', () => {
+  it('lets only is_admin through, and only on the $set event', () => {
+    const out = sanitizeEvent(
+      event('$set', { $set: { is_admin: true, email: 'a@example.com' } }, { $set: { is_admin: true, name: 'Ada' } }),
+    )!
+    expect(out.$set).toEqual({ is_admin: true })
+    expect(out.properties.$set).toEqual({ is_admin: true })
+    expect(JSON.stringify(out)).not.toMatch(/a@example.com|Ada/)
+    expect(sanitizeEvent(event('$set', { $set: { is_admin: 'yes' } }))!.$set).toBeUndefined()
+  })
+
+  it('never sends other person properties or $identify', () => {
     expect(sanitizeEvent(event('$identify', { $set: { is_admin: true } }))).toBeNull()
     const out = sanitizeEvent(
       event('share', { kind: 'episode', $set: { email: 'a@example.com' } }, {
@@ -82,5 +91,10 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
   it('caps long strings', () => {
     const out = sanitizeEvent(event('entity_open', { entity_type: 'x'.repeat(500) }))!
     expect(String(out.properties.entity_type)).toHaveLength(200)
+  })
+
+  it('labels every event as thestill, whatever the page tried to set', () => {
+    const out = sanitizeEvent(event('entity_open', { entity_type: 'person', app: 'sarunic.com' }))!
+    expect(out.properties.app).toBe('thestill')
   })
 })

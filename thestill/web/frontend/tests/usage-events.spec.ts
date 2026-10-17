@@ -23,7 +23,7 @@ const USER = {
   usage_analytics_enabled: true,
 }
 
-const ALLOWED_EVENTS = ['$pageview', '$identify', 'share', 'entity_open']
+const ALLOWED_EVENTS = ['$pageview', '$set', 'share', 'entity_open']
 
 // posthog-js drops events from headless browsers as bots; look like a person.
 test.use({
@@ -102,6 +102,10 @@ test('a signed-in session sends only allowlisted events, without URLs or search 
   await navigate('/settings')
   await expect.poll(kinds, { timeout: 15_000 }).toContain('/settings')
   for (const e of sent()) expect(ALLOWED_EVENTS).toContain(e.event)
+  for (const e of sent()) expect(e.properties.app).toBe('thestill')
+  // The one person property, for PostHog's internal-users filter.
+  const sets = sent().filter((e) => e.event === '$set')
+  expect(sets.map((e) => e.properties.$set)).toEqual([{ is_admin: false }])
   for (const e of sent()) expect(String(e.properties.$current_url ?? '')).not.toContain('?')
 
   const everything = JSON.stringify(ingest)

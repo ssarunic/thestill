@@ -589,12 +589,18 @@ What was built differs from the sections above in these places:
   id rather than the user's: an HMAC of the OAuth `state`, which both ends
   know. The funnel joins without a cookie, and nothing links the visitor
   key or the account to it. Opted-out readers send no completion.
+- **Shared PostHog project ready.** Caddy also strips `X-Forwarded-For`,
+  so no reader IP reaches PostHog whatever the project's IP setting, and
+  every event carries `app: "thestill"` (server events have no `$host`).
+  thestill can share a project with another site without touching its
+  settings; see [docs/analytics.md](../docs/analytics.md).
 - **Remote MCP honours GPC:** the guard stores `Sec-GPC` on the request
   state and the tool-call event carries it.
 - **The browser SDK is bootstrapped with the user id**, so memory
   persistence never mints an anonymous id to merge, and it sends no
-  `$identify`: the `is_admin` person property comes only from server
-  events (`$set` on identified captures).
+  `$identify`. It sends one `$set` per load with `is_admin` and nothing
+  else (sign-in events are anonymous, so they cannot carry it), for the
+  internal-users filter.
 - **Stopping is an in-memory flag, not posthog-js opt-out**, because the
   SDK writes opt-out consent to `localStorage` even with memory
   persistence. `before_send` drops everything while stopped.

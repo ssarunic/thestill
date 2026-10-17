@@ -8,6 +8,9 @@ import { routePattern } from './routes'
 
 // Event → the props our code may attach.
 export const EVENT_PROPS: Record<string, readonly string[]> = {
+  // The one person update: ``is_admin``, so PostHog's internal-users filter
+  // can hide the operator (sign-in events are anonymous and cannot carry it).
+  $set: [],
   $pageview: ['path_kind'],
   share: ['kind'],
   entity_open: ['entity_type'],
@@ -55,6 +58,9 @@ const URL_PROPS: Record<string, 'pattern' | 'url' | 'host'> = {
   $initial_referring_domain: 'host',
 }
 const MAX_STRING = 200
+// Labels every event for a PostHog project shared with another site; set
+// here, never taken from the page.
+const APP = 'thestill'
 
 function hostOf(value: unknown): string {
   if (typeof value !== 'string' || !value || value === '$direct') return '$direct'
@@ -88,17 +94,27 @@ function cleanProps(props: Record<string, unknown> | undefined, allowed: readonl
   return out
 }
 
+function adminFlag(set: unknown): boolean | undefined {
+  const value = (set as Record<string, unknown> | undefined)?.is_admin
+  return typeof value === 'boolean' ? value : undefined
+}
+
 /** ``before_send``: the event with only what spec #95 allows, or null. */
 export function sanitizeEvent(event: CaptureResult | null): CaptureResult | null {
   if (!event) return null
   const allowed = EVENT_PROPS[event.event]
   if (!allowed) return null
-  // Rebuilt field by field: person properties ($set, $set_once) never
-  // leave the browser; the server sets ``is_admin`` with its own events.
+  // Rebuilt field by field. The only person property that may leave the
+  // browser is ``is_admin`` (a boolean), and only on the $set event;
+  // $set_once and everything else never do.
+  const properties: Record<string, unknown> = { ...cleanProps(event.properties, allowed), app: APP }
+  const isAdmin = event.event === '$set' ? adminFlag(event.$set) ?? adminFlag(event.properties?.$set) : undefined
+  if (isAdmin !== undefined) properties.$set = { is_admin: isAdmin }
   return {
     uuid: event.uuid,
     event: event.event,
-    properties: cleanProps(event.properties, allowed),
+    properties,
+    ...(isAdmin !== undefined ? { $set: { is_admin: isAdmin } } : {}),
     ...(event.timestamp ? { timestamp: event.timestamp } : {}),
   }
 }

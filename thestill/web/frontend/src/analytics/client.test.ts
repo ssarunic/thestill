@@ -6,6 +6,7 @@ const fake = vi.hoisted(() => ({
   capture: vi.fn(),
   opt_in_capturing: vi.fn(),
   opt_out_capturing: vi.fn(),
+  setPersonProperties: vi.fn(),
   reset: vi.fn(),
 }))
 vi.mock('posthog-js', () => ({ default: fake }))
@@ -28,7 +29,7 @@ describe('analytics client (spec #95 §3.4)', () => {
 
   it('initialises memory-only, same-origin, with nothing captured automatically', async () => {
     const client = await freshClient()
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     await vi.waitFor(() => expect(fake.init).toHaveBeenCalled())
     const [key, config] = fake.init.mock.calls[0]
     expect(key).toBe('phc_test')
@@ -46,11 +47,12 @@ describe('analytics client (spec #95 §3.4)', () => {
     })
     expect(typeof config.before_send).toBe('function')
     expect(fake.identify).not.toHaveBeenCalled()
+    expect(fake.setPersonProperties).toHaveBeenCalledWith({ is_admin: false })
   })
 
   it('queues events until the SDK has loaded, then sends them in order', async () => {
     const client = await freshClient()
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     client.track('$pageview', { path_kind: '/inbox' })
     await vi.waitFor(() => expect(fake.capture).toHaveBeenCalledWith('$pageview', { path_kind: '/inbox' }))
     client.track('share', { kind: 'episode' })
@@ -60,7 +62,7 @@ describe('analytics client (spec #95 §3.4)', () => {
   it('never loads under Global Privacy Control, and drops events', async () => {
     setGpc(true)
     const client = await freshClient()
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     client.track('$pageview', { path_kind: '/inbox' })
     await new Promise((r) => setTimeout(r, 0))
     expect(fake.init).not.toHaveBeenCalled()
@@ -69,7 +71,7 @@ describe('analytics client (spec #95 §3.4)', () => {
 
   it('stops in memory only: no SDK opt-out (it would write localStorage), no second init', async () => {
     const client = await freshClient()
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     await vi.waitFor(() => expect(fake.init).toHaveBeenCalledTimes(1))
     const beforeSend = fake.init.mock.calls[0][1].before_send
 
@@ -79,7 +81,7 @@ describe('analytics client (spec #95 §3.4)', () => {
     expect(beforeSend({ uuid: 'x', event: 'share', properties: { kind: 'episode' } })).toBeNull()
     expect(fake.opt_out_capturing).not.toHaveBeenCalled()
 
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     client.track('share', { kind: 'episode' })
     expect(fake.capture).toHaveBeenCalledWith('share', { kind: 'episode' })
     expect(beforeSend({ uuid: 'x', event: 'share', properties: { kind: 'episode' } })).not.toBeNull()
@@ -93,7 +95,7 @@ describe('analytics client (spec #95 §3.4)', () => {
 
   it('opting out while the SDK loads sends nothing queued', async () => {
     const client = await freshClient()
-    client.startAnalytics('phc_test', { id: 'u-1' })
+    client.startAnalytics('phc_test', { id: 'u-1', is_admin: false })
     client.track('$pageview', { path_kind: '/inbox' })
     client.stopAnalytics()
     await vi.waitFor(() => expect(fake.init).toHaveBeenCalled())

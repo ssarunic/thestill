@@ -17,11 +17,12 @@ export default function AnalyticsBridge() {
   const { pathname } = useLocation()
   const key = user ? analyticsKey : null
   const userId = user?.id
+  const isAdmin = user?.is_admin === true
 
   useEffect(() => {
-    if (key && userId) startAnalytics(key, { id: userId })
+    if (key && userId) startAnalytics(key, { id: userId, is_admin: isAdmin })
     else stopAnalytics()
-  }, [key, userId])
+  }, [key, userId, isAdmin])
 
   useEffect(() => {
     if (key) track('$pageview', { path_kind: routePattern(pathname) })

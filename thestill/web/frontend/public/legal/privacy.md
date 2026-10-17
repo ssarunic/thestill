@@ -52,7 +52,7 @@ We use PostHog, hosted in the EU, to see how thestill is used. It receives:
 - for signed-out visitors: the page views described above, without any account number;
 - the browser, operating system and device type, worked out from your browser's user agent.
 
-Your IP address reaches PostHog's servers when your browser or our server sends an event, and PostHog discards it rather than storing it. Signed-out visitors' browsers never contact PostHog: our own server forwards the page views.
+PostHog does not receive your IP address: your browser's events pass through our own server, which removes it before forwarding them, and the events our server sends come from the server's own address. Signed-out visitors' browsers never contact PostHog at all: our own server forwards the page views.
 
 You can turn usage analytics off at any time in Settings, and we honour Global Privacy Control. Either way, the things the service has to keep to work (such as the shows you follow and the episodes you read) still count towards our overall numbers.
 
@@ -74,7 +74,7 @@ We use these service providers ("processors") to run thestill. They may only use
 | Amazon Web Services, London (UK) | Hosting, database, backups, server logs and sending briefing emails | Everything thestill stores |
 | Google Gemini API (US and other countries) | Writing summaries, briefings and person descriptions | Podcast transcripts and episode information; for briefings, the episodes in your briefing, not your name or email |
 | ipinfo.io (US) | Looking up the country of an IP address | Your IP address |
-| PostHog, EU hosting (Germany) | Usage analytics (see "Usage analytics") | Internal account number, which features you use, pages by type, browser and device type; your IP address in transit, not stored |
+| PostHog, EU hosting (Germany) | Usage analytics (see "Usage analytics") | Internal account number, which features you use, pages by type, browser and device type; not your IP address |
 
 Google also runs "Sign in with Google". For that, Google acts as its own controller under its own privacy policy, and learns that you signed in to thestill.
 

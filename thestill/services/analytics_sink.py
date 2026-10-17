@@ -35,6 +35,10 @@ from ..models.user import User
 
 logger = get_logger(__name__)
 
+# Every event carries this, so a PostHog project shared with another site
+# can tell thestill's events apart (server events have no ``$host``).
+APP_PROPERTY = {"app": "thestill"}
+
 PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal"]
 PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "none"]
 
@@ -147,7 +151,7 @@ class PostHogSink:
         gpc: bool = False,
     ) -> None:
         try:
-            properties = event.properties()
+            properties = {**event.properties(), **APP_PROPERTY}
             if user is not None:
                 # The per-user switch and GPC are the server's truth, not the
                 # client's: an identified event is dropped for either.
