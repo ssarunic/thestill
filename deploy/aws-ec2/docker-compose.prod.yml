@@ -44,6 +44,13 @@ services:
       ENVIRONMENT: production
       COOKIE_SECURE: "true"
       LOG_FORMAT: json
+      # Caddy is the only thing that can reach the app (its port is not
+      # published), and it reaches it over this compose network. Trust that
+      # network's X-Forwarded-For so rate limits, region detection and the
+      # analytics visitor key see each reader's IP, not Caddy's. A range,
+      # because Caddy's container address is not pinned and changes when
+      # containers are recreated; 172.16.0.0/12 holds Docker's bridge pools.
+      TRUSTED_PROXIES: "172.16.0.0/12"
       # Spec #66 — the container self-migrates (alembic upgrade head,
       # advisory-lock-safe) before serving.
       MIGRATE_ON_STARTUP: "true"

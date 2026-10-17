@@ -21,9 +21,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from thestill.web.middleware.rate_limit import (
+    _LIMITER,
     RateLimit,
     RateLimitExceeded,
-    _LIMITER,
     enforce_mcp_mutation_quota,
     rate_limit_dependency,
     reset_for_testing,
@@ -175,3 +175,41 @@ class TestMcpMutationQuota:
         # Session A's second call IS throttled.
         with pytest.raises(RateLimitExceeded):
             enforce_mcp_mutation_quota("add_podcast", session_key="session-a")
+
+
+class TestTrustedProxyRanges:
+    """TRUSTED_PROXIES accepts CIDR ranges: behind Docker the proxy's
+    container address changes, so production trusts the bridge range."""
+
+    def _request(self, peer: str, xff: str, trusted):
+        req = MagicMock()
+        req.client = MagicMock(host=peer)
+        req.headers = {"X-Forwarded-For": xff}
+        req.app.state.app_state.config = SimpleNamespace(trusted_proxies=trusted)
+        return req
+
+    def test_a_peer_inside_a_trusted_range_forwards_the_client(self):
+        from thestill.web.middleware.rate_limit import resolve_client_ip
+
+        assert resolve_client_ip(self._request("172.18.0.4", "203.0.113.5", ["172.16.0.0/12"])) == "203.0.113.5"
+        # Two readers behind the same proxy are two clients, not one.
+        assert resolve_client_ip(self._request("172.18.0.4", "198.51.100.9", ["172.16.0.0/12"])) == "198.51.100.9"
+
+    def test_a_peer_outside_the_range_is_not_trusted(self):
+        from thestill.web.middleware.rate_limit import resolve_client_ip
+
+        assert resolve_client_ip(self._request("203.0.113.7", "198.51.100.9", ["172.16.0.0/12"])) == "203.0.113.7"
+
+    def test_trusted_hops_inside_the_range_are_skipped(self):
+        from thestill.web.middleware.rate_limit import resolve_client_ip
+
+        req = self._request("172.18.0.4", "203.0.113.5, 172.18.0.9", ["172.16.0.0/12"])
+        assert resolve_client_ip(req) == "203.0.113.5"
+
+    def test_membership(self):
+        from thestill.web.middleware.rate_limit import trusted_proxy_set
+
+        trusted = trusted_proxy_set(SimpleNamespace(trusted_proxies=["10.0.0.1", "172.16.0.0/12", "not-an-ip"]))
+        assert "10.0.0.1" in trusted and "172.31.255.1" in trusted and "not-an-ip" in trusted
+        assert "10.0.0.2" not in trusted and "192.168.1.1" not in trusted and "garbage" not in trusted
+        assert not trusted_proxy_set(SimpleNamespace(trusted_proxies=[]))

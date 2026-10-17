@@ -232,6 +232,12 @@ class TestAliasDomains:
         assert ingest.count("header_up -X-Forwarded-For") == 2  # no reader IP reaches PostHog
         assert "reverse_proxy thestill:8000" in caddyfile[caddyfile.index("handle {") :]
 
+    def test_compose_trusts_the_docker_network_as_proxy(self):
+        # Without it every request looks like Caddy: one shared rate-limit
+        # bucket, no region detection, one analytics visitor (2026-10-17).
+        compose = (SCRIPT.parent / "docker-compose.prod.yml").read_text()
+        assert 'TRUSTED_PROXIES: "172.16.0.0/12"' in compose
+
     def test_compose_mounts_the_redirects_file(self):
         compose = (SCRIPT.parent / "docker-compose.prod.yml").read_text()
         assert "./redirects.caddy:/etc/caddy/redirects.caddy:ro" in compose
