@@ -370,15 +370,15 @@ that step's horizon ago. Cached in-process for 10 minutes per range.
     "podcasts": [
       {"podcast_id": "...", "slug": "hard-fork", "title": "Hard Fork", "category": "Technology",
        "followers": 12, "new_follows": 3, "follower_readers": 6, "readers": 9, "readers_previous": 7,
-       "listeners": 4, "completions": 2, "change": "+2"}
+       "listeners": 4, "completions": 2, "public_views": 31, "change": "+2"}
     ],
     "episodes": [
       {"episode_id": "...", "slug": "...", "title": "...", "podcast_slug": "hard-fork", "podcast_title": "Hard Fork",
-       "published_at": "2026-10-10T00:00:00Z", "imported": false, "readers": 6, "listeners": 3, "completions": 1}
+       "published_at": "2026-10-10T00:00:00Z", "imported": false, "readers": 6, "listeners": 3, "completions": 1, "public_views": 12}
     ],
     "categories": [
       {"category": "Technology", "shows": 4, "shows_read": 3, "followers": 15, "readers": 10,
-       "readers_previous": 12, "change": "−2"}
+       "readers_previous": 12, "public_views": 44, "change": "−2"}
     ],
     "notes": ["..."]
   },
@@ -393,7 +393,9 @@ server's label for the difference: `+n`, `−n`, `0`, `new` or `—`.
 `podcasts` is the union of the top 20 by readers and the top 20 by
 followers, so either sort is an exact top 20; synthetic import parents are
 left out. `episodes` is the top 20 by readers. `categories` rolls each show
-up to the top level of its primary category, plus "Uncategorised". Every
+up to the top level of its primary category, plus "Uncategorised".
+`public_views` counts signed-out views in the window: a show's own page
+plus its episode pages, an episode's page, and a category's shows. Every
 figure is an aggregate; no row carries user ids.
 
 In single-user mode or on the SQLite backend the response is

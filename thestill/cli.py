@@ -5556,11 +5556,14 @@ def _render_content(content: ContentReport, top: int = 10) -> None:
     if not content.podcasts:
         click.echo("  No reading or follows in this window.")
     else:
-        click.echo(f"  {'Podcast':<36} {'Readers':>7} {'Change':>6} {'Followers':>9} {'New':>4} {'Listeners':>9}")
+        click.echo(
+            f"  {'Podcast':<36} {'Readers':>7} {'Change':>6} {'Followers':>9} {'New':>4} {'Listeners':>9}"
+            f" {'Public views':>12}"
+        )
     for p in content.podcasts[:top]:
         line = (
             f"  {_fit(p.title, 36)} {p.readers:>7} {p.change:>6}"
-            f" {p.followers:>9} {p.new_follows:>4} {p.listeners:>9}"
+            f" {p.followers:>9} {p.new_follows:>4} {p.listeners:>9} {p.public_views:>12}"
         )
         click.echo(_dim_if_small(line, p.readers))
 
@@ -5569,13 +5572,17 @@ def _render_content(content: ContentReport, top: int = 10) -> None:
         click.echo("  No episodes read in this window.")
     for ep in content.episodes[:top]:
         label = f"{ep.podcast_title} — {ep.title}" + (" (imported)" if ep.imported else "")
-        line = f"  {_fit(label, 60)} {ep.readers:>3} readers, {ep.listeners} listeners, {ep.completions} completed"
+        line = (
+            f"  {_fit(label, 60)} {ep.readers:>3} readers, {ep.listeners} listeners, {ep.completions} completed,"
+            f" {ep.public_views} public views"
+        )
         click.echo(_dim_if_small(line, ep.readers))
 
     click.echo("\nContent: categories")
     for c in content.categories:
         line = (
-            f"  {_fit(c.category, 28)} {c.readers:>3} readers ({c.change}), {c.followers} followers of {c.shows} shows"
+            f"  {_fit(c.category, 28)} {c.readers:>3} readers ({c.change}), {c.followers} followers of {c.shows} shows,"
+            f" {c.public_views} public views"
         )
         click.echo(_dim_if_small(line, c.readers))
     for note in content.notes:

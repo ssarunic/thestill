@@ -1473,6 +1473,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_episode_views table created")
 
+        # Spec #103 Phase 2 (Postgres migration 0020): signed-out views per
+        # public page per UTC day. ``day`` is an ISO date string.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public_page_daily_views (
+                day       TEXT NOT NULL,
+                kind      TEXT NOT NULL,
+                object_id TEXT NOT NULL,
+                views     INTEGER NOT NULL,
+                PRIMARY KEY (day, kind, object_id)
+            )
+            """
+        )
+
         # Per-user briefings (spec #36). Cursor (cursor_from, cursor_to)
         # makes "what inbox window did this briefing cover" reproducible
         # without joining back to the inbox at the same moment in time.

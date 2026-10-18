@@ -1,6 +1,6 @@
 # Content Popularity
 
-> **Status:** 🚧 Phases 0–1 implemented (2026-10-18); Phase 2 open
+> **Status:** ✅ Phases 0–2 implemented (2026-10-18)
 > **Created:** 2026-10-17
 > **Priority:** Medium. Phase 0 needs no migration and can ship with the next deploy.
 > **Author:** Product & Engineering
@@ -390,7 +390,18 @@ CREATE TABLE IF NOT EXISTS public_page_daily_views (
   ever contend, buffer counts in memory and flush once a minute; not
   built now.
 - **Surfaces.** The podcast and episode tables gain a "Public views"
-  column for the window, and the categories table a total.
+  column for the window, and the categories table a total. A show's
+  figure is its own page plus its episode pages; an episode's is its
+  page. It is a column only: the rankings stay readers and followers, so
+  a show with anonymous traffic and no readers does not appear
+  (settled 2026-10-18). Entity, top and landing rows are stored but not
+  shown yet.
+- **Implementation.** The beacon resolves the path with the public API's
+  own lookups (`_public_podcast_row`, `_public_episode`,
+  `_entity_id_from_path`), so a page counts exactly when the public site
+  would serve it; share and legal pages are not counted. The increment
+  is its own statement; a failure is logged and the beacon still
+  returns 204.
 
 ### 6. Surfaces
 
@@ -451,7 +462,7 @@ top 10 episodes, every category. `--json` prints the full payload.
 |---|---|---|
 | 0 ✅ | `ContentReport` models; `AnalyticsRepository.content` (Postgres) and the stub; `previous` window in `AnalyticsService`; `content` in `GET /api/dashboard/analytics`; `ContentSection`; CLI Content block; notes; indexes as `EXPLAIN` decides (none needed, see below) | Yes; no migration |
 | 1 ✅ | `user_episode_views` and `user_episode_progress.listened_at` (Alembic + `SCHEMA_SQL` + SQLite guards); opt-out-filtered backfills; view write in the `POST /api/inbox/{id}/read` handler and `listened_at` in `plan_row`, both honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
-| 2 | `public_page_daily_views`; upsert in `POST /api/public/pageview`; "Public views" columns | Yes |
+| 2 ✅ | `public_page_daily_views`; upsert in `POST /api/public/pageview`; "Public views" columns | Yes |
 
 **Phase 0 measurement (2026-10-18).** Production holds 99 shows and
 6.3k episodes. A synthetic set well past 10× (2,000 users, 1,000 shows,

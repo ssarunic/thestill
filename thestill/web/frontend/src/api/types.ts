@@ -79,6 +79,7 @@ export interface AnalyticsPodcastStat {
   readers_previous: number
   listeners: number
   completions: number
+  public_views: number  // signed-out views of its show and episode pages
   change: string  // server-formatted: +n, −n, 0, new or —
 }
 
@@ -93,6 +94,7 @@ export interface AnalyticsEpisodeStat {
   readers: number
   listeners: number
   completions: number
+  public_views: number
 }
 
 export interface AnalyticsCategoryStat {
@@ -102,6 +104,7 @@ export interface AnalyticsCategoryStat {
   followers: number
   readers: number
   readers_previous: number
+  public_views: number
   change: string
 }
 

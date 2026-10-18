@@ -161,6 +161,12 @@ class _Seed:
             (user[0], episode_id, position, at, completed_at, listened_at),
         )
 
+    def page_views(self, kind, object_id, day, views):
+        self.conn.execute(
+            "INSERT INTO public_page_daily_views (day, kind, object_id, views) VALUES (%s, %s, %s, %s)",
+            (day, kind, object_id, views),
+        )
+
     def briefing(self, user, created_at, opened_at=None):
         self.conn.execute(
             """
@@ -338,7 +344,7 @@ def content():
     ensure_schema(PG_DSN)
     tag = uuid.uuid4().hex[:8]
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE users, podcasts, episodes CASCADE")
+        conn.execute("TRUNCATE users, podcasts, episodes, public_page_daily_views CASCADE")
         s = _Seed(conn)
         tech = s.category(f"Technology {tag}")
         tech_news = s.category("Tech News", parent=tech)
@@ -407,6 +413,17 @@ def content():
         # An imported episode.
         s.view(u1, i1, NOW - 1 * D)
 
+        # Phase 2: signed-out views. Alpha 5 (show page) + 3 (A1) in the
+        # window; 100 before it; Beta 2; an entity and the landing page
+        # count towards no show.
+        today = NOW.date()
+        s.page_views("podcast", alpha, today - 1 * D, 5)
+        s.page_views("episode", a1, today, 3)
+        s.page_views("podcast", alpha, today - 40 * D, 100)
+        s.page_views("podcast", beta, today, 2)
+        s.page_views("entity", "person:someone", today, 7)
+        s.page_views("landing", "", today, 9)
+
     repo = PostgresAnalyticsRepository(PG_DSN, exclude_emails=(LOCAL_EMAIL,))
     service = AnalyticsService(repo, enabled=True, clock=lambda: NOW)
     return {"service": service, "repo": repo, "tag": tag}
@@ -425,6 +442,7 @@ def test_content_podcasts(content):
     assert (alpha.readers, alpha.readers_previous) == (3, 1)
     assert (alpha.listeners, alpha.completions) == (1, 1)  # u2, across A1 and A2
     assert alpha.change == "+2"
+    assert (alpha.public_views, p["Beta"].public_views, p["Gamma"].public_views) == (8, 2, 0)
 
     # Read only in the previous window, by a follower (u3), who is therefore
     # not a follower reader now; the admin's read never counts.
@@ -460,6 +478,7 @@ def test_content_episodes(content):
     assert (e["A1"].readers, e["A1"].listeners, e["A1"].completions) == (3, 1, 1)
     assert (e["A1"].podcast_slug, e["A1"].slug, e["A1"].imported) == ("alpha", "a1", False)
     assert e["A1"].published_at == NOW - 6 * D
+    assert (e["A1"].public_views, e["G1"].public_views) == (3, 0)
     assert (e["I1"].imported, e["I1"].readers, e["I1"].listeners) == (True, 1, 0)
 
 
@@ -472,6 +491,7 @@ def test_content_categories_roll_up_and_add_up(content):
     tech = c[f"Technology {tag}"]  # Alpha + Beta (via its subcategory)
     assert (tech.shows, tech.shows_read, tech.followers) == (2, 1, 5)
     assert (tech.readers, tech.readers_previous) == (3, 2)  # u1 u2 u5; before: u1 (A2), u3 (B1)
+    assert (tech.public_views, c[UNCATEGORISED].public_views) == (10, 0)  # Alpha 8 + Beta 2
     assert (c[UNCATEGORISED].shows, c[UNCATEGORISED].followers, c[UNCATEGORISED].readers) == (1, 1, 1)
     comedy = c[f"Comedy {tag}"]  # read through discovery only
     assert (comedy.shows, comedy.shows_read, comedy.followers, comedy.readers) == (0, 1, 0, 1)

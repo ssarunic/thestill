@@ -207,6 +207,19 @@ listens AS (
      WHERE p.listened_at >= %(start)s AND p.listened_at < %(end)s
 )"""
 
+# Signed-out public views in the window (spec #103 Phase 2), filed under
+# the show: its own page plus its episode pages. Ids are compared as text
+# because object_id also holds entity ids, which are not uuids.
+_PODCAST_VIEWS = """
+podcast_views AS (
+    SELECT p.id AS podcast_id, sum(pv.views) AS public_views
+      FROM public_page_daily_views pv
+      LEFT JOIN episodes e ON pv.kind = 'episode' AND e.id::text = pv.object_id
+      JOIN podcasts p ON p.id::text = CASE pv.kind WHEN 'podcast' THEN pv.object_id ELSE e.podcast_id::text END
+     WHERE pv.kind IN ('podcast', 'episode') AND pv.day >= %(start_day)s AND pv.day <= %(end_day)s
+     GROUP BY p.id
+)"""
+
 # The union of the top ``limit`` shows by readers and by followers, so the
 # page can sort either way and still show an exact top N. Imported
 # episodes' synthetic parents (spec #31) are not shows.
@@ -214,6 +227,7 @@ _CONTENT_PODCASTS_SQL = f"""
 WITH {_REAL_USERS},
 {_READS.strip()},
 {_LISTENS.strip()},
+{_PODCAST_VIEWS.strip()},
 follows AS (
     SELECT f.podcast_id, f.user_id, f.created_at
       FROM podcast_followers f JOIN real_users ru ON ru.id = f.user_id
@@ -245,11 +259,13 @@ shows AS (
            COALESCE(fs.followers, 0) AS followers, COALESCE(fs.new_follows, 0) AS new_follows,
            COALESCE(rs.follower_readers, 0) AS follower_readers,
            COALESCE(rs.readers, 0) AS readers, COALESCE(rs.readers_previous, 0) AS readers_previous,
-           COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions
+           COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions,
+           COALESCE(pv.public_views, 0) AS public_views
       FROM podcasts p
       LEFT JOIN follow_stats fs ON fs.podcast_id = p.id
       LEFT JOIN read_stats rs ON rs.podcast_id = p.id
       LEFT JOIN listen_stats ls ON ls.podcast_id = p.id
+      LEFT JOIN podcast_views pv ON pv.podcast_id = p.id
      WHERE NOT p.synthetic AND (fs.podcast_id IS NOT NULL OR rs.podcast_id IS NOT NULL)
 ),
 ranked AS (
@@ -281,14 +297,22 @@ listen_stats AS (
            count(DISTINCT user_id) FILTER (WHERE completed) AS completions
       FROM listens
      GROUP BY episode_id
+),
+episode_views AS (
+    SELECT object_id, sum(views) AS public_views
+      FROM public_page_daily_views
+     WHERE kind = 'episode' AND day >= %(start_day)s AND day <= %(end_day)s
+     GROUP BY object_id
 )
 SELECT e.id, e.slug, e.title, p.slug AS podcast_slug, p.title AS podcast_title,
        COALESCE(e.pub_date, e.published_at) AS published_at, p.synthetic AS imported,
-       rs.readers, COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions
+       rs.readers, COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions,
+       COALESCE(ev.public_views, 0) AS public_views
   FROM read_stats rs
   JOIN episodes e ON e.id = rs.episode_id
   JOIN podcasts p ON p.id = e.podcast_id
   LEFT JOIN listen_stats ls ON ls.episode_id = rs.episode_id
+  LEFT JOIN episode_views ev ON ev.object_id = rs.episode_id::text
  ORDER BY rs.readers DESC, listeners DESC, COALESCE(e.pub_date, e.published_at) DESC NULLS LAST, e.id
  LIMIT %(limit)s
 """
@@ -299,6 +323,7 @@ SELECT e.id, e.slug, e.title, p.slug AS podcast_slug, p.title AS podcast_title,
 _CONTENT_CATEGORIES_SQL = f"""
 WITH {_REAL_USERS},
 {_READS.strip()},
+{_PODCAST_VIEWS.strip()},
 shows AS (
     SELECT p.id, COALESCE(c.parent_id, c.id, 0) AS top_id
       FROM podcasts p LEFT JOIN categories c ON c.id = p.primary_category_id
@@ -320,13 +345,20 @@ read_stats AS (
       JOIN episodes e ON e.id = r.episode_id
       JOIN shows s ON s.id = e.podcast_id
      GROUP BY s.top_id
+),
+view_stats AS (
+    SELECT s.top_id, sum(pv.public_views) AS public_views
+      FROM podcast_views pv JOIN shows s ON s.id = pv.podcast_id
+     GROUP BY s.top_id
 )
 SELECT COALESCE(top.name, %(uncategorised)s) AS category,
        COALESCE(fs.shows, 0) AS shows, COALESCE(rs.shows_read, 0) AS shows_read,
        COALESCE(fs.followers, 0) AS followers,
-       COALESCE(rs.readers, 0) AS readers, COALESCE(rs.readers_previous, 0) AS readers_previous
+       COALESCE(rs.readers, 0) AS readers, COALESCE(rs.readers_previous, 0) AS readers_previous,
+       COALESCE(vs.public_views, 0) AS public_views
   FROM follow_stats fs
   FULL JOIN read_stats rs ON rs.top_id = fs.top_id
+  LEFT JOIN view_stats vs ON vs.top_id = COALESCE(fs.top_id, rs.top_id)
   LEFT JOIN categories top ON top.id = COALESCE(fs.top_id, rs.top_id)
  ORDER BY readers DESC, followers DESC, category
 """
@@ -441,7 +473,16 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
         # The SQL names every column after its model field and coalesces
         # every count, so rows validate as they are.
-        params = {"start": window.start, "end": window.end, "prev_start": previous.start, "limit": limit}
+        params = {
+            "start": window.start,
+            "end": window.end,
+            "prev_start": previous.start,
+            "limit": limit,
+            # public_page_daily_views is per UTC day; the window's last day is
+            # the one ``end`` falls in.
+            "start_day": window.start.astimezone(timezone.utc).date(),
+            "end_day": (window.end - timedelta(microseconds=1)).astimezone(timezone.utc).date(),
+        }
         return ContentReport(
             podcasts=[
                 PodcastStat.model_validate({**row, "podcast_id": str(row["id"])})

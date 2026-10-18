@@ -167,6 +167,7 @@ class PodcastStat(BaseModel):
     readers_previous: int
     listeners: int
     completions: int
+    public_views: int = 0  # signed-out views of its show and episode pages (Phase 2)
 
     @computed_field
     @property
@@ -185,6 +186,7 @@ class EpisodeStat(BaseModel):
     readers: int
     listeners: int
     completions: int
+    public_views: int = 0  # signed-out views of its public page (Phase 2)
 
 
 class CategoryStat(BaseModel):
@@ -194,6 +196,7 @@ class CategoryStat(BaseModel):
     followers: int  # distinct users following any show in it
     readers: int
     readers_previous: int
+    public_views: int = 0  # its shows' public views (Phase 2)
 
     @computed_field
     @property

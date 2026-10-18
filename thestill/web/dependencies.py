@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from ..repositories.link_decision_repository import LinkDecisionRepository
     from ..repositories.pending_operations_repository import PendingOperationsRepository
     from ..repositories.podcast_follower_repository import PodcastFollowerRepository
+    from ..repositories.public_page_view_repository import PublicPageViewRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
     from ..repositories.user_repository import UserRepository
@@ -191,6 +192,8 @@ class AppState:
     # Spec #103 — first episode opens. ``Optional`` only for hand-built
     # test fixtures; production wiring always passes it.
     episode_view_repository: "Optional[EpisodeViewRepository]" = None
+    # Spec #103 Phase 2 — signed-out public page views per day.
+    public_page_view_repository: "Optional[PublicPageViewRepository]" = None
     # Spec #95 Layer B — usage events (PostHog, or NullSink when off).
     # ``None`` only in hand-built test fixtures; emitters treat it as off.
     analytics_sink: "Optional[AnalyticsSink]" = None

@@ -4,6 +4,7 @@ Settings switch on PATCH /api/auth/me."""
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
@@ -12,8 +13,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.unit.analytics_fakes import RecordingSink
+from thestill.models.podcast import Episode, Podcast
 from thestill.models.user import User
+from thestill.repositories.sqlite_public_page_view_repository import SqlitePublicPageViewRepository
 from thestill.utils.config import Config
+from thestill.utils.sqlite_ext import connect
 from thestill.web.app import create_app
 from thestill.web.dependencies import AUTH_COOKIE_NAME
 from thestill.web.middleware import rate_limit
@@ -211,3 +215,126 @@ def test_analytics_can_never_fail_a_sign_in(client, sink, app_state, monkeypatch
     _stub_oauth(app_state, monkeypatch, SimpleNamespace(email="odd@example.com"), ["state-x"])
     _sign_in_round_trip(client, "state-x")  # asserts the 302
     assert [c["event"].name for c in sink.captured] == ["login_started"]
+
+
+# -- spec #103 Phase 2: per-page daily counter -------------------------------
+
+PUBLIC_ID = "11111111-1111-1111-1111-111111111111"
+EPISODE_ID = "00000000-0000-0000-0000-000000000001"
+
+
+@pytest.fixture
+def counter(app_state):
+    """A real counter over the app's SQLite database, with one public show
+    (one summarised and one unsummarised episode) and one hidden show."""
+    db = app_state.repository.db_path
+    app_state.public_page_view_repository = SqlitePublicPageViewRepository(db)
+    summary = Path(app_state.path_manager.summary_file("summarised_summary.md"))
+    summary.parent.mkdir(parents=True, exist_ok=True)
+    summary.write_text("## 1. The Gist\n\nTwo hosts argue about chips.\n", encoding="utf-8")
+    now = datetime.now(timezone.utc)
+
+    def episode(n, slug, summarised):
+        return Episode(
+            id=f"00000000-0000-0000-0000-00000000000{n}",
+            external_id=f"guid-{n}",
+            title=f"Episode {n}",
+            description="",
+            slug=slug,
+            pub_date=now - timedelta(days=n),
+            audio_url=f"https://example.com/{n}.mp3",
+            summary_path="summarised_summary.md" if summarised else None,
+        )
+
+    for podcast_id, slug, episodes in (
+        (PUBLIC_ID, "public-show", [episode(1, "summarised", True), episode(2, "no-summary", False)]),
+        ("22222222-2222-2222-2222-222222222222", "hidden-show", [episode(3, "hidden-episode", True)]),
+    ):
+        app_state.repository.save(
+            Podcast(
+                id=podcast_id,
+                rss_url=f"https://example.com/{slug}.xml",
+                title=slug,
+                description="",
+                slug=slug,
+                created_at=now,
+                episodes=episodes,
+            )
+        )
+    for n in (1, 3):
+        app_state.repository.set_episode_summary_preview(f"00000000-0000-0000-0000-00000000000{n}", "Chips.")
+    app_state.repository.set_podcast_public_pages("22222222-2222-2222-2222-222222222222", False)
+
+    def rows():
+        with connect(db) as conn:
+            return {
+                (r["kind"], r["object_id"]): r["views"]
+                for r in conn.execute("SELECT kind, object_id, views FROM public_page_daily_views").fetchall()
+            }
+
+    return rows
+
+
+def test_browser_views_go_on_the_page_counter(client, counter):
+    for path in (
+        "/podcasts/public-show",
+        "/podcasts/public-show?ref=x",
+        "/podcasts/public-show/episodes/summarised",
+        "/",
+        "/top",
+    ):
+        assert client.post("/api/public/pageview", json={"path": path}).status_code == 204
+    assert counter() == {("podcast", PUBLIC_ID): 2, ("episode", EPISODE_ID): 1, ("landing", ""): 1, ("top", ""): 1}
+
+
+def test_pages_that_are_not_counted(client, counter, app_state):
+    for path in (
+        "/podcasts/no-such-show",
+        "/podcasts/hidden-show",  # public_pages = false
+        "/podcasts/hidden-show/episodes/hidden-episode",
+        "/podcasts/public-show/episodes/no-summary",  # the public site 404s it
+        "/entities/person/nobody",
+        "/share/abc",
+        "/terms",
+        "/inbox",
+    ):
+        client.post("/api/public/pageview", json={"path": path})
+    client.post(
+        "/api/public/pageview",
+        json={"path": "/podcasts/public-show"},
+        headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"},
+    )
+    _sign_in(client, app_state)
+    client.post("/api/public/pageview", json={"path": "/podcasts/public-show"})
+    assert counter() == {}
+
+
+def test_a_failing_counter_never_fails_the_beacon(client, counter, app_state, sink, monkeypatch):
+    def boom(*args):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(app_state.public_page_view_repository, "increment", boom)
+    assert client.post("/api/public/pageview", json={"path": "/podcasts/public-show"}).status_code == 204
+    assert [c["event"].kind for c in sink.captured] == ["podcast"]
+
+
+def test_the_counter_stores_no_visitor_data(counter, app_state):
+    with connect(app_state.repository.db_path) as conn:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(public_page_daily_views)").fetchall()}
+    assert columns == {"day", "kind", "object_id", "views"}
+
+
+def test_entity_pages_count_under_the_stored_id_unless_hidden(client, counter, app_state):
+    from thestill.models.entities import EntityRecord, EntityType
+
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="person:ada", type=EntityType.PERSON, canonical_name="Ada"))
+    # Re-typed after its row existed (P31 gating): the URL type differs from the id prefix.
+    repo.upsert_entity(EntityRecord(id="company:pais", type=EntityType.PERSON, canonical_name="Pais"))
+    repo.upsert_entity(EntityRecord(id="person:hidden", type=EntityType.PERSON, canonical_name="Hidden"))
+    repo.set_entity_public_hidden("person:hidden", True)
+    clear_public_caches()
+
+    for path in ("/entities/person/ada", "/entities/person/pais", "/entities/person/hidden"):
+        client.post("/api/public/pageview", json={"path": path})
+    assert counter() == {("entity", "person:ada"): 1, ("entity", "company:pais"): 1}
