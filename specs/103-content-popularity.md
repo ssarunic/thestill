@@ -250,8 +250,8 @@ SELECT e.podcast_id,
 
 Phase 1 swaps the first branch for `user_episode_views` and the second
 for `p.listened_at` in the window, and leaves the rest alone. Indexes
-come from `EXPLAIN` on a production-sized copy, not guesswork, as in
-#95 §2; the likely ones are a partial index on
+come from `EXPLAIN` on a production-sized copy, not guesswork, as
+in #95 §2; the likely ones are a partial index on
 `user_episode_inbox (state_changed_at) WHERE state = 'read'` and one on
 `user_episode_progress (updated_at)` (Phase 1: `listened_at`).
 
