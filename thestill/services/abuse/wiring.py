@@ -21,20 +21,24 @@ open.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ...utils.datetime_utils import now_utc
 from .access_guard import AccessGuard
 from .account_admin_service import AccountAdminService
+from .alert_channels import build_alert_channels
+from .alerts import AlertService, AlertSignals
 from .audit_service import AuditLog
 from .follow_policy import FollowPolicy, NewFeedPrecheck
 from .quota_service import QuotaService
+from .rate_limit_hits import user_rate_limit_hits
 from .settings_service import SettingsService
 from .signup_policy import SignupPolicy
 
 if TYPE_CHECKING:
     from ...repositories.factory import RepositoryBundle
     from ...utils.config import Config
+    from ..email_sender import EmailSender
 
 
 @dataclass
@@ -47,12 +51,19 @@ class AbuseServices:
     new_feed_precheck: NewFeedPrecheck
     account_admin: AccountAdminService
     quota: QuotaService
+    alerts: AlertService
 
 
 def build_abuse_services(
-    config: "Config", repos: "RepositoryBundle", *, clock: Callable[[], datetime] = now_utc
+    config: "Config",
+    repos: "RepositoryBundle",
+    *,
+    email_sender: Optional["EmailSender"] = None,
+    clock: Callable[[], datetime] = now_utc,
 ) -> AbuseServices:
-    """``clock`` lets tests pin time for quota windows and admin actions."""
+    """``email_sender`` adds the email alert channel (log-only without it).
+    ``clock`` lets tests pin time for quota windows, admin actions and alerts."""
+
     audit = AuditLog(repos.audit_log, clock=clock)
     settings = SettingsService(repos.settings, config, audit)
     quota = QuotaService(repos.usage, repos.user, settings, config, clock=clock)
@@ -78,4 +89,18 @@ def build_abuse_services(
             clock=clock,
         ),
         quota=quota,
+        alerts=AlertService(
+            signals=AlertSignals(
+                usage=repos.usage,
+                directory=repos.user_directory,
+                queue=repos.queue_manager,
+                rate_limit_hits=user_rate_limit_hits,
+            ),
+            channels=build_alert_channels(config, email_sender),
+            claims=repos.settings,
+            settings=settings,
+            users=repos.user,
+            config=config,
+            clock=clock,
+        ),
     )

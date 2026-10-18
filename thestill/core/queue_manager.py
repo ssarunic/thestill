@@ -1600,6 +1600,24 @@ class QueueManager:
             ).fetchall()
         return [r["episode_id"] for r in rows]
 
+    def queued_audio_durations(self, since: datetime) -> List[Optional[str]]:
+        """Spec #104 spend breaker — the feed-reported duration of every
+        episode that entered the transcription pipeline (a download,
+        downsample or transcribe task) since ``since``, one per episode, as
+        stored (seconds or ``HH:MM:SS``; None when the feed gave none)."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.duration AS duration FROM episodes e
+                WHERE e.id IN (
+                    SELECT episode_id FROM tasks
+                    WHERE stage IN ('download', 'downsample', 'transcribe') AND created_at >= ?
+                )
+                """,
+                (since.isoformat(),),
+            ).fetchall()
+        return [None if row["duration"] is None else str(row["duration"]) for row in rows]
+
     def get_queue_stats(self) -> dict:
         """
         Get queue statistics.

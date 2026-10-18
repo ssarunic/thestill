@@ -1507,6 +1507,18 @@ def status(ctx):
         click.echo(f"  ElevenLabs model: {config.elevenlabs_model}")
         click.echo(f"  ElevenLabs API key: {'✓ Set' if config.elevenlabs_api_key else '✗ Not set'}")
 
+    # Spec #104 — where operator alerts go.
+    alert_channels = []
+    if config.admin_alert_email:
+        alert_channels.append(
+            f"email to {len(config.admin_alert_email)}"
+            if config.email_provider != "none"
+            else "email (EMAIL_PROVIDER=none!)"
+        )
+    if config.alert_webhook_url:
+        alert_channels.append("webhook")
+    click.echo(f"  Operator alerts: {' + '.join(alert_channels) + ' + log' if alert_channels else 'log only'}")
+
     # Diarization settings
     click.echo(f"  Speaker diarization: {'✓ Enabled' if config.enable_diarization else '✗ Disabled'}")
     if config.enable_diarization:
@@ -5163,6 +5175,55 @@ def admin_revoke(ctx, email):
     """Remove a user's admin role (never the last active admin)."""
     user, _ = _act_on(ctx, email, lambda admin, user, actor: admin.revoke_admin(user.id, actor=actor))
     click.echo(f"✓ {user.email} is no longer an admin.")
+
+
+@main.group("alerts")
+def alerts_group():
+    """Operator alerts and the daily digest (spec #104)."""
+
+
+def _alert_service(ctx):
+    """The alert service with the email channel (the CLI builds an email
+    sender only for these commands)."""
+    from .services.abuse.alert_channels import build_alert_channels
+    from .services.email_sender import make_email_sender
+
+    config = ctx.obj.config
+    return ctx.obj.abuse.alerts.with_channels(build_alert_channels(config, make_email_sender(config)))
+
+
+def _report_delivery(ctx, results) -> None:
+    for channel, ok in results.items():
+        click.echo(f"{'✓' if ok else '❌'} {channel}")
+    if ctx.obj.config.admin_alert_email and "email" not in results:
+        click.echo("⚠️  ADMIN_ALERT_EMAIL is set but EMAIL_PROVIDER=none: no email was sent.", err=True)
+    if not all(results.values()):
+        ctx.exit(1)
+
+
+@alerts_group.command("test")
+@click.pass_context
+@require_config
+@log_command
+def alerts_test(ctx):
+    """Send a test alert to every configured channel."""
+    _report_delivery(ctx, _alert_service(ctx).send_test())
+
+
+@alerts_group.command("digest")
+@click.option("--send", is_flag=True, help="Send it now instead of printing it.")
+@click.pass_context
+@require_config
+@log_command
+def alerts_digest(ctx, send):
+    """Show (or send) the daily digest for the last 24 hours."""
+    alerts = _alert_service(ctx)
+    digest = alerts.build_digest(force=True)
+    if not send:
+        click.echo(digest.text)
+        return
+    click.echo(digest.title)
+    _report_delivery(ctx, alerts.send(digest))
 
 
 @main.group("settings")

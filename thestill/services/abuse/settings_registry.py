@@ -106,6 +106,36 @@ def _validate_quota_overrides(value: Any) -> Dict[str, Dict[str, int]]:
     return normalised
 
 
+#: Thresholds of the Phase 3 alerts; ``alerts`` overrides any subset of the
+#: env defaults (``Config.alert_<name>``).
+ALERT_THRESHOLDS = (
+    "quota_pressure",
+    "rate_limit_pressure",
+    "signup_spike",
+    "feed_spike",
+    "queue_backlog",
+    "spend_breaker_minutes",
+)
+SPEND_BREAKER_ACTIONS = ("none", "pause_new_feeds")
+
+
+def _validate_alerts(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("expected {threshold: number, spend_breaker_action: ...}")
+    for key, item in value.items():
+        if key == "spend_breaker_action":
+            if item not in SPEND_BREAKER_ACTIONS:
+                raise ValueError(f"spend_breaker_action must be one of {', '.join(SPEND_BREAKER_ACTIONS)}")
+        elif key in ALERT_THRESHOLDS:
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise ValueError(f"{key} must be a whole number >= 0")
+        else:
+            raise ValueError(
+                f"unknown alert setting {key!r}; known: {', '.join(ALERT_THRESHOLDS)}, spend_breaker_action"
+            )
+    return dict(value)
+
+
 @dataclass(frozen=True)
 class SettingSpec:
     key: str
@@ -163,6 +193,15 @@ SETTINGS: Dict[str, SettingSpec] = {
             "`thestill user quota`.",
             lambda _c: {},
             _validate_quota_overrides,
+            json.loads,
+            failsafe={},
+        ),
+        SettingSpec(
+            "alerts",
+            "Alert thresholds and the spend breaker's action, overriding the ALERT_* env defaults: "
+            '{"queue_backlog": 1000, "spend_breaker_action": "pause_new_feeds"}.',
+            lambda _c: {},
+            _validate_alerts,
             json.loads,
             failsafe={},
         ),

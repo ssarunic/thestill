@@ -41,6 +41,8 @@ from typing import Callable, Deque, Dict, Optional
 from fastapi import HTTPException, Request, status
 from structlog import get_logger
 
+from ...services.abuse.rate_limit_hits import USER_HITS
+
 logger = get_logger(__name__)
 
 
@@ -342,55 +344,11 @@ def allow_public_request(request: Request) -> bool:
     return allowed
 
 
-class _UserHitLog:
-    """Recent per-user rate-limit hits in this process, for the spec #104
-    ``rate_limit_pressure`` alert. Keeps one hour; bounded by sweeping."""
-
-    HORIZON_SECONDS = 3600
-
-    def __init__(self) -> None:
-        self._hits: Dict[str, Deque[float]] = {}
-        self._lock = threading.Lock()
-
-    def record(self, user_id: str) -> None:
-        now = time.monotonic()
-        with self._lock:
-            hits = self._hits.setdefault(user_id, deque())
-            hits.append(now)
-            # Trim this user's own history every time, so one flooding user
-            # can't grow it without bound between sweeps.
-            while now - hits[0] > self.HORIZON_SECONDS:
-                hits.popleft()
-            if len(self._hits) > _SWEEP_TRIGGER:
-                self._sweep(now)
-
-    def counts(self, window_seconds: int = HORIZON_SECONDS) -> Dict[str, int]:
-        now = time.monotonic()
-        with self._lock:
-            self._sweep(now)
-            return {uid: sum(1 for t in hits if now - t <= window_seconds) for uid, hits in self._hits.items()}
-
-    def _sweep(self, now: float) -> None:
-        for uid in list(self._hits):
-            hits = self._hits[uid]
-            while hits and now - hits[0] > self.HORIZON_SECONDS:
-                hits.popleft()
-            if not hits:
-                del self._hits[uid]
-
-    def reset(self) -> None:
-        with self._lock:
-            self._hits.clear()
-
-
-_USER_HITS = _UserHitLog()
-
-
 def enforce_user_rate_limit(user_id: str, limit: RateLimit, prefix: str = "user") -> None:
     """Charge one request to ``user_id``'s bucket; 429 once it is spent."""
     if _LIMITER.allow(f"{prefix}:{user_id}", limit):
         return
-    _USER_HITS.record(user_id)
+    USER_HITS.record(user_id)
     logger.warning(
         "rate_limit_exceeded",
         key=prefix,
@@ -405,15 +363,10 @@ def enforce_user_rate_limit(user_id: str, limit: RateLimit, prefix: str = "user"
     )
 
 
-def user_rate_limit_hits(window_seconds: int = _UserHitLog.HORIZON_SECONDS) -> Dict[str, int]:
-    """Per-user rate-limit hits in this process over the last ``window_seconds``."""
-    return _USER_HITS.counts(window_seconds)
-
-
 def reset_for_testing() -> None:
     """Flush all buckets — call from test fixtures, never production."""
     _LIMITER.reset()
-    _USER_HITS.reset()
+    USER_HITS.reset()
 
 
 __all__ = [
@@ -421,7 +374,6 @@ __all__ = [
     "USER_API_LIMIT",
     "USER_SEARCH_LIMIT",
     "enforce_user_rate_limit",
-    "user_rate_limit_hits",
     "allow_public_request",
     "AUTH_LIMIT",
     "WEBHOOK_LIMIT",

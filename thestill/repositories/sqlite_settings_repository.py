@@ -15,7 +15,7 @@
 """SQLite implementation of the spec #104 settings repository."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -50,6 +50,19 @@ class SqliteSettingsRepository(SettingsRepository):
                 """,
                 (key, json.dumps(value), updated_at.isoformat(), updated_by),
             )
+
+    def claim(self, key: str, value: Any, *, now: datetime, min_interval_seconds: int) -> bool:
+        cutoff = (now - timedelta(seconds=min_interval_seconds)).isoformat()
+        with connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, NULL)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                WHERE app_settings.updated_at <= ?
+                """,
+                (key, json.dumps(value), now.isoformat(), cutoff),
+            )
+            return cursor.rowcount == 1
 
     def delete(self, key: str) -> bool:
         with connect(self.db_path) as conn:

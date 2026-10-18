@@ -113,6 +113,15 @@ class SqliteUsageEventRepository(UsageEventRepository):
             ).fetchall()
         return {row[0]: row[1] for row in rows}
 
+    def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                f"SELECT user_id, COUNT(*) FROM usage_events WHERE kind = ? AND {COUNTED_SQL} AND created_at >= ?"
+                " GROUP BY user_id",
+                (kind, since.isoformat()),
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
     def release_stale(self, older_than: datetime, *, now: datetime) -> int:
         with connect(self.db_path) as conn:
             return conn.execute(

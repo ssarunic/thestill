@@ -14,10 +14,11 @@
 
 """SQLite implementation of the spec #104 user directory."""
 
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from ..models.user import UserStatus
+from ..models.user import User, UserStatus
 from ..utils.sqlite_ext import connect
 from .sqlite_user_repository import SELECT_COLS, row_to_user
 from .user_directory_repository import USER_SORT_ORDER, UserDirectoryRepository, UserSort, UserSummary, search_pattern
@@ -67,6 +68,14 @@ class SqliteUserDirectoryRepository(UserDirectoryRepository):
         where, params = _where(status, q)
         with connect(self.db_path) as conn:
             return conn.execute(f"SELECT COUNT(*) FROM users u {where}", params).fetchone()[0]
+
+    def created_since(self, since: datetime) -> List[User]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                f"SELECT {SELECT_COLS} FROM users WHERE created_at >= ? ORDER BY created_at DESC",
+                (since.isoformat(),),
+            ).fetchall()
+        return [row_to_user(row) for row in rows]
 
     def count_admins(self) -> int:
         with connect(self.db_path) as conn:

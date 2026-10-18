@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from psycopg.types.json import Jsonb
@@ -52,6 +52,18 @@ class PostgresSettingsRepository(SettingsRepository):
                 """,
                 (key, Jsonb(value), updated_at, updated_by),
             )
+
+    def claim(self, key: str, value: Any, *, now: datetime, min_interval_seconds: int) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (%s, %s, %s, NULL)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+                WHERE app_settings.updated_at <= %s
+                """,
+                (key, Jsonb(value), now, now - timedelta(seconds=min_interval_seconds)),
+            )
+            return cursor.rowcount == 1
 
     def delete(self, key: str) -> bool:
         with connect(self.dsn) as conn:

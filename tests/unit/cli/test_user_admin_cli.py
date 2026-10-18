@@ -152,3 +152,14 @@ def test_user_quota_override_and_usage(db):
     assert run("user", "quota", "spam@example.com", "imports_per_day", "default").exit_code == 0
     info = as_json(run("user", "show", "spam@example.com", "--json").stdout)
     assert info["usage_24h"] == {}
+
+
+def test_alerts_test_and_digest(db):
+    result = run("alerts", "test")
+    assert result.exit_code == 0, result.output
+    assert "✓ log" in result.output  # no email provider or webhook configured
+
+    result = run("alerts", "digest")
+    assert result.exit_code == 0, result.output
+    assert "Thestill daily digest" in result.output
+    assert "New accounts (24h): 2" in result.output

@@ -48,7 +48,7 @@ Dialect/concurrency differences from the SQLite version:
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Collection, Dict, List, Optional, Sequence
 
 from psycopg.types.json import Jsonb
@@ -843,6 +843,24 @@ class PostgresQueueManager:
                 ),
             ).fetchall()
         return [as_str(r["episode_id"]) for r in rows]
+
+    def queued_audio_durations(self, since: datetime) -> List[Optional[str]]:
+        """Spec #104 spend breaker — the feed-reported duration of every
+        episode that entered the transcription pipeline (a download,
+        downsample or transcribe task) since ``since``, one per episode, as
+        stored (seconds or ``HH:MM:SS``; None when the feed gave none)."""
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                """
+                SELECT e.duration AS duration FROM episodes e
+                WHERE e.id IN (
+                    SELECT episode_id FROM tasks
+                    WHERE stage IN ('download', 'downsample', 'transcribe') AND created_at >= %s
+                )
+                """,
+                (since,),
+            ).fetchall()
+        return [None if row["duration"] is None else str(row["duration"]) for row in rows]
 
     def get_queue_stats(self) -> dict:
         """

@@ -22,7 +22,7 @@ from typing import Dict, Optional, Sequence, Tuple
 
 import psycopg
 
-from ..utils.postgres_ext import connect
+from ..utils.postgres_ext import as_str, connect
 from .usage_event_repository import (
     COUNTED_SQL,
     PRUNE_KEEP_KINDS,
@@ -119,6 +119,15 @@ class PostgresUsageEventRepository(UsageEventRepository):
                 (user_id, since),
             ).fetchall()
         return {row["kind"]: row["n"] for row in rows}
+
+    def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"SELECT user_id, COUNT(*) AS n FROM usage_events WHERE kind = %s AND {COUNTED_SQL}"
+                " AND created_at >= %s GROUP BY user_id",
+                (kind, since),
+            ).fetchall()
+        return {as_str(row["user_id"]): row["n"] for row in rows}
 
     def release_stale(self, older_than: datetime, *, now: datetime) -> int:
         with connect(self.dsn) as conn:
