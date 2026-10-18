@@ -72,7 +72,11 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                 INSERT INTO user_episode_progress
                     (user_id, episode_id, position_seconds, duration_seconds,
                      completed_at, stopped_at, session_id, seq, updated_at, listened_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                -- listened_at only for a user whose switch is on; one
+                -- statement, so it can't interleave with the opt-out's erase.
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = ? AND usage_analytics_enabled = 1)
+                             THEN ? END)
                 ON CONFLICT(user_id, episode_id) DO UPDATE SET
                     position_seconds = excluded.position_seconds,
                     duration_seconds = COALESCE(excluded.duration_seconds,
@@ -100,6 +104,7 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                     row.session_id,
                     row.seq,
                     row.updated_at.isoformat(),
+                    row.user_id,
                     _iso(row.listened_at),
                     1 if force else 0,
                 ),

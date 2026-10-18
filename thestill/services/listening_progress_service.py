@@ -84,6 +84,17 @@ def _usable_duration(value: Optional[float]) -> Optional[float]:
     return float(value)
 
 
+def _was_playing(stored: Optional[ListeningProgress], write: ProgressWrite) -> bool:
+    """Whether this session's previous write was playback: the stored row is
+    from the same session and its last write set ``listened_at``."""
+    return (
+        stored is not None
+        and stored.session_id == write.session_id
+        and stored.listened_at is not None
+        and stored.listened_at == stored.updated_at
+    )
+
+
 def plan_row(
     write: ProgressWrite,
     *,
@@ -109,11 +120,14 @@ def plan_row(
     The duration is the written one, else the stored one, so a write
     without a duration still applies the 45 s rule.
 
-    ``listened_at`` (spec #103) becomes ``now`` for playback — ``tick``,
-    ``pause``, ``ended`` and a completing ``stop`` — when ``measure`` (the
-    user's usage-analytics consent, off unless the caller passes it);
-    every other write carries the stored value forward, so "Mark as played
-    / unplayed" never counts as listening.
+    ``listened_at`` (spec #103) becomes ``now`` for playback when
+    ``measure`` (the request's usage-analytics consent, off unless the
+    caller passes it). Playback is ``tick``, ``pause`` and ``ended``, and a
+    completing ``stop`` only when the same session's previous write was
+    playback: the player also stops paused and restored sessions. Every
+    other write leaves it None, which the repository keeps as stored —
+    never a value carried from ``stored``, which may be stale — so "Mark as
+    played / unplayed" never counts as listening.
     """
     if not write.session_id or len(write.session_id) > MAX_SESSION_ID_LENGTH:
         raise InvalidProgressError(f"session_id must be 1-{MAX_SESSION_ID_LENGTH} characters")
@@ -139,8 +153,8 @@ def plan_row(
         if completed:
             position = 0.0
 
-    playback = write.event in PLAYBACK_EVENTS or (write.event == "stop" and completed)
-    listened_at = now if measure and playback else (stored.listened_at if stored else None)
+    playback = write.event in PLAYBACK_EVENTS or (write.event == "stop" and completed and _was_playing(stored, write))
+    listened_at = now if measure and playback else None
 
     return ListeningProgress(
         user_id=user_id,

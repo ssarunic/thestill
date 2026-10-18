@@ -29,6 +29,7 @@ from ..models.listening import ListeningProgress
 from ..utils.ids import is_uuid
 from ..utils.postgres_ext import as_str, connect
 from .listening_progress_repository import ListeningProgressRepository
+from .postgres_user_repository import consents_to_measurement
 
 logger = get_logger(__name__)
 
@@ -59,6 +60,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
         if not (is_uuid(row.user_id) and is_uuid(row.episode_id)):
             return False
         with connect(self.dsn) as conn:
+            listened_at = row.listened_at if row.listened_at and consents_to_measurement(conn, row.user_id) else None
             cursor = conn.execute(
                 """
                 INSERT INTO user_episode_progress
@@ -91,7 +93,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
                     row.session_id,
                     row.seq,
                     row.updated_at,
-                    row.listened_at,
+                    listened_at,
                     force,
                 ),
             )

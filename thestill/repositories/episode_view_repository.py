@@ -30,4 +30,8 @@ class EpisodeViewRepository(ABC):
     @abstractmethod
     def record_view(self, user_id: str, episode_id: str, at: datetime) -> bool:
         """Store ``at`` as the first view unless one exists. An unknown or
-        malformed episode stores nothing. Returns True when a row was added."""
+        malformed episode stores nothing, and so does a user whose
+        ``usage_analytics_enabled`` is off when the statement runs, checked
+        so that it serializes with ``UserRepository.update_usage_analytics``
+        (an in-flight view can't outlive the opt-out's erase). Returns True
+        when a row was added."""

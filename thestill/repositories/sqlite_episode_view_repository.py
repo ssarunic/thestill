@@ -41,9 +41,10 @@ class SqliteEpisodeViewRepository(EpisodeViewRepository):
             cursor = conn.execute(
                 """
                 INSERT INTO user_episode_views (user_id, episode_id, first_viewed_at)
-                SELECT ?, id, ? FROM episodes WHERE id = ?
+                SELECT ?, id, ? FROM episodes
+                 WHERE id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND usage_analytics_enabled = 1)
                 ON CONFLICT (user_id, episode_id) DO NOTHING
                 """,
-                (user_id, at.isoformat(), episode_id),
+                (user_id, at.isoformat(), episode_id, user_id),
             )
             return cursor.rowcount == 1
