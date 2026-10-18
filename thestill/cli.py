@@ -50,6 +50,7 @@ from .repositories.sqlite_podcast_follower_repository import SqlitePodcastFollow
 from .repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from .repositories.sqlite_user_repository import SqliteUserRepository
 from .services import PodcastService, RefreshService, StatsService
+from .services.abuse.settings_registry import QUOTA_NAMES
 from .services.analytics_service import ALLOWED_RANGES, DEFAULT_RANGE, AnalyticsService
 from .services.auth_service import AuthService
 from .services.inbox_service import InboxService
@@ -5017,6 +5018,7 @@ def user_show(ctx, email_or_id, json_output):
         follows=footprint.follows,
         suspended_follows=footprint.suspended_follows,
         feeds_brought_in=footprint.feeds_brought_in,
+        usage_24h=footprint.usage_24h,
     )
     if json_output:
         click.echo(json.dumps(info, indent=2))
@@ -5109,6 +5111,31 @@ def user_remove_introduced_feeds(ctx, email_or_id):
         f"✓ Removed {len(result.feeds_removed)} feeds {user.email} brought in; "
         f"{result.tasks_cancelled} queued tasks cancelled. Podcast rows and processed episodes stay."
     )
+
+
+@user_group.command("quota")
+@click.argument("email_or_id")
+@click.argument("quota", type=click.Choice(QUOTA_NAMES))
+@click.argument("limit")
+@click.pass_context
+@require_config
+@log_command
+def user_quota(ctx, email_or_id, quota, limit):
+    """Override one quota for a user: a number (0 = unlimited) or ``default``."""
+    if limit == "default":
+        value = None
+    elif limit.isdigit():
+        value = int(limit)
+    else:
+        click.echo("❌ LIMIT must be a whole number (0 = unlimited) or 'default'.", err=True)
+        ctx.exit(2)
+    user, overrides = _act_on(
+        ctx,
+        email_or_id,
+        lambda admin, user, actor: admin.set_quota_override(user.id, quota, value, actor=actor),
+    )
+    shown = "the default" if value is None else ("unlimited" if value == 0 else value)
+    click.echo(f"✓ {quota} for {user.email}: {shown}. Overrides now: {json.dumps(overrides)}")
 
 
 @main.group("admin")

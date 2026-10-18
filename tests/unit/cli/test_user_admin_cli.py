@@ -137,3 +137,18 @@ def test_user_commands_need_multi_user_mode(tmp_path, monkeypatch):
     assert result.exit_code == 1 and "multi-user mode" in result.output
     # The global switches apply in single-user mode too.
     assert run("settings", "set", "read_only", "on").exit_code == 0
+
+
+def test_user_quota_override_and_usage(db):
+    result = run("user", "quota", "spam@example.com", "imports_per_day", "12")
+    assert result.exit_code == 0, result.output
+    assert '"imports_per_day": 12' in result.output
+    assert run("user", "quota", "spam@example.com", "imports_per_day", "lots").exit_code == 2
+    assert run("user", "quota", "spam@example.com", "no_such_quota", "1").exit_code == 2
+
+    entry = SqliteAuditLogRepository(db).list(action="user.quota_override")[0]
+    assert entry.details == {"quota": "imports_per_day", "old": None, "new": 12}
+
+    assert run("user", "quota", "spam@example.com", "imports_per_day", "default").exit_code == 0
+    info = as_json(run("user", "show", "spam@example.com", "--json").stdout)
+    assert info["usage_24h"] == {}

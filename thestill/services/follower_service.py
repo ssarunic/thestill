@@ -26,9 +26,10 @@ from structlog import get_logger
 
 from ..models.podcast import Podcast
 from ..models.user import PodcastFollower
-from ..repositories.podcast_follower_repository import PodcastFollowerRepository, allow_all
+from ..repositories.podcast_follower_repository import PodcastFollowerRepository
 from ..repositories.podcast_repository import PodcastRepository
 from .abuse.errors import AbusePreventionError
+from .abuse.follow_policy import UNGATED
 
 if TYPE_CHECKING:
     from .abuse.follow_policy import FollowPolicy
@@ -113,17 +114,22 @@ class FollowerService:
             AlreadyFollowingError: If user already follows the podcast
             FeaturePausedError: If ``new_feeds_enabled`` is off and nobody
                 follows the podcast yet (spec #104)
+            QuotaExceededError: A follow quota is used up (spec #104 Phase 2)
         """
         # Validate podcast exists
         podcast = self.podcast_repository.get_by_id(podcast_id)
         if not podcast:
             raise PodcastNotFoundError(f"Podcast not found: {podcast_id}")
 
-        decide = self._follow_policy.bind(user_id) if gated and self._follow_policy is not None else allow_all
+        gate = self._follow_policy.bind(user_id, podcast_id) if gated and self._follow_policy is not None else UNGATED
         follower = PodcastFollower(user_id=user_id, podcast_id=podcast_id)
+        if gate.now is not None:
+            # Stamp the follow (and its ledger rows) with the instant the
+            # limits were measured at, so they fall in the counted window.
+            follower.created_at = gate.now
         try:
-            # Exists check, gate and insert in one locked transaction.
-            outcome = self.follower_repository.follow_with_gate(follower, decide)
+            # Exists check, gate, quotas and insert in one locked transaction.
+            outcome = self.follower_repository.follow_with_gate(follower, gate.decide, usage_since=gate.usage_since)
         except Exception as e:
             # A concurrent follow of the same pair can still hit the unique
             # constraint (sqlite3.IntegrityError / psycopg UniqueViolation).

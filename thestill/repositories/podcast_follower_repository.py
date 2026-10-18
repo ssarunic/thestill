@@ -21,9 +21,11 @@ supporting the multi-user shared podcasts architecture.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from datetime import datetime
+from typing import Callable, List, Optional, Sequence
 
 from ..models.user import PodcastFollower
+from .usage_event_repository import UsageRecord
 
 
 @dataclass(frozen=True)
@@ -34,8 +36,15 @@ class FollowFacts:
     #: introduce the feed: seed its newest episodes and process every
     #: future one (spec #63).
     podcast_followers: int
-    #: The user's current follows (Phase 2's ``follows_total`` quota).
+    #: The user's current follows (the ``follows_total`` quota).
     user_follows_total: int
+    #: Counted ``follow`` / ``feed_introduced`` ledger rows since the
+    #: window start (0 when the caller asked for no usage window).
+    follows_in_window: int = 0
+    introduced_in_window: int = 0
+    #: Oldest of those rows, for a quota's ``Retry-After``.
+    oldest_follow_at: Optional[datetime] = None
+    oldest_introduced_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,10 @@ class FollowDecision:
     repository after its transaction closes."""
 
     refusal: Optional[Exception] = None
+    #: Ledger rows written in the same transaction as the follow.
+    usage_records: Sequence[UsageRecord] = ()
+    #: Ledger rows written even when refused (``quota_exceeded``).
+    refusal_records: Sequence[UsageRecord] = ()
 
 
 ALLOW_FOLLOW = FollowDecision()
@@ -91,23 +104,35 @@ class PodcastFollowerRepository(ABC):
         pass
 
     @abstractmethod
-    def follow_with_gate(self, follower: PodcastFollower, decide: FollowDecider) -> FollowOutcome:
+    def follow_with_gate(
+        self,
+        follower: PodcastFollower,
+        decide: FollowDecider,
+        *,
+        usage_since: Optional[datetime] = None,
+    ) -> FollowOutcome:
         """Spec #104 — insert ``follower`` if ``decide`` allows it, atomically.
 
-        In one transaction: take a per-podcast lock (Postgres advisory
-        lock; SQLite ``BEGIN IMMEDIATE``), return ``already_following`` if
-        the row exists, measure ``FollowFacts``, ask ``decide``, then insert.
-        The lock means two concurrent first follows of a dormant feed can't
-        both see a follower count that excludes the other.
+        In one transaction: with ``usage_since``, take the user's ``follow``
+        quota lock and count their ledger rows since then; take a
+        per-podcast lock (Postgres advisory locks, always user before
+        podcast; SQLite ``BEGIN IMMEDIATE``); return ``already_following``
+        if the row exists; measure ``FollowFacts``; ask ``decide``; insert
+        the follow and the decision's ledger rows. The locks mean two
+        concurrent first follows of a dormant feed can't both see a
+        follower count that excludes the other, and a user's concurrent
+        follows can't both pass with one allowance left.
 
-        Raises ``decide``'s refusal after the transaction has closed.
+        Raises ``decide``'s refusal after the transaction has committed its
+        ``refusal_records``.
         """
 
     @abstractmethod
     def introduced_podcast_ids(self, user_id: str) -> List[str]:
-        """Podcasts this user brought in: their follow is the earliest of
-        all follows of the feed, active or moved aside by a ban (spec #104
-        §1.5 — a good-enough stand-in until the Phase 2 usage ledger)."""
+        """Podcasts this user brought in (spec #104 §1.5): every committed
+        ``feed_introduced`` ledger row, plus — for follows older than the
+        ledger — feeds where their follow is the earliest of all follows,
+        active or moved aside by a ban."""
 
     @abstractmethod
     def remove(self, user_id: str, podcast_id: str) -> bool:

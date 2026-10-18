@@ -22,13 +22,16 @@ the conventions documented in ``utils.postgres_ext``: native ``uuid`` ids,
 
 from __future__ import annotations
 
-from typing import List
+from datetime import datetime
+from typing import List, Optional
 
 from structlog import get_logger
 
 from ..models.user import PodcastFollower
 from ..utils.postgres_ext import as_str, connect
 from .podcast_follower_repository import FollowDecider, FollowFacts, FollowOutcome, PodcastFollowerRepository
+from .postgres_usage_event_repository import count_usage, insert_usage, lock_usage
+from .usage_event_repository import FOLLOW_LOCK_GROUP
 
 logger = get_logger(__name__)
 
@@ -53,11 +56,19 @@ class PostgresPodcastFollowerRepository(PodcastFollowerRepository):
             logger.debug("Added follower", user_id=follower.user_id, podcast_id=follower.podcast_id)
             return follower
 
-    def follow_with_gate(self, follower: PodcastFollower, decide: FollowDecider) -> FollowOutcome:
+    def follow_with_gate(
+        self,
+        follower: PodcastFollower,
+        decide: FollowDecider,
+        *,
+        usage_since: Optional[datetime] = None,
+    ) -> FollowOutcome:
         refusal = None
         with connect(self.dsn) as conn:
-            # Lock order on every path: per-user quota locks (Phase 2), then
-            # this per-podcast lock. Released at commit/rollback.
+            # Lock order on every path: the user's quota lock, then the
+            # podcast lock. Both release at commit/rollback.
+            if usage_since is not None:
+                lock_usage(conn, follower.user_id, FOLLOW_LOCK_GROUP)
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"follow_gate:{follower.podcast_id}",),
@@ -67,23 +78,40 @@ class PostgresPodcastFollowerRepository(PodcastFollowerRepository):
                 (follower.user_id, follower.podcast_id),
             ).fetchone():
                 return FollowOutcome(follower=None, already_following=True)
-            facts = FollowFacts(
-                podcast_followers=conn.execute(
-                    "SELECT COUNT(*) AS n FROM podcast_followers WHERE podcast_id = %s", (follower.podcast_id,)
-                ).fetchone()["n"],
-                user_follows_total=conn.execute(
-                    "SELECT COUNT(*) AS n FROM podcast_followers WHERE user_id = %s", (follower.user_id,)
-                ).fetchone()["n"],
-            )
-            refusal = decide(facts).refusal
+            facts = self._measure(conn, follower, usage_since)
+            decision = decide(facts)
+            refusal = decision.refusal
             if refusal is None:
                 conn.execute(
                     "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (%s, %s, %s, %s)",
                     (follower.id, follower.user_id, follower.podcast_id, follower.created_at),
                 )
+                insert_usage(conn, follower.user_id, decision.usage_records, follower.created_at)
+            else:
+                insert_usage(conn, follower.user_id, decision.refusal_records, follower.created_at)
         if refusal is not None:
             raise refusal
         return FollowOutcome(follower=follower, introduced=facts.podcast_followers == 0)
+
+    @staticmethod
+    def _measure(conn, follower: PodcastFollower, usage_since: Optional[datetime]) -> FollowFacts:
+        follows, oldest_follow = 0, None
+        introduced, oldest_introduced = 0, None
+        if usage_since is not None:
+            follows, oldest_follow = count_usage(conn, follower.user_id, "follow", usage_since)
+            introduced, oldest_introduced = count_usage(conn, follower.user_id, "feed_introduced", usage_since)
+        return FollowFacts(
+            podcast_followers=conn.execute(
+                "SELECT COUNT(*) AS n FROM podcast_followers WHERE podcast_id = %s", (follower.podcast_id,)
+            ).fetchone()["n"],
+            user_follows_total=conn.execute(
+                "SELECT COUNT(*) AS n FROM podcast_followers WHERE user_id = %s", (follower.user_id,)
+            ).fetchone()["n"],
+            follows_in_window=follows,
+            introduced_in_window=introduced,
+            oldest_follow_at=oldest_follow,
+            oldest_introduced_at=oldest_introduced,
+        )
 
     def introduced_podcast_ids(self, user_id: str) -> List[str]:
         with connect(self.dsn) as conn:
@@ -96,11 +124,14 @@ class PostgresPodcastFollowerRepository(PodcastFollowerRepository):
                 ), first AS (
                     SELECT podcast_id, MIN(created_at) AS first_at FROM f GROUP BY podcast_id
                 )
-                SELECT DISTINCT f.podcast_id
+                SELECT f.podcast_id::text AS podcast_id
                 FROM f JOIN first ON first.podcast_id = f.podcast_id AND f.created_at = first.first_at
                 WHERE f.user_id = %s
+                UNION
+                SELECT subject_id FROM usage_events
+                WHERE user_id = %s AND kind = 'feed_introduced' AND state = 'committed' AND subject_id IS NOT NULL
                 """,
-                (user_id,),
+                (user_id, user_id),
             ).fetchall()
             return [as_str(row["podcast_id"]) for row in rows]
 

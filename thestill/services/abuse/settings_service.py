@@ -162,15 +162,24 @@ class SettingsService:
 
     # ----- writes (audited) -----
 
-    def set(self, key: str, value: Any, *, actor: Actor) -> EffectiveSetting:
+    def set(
+        self,
+        key: str,
+        value: Any,
+        *,
+        actor: Actor,
+        audit: bool = True,
+    ) -> EffectiveSetting:
         """Validate, store and audit one setting. Raises ``KeyError`` for an
-        unknown key and ``ValueError`` for a bad value."""
+        unknown key and ``ValueError`` for a bad value. ``audit=False`` is
+        for a caller that records its own, narrower entry (a quota override
+        audits one user's limit, not the whole map)."""
         spec = get_spec(key)
         normalised = spec.validate(value)
         old = self.effective(key)
         self._repo.upsert(key, normalised, updated_by=actor.user_id, updated_at=now_utc())
         self.invalidate()
-        if self._audit is not None:
+        if audit and self._audit is not None:
             self._audit.record(actor, "setting.set", key=key, old=old.value, new=normalised)
         # Values stay out of the log: the allowlist holds email addresses.
         # The audit log keeps them.

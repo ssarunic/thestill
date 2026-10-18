@@ -20,12 +20,15 @@ open.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Callable
 
+from ...utils.datetime_utils import now_utc
 from .access_guard import AccessGuard
 from .account_admin_service import AccountAdminService
 from .audit_service import AuditLog
 from .follow_policy import FollowPolicy, NewFeedPrecheck
+from .quota_service import QuotaService
 from .settings_service import SettingsService
 from .signup_policy import SignupPolicy
 
@@ -43,18 +46,23 @@ class AbuseServices:
     follow_policy: FollowPolicy
     new_feed_precheck: NewFeedPrecheck
     account_admin: AccountAdminService
+    quota: QuotaService
 
 
-def build_abuse_services(config: "Config", repos: "RepositoryBundle") -> AbuseServices:
-    audit = AuditLog(repos.audit_log)
+def build_abuse_services(
+    config: "Config", repos: "RepositoryBundle", *, clock: Callable[[], datetime] = now_utc
+) -> AbuseServices:
+    """``clock`` lets tests pin time for quota windows and admin actions."""
+    audit = AuditLog(repos.audit_log, clock=clock)
     settings = SettingsService(repos.settings, config, audit)
+    quota = QuotaService(repos.usage, repos.user, settings, config, clock=clock)
     return AbuseServices(
         settings=settings,
         audit=audit,
         guard=AccessGuard(repos.user, settings, multi_user=config.multi_user),
         signup=SignupPolicy(settings),
-        follow_policy=FollowPolicy(settings),
-        new_feed_precheck=NewFeedPrecheck(settings, repos.follower),
+        follow_policy=FollowPolicy(settings, quota),
+        new_feed_precheck=NewFeedPrecheck(settings, repos.follower, quota),
         account_admin=AccountAdminService(
             users=repos.user,
             directory=repos.user_directory,
@@ -65,5 +73,9 @@ def build_abuse_services(config: "Config", repos: "RepositoryBundle") -> AbuseSe
             queue=repos.queue_manager,
             audit=audit,
             multi_user=config.multi_user,
+            settings=settings,
+            quota=quota,
+            clock=clock,
         ),
+        quota=quota,
     )

@@ -1,6 +1,6 @@
 # Abuse Prevention and User Administration
 
-> **Status:** 🚧 In progress. Phase 1 implemented (see [Implementation notes](#implementation-notes)); Phases 2–4 open
+> **Status:** 🚧 In progress. Phases 1–2 implemented (see [Implementation notes](#implementation-notes)); Phases 3–4 open
 > **Created:** 2026-10-17
 > **Updated:** 2026-10-18
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
@@ -447,6 +447,22 @@ Where the build differs from, or adds to, the design above.
 - **Audit actors** are `web`, `cli` and `system` (`system` is for the Phase 3 breaker). The CLI also has `thestill user remove-introduced-feeds` and `thestill settings reset`.
 - **New config.** `ADMIN_CONTACT_EMAIL` is new, alongside `SIGNUP_MODE` and `SIGNUP_ALLOWLIST`.
 - **Housekeeping.** Phase 2's reservation expiry and ledger pruning need a new periodic loop: there was no housekeeping job to reuse.
+
+**Phase 2** (branch `feat/104-p2-quotas`, stacked on Phase 1):
+
+- **Ledger.** `usage_events` (alembic 0022) has its own repository. `reserve` takes a per-(user, lock group) Postgres advisory lock, or SQLite `BEGIN IMMEDIATE`, then counts reserved and committed rows and inserts. Follow quotas share the `follow` group, so a follow takes one user lock, always before the podcast lock.
+- **Follows don't reserve.** `follow_with_gate` counts the user's `follow` and `feed_introduced` rows under the same locks, and writes the new rows, or the `quota_exceeded` row, in the follow's own transaction. The follow and its rows carry the instant the limits were measured at.
+- **Imports** reserve only when the episode is new, and commit once it is created. Re-importing an existing episode is free even at the limit. The old inbox-based import counter in the log now reads the ledger.
+- **Add-feed and remote MCP `add_podcast`** also run a read-only follow-quota precheck before any podcast row is written. The follow's own check stays authoritative and records the refusal.
+- **`Retry-After`** for a reserved quota comes from the row whose expiry brings the count back under the limit, which stays right after an override lowers a limit below current use. For follows it is the oldest row in the window, a lower bound in that case.
+- **The quota table** (`services/abuse/quotas.py`) holds each quota's kind, window, lock group, env field and refusal text once.
+- **A commit after expiry still counts.** If a paid call outlives `QUOTA_RESERVATION_TTL_SECONDS`, its late commit records a fresh committed row and logs `quota_commit_after_expiry`.
+- **Translation** charges the requesting user. The summary route now takes the session user. A cached translation is free.
+- **Refusal messages are written by the server** (for example "You've added 10 new podcasts today. You can add more in 6 hours."), so the frontend shows the `message` field.
+- **The per-user rate limit** uses the existing `RATE_LIMIT_*` naming: `RATE_LIMIT_USER_MAX` / `_WINDOW_SECONDS` and `RATE_LIMIT_USER_SEARCH_MAX` / `_WINDOW_SECONDS`, not `USER_API_LIMIT` / `USER_SEARCH_LIMIT`. Hits are kept per process, trimmed to an hour on every record, ready for Phase 3's `rate_limit_pressure` (nothing reads them until then), so they are not parsed from logs.
+- **`QUOTA_ENFORCE`** defaults to `true`. With `false`, usage is recorded and refusals are only logged (`quota_would_refuse`), which answers open question 3.
+- **Housekeeping** is a new `core/periodic_runner.py` loop started in the app lifespan. It releases expired reservations every minute and prunes the ledger every 6 hours.
+- **CLI.** `thestill user quota <email> <quota> <limit|default>` audits `user.quota_override` with only that user's limit, not the whole overrides map. `thestill user show` lists the last 24 hours of usage.
 
 ## Testing
 

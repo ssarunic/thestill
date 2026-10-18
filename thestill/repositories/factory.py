@@ -45,6 +45,7 @@ from .podcast_follower_repository import PodcastFollowerRepository
 from .public_page_view_repository import PublicPageViewRepository
 from .settings_repository import SettingsRepository
 from .suspended_follow_repository import SuspendedFollowRepository
+from .usage_event_repository import UsageEventRepository
 from .user_directory_repository import UserDirectoryRepository
 from .user_repository import UserRepository
 
@@ -150,6 +151,8 @@ class RepositoryBundle:
     audit_log: AuditLogRepository
     suspended_follow: SuspendedFollowRepository
     user_directory: UserDirectoryRepository
+    # Spec #104 Phase 2: the per-user usage ledger behind quotas.
+    usage: UsageEventRepository
 
 
 def make_repositories(config: "Config") -> RepositoryBundle:
@@ -178,6 +181,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
         from .postgres_settings_repository import PostgresSettingsRepository
         from .postgres_suspended_follow_repository import PostgresSuspendedFollowRepository
+        from .postgres_usage_event_repository import PostgresUsageEventRepository
         from .postgres_user_directory_repository import PostgresUserDirectoryRepository
         from .postgres_user_repository import PostgresUserRepository
 
@@ -204,6 +208,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             audit_log=PostgresAuditLogRepository(dsn),
             suspended_follow=PostgresSuspendedFollowRepository(dsn),
             user_directory=PostgresUserDirectoryRepository(dsn),
+            usage=PostgresUsageEventRepository(dsn),
         )
 
     db_path = str(config.database_path)
@@ -225,6 +230,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
     from .sqlite_settings_repository import SqliteSettingsRepository
     from .sqlite_suspended_follow_repository import SqliteSuspendedFollowRepository
+    from .sqlite_usage_event_repository import SqliteUsageEventRepository
     from .sqlite_user_directory_repository import SqliteUserDirectoryRepository
     from .sqlite_user_repository import SqliteUserRepository
 
@@ -251,6 +257,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         audit_log=SqliteAuditLogRepository(db_path=db_path),
         suspended_follow=SqliteSuspendedFollowRepository(db_path=db_path),
         user_directory=SqliteUserDirectoryRepository(db_path=db_path),
+        usage=SqliteUsageEventRepository(db_path=db_path),
     )
 
 

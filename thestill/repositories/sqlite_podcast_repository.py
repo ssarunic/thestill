@@ -634,6 +634,21 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 PRIMARY KEY (user_id, podcast_id)
             );
             CREATE INDEX IF NOT EXISTS idx_suspended_follows_podcast ON suspended_follows(podcast_id);
+
+            -- Spec #104 Phase 2 (Postgres 0022): the usage ledger behind quotas.
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id         TEXT PRIMARY KEY NOT NULL,
+                user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                kind       TEXT NOT NULL CHECK (kind IN
+                    ('feed_introduced', 'follow', 'import', 'translation', 'narration', 'quota_exceeded')),
+                state      TEXT NOT NULL CHECK (state IN ('reserved', 'committed', 'released')),
+                created_at TIMESTAMP NOT NULL,
+                settled_at TIMESTAMP NULL,
+                subject_id TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_events_user_kind ON usage_events(user_id, kind, created_at);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_kind_created ON usage_events(kind, created_at);
+            CREATE INDEX IF NOT EXISTS idx_usage_events_reserved ON usage_events(created_at) WHERE state = 'reserved';
             """
         )
 

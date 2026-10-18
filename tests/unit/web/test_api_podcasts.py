@@ -363,6 +363,7 @@ class TestEpisodeSummaryLanguages:
             source_language="hr",
             target_language="en",
             provider=provider,
+            user_id="user-1",
         )
 
     def test_legacy_english_is_canonical_and_croatian_is_the_translation(self, client, mock_app_state, monkeypatch):
@@ -391,6 +392,7 @@ class TestEpisodeSummaryLanguages:
             source_language="en",
             target_language="hr",
             provider=provider,
+            user_id="user-1",
         )
 
 

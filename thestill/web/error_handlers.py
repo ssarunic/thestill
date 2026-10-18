@@ -18,7 +18,8 @@ A refusal can surface from a dependency (a disabled account), a service
 called by a ``GET`` (a paused translation) or a background helper, so one
 handler maps them all instead of a try/except in every route. The body is
 ``{"detail": {...}}`` — the shape ``HTTPException(detail=dict)`` produces,
-which the frontend already parses (``error.detail.error``).
+which the frontend already parses (``error.detail.error``). A quota
+refusal also carries ``Retry-After``.
 """
 
 from fastapi import FastAPI, Request
@@ -34,4 +35,4 @@ def register_abuse_handlers(app: FastAPI) -> None:
     @app.exception_handler(AbusePreventionError)
     async def _abuse_refusal(request: Request, exc: AbusePreventionError) -> JSONResponse:  # noqa: ANN001
         logger.info("request_refused", error=type(exc).__name__, status_code=exc.status_code)
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail()})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail()}, headers=exc.headers())
