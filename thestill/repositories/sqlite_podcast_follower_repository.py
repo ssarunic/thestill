@@ -31,7 +31,7 @@ from structlog import get_logger
 
 from ..models.user import PodcastFollower
 from ..utils.sqlite_ext import connect
-from .podcast_follower_repository import PodcastFollowerRepository
+from .podcast_follower_repository import FollowDecider, FollowFacts, FollowOutcome, PodcastFollowerRepository
 
 logger = get_logger(__name__)
 
@@ -77,6 +77,54 @@ class SqlitePodcastFollowerRepository(PodcastFollowerRepository):
 
             logger.debug(f"Added follower: user={follower.user_id}, podcast={follower.podcast_id}")
             return follower
+
+    def follow_with_gate(self, follower: PodcastFollower, decide: FollowDecider) -> FollowOutcome:
+        refusal = None
+        with self._get_connection() as conn:
+            # Serialises every writer on the database, which covers the
+            # per-podcast (and Phase 2 per-user) lock in one step.
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 FROM podcast_followers WHERE user_id = ? AND podcast_id = ?",
+                (follower.user_id, follower.podcast_id),
+            ).fetchone():
+                return FollowOutcome(follower=None, already_following=True)
+            facts = FollowFacts(
+                podcast_followers=conn.execute(
+                    "SELECT COUNT(*) FROM podcast_followers WHERE podcast_id = ?", (follower.podcast_id,)
+                ).fetchone()[0],
+                user_follows_total=conn.execute(
+                    "SELECT COUNT(*) FROM podcast_followers WHERE user_id = ?", (follower.user_id,)
+                ).fetchone()[0],
+            )
+            refusal = decide(facts).refusal
+            if refusal is None:
+                conn.execute(
+                    "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+                    (follower.id, follower.user_id, follower.podcast_id, follower.created_at.isoformat()),
+                )
+        if refusal is not None:
+            raise refusal
+        return FollowOutcome(follower=follower, introduced=facts.podcast_followers == 0)
+
+    def introduced_podcast_ids(self, user_id: str) -> List[str]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                WITH f AS (
+                    SELECT user_id, podcast_id, created_at FROM podcast_followers
+                    UNION ALL
+                    SELECT user_id, podcast_id, created_at FROM suspended_follows
+                ), first AS (
+                    SELECT podcast_id, MIN(created_at) AS first_at FROM f GROUP BY podcast_id
+                )
+                SELECT DISTINCT f.podcast_id
+                FROM f JOIN first ON first.podcast_id = f.podcast_id AND f.created_at = first.first_at
+                WHERE f.user_id = ?
+                """,
+                (user_id,),
+            ).fetchall()
+            return [row["podcast_id"] for row in rows]
 
     def remove(self, user_id: str, podcast_id: str) -> bool:
         """Remove a follower relationship."""

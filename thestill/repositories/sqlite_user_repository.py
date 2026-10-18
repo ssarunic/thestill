@@ -29,16 +29,24 @@ from typing import Iterator, Optional
 
 from structlog import get_logger
 
-from ..models.user import User
+from ..models.user import User, UserStatus
 from ..utils.sqlite_ext import connect
 from .user_repository import UserRepository
 
 logger = get_logger(__name__)
 
-_SELECT_COLS = (
+SELECT_COLS = (
     "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
-    " usage_analytics_enabled"
+    " usage_analytics_enabled, status, status_reason, status_changed_at, status_changed_by, tokens_valid_after"
 )
+
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+def _parse(value: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(value) if value else None
 
 
 class SqliteUserRepository(UserRepository):
@@ -69,7 +77,7 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT {_SELECT_COLS}
+                SELECT {SELECT_COLS}
                 FROM users
                 WHERE id = ?
                 """,
@@ -84,7 +92,7 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT {_SELECT_COLS}
+                SELECT {SELECT_COLS}
                 FROM users
                 WHERE email = ?
                 """,
@@ -99,7 +107,7 @@ class SqliteUserRepository(UserRepository):
         with self._get_connection() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT {_SELECT_COLS}
+                SELECT {SELECT_COLS}
                 FROM users
                 WHERE google_id = ?
                 """,
@@ -119,7 +127,8 @@ class SqliteUserRepository(UserRepository):
         intentionally NOT updated by this path — preserving the user's stored
         region and admin grant across logins, and keeping the signup source
         set-once (spec #95). Use ``update_region`` to mutate region state
-        explicitly; ``is_admin`` is set manually in the database.
+        explicitly. The spec #104 status columns are never written here, so
+        a login can't lift a suspension: use ``apply_status`` / ``set_admin``.
         """
         with self._get_connection() as conn:
             conn.execute(
@@ -204,6 +213,40 @@ class SqliteUserRepository(UserRepository):
                 logger.debug(f"Updated last login for user {user_id}")
             return updated
 
+    # ----- Spec #104: account status and admin flag -----
+
+    def apply_status(
+        self,
+        user_id: str,
+        status: UserStatus,
+        *,
+        reason: Optional[str],
+        changed_by: Optional[str],
+        changed_at: datetime,
+        tokens_valid_after: Optional[datetime] = None,
+    ) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET status = ?, status_reason = ?, status_changed_at = ?, status_changed_by = ?,
+                    tokens_valid_after = COALESCE(?, tokens_valid_after)
+                WHERE id = ?
+                """,
+                (UserStatus(status).value, reason, _iso(changed_at), changed_by, _iso(tokens_valid_after), user_id),
+            )
+            return cursor.rowcount > 0
+
+    def set_tokens_valid_after(self, user_id: str, when: datetime) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE users SET tokens_valid_after = ? WHERE id = ?", (_iso(when), user_id))
+            return cursor.rowcount > 0
+
+    def set_admin(self, user_id: str, is_admin: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE users SET is_admin = ? WHERE id = ?", (1 if is_admin else 0, user_id))
+            return cursor.rowcount > 0
+
     # ----- JWT revocation deny-list (spec #25 item 4.2) -----
 
     def revoke_token(self, jti: str, expires_at: datetime) -> None:
@@ -272,18 +315,27 @@ class SqliteUserRepository(UserRepository):
             return deleted
 
     def _row_to_user(self, row: sqlite3.Row) -> User:
-        """Convert database row to User model."""
-        return User(
-            id=row["id"],
-            email=row["email"],
-            name=row["name"],
-            picture=row["picture"],
-            google_id=row["google_id"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            last_login_at=datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None,
-            region=row["region"],
-            region_locked=bool(row["region_locked"]),
-            is_admin=bool(row["is_admin"]),
-            signup_source=row["signup_source"],
-            usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
-        )
+        return row_to_user(row)
+
+
+def row_to_user(row: sqlite3.Row) -> User:
+    """Convert database row to User model."""
+    return User(
+        id=row["id"],
+        email=row["email"],
+        name=row["name"],
+        picture=row["picture"],
+        google_id=row["google_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        last_login_at=datetime.fromisoformat(row["last_login_at"]) if row["last_login_at"] else None,
+        region=row["region"],
+        region_locked=bool(row["region_locked"]),
+        is_admin=bool(row["is_admin"]),
+        signup_source=row["signup_source"],
+        usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
+        status=UserStatus(row["status"]),
+        status_reason=row["status_reason"],
+        status_changed_at=_parse(row["status_changed_at"]),
+        status_changed_by=row["status_changed_by"],
+        tokens_valid_after=_parse(row["tokens_valid_after"]),
+    )

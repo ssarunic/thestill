@@ -75,6 +75,8 @@ import type {
   McpTokenScope,
 } from './types'
 
+import { apiErrorMessage, redirectIfAccountDisabled } from './errors'
+
 const API_BASE = '/api'
 
 async function fetchApi<T>(endpoint: string): Promise<T> {
@@ -82,7 +84,9 @@ async function fetchApi<T>(endpoint: string): Promise<T> {
     credentials: 'include',
   })
   if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`)
+    const body = await response.json().catch(() => null)
+    redirectIfAccountDisabled(body)
+    throw new Error(body ? apiErrorMessage(body, response.status) : `API error: ${response.status} ${response.statusText}`)
   }
   return response.json()
 }
@@ -157,10 +161,7 @@ export async function resolvePodcast(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message =
-      typeof error.detail === 'string'
-        ? error.detail
-        : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -176,7 +177,7 @@ export async function followPodcast(podcastSlug: string): Promise<void> {
 
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.detail || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
 }
 
@@ -189,7 +190,7 @@ export async function unfollowPodcast(podcastSlug: string): Promise<void> {
 
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.detail || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
 }
 
@@ -250,7 +251,7 @@ export async function startRefresh(request: RefreshRequest = {}): Promise<Refres
 
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.detail?.error || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
 
   return response.json()
@@ -273,7 +274,7 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
 
   if (!response.ok) {
     const error = await response.json()
-    throw new Error(error.detail?.error || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
 
   return response.json()
@@ -299,9 +300,7 @@ export async function queuePipelineTask(
   if (!response.ok) {
     const error = await response.json()
     // Handle various error formats from FastAPI
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || error.detail?.msg || JSON.stringify(error.detail) || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -350,9 +349,7 @@ export async function bulkProcessEpisodes(episodeIds: string[]): Promise<BulkPro
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || error.detail?.msg || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -377,9 +374,7 @@ export async function retryDLQTask(taskId: string): Promise<DLQActionResponse> {
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -393,9 +388,7 @@ export async function skipDLQTask(taskId: string): Promise<DLQActionResponse> {
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -413,9 +406,7 @@ export async function retryAllDLQTasks(taskIds?: string[]): Promise<DLQBulkRetry
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -438,9 +429,7 @@ export async function bumpQueueTask(taskId: string): Promise<BumpTaskResponse> {
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -455,9 +444,7 @@ export async function cancelQueueTask(taskId: string): Promise<CancelTaskRespons
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -483,9 +470,7 @@ export async function retryFailedEpisode(episodeId: string): Promise<EpisodeRetr
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -507,9 +492,7 @@ export async function runPipeline(request: RunPipelineRequest): Promise<RunPipel
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -523,9 +506,7 @@ export async function cancelPipeline(episodeId: string): Promise<CancelPipelineR
 
   if (!response.ok) {
     const error = await response.json()
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -552,10 +533,7 @@ export async function narrateBriefing(
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message =
-      typeof error.detail === 'string'
-        ? error.detail
-        : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
   return response.json()
@@ -730,9 +708,7 @@ export async function setInboxState(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -754,9 +730,7 @@ export async function sendToInbox(episodeId: string): Promise<SendToInboxRespons
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
   return response.json()
@@ -832,9 +806,7 @@ export async function markBriefingListened(briefingId: string): Promise<Briefing
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -875,9 +847,7 @@ export async function putBriefingSchedule(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -900,9 +870,7 @@ export async function importEpisode(request: ImportRequest): Promise<ImportRespo
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    const message = typeof error.detail === 'string'
-      ? error.detail
-      : error.detail?.error || `API error: ${response.status}`
+    const message = apiErrorMessage(error, response.status)
     throw new Error(message)
   }
 
@@ -924,7 +892,7 @@ export async function createOrRotateMcpToken(scopes: McpTokenScope[]): Promise<M
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    throw new Error(error.detail || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
   return response.json()
 }
@@ -936,6 +904,6 @@ export async function revokeMcpToken(): Promise<void> {
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
-    throw new Error(error.detail || `API error: ${response.status}`)
+    throw new Error(apiErrorMessage(error, response.status))
   }
 }

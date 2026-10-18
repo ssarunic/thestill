@@ -31,6 +31,8 @@ from structlog import get_logger
 from ..models.briefing import Briefing
 from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.inbox_repository import InboxRepository
+from .abuse.access_guard import NULL_GUARD, AccessGuard
+from .abuse.errors import AccountDisabledError
 
 if TYPE_CHECKING:
     from ..utils.config import Config
@@ -100,6 +102,7 @@ class BriefingService:
         min_interval_seconds: int,
         readiness_grace_minutes: int = 60,
         renderer: Optional["BriefingRenderer"] = None,
+        access: AccessGuard = NULL_GUARD,
     ) -> None:
         if min_interval_seconds < 0:
             raise ValueError("min_interval_seconds must be non-negative")
@@ -110,6 +113,8 @@ class BriefingService:
         self._min_interval = timedelta(seconds=min_interval_seconds)
         self._readiness_grace = timedelta(minutes=readiness_grace_minutes)
         self._renderer = renderer
+        # Spec #104: a suspended or banned user gets no briefing.
+        self._access = access
         self._lazy_deferrals: dict[str, _LazyDeferral] = {}
         self._lazy_deferrals_lock = threading.Lock()
         logger.info(
@@ -127,6 +132,7 @@ class BriefingService:
         inbox_repository: InboxRepository,
         *,
         renderer: Optional["BriefingRenderer"] = None,
+        access: AccessGuard = NULL_GUARD,
     ) -> "BriefingService":
         """Build from the briefing throttle and readiness settings in ``Config``."""
         return cls(
@@ -135,6 +141,7 @@ class BriefingService:
             min_interval_seconds=config.briefing_min_interval_seconds,
             readiness_grace_minutes=config.briefing_readiness_grace_minutes,
             renderer=renderer,
+            access=access,
         )
 
     def generate_for_user(
@@ -159,7 +166,17 @@ class BriefingService:
               callers should treat this as a no-op.
             - ``Deferred`` when followed, pre-cutoff episodes in this cursor
               window still have active pipeline work and grace remains.
+
+        A suspended or banned user (spec #104) gets ``None``, as for an
+        empty inbox: the scheduler still advances the slot, so they aren't
+        reconsidered every tick, and a deferred retry is dropped. A
+        reinstated user's next briefing covers everything since their last.
         """
+        try:
+            self._access.ensure_user_active(user_id)
+        except AccountDisabledError:
+            logger.info("briefing_skipped_account_disabled", user_id=user_id)
+            return None
         clock_now = now or datetime.now(timezone.utc)
         latest = self._briefings.latest_for_user(user_id)
 

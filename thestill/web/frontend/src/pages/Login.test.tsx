@@ -3,7 +3,15 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Login from './Login'
 
-const auth = { isAnonymous: true, isAuthenticated: false, isLoading: false, isMultiUser: true, login: vi.fn() }
+const auth = {
+  accountDisabled: false,
+  adminContactEmail: null as string | null,
+  isAnonymous: true,
+  isAuthenticated: false,
+  isLoading: false,
+  isMultiUser: true,
+  login: vi.fn(),
+}
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => auth }))
 
 function renderAt(url: string) {
@@ -15,7 +23,11 @@ function renderAt(url: string) {
 }
 
 describe('Login (spec #102)', () => {
-  beforeEach(() => auth.login.mockReset())
+  beforeEach(() => {
+    auth.login.mockReset()
+    auth.accountDisabled = false
+    auth.adminContactEmail = null
+  })
   afterEach(() => window.sessionStorage.clear())
 
   it('offers the providers, the consent line and a way back', () => {
@@ -40,5 +52,26 @@ describe('Login (spec #102)', () => {
     renderAt('/login?next=%2Finbox&intent=follow')
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
     expect(window.sessionStorage.length).toBe(0)
+  })
+
+  it('explains a disabled account, with the operator contact (spec #104)', () => {
+    auth.adminContactEmail = 'ops@thestill.me'
+    renderAt('/login?error=account_disabled')
+    expect(screen.getByRole('alert')).toHaveTextContent('This account has been disabled. Contact ops@thestill.me.')
+    expect(screen.getByRole('link', { name: 'ops@thestill.me' })).toHaveAttribute('href', 'mailto:ops@thestill.me')
+  })
+
+  it('explains a disabled session even without the query parameter', () => {
+    auth.accountDisabled = true
+    renderAt('/login')
+    expect(screen.getByRole('alert')).toHaveTextContent('This account has been disabled.')
+  })
+
+  it('says signups are paused, and ignores unknown error codes', () => {
+    const { unmount } = renderAt('/login?error=signups_closed')
+    expect(screen.getByRole('alert')).toHaveTextContent('Signups are paused right now.')
+    unmount()
+    renderAt('/login?error=%3Cscript%3E')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

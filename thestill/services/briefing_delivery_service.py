@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Optional
 from structlog import get_logger
 
 from ..models.briefing_delivery import BriefingDelivery, DeliveryChannel
+from .abuse.access_guard import NULL_GUARD, AccessGuard
+from .abuse.errors import AccountDisabledError
 
 if TYPE_CHECKING:
     from ..repositories.briefing_delivery_repository import BriefingDeliveryRepository
@@ -72,6 +74,7 @@ class BriefingDeliveryService:
         backoff_seconds: int = 300,
         max_per_pass: int = 50,
         claim_lease_seconds: int = 600,
+        access: AccessGuard = NULL_GUARD,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
@@ -89,6 +92,7 @@ class BriefingDeliveryService:
         self._backoff = backoff_seconds
         self._max_per_pass = max_per_pass
         self._claim_lease = claim_lease_seconds
+        self._access = access
         logger.info(
             "BriefingDeliveryService initialized",
             max_attempts=max_attempts,
@@ -198,6 +202,13 @@ class BriefingDeliveryService:
         user = self._users.get_by_id(briefing.user_id)
         if user is None or not user.email:
             raise _PermanentDeliveryError("user missing or has no email address")
+        # Spec #104: checked at send time, so it also parks deliveries queued
+        # before the suspension or waiting on a backoff retry. A reinstated
+        # user does not get the parked emails.
+        try:
+            self._access.ensure_active(user)
+        except AccountDisabledError as exc:
+            raise _PermanentDeliveryError("account disabled") from exc
 
         if not briefing.script_path:
             raise _PermanentDeliveryError("briefing has no rendered script")

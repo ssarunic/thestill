@@ -192,9 +192,17 @@ class PodcastFeedManager:
             self._transaction_podcasts[podcast_rss_url] = podcast
         return podcast
 
-    def add_podcast(self, url: str) -> Optional[Podcast]:
+    def add_podcast(
+        self, url: str, precheck: Optional[Callable[[Optional[Podcast]], None]] = None
+    ) -> Optional[Podcast]:
         """
         Add a new podcast feed - handles RSS URLs, Apple Podcast URLs, and YouTube URLs.
+
+        Args:
+            url: The feed, Apple Podcasts or YouTube URL.
+            precheck: Spec #104 — called with the existing podcast (or None)
+                once the URL is canonical and before any row is written; it
+                raises to refuse the add. Its errors propagate.
 
         Returns:
             The newly added Podcast object, or None if failed or already exists.
@@ -240,6 +248,8 @@ class PodcastFeedManager:
 
             # Save if not already exists, otherwise return existing
             podcast_url = str(podcast.rss_url)
+            if precheck is not None:
+                precheck(self.repository.get_by_url(podcast_url))
             if not self.repository.exists(podcast_url):
                 self.repository.save(podcast)
                 logger.info("Added podcast", podcast_title=podcast.title, rss_url=podcast_url)
@@ -250,6 +260,11 @@ class PodcastFeedManager:
             return existing
 
         except Exception as e:
+            # Lazy: the services package imports this module.
+            from ..services.abuse.errors import AbusePreventionError
+
+            if isinstance(e, AbusePreventionError):
+                raise  # a spec #104 refusal is an answer, not a failure
             logger.error("Error adding podcast", url=url, error=str(e), exc_info=True)
             return None
 

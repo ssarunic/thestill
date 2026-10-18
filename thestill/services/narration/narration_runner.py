@@ -37,6 +37,7 @@ from ...models.podcast import Episode, Podcast
 from ...repositories.briefing_repository import BriefingRepository
 from ...repositories.inbox_repository import InboxRepository
 from ...repositories.podcast_repository import PodcastRepository
+from ..abuse.access_guard import NULL_GUARD, AccessGuard
 from .models import NarrationContent
 from .narration_generator import NarrationConfig, NarrationGenerator
 
@@ -88,11 +89,16 @@ class NarrationRunner:
         briefing_repository: BriefingRepository,
         inbox_repository: InboxRepository,
         podcast_repository: PodcastRepository,
+        access: AccessGuard = NULL_GUARD,
     ):
         self.generator = generator
         self.briefing_repository = briefing_repository
         self.inbox_repository = inbox_repository
         self.podcast_repository = podcast_repository
+        # Spec #104: the owner's account status and the narration switch,
+        # checked here so the manual route and the scheduler's chain both
+        # stop before any LLM call.
+        self._access = access
 
     def artifact_exists(self, *, briefing_id: str, slug: str) -> bool:
         """True when a narration artefact for ``(briefing, slug)`` is on disk.
@@ -113,7 +119,16 @@ class NarrationRunner:
         wpm: float = 150.0,
         max_quote_share: float = 0.40,
     ) -> NarrationRun:
+        """Narrate one briefing.
+
+        Raises:
+            NarrationRunnerError: unknown briefing, no episodes, bad slug.
+            AccountDisabledError: the briefing's owner is suspended or banned.
+            FeaturePausedError: ``narration_enabled`` is off or ``read_only`` on.
+        """
         briefing = self._resolve_briefing(briefing_id)
+        self._access.ensure_user_active(briefing.user_id)
+        self._access.require_feature("narration")
         episodes = self._resolve_episodes(briefing)
         if not episodes:
             raise NarrationRunnerError(f"briefing {briefing.id} contains no resolvable episodes")

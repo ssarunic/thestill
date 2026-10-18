@@ -22,7 +22,7 @@ Multi-user mode (MULTI_USER=true): Requires Google OAuth authentication.
 import secrets
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 from urllib.parse import urlencode
 
 import httpx
@@ -34,6 +34,10 @@ from ..repositories.user_repository import UserRepository
 from ..utils.config import Config
 from ..utils.geoip import lookup_country_from_ip
 from ..utils.jwt import create_access_token, decode_token
+from .abuse.access_guard import AccessGuard
+
+if TYPE_CHECKING:
+    from .abuse.signup_policy import SignupPolicy
 
 logger = get_logger(__name__)
 
@@ -54,17 +58,29 @@ class AuthService:
     In multi-user mode, handles Google OAuth flow and JWT token management.
     """
 
-    def __init__(self, config: Config, user_repository: UserRepository):
+    def __init__(
+        self,
+        config: Config,
+        user_repository: UserRepository,
+        *,
+        signup_policy: Optional["SignupPolicy"] = None,
+    ):
         """
         Initialize the auth service.
 
         Args:
             config: Application configuration
             user_repository: Repository for user persistence
+            signup_policy: Spec #104 signup gate, checked only when a Google
+                identity would create a new account. None lets everyone in
+                (hand-built fixtures); production wiring passes it.
         """
         self.config = config
         self.user_repository = user_repository
         self.multi_user = config.multi_user
+        self._signup_policy = signup_policy
+        # Status checks need only the mode; they never read settings.
+        self._guard = AccessGuard(user_repository, None, multi_user=config.multi_user)
 
         # JWT settings
         self.jwt_secret_key = config.jwt_secret_key
@@ -195,6 +211,8 @@ class AuthService:
         Raises:
             RuntimeError: If Google OAuth is not available in single-user mode
             httpx.HTTPError: If OAuth token exchange fails
+            AccountDisabledError: The account is suspended or banned (spec #104)
+            SignupRefusedError: A new account the signup gate refuses (spec #104)
         """
         if not self.multi_user:
             raise RuntimeError("Google OAuth is not available in single-user mode")
@@ -230,6 +248,8 @@ class AuthService:
         user = self.user_repository.get_by_google_id(google_id)
 
         if user:
+            # Spec #104: before the save, so a refused login leaves no trace.
+            self.ensure_active(user)
             # Update existing user
             user.name = name
             user.picture = picture
@@ -241,6 +261,7 @@ class AuthService:
             user = self.user_repository.get_by_email(email)
 
             if user:
+                self.ensure_active(user)
                 # Link Google account to existing user
                 user.google_id = google_id
                 user.name = name
@@ -249,6 +270,10 @@ class AuthService:
                 user = self.user_repository.save(user)
                 logger.info(f"Linked Google account to existing user: {user.email}")
             else:
+                # Spec #104 signup gate: only here, after the email-linking
+                # lookup, so an existing account is never locked out by it.
+                if self._signup_policy is not None:
+                    self._signup_policy.check(email)
                 # Create new user
                 user = User(
                     id=str(uuid.uuid4()),
@@ -331,21 +356,43 @@ class AuthService:
         self.user_repository.prune_expired_revocations()
         return True
 
+    def ensure_active(self, user: User) -> None:
+        """Spec #104 — raise ``AccountDisabledError`` for a suspended or
+        banned user. A no-op in single-user mode."""
+        self._guard.ensure_active(user)
+
     def get_user_from_token(self, token: str) -> Optional[User]:
         """
         Get the full user object from a JWT token.
+
+        The user row is read fresh on every call, so a status change bites
+        on the user's next request with no cache to clear.
 
         Args:
             token: The JWT token
 
         Returns:
             User if token is valid and user exists, None otherwise
+
+        Raises:
+            AccountDisabledError: The account is suspended or banned. Not
+                ``None``: the frontend treats ``None`` as "signed out" and
+                would loop through ``/login``.
         """
         payload = self.verify_jwt(token)
         if not payload:
             return None
 
-        return self.user_repository.get_by_id(payload.sub)
+        user = self.user_repository.get_by_id(payload.sub)
+        if user is None:
+            return None
+        # Status before revocation: a disabled user's old token still
+        # reaches the "account disabled" message instead of a sign-in loop.
+        self.ensure_active(user)
+        if user.tokens_valid_after is not None and payload.iat < user.tokens_valid_after:
+            logger.debug("token_rejected_before_valid_after", sub=payload.sub)
+            return None
+        return user
 
     async def maybe_infer_region(self, user: User, client_ip: Optional[str]) -> Optional[str]:
         """Infer and persist the user's region from their IP, if appropriate.

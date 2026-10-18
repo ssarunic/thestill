@@ -183,13 +183,36 @@ Get authentication status and configuration.
     "usage_analytics_enabled": true
   },
   "usage_analytics_available": true,
-  "analytics": {"key": "phc_..."}
+  "analytics": {"key": "phc_..."},
+  "account_disabled": false,
+  "admin_contact_email": "ops@example.com"
 }
 ```
 
 `usage_analytics_available` is true when usage events are configured
 (spec #95); `analytics` carries the PostHog project key only for a signed-in
 user who has not opted out and whose request has no `Sec-GPC: 1`, else null.
+
+Spec #104: for a suspended or banned account this endpoint answers
+`authenticated: false`, `user: null` and `account_disabled: true` rather
+than 403, so the app shows `/login`'s explanation instead of looping.
+`admin_contact_email` is `ADMIN_CONTACT_EMAIL`, or null.
+
+### Refusals (spec #104)
+
+Policy refusals use one body shape on every route, under `detail` like any
+`HTTPException`. `error` is a stable code; `message` is written for the
+reader.
+
+| Status | `error` | When |
+|---|---|---|
+| 403 | `account_disabled` | The session belongs to a suspended or banned account |
+| 503 | `feature_paused` (with `feature`) | A runtime switch is off: `new_feeds`, `imports`, `translations`, `narration` |
+| 503 | `read_only` | Panic mode: a non-admin write, or any paused feature while `read_only` is on |
+
+```json
+{"detail": {"error": "feature_paused", "feature": "new_feeds", "message": "Adding new podcasts is paused right now."}}
+```
 
 ### PATCH /api/auth/me
 
@@ -219,7 +242,10 @@ Handle Google OAuth callback. Sets auth cookie and redirects to home.
 | code      | string | Authorization code from Google |
 | state     | string | CSRF protection state token    |
 
-**Response:** `302 Redirect` to `/` with `auth_token` cookie set
+**Response:** `302 Redirect` to `/` with `auth_token` cookie set. A
+suspended or banned account redirects to `/login?error=account_disabled`, and
+a new identity the signup gate refuses (spec #104) to
+`/login?error=signups_closed`, both without a cookie.
 
 ### POST /api/auth/logout
 

@@ -34,6 +34,8 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
+from ...models.user import PRIVATE_USER_FIELDS
+from ...services.abuse.errors import AccountDisabledError, SignupRefusedError
 from ...services.analytics_sink import LoginCompleted, LoginStarted
 from ...utils.page_kind import public_page_kind, signup_source_for
 from ..analytics_request import capture_event, login_flow_key, may_measure
@@ -169,9 +171,15 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
     """
     multi_user = state.config.multi_user
 
-    # Get current user
+    # Get current user. Spec #104: a suspended or banned account reads as
+    # signed out plus a flag, so the app shows /login's "account disabled"
+    # message instead of looping between /login and a 403.
     token = _get_token_from_request(request)
-    user = state.auth_service.get_current_user(token)
+    account_disabled = False
+    try:
+        user = state.auth_service.get_current_user(token)
+    except AccountDisabledError:
+        user, account_disabled = None, True
 
     if user is not None:
         await state.auth_service.maybe_infer_region(user, resolve_client_ip(request))
@@ -186,7 +194,10 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             # (else the frontend keeps the sign-in wall).
             "public_pages": bool(multi_user and state.config.public_pages_enabled),
             "authenticated": user is not None,
-            "user": user.model_dump(exclude={"google_id"}) if user else None,
+            "account_disabled": account_disabled,
+            # Spec #104: shown on /login for a disabled account or paused signups.
+            "admin_contact_email": state.config.admin_contact_email or None,
+            "user": user.model_dump(exclude=PRIVATE_USER_FIELDS) if user else None,
             # Spec #51 capability flag: the settings UI only shows the
             # briefing email-delivery checkbox when a provider is
             # configured AND the briefing scheduler is running — the
@@ -365,6 +376,14 @@ async def google_callback(
         logger.info("user_authenticated", email=user.email)
         return response
 
+    except (AccountDisabledError, SignupRefusedError) as e:
+        # Spec #104 — not an auth failure: /login explains it.
+        error = "account_disabled" if isinstance(e, AccountDisabledError) else "signups_closed"
+        logger.info("oauth_callback_refused", error=error)
+        response = RedirectResponse(url=f"/login?error={error}", status_code=302)
+        response.delete_cookie(key="oauth_state")
+        response.delete_cookie(key=NEXT_COOKIE)
+        return response
     except Exception as e:
         # Don't leak upstream error messages to the client.
         # Log the type + message server-side; respond with a generic message.
@@ -419,7 +438,7 @@ def get_current_user(request: Request, state: AppState = Depends(get_app_state))
 
     return api_response(
         {
-            "user": user.model_dump(exclude={"google_id"}),
+            "user": user.model_dump(exclude=PRIVATE_USER_FIELDS),
         }
     )
 
@@ -465,4 +484,4 @@ def update_current_user(
     if payload.usage_analytics_enabled is not None:
         updated = state.auth_service.set_usage_analytics(updated, payload.usage_analytics_enabled)
 
-    return api_response({"user": updated.model_dump(exclude={"google_id"})})
+    return api_response({"user": updated.model_dump(exclude=PRIVATE_USER_FIELDS)})

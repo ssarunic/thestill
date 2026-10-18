@@ -683,6 +683,27 @@ class PostgresQueueManager:
             )
         return count
 
+    def cancel_queued_for_podcasts(self, podcast_ids: List[str]) -> int:
+        """Spec #104 — see ``QueueManager.cancel_queued_for_podcasts``."""
+        if not podcast_ids:
+            return 0
+        now = now_utc()
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET status = 'superseded', updated_at = %s, completed_at = %s
+                WHERE status IN ('pending', 'retry_scheduled')
+                  AND (podcast_id = ANY(%s::uuid[])
+                       OR episode_id IN (SELECT id FROM episodes WHERE podcast_id = ANY(%s::uuid[])))
+                """,
+                (now, now, list(podcast_ids), list(podcast_ids)),
+            )
+            count = cursor.rowcount or 0
+        if count:
+            logger.info("queued_tasks_cancelled_for_podcasts", podcasts=len(podcast_ids), count=count)
+        return count
+
     def fail_task(self, task_id: str, error_message: str) -> None:
         """
         Mark a task as failed (explicit/manual terminal fail, e.g. user cancel).

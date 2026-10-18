@@ -38,15 +38,15 @@ from typing import Optional
 
 from structlog import get_logger
 
-from ..models.user import User
+from ..models.user import User, UserStatus
 from ..utils.postgres_ext import as_str, connect
 from .user_repository import UserRepository
 
 logger = get_logger(__name__)
 
-_SELECT_COLS = (
+SELECT_COLS = (
     "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
-    " usage_analytics_enabled"
+    " usage_analytics_enabled, status, status_reason, status_changed_at, status_changed_by, tokens_valid_after"
 )
 
 
@@ -88,7 +88,7 @@ class PostgresUserRepository(UserRepository):
         """Get user by internal UUID (primary key)."""
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_SELECT_COLS} FROM users WHERE id = %s",
+                f"SELECT {SELECT_COLS} FROM users WHERE id = %s",
                 (user_id,),
             ).fetchone()
             return self._row_to_user(row) if row else None
@@ -97,7 +97,7 @@ class PostgresUserRepository(UserRepository):
         """Get user by email address."""
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_SELECT_COLS} FROM users WHERE email = %s",
+                f"SELECT {SELECT_COLS} FROM users WHERE email = %s",
                 (email,),
             ).fetchone()
             return self._row_to_user(row) if row else None
@@ -106,7 +106,7 @@ class PostgresUserRepository(UserRepository):
         """Get user by Google's unique user ID."""
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_SELECT_COLS} FROM users WHERE google_id = %s",
+                f"SELECT {SELECT_COLS} FROM users WHERE google_id = %s",
                 (google_id,),
             ).fetchone()
             return self._row_to_user(row) if row else None
@@ -119,7 +119,8 @@ class PostgresUserRepository(UserRepository):
         / ``signup_source`` are intentionally NOT updated on conflict —
         preserving stored region and admin grant across logins, and keeping
         the signup source set-once (spec #95). Use ``update_region`` to
-        mutate region.
+        mutate region. The spec #104 status columns are never written here,
+        so a login can't lift a suspension.
         """
         with connect(self.dsn) as conn:
             conn.execute(
@@ -202,6 +203,40 @@ class PostgresUserRepository(UserRepository):
                 logger.info("Deleted user", user_id=user_id)
             return deleted
 
+    # ----- Spec #104: account status and admin flag -----
+
+    def apply_status(
+        self,
+        user_id: str,
+        status: UserStatus,
+        *,
+        reason: Optional[str],
+        changed_by: Optional[str],
+        changed_at: datetime,
+        tokens_valid_after: Optional[datetime] = None,
+    ) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE users
+                SET status = %s, status_reason = %s, status_changed_at = %s, status_changed_by = %s,
+                    tokens_valid_after = COALESCE(%s, tokens_valid_after)
+                WHERE id = %s
+                """,
+                (UserStatus(status).value, reason, changed_at, changed_by, tokens_valid_after, user_id),
+            )
+            return cursor.rowcount > 0
+
+    def set_tokens_valid_after(self, user_id: str, when: datetime) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute("UPDATE users SET tokens_valid_after = %s WHERE id = %s", (when, user_id))
+            return cursor.rowcount > 0
+
+    def set_admin(self, user_id: str, is_admin: bool) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute("UPDATE users SET is_admin = %s WHERE id = %s", (is_admin, user_id))
+            return cursor.rowcount > 0
+
     # ----- JWT revocation deny-list (spec #25 item 4.2) -----
 
     def revoke_token(self, jti: str, expires_at: datetime) -> None:
@@ -234,19 +269,28 @@ class PostgresUserRepository(UserRepository):
             return count
 
     def _row_to_user(self, row: dict) -> User:
-        """Convert a dict row to a User. timestamptz columns come back as
-        tz-aware ``datetime`` — no string parsing needed (unlike SQLite)."""
-        return User(
-            id=as_str(row["id"]),
-            email=row["email"],
-            name=row["name"],
-            picture=row["picture"],
-            google_id=row["google_id"],
-            created_at=row["created_at"],
-            last_login_at=row["last_login_at"],
-            region=row["region"],
-            region_locked=bool(row["region_locked"]),
-            is_admin=bool(row["is_admin"]),
-            signup_source=row["signup_source"],
-            usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
-        )
+        return row_to_user(row)
+
+
+def row_to_user(row: dict) -> User:
+    """Convert a dict row to a User. timestamptz columns come back as
+    tz-aware ``datetime`` — no string parsing needed (unlike SQLite)."""
+    return User(
+        id=as_str(row["id"]),
+        email=row["email"],
+        name=row["name"],
+        picture=row["picture"],
+        google_id=row["google_id"],
+        created_at=row["created_at"],
+        last_login_at=row["last_login_at"],
+        region=row["region"],
+        region_locked=bool(row["region_locked"]),
+        is_admin=bool(row["is_admin"]),
+        signup_source=row["signup_source"],
+        usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
+        status=UserStatus(row["status"]),
+        status_reason=row["status_reason"],
+        status_changed_at=row["status_changed_at"],
+        status_changed_by=as_str(row["status_changed_by"]),
+        tokens_valid_after=row["tokens_valid_after"],
+    )

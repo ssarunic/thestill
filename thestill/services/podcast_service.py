@@ -20,7 +20,7 @@ import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, List, Literal, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, Callable, List, Literal, NamedTuple, Optional, Union
 
 from pydantic import BaseModel, computed_field
 from structlog import get_logger
@@ -42,6 +42,7 @@ from ..utils.duration import format_duration
 from ..utils.file_storage import FileStorage
 from ..utils.language_config import normalize_language_code
 from ..utils.path_manager import PathManager
+from .abuse.access_guard import NULL_GUARD, AccessGuard
 
 logger = get_logger(__name__)
 
@@ -300,6 +301,7 @@ class PodcastService:
         podcast_repository: PodcastRepository,
         path_manager: PathManager,
         file_storage: FileStorage,
+        access: AccessGuard = NULL_GUARD,
     ) -> None:
         """
         Initialize podcast service.
@@ -309,7 +311,9 @@ class PodcastService:
             podcast_repository: Repository for podcast persistence.
             path_manager: Path manager for file path operations.
             file_storage: Spec #35 backend for transcript / summary reads.
+            access: Spec #104 guard; gates generating a summary translation.
         """
+        self._access = access
         self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
         self.path_manager: PathManager = path_manager
         self.repository: PodcastRepository = podcast_repository
@@ -328,7 +332,9 @@ class PodcastService:
         pattern into one. Used by every read-side method below."""
         return self.file_storage.read_text(self.path_manager.to_relative(absolute_path))
 
-    def add_podcast(self, url: str) -> Optional[Podcast]:
+    def add_podcast(
+        self, url: str, precheck: Optional[Callable[[Optional[Podcast]], None]] = None
+    ) -> Optional[Podcast]:
         """
         Add a new podcast to tracking, or return existing if already tracked.
 
@@ -337,12 +343,13 @@ class PodcastService:
 
         Args:
             url: RSS URL, Apple Podcast URL, or YouTube channel/playlist URL
+            precheck: Spec #104 new-feed gate; see ``PodcastFeedManager.add_podcast``.
 
         Returns:
             Podcast object if successful or already exists, None if failed
         """
         logger.info(f"Adding podcast: {url}")
-        added_podcast = self.feed_manager.add_podcast(url)
+        added_podcast = self.feed_manager.add_podcast(url, precheck=precheck)
 
         if added_podcast:
             logger.info(f"Successfully added podcast: {added_podcast.title}")
@@ -1075,6 +1082,10 @@ class PodcastService:
             original = self.get_summary_for_episode(episode, canonical_language=source)
             if original is None or original.startswith("N/A"):
                 return original
+
+            # Spec #104: an existing translation is still served above; only
+            # the paid call is refused while translations are paused.
+            self._access.require_feature("translations")
 
             from ..core.summary_citations import resolve_and_persist_summary_citations
             from ..core.summary_translation import SummaryTranslator

@@ -222,7 +222,12 @@ class TestSqliteUserRepository:
                 region_locked INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 signup_source TEXT NULL,
-                usage_analytics_enabled INTEGER NOT NULL DEFAULT 1
+                usage_analytics_enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active',
+                status_reason TEXT NULL,
+                status_changed_at TIMESTAMP NULL,
+                status_changed_by TEXT NULL,
+                tokens_valid_after TIMESTAMP NULL
             );
             CREATE TABLE IF NOT EXISTS revoked_tokens (
                 jti TEXT PRIMARY KEY NOT NULL,
@@ -375,7 +380,12 @@ class TestAuthServiceSingleUser:
                 region_locked INTEGER NOT NULL DEFAULT 0,
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 signup_source TEXT NULL,
-                usage_analytics_enabled INTEGER NOT NULL DEFAULT 1
+                usage_analytics_enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active',
+                status_reason TEXT NULL,
+                status_changed_at TIMESTAMP NULL,
+                status_changed_by TEXT NULL,
+                tokens_valid_after TIMESTAMP NULL
             );
             CREATE TABLE IF NOT EXISTS revoked_tokens (
                 jti TEXT PRIMARY KEY NOT NULL,

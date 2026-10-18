@@ -22,6 +22,7 @@ Includes pipeline operations: refresh, download, downsample, transcribe, clean.
 import json
 import os
 import uuid
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,6 +36,8 @@ from ..core.audio_preprocessor import AudioPreprocessor
 from ..core.feed_manager import PodcastFeedManager
 from ..models.transcription import TranscribeOptions
 from ..services import PodcastService, RefreshService, StatsService
+from ..services.abuse.errors import ReadOnlyError
+from ..services.abuse.wiring import build_abuse_services
 from ..services.auth_service import AuthService
 from ..services.follower_service import NotFollowingError
 from ..utils.config import Config, load_config
@@ -103,6 +106,8 @@ def setup_tools(
     from ..repositories.factory import make_repositories, make_search_backend
 
     repos = make_repositories(config)
+    # Spec #104 — the same switches and follow gate as the web app and CLI.
+    abuse = build_abuse_services(config, repos)
     path_manager = PathManager(storage_path)
     repository = repos.podcast
     # Spec #40 — pending transcription operations (backend-resolved).
@@ -116,7 +121,9 @@ def setup_tools(
 
     embedding_model = EmbeddingModel(config.embedding_model)
     search_backend = make_search_backend(config, embedding_model)
-    podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
+    podcast_service = PodcastService(
+        storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard
+    )
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
         repository,
@@ -163,7 +170,9 @@ def setup_tools(
         queue_manager=repos.queue_manager,
         podcast_repository=repository,
     )
-    follower_service = FollowerService(repos.follower, repository, inbox_service=inbox_service)
+    follower_service = FollowerService(
+        repos.follower, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
+    )
 
     @log_mcp_stdio
     async def list_tools(identity: McpIdentity) -> list[Tool]:
@@ -478,16 +487,18 @@ def setup_tools(
             return [p for p in podcast_service.get_podcasts() if p.id in followed]
 
         if name in _MUTATING_TOOLS:
-            try:
-                quota_key = identity.user.id if identity.is_remote else _session_key
-                enforce_mcp_mutation_quota(name, session_key=quota_key)
-            except RateLimitExceeded as exc:
-                return [
-                    TextContent(
-                        type="text",
-                        text=json.dumps({"success": False, "error": str(exc), "retry_after_seconds": 60}),
-                    )
-                ]
+            refusal = None
+            if not identity.is_admin and abuse.settings.get("read_only"):
+                # Spec #104 panic mode — the MCP twin of the web method filter.
+                refusal = {"error": str(ReadOnlyError())}
+            else:
+                try:
+                    quota_key = identity.user.id if identity.is_remote else _session_key
+                    enforce_mcp_mutation_quota(name, session_key=quota_key)
+                except RateLimitExceeded as exc:
+                    refusal = {"error": str(exc), "retry_after_seconds": 60}
+            if refusal is not None:
+                return [TextContent(type="text", text=json.dumps({"success": False, **refusal}))]
 
         try:
             if name == "add_podcast":
@@ -503,14 +514,21 @@ def setup_tools(
                     # Spec #78 Phase 2 — add + auto-follow the *caller*.
                     # ``add_podcast_and_auto_follow`` only follows in
                     # single-user mode, so the remote branch follows directly.
-                    podcast = podcast_service.add_podcast(url)
+                    podcast = podcast_service.add_podcast(
+                        url, precheck=partial(abuse.new_feed_precheck.check, will_follow=True)
+                    )
                     if podcast:
                         follower_service.follow_best_effort(identity.user.id, podcast.id)
                 else:
                     from ..services.podcast_add import add_podcast_and_auto_follow
 
                     podcast = add_podcast_and_auto_follow(
-                        podcast_service, follower_service, _auth_service(), config, url
+                        podcast_service,
+                        follower_service,
+                        _auth_service(),
+                        config,
+                        url,
+                        new_feed_precheck=abuse.new_feed_precheck,
                     )
                 if podcast:
                     result = {

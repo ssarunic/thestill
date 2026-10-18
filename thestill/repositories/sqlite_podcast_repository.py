@@ -587,6 +587,55 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Spec #95 Layer B — the Settings switch for usage events (0018).
             if "usage_analytics_enabled" not in user_columns:
                 conn.execute("ALTER TABLE users ADD COLUMN usage_analytics_enabled INTEGER NOT NULL DEFAULT 1")
+            # Spec #104 — account status + token revocation (Postgres 0021).
+            if "status" not in user_columns:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+                    " CHECK (status IN ('active', 'suspended', 'banned'))"
+                )
+            for column, ddl in (
+                ("status_reason", "TEXT NULL"),
+                ("status_changed_at", "TIMESTAMP NULL"),
+                ("status_changed_by", "TEXT NULL"),
+                ("tokens_valid_after", "TIMESTAMP NULL"),
+            ):
+                if column not in user_columns:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {column} {ddl}")
+
+        # Spec #104 (Postgres 0021): runtime switches, the admin audit log,
+        # and a banned user's follows moved aside. Timestamps are ISO-8601
+        # text written by the repositories.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                updated_by TEXT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at     TIMESTAMP NOT NULL,
+                actor_user_id  TEXT NULL,
+                actor          TEXT NOT NULL CHECK (actor IN ('web', 'cli', 'system')),
+                action         TEXT NOT NULL,
+                target_user_id TEXT NULL,
+                details        TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at);
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_user_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS suspended_follows (
+                user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                podcast_id   TEXT NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+                created_at   TIMESTAMP NOT NULL,
+                suspended_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (user_id, podcast_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_suspended_follows_podcast ON suspended_follows(podcast_id);
+            """
+        )
 
         # Digest retirement: the legacy global digests tables are dropped.
         # Briefings (spec #36/#50) are the only consumer-facing concept;
@@ -2608,7 +2657,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 signup_source TEXT NULL,
                 usage_analytics_enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active',
+                status_reason TEXT NULL,
+                status_changed_at TIMESTAMP NULL,
+                status_changed_by TEXT NULL,
+                tokens_valid_after TIMESTAMP NULL,
                 CHECK (length(id) = 36),
+                CHECK (status IN ('active', 'suspended', 'banned')),
                 CHECK (length(email) > 0),
                 CHECK (region IS NULL OR length(region) = 2),
                 CHECK (region_locked IN (0, 1)),

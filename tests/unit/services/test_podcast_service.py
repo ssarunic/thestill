@@ -160,7 +160,7 @@ class TestAddPodcast:
         # Verify
         assert result is not None
         assert result.title == new_podcast.title
-        podcast_service.feed_manager.add_podcast.assert_called_once_with("https://example.com/tech.xml")
+        podcast_service.feed_manager.add_podcast.assert_called_once_with("https://example.com/tech.xml", precheck=None)
 
     def test_add_podcast_failure(self, podcast_service, mock_repository):
         """Should return None on failure."""

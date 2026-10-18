@@ -46,11 +46,13 @@ class McpUserError(ValueError):
 def _authored_exception_types() -> Tuple[Type[BaseException], ...]:
     # Imported lazily: identity/utils/rate_limit sit on import paths that
     # reach back into this package.
+    from ..services.abuse.errors import AbusePreventionError
     from ..web.middleware.rate_limit import RateLimitExceeded
     from .identity import NotAuthenticatedError, ScopeError
 
-    # NumericIdentifierRefused is an McpUserError.
-    return (McpUserError, ScopeError, NotAuthenticatedError, RateLimitExceeded)
+    # NumericIdentifierRefused is an McpUserError. Spec #104 refusals
+    # (paused feature, disabled account) are written for the user too.
+    return (McpUserError, ScopeError, NotAuthenticatedError, RateLimitExceeded, AbusePreventionError)
 
 
 def public_error_message(

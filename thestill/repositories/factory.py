@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 from .analytics_repository import AnalyticsRepository, UnavailableAnalyticsRepository
+from .audit_log_repository import AuditLogRepository
 from .briefing_delivery_repository import BriefingDeliveryRepository
 from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
@@ -42,6 +43,9 @@ from .listening_progress_repository import ListeningProgressRepository
 from .mcp_token_repository import McpTokenRepository
 from .podcast_follower_repository import PodcastFollowerRepository
 from .public_page_view_repository import PublicPageViewRepository
+from .settings_repository import SettingsRepository
+from .suspended_follow_repository import SuspendedFollowRepository
+from .user_directory_repository import UserDirectoryRepository
 from .user_repository import UserRepository
 
 if TYPE_CHECKING:
@@ -140,6 +144,12 @@ class RepositoryBundle:
     # Spec #103: first episode opens, and signed-out public page views.
     episode_view: EpisodeViewRepository
     public_page_view: PublicPageViewRepository
+    # Spec #104: runtime switches, the admin audit log, a banned user's
+    # follows moved aside, and the operator's cross-user listing.
+    settings: SettingsRepository
+    audit_log: AuditLogRepository
+    suspended_follow: SuspendedFollowRepository
+    user_directory: UserDirectoryRepository
 
 
 def make_repositories(config: "Config") -> RepositoryBundle:
@@ -151,6 +161,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from ..core.postgres_queue_manager import PostgresQueueManager
         from ..models.user import DEFAULT_USER_EMAIL
         from .postgres_analytics_repository import PostgresAnalyticsRepository
+        from .postgres_audit_log_repository import PostgresAuditLogRepository
         from .postgres_briefing_delivery_repository import PostgresBriefingDeliveryRepository
         from .postgres_briefing_repository import PostgresBriefingRepository
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
@@ -165,6 +176,9 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
         from .postgres_podcast_repository import PostgresPodcastRepository
         from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
+        from .postgres_settings_repository import PostgresSettingsRepository
+        from .postgres_suspended_follow_repository import PostgresSuspendedFollowRepository
+        from .postgres_user_directory_repository import PostgresUserDirectoryRepository
         from .postgres_user_repository import PostgresUserRepository
 
         return RepositoryBundle(
@@ -186,10 +200,15 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
             episode_view=PostgresEpisodeViewRepository(dsn),
             public_page_view=PostgresPublicPageViewRepository(dsn),
+            settings=PostgresSettingsRepository(dsn),
+            audit_log=PostgresAuditLogRepository(dsn),
+            suspended_follow=PostgresSuspendedFollowRepository(dsn),
+            user_directory=PostgresUserDirectoryRepository(dsn),
         )
 
     db_path = str(config.database_path)
     from ..core.queue_manager import QueueManager
+    from .sqlite_audit_log_repository import SqliteAuditLogRepository
     from .sqlite_briefing_delivery_repository import SqliteBriefingDeliveryRepository
     from .sqlite_briefing_repository import SqliteBriefingRepository
     from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
@@ -204,6 +223,9 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
     from .sqlite_podcast_repository import SqlitePodcastRepository
     from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
+    from .sqlite_settings_repository import SqliteSettingsRepository
+    from .sqlite_suspended_follow_repository import SqliteSuspendedFollowRepository
+    from .sqlite_user_directory_repository import SqliteUserDirectoryRepository
     from .sqlite_user_repository import SqliteUserRepository
 
     return RepositoryBundle(
@@ -225,6 +247,10 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         analytics=UnavailableAnalyticsRepository(),
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
         public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
+        settings=SqliteSettingsRepository(db_path=db_path),
+        audit_log=SqliteAuditLogRepository(db_path=db_path),
+        suspended_follow=SqliteSuspendedFollowRepository(db_path=db_path),
+        user_directory=SqliteUserDirectoryRepository(db_path=db_path),
     )
 
 

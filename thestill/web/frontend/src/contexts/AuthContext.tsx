@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { safeNextPath } from '../utils/safeNext'
 import { resetAnalytics } from '../analytics/client'
+import { apiErrorMessage } from '../api/errors'
 
 // User type matching backend model
 export interface User {
@@ -31,6 +32,10 @@ interface AuthStatus {
   // this reader's app initialises with — null when off, opted out or GPC.
   usage_analytics_available?: boolean
   analytics?: { key: string } | null
+  // Spec #104: the session belongs to a suspended or banned account — it
+  // reads as signed out, and /login says why (with the operator contact).
+  account_disabled?: boolean
+  admin_contact_email?: string | null
 }
 
 interface AuthContextType {
@@ -46,6 +51,9 @@ interface AuthContextType {
   // Spec #95 — see AuthStatus.
   usageAnalyticsAvailable: boolean
   analyticsKey: string | null
+  // Spec #104 — see AuthStatus.
+  accountDisabled: boolean
+  adminContactEmail: string | null
   // ``next``: same-origin path to return to after sign-in (spec #94).
   login: (next?: string) => void
   logout: () => Promise<void>
@@ -66,6 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [publicPages, setPublicPages] = useState(false)
   const [usageAnalyticsAvailable, setUsageAnalyticsAvailable] = useState(false)
   const [analyticsKey, setAnalyticsKey] = useState<string | null>(null)
+  const [accountDisabled, setAccountDisabled] = useState(false)
+  const [adminContactEmail, setAdminContactEmail] = useState<string | null>(null)
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -81,6 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setPublicPages(authStatus.public_pages === true)
       setUsageAnalyticsAvailable(authStatus.usage_analytics_available === true)
       setAnalyticsKey(authStatus.analytics?.key ?? null)
+      setAccountDisabled(authStatus.account_disabled === true)
+      setAdminContactEmail(authStatus.admin_contact_email ?? null)
     } catch (error) {
       console.error('Auth status check failed:', error)
       setUser(null)
@@ -98,8 +110,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify(fields),
     })
     if (!response.ok) {
-      const body = await response.json().catch(() => ({}))
-      throw new Error(body.detail || `Failed to update ${what} (${response.status})`)
+      const body = await response.json().catch(() => null)
+      throw new Error(body ? apiErrorMessage(body, response.status) : `Failed to update ${what} (${response.status})`)
     }
     const body = await response.json()
     if (body?.user) {
@@ -173,6 +185,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         emailDeliveryAvailable,
         usageAnalyticsAvailable,
         analyticsKey,
+        accountDisabled,
+        adminContactEmail,
         login,
         logout,
         refreshAuth,

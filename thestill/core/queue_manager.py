@@ -1429,6 +1429,35 @@ class QueueManager:
             )
         return count
 
+    def cancel_queued_for_podcasts(self, podcast_ids: List[str]) -> int:
+        """Spec #104 — drop the queued work of feeds that just lost their
+        last follower (a ban, or remove-introduced-feeds).
+
+        Marks ``pending`` / ``retry_scheduled`` rows for the podcasts — feed
+        tasks by ``podcast_id``, episode tasks through ``episodes`` — as
+        ``superseded`` (terminal, hidden from the DLQ view). Tasks already
+        ``processing`` finish. Returns the number of rows changed.
+        """
+        if not podcast_ids:
+            return 0
+        now = now_utc().isoformat()
+        placeholders = ",".join("?" * len(podcast_ids))
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE tasks
+                SET status = 'superseded', updated_at = ?, completed_at = ?
+                WHERE status IN ('pending', 'retry_scheduled')
+                  AND (podcast_id IN ({placeholders})
+                       OR episode_id IN (SELECT id FROM episodes WHERE podcast_id IN ({placeholders})))
+                """,
+                [now, now, *podcast_ids, *podcast_ids],
+            )
+            count = cursor.rowcount or 0
+        if count:
+            logger.info("queued_tasks_cancelled_for_podcasts", podcasts=len(podcast_ids), count=count)
+        return count
+
     def fail_task(self, task_id: str, error_message: str) -> None:
         """
         Mark a task as failed (explicit/manual terminal fail, e.g. user cancel).

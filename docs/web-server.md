@@ -216,9 +216,9 @@ public page calls any `/api` endpoint outside `/api/public` and
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95) |
+| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95). A suspended or banned session reads as signed out with `account_disabled: true`; `admin_contact_email` comes from `ADMIN_CONTACT_EMAIL` (spec #104) |
 | `/api/auth/google/login` | GET | Initiate Google OAuth flow |
-| `/api/auth/google/callback` | GET | OAuth callback handler |
+| `/api/auth/google/callback` | GET | OAuth callback handler. Redirects to `/login?error=account_disabled` or `/login?error=signups_closed` when spec #104 refuses the sign-in |
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
 | `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference) and/or `usage_analytics_enabled` (spec #95 Settings switch) |
@@ -229,6 +229,13 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
 | `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
 | `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes written in the last 3 days, newest first, for the Continue listening strip |
+
+**Refusals (spec #104).** Any route may answer with
+`{"detail": {"error": <code>, "message": <text>}}`: 403 `account_disabled`
+for a suspended or banned session, 503 `feature_paused` (plus `feature`) when
+a runtime switch is off, and 503 `read_only` for a non-admin write in panic
+mode. The switches are managed with `thestill settings` (see
+[configuration.md](configuration.md#abuse-prevention--runtime-switches-spec-104)).
 
 ### Webhooks
 
