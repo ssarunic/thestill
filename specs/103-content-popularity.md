@@ -32,7 +32,7 @@ Two gaps, each closed by storing one new fact once (the #95 §1 rule):
 | Phase | Gap | Fix |
 |---|---|---|
 | 0 | None; ships on today's tables, with known undercounts listed on the page | Content section from `podcast_followers`, `user_episode_inbox`, `user_episode_progress` |
-| 1 | An episode opened outside the inbox, or after it was saved or dismissed, records nothing | `user_episode_views`: the first time each user opened each episode |
+| 1 | An episode opened outside the inbox, or after it was saved or dismissed, records nothing; progress rows can't tell playback from a "Mark as played / unplayed" | `user_episode_views`: the first time each user opened each episode; `user_episode_progress.listened_at`: the last write that came from playback |
 | 2 | Anonymous public page views have no object identity anywhere durable | `public_page_daily_views`: a per-day counter per public page, no visitor id |
 
 Nothing new is sent to PostHog.
@@ -69,7 +69,13 @@ Nothing new is sent to PostHog.
 - **Listens.** `user_episode_progress` (#90): one row per user and
   episode. `updated_at` moves on every write; `completed_at` is set on
   completion. A listen in the current window therefore hides the same
-  user's listen in an earlier window.
+  user's listen in an earlier window. Not every write is playback
+  ([listening_progress_service.py:85](../thestill/services/listening_progress_service.py#L85)):
+  "Mark as played" (`mark_played`) and "Mark unplayed" (`mark_unplayed`)
+  both store position 0 and move `updated_at` without anyone listening.
+  `mark_played` also sets `completed_at` and, like every completion,
+  calls `InboxService.mark_read`, so it turns an unread inbox row into a
+  read too. A stored row can't tell `mark_played` from a real `ended`.
 - **Categories.** `podcasts.primary_category_id` points at
   `categories (id, name, parent_id)`. The id can be a top-level category
   or a subcategory; `COALESCE(parent_id, id)` gives the top level.
@@ -111,16 +117,25 @@ Anything not in this table is not collected (constitution §10).
 
 - **Population.** #95's `real_users`: not admin, not an excluded email.
   Every join goes through it.
-- **Reader of an episode in a window.** A real user with a read of that
-  episode in the window, or a progress row whose `updated_at` falls in
-  it. Listening counts as reading. Phase 0's read is an inbox `read`
+- **Reader of an episode in a window.** A real user who opened it or
+  listened to it in the window. Phase 0's open is an inbox `read`
   transition; from Phase 1 it is `user_episode_views.first_viewed_at`.
   Both are first-time facts, so rereading an old episode counts once,
   when it first happened.
+- **Listening.** Playback only, never a "Mark as played / unplayed".
+  Phase 0 counts a progress row as listening when `updated_at` falls in
+  the window **and** `position_seconds > 0 OR completed_at IS NOT NULL`:
+  that drops `mark_unplayed` resets (position 0, no completion) but still
+  counts a `mark_played` as a completion, and its inbox flip as a read,
+  both of which the page notes. From
+  Phase 1 listening is `listened_at` (§4a), which no `mark_*` write
+  touches.
 - **Readers of a podcast.** Distinct users who were readers of any of
   its episodes in the window.
-- **Listeners, completions.** Distinct users with a progress row whose
-  `updated_at` / `completed_at` falls in the window.
+- **Listeners, completions.** Distinct users who were listening in the
+  window, and those of them whose row completed in it. From Phase 1 a
+  completion counts only when playback wrote it
+  (`completed_at = listened_at`, §4a).
 - **Followers.** The current count. **New follows:** surviving follows
   created in the window.
 - **Follower reach.** Of the show's current followers, how many were
@@ -146,7 +161,12 @@ Anything not in this table is not collected (constitution §10).
   Ties break on followers, then title.
 - **Episodes.** Top 20 by readers, ties on listeners, then publish date.
 - **Categories.** Every top-level category with at least one followed
-  show, plus "Uncategorised"; about 20 rows.
+  show **or** at least one reader in the window or the previous one,
+  plus "Uncategorised"; about 20 rows. Reading activity alone is enough,
+  so a category reached only through search, entity pages or the related
+  rail still appears (with `shows = 0` if nobody follows its shows), and
+  one that dropped to zero readers stays visible with its `−n`. Sorted by
+  readers, then followers.
 
 ### 3. Repository and models
 
@@ -191,6 +211,7 @@ class EpisodeStat(BaseModel):
 class CategoryStat(BaseModel):
     category: str  # top-level name, or "Uncategorised"
     shows: int  # shows with at least one follower
+    shows_read: int  # shows with at least one reader in the window
     followers: int  # distinct users following any show in it
     readers: int
     readers_previous: int
@@ -218,6 +239,7 @@ reads AS (
     SELECT p.user_id, p.episode_id, p.updated_at
       FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
      WHERE p.updated_at >= %(prev_start)s AND p.updated_at < %(end)s
+       AND (p.position_seconds > 0 OR p.completed_at IS NOT NULL)  -- not a mark_unplayed reset
 )
 SELECT e.podcast_id,
        count(DISTINCT r.user_id) FILTER (WHERE r.at >= %(start)s) AS readers,
@@ -226,11 +248,12 @@ SELECT e.podcast_id,
  GROUP BY e.podcast_id
 ```
 
-Phase 1 swaps the first branch for `user_episode_views` and leaves the
-rest alone. Indexes come from `EXPLAIN` on a production-sized copy, not
-guesswork, as in #95 §2; the likely ones are a partial index on
+Phase 1 swaps the first branch for `user_episode_views` and the second
+for `p.listened_at` in the window, and leaves the rest alone. Indexes
+come from `EXPLAIN` on a production-sized copy, not guesswork, as in
+#95 §2; the likely ones are a partial index on
 `user_episode_inbox (state_changed_at) WHERE state = 'read'` and one on
-`user_episode_progress (updated_at)`.
+`user_episode_progress (updated_at)` (Phase 1: `listened_at`).
 
 ### 4. Phase 1: `user_episode_views`
 
@@ -248,11 +271,13 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
 
 - **Where it's written.** `POST /api/inbox/{id}/read` already fires on
   every summary view from every route (inbox overlay, standalone page,
-  search, entity pages), whether or not an inbox row exists.
-  `InboxService.mark_read` also runs
-  `INSERT … ON CONFLICT DO NOTHING` through a new
-  `EpisodeViewRepository`. The endpoint name stays; its docstring says
-  it records the view too.
+  search, entity pages), whether or not an inbox row exists. Its route
+  handler records the view, `INSERT … ON CONFLICT DO NOTHING` through a
+  new `EpisodeViewRepository`, next to its `InboxService.mark_read`
+  call. Not inside `InboxService.mark_read`: the listening service also
+  calls that on every completion, `mark_played` included, and a "Mark as
+  played" is not an open. The endpoint name stays; its docstring says it
+  records the view too.
 - **It's a POST, not a side effect of the episode GET**, for the reason
   #95 gave for `opened_at`: React Query prefetches and refetches must
   not count as views.
@@ -268,9 +293,13 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
   guards, so the two paths don't drift (FM-6) even though SQLite has no
   analytics.
 - **Backfill.** From `user_episode_inbox` rows in `read` with
-  `state_changed_at`. Views before the migration that the inbox lost
-  stay lost; the page says opens before the migration date are
-  undercounted.
+  `state_changed_at`, for users with `usage_analytics_enabled = true`
+  only: the same filter as live writes. GPC is per request and can't be
+  applied to history; the backfill is the account switch alone. The
+  backfill can't tell a `mark_played` read from an open, so it carries
+  that overcount into old rows. Views before the migration that the
+  inbox lost stay lost; the page says opens before the migration date
+  are approximate.
 - **Privacy policy.** "What you have read" is already listed as account
   data ([privacy.md:29](../thestill/web/frontend/public/legal/privacy.md)),
   and the usage-analytics paragraph (line 57) stays true because views
@@ -278,6 +307,30 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
 - **One source per metric.** After Phase 1, analytics reads views and
   progress only. The inbox `read` state stays what the inbox UI shows
   and is no longer an analytics input.
+
+### 4a. Phase 1: `user_episode_progress.listened_at`
+
+A nullable `listened_at timestamptz` on the progress row: the time of
+the last write that came from playback. `plan_row` sets it to `now` for
+`tick`, `pause` and `ended`, and for a `stop` that completes; it carries
+the stored value forward for `seek`, a non-completing `stop`,
+`mark_played` and `mark_unplayed`. `tick` only fires while audio plays,
+and only a playing episode can be paused or end, so every listen of
+15 s or more, and every shorter one ended by a pause, is recorded.
+
+- **Completions.** A playback completion sets `completed_at` and
+  `listened_at` from the same `now`. A `mark_played` sets `completed_at`
+  only. Analytics counts a completion when `completed_at = listened_at`.
+- **Opt-outs.** Like the views table, the column exists only to measure,
+  so it is left unchanged for a user with
+  `usage_analytics_enabled = false` or a write carrying `Sec-GPC: 1`
+  (decision D5). Resume, restore and completion keep working; they read
+  the other columns.
+- **Backfill.** `listened_at = updated_at` where
+  `position_seconds > 0 OR completed_at IS NOT NULL`, for users with the
+  switch on: the Phase 0 rule, so old windows read the same before and
+  after the migration.
+- **Both backends**, as for the views table.
 
 ### 5. Phase 2: `public_page_daily_views`
 
@@ -352,6 +405,9 @@ top 10 episodes, every category. `--json` prints the full payload.
 |---|---|
 | The ranking is read as exact while reads are undercounted (Phase 0) | Notes on the page and in the CLI name the three undercounts; Phase 1 removes them |
 | `readers_previous` is low for listeners because `updated_at` moves | Noted on the page; the change column is a trend, not an exact count |
+| "Mark as played / unplayed" counted as listening or reading | Phase 0 drops resets and notes `mark_played`; Phase 1 counts only `listened_at` and views written by the route handler, never by `InboxService.mark_read` |
+| Opted-out readers counted through a backfill | Both Phase 1 backfills apply the same `usage_analytics_enabled` filter as live writes |
+| A category read only through discovery is missing | Categories are listed for follows **or** reading activity (§2) |
 | Imported episodes crowd the podcast table | Synthetic podcasts excluded from podcast and category tables |
 | Category totals don't add up | Primary category only, plus "Uncategorised"; contract test sums shows |
 | A small count points at one person | Admin only, aggregates only, no drill-down, counts under five greyed; follows #95 D1 |
@@ -365,7 +421,7 @@ top 10 episodes, every category. `--json` prints the full payload.
 | Phase | Scope | Ships alone? |
 |---|---|---|
 | 0 | `ContentReport` models; `AnalyticsRepository.content` (Postgres) and the stub; `previous` window in `AnalyticsService`; `content` in `GET /api/dashboard/analytics`; `ContentSection`; CLI Content block; notes; indexes as `EXPLAIN` decides | Yes; no migration |
-| 1 | `user_episode_views` (Alembic + `SCHEMA_SQL` + SQLite guard); backfill from inbox reads; write from `mark_read` honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
+| 1 | `user_episode_views` and `user_episode_progress.listened_at` (Alembic + `SCHEMA_SQL` + SQLite guards); opt-out-filtered backfills; view write in the `POST /api/inbox/{id}/read` handler and `listened_at` in `plan_row`, both honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
 | 2 | `public_page_daily_views`; upsert in `POST /api/public/pageview`; "Public views" columns | Yes |
 
 ## Testing
@@ -380,14 +436,23 @@ top 10 episodes, every category. `--json` prints the full payload.
   its episode present with `imported = true`.
 - The subcategory show lands in its parent's row; per-category show
   counts sum to the number of non-synthetic shows with followers.
+- A category whose only activity is a read of an unfollowed show appears
+  with `shows = 0`, `shows_read = 1` and its reader.
+- Phase 0: a `mark_unplayed` row is neither a listener nor a reader; a
+  real partial listen (position > 0) is both.
 - `readers_previous` counts the previous window only; a user reading in
   both windows counts once in each.
 - The podcast list is the union of both top-N lists with no duplicates.
 - Phase 1: `POST /api/inbox/{id}/read` on an episode with no inbox row
   writes a view and returns as before; a second call leaves
   `first_viewed_at` unchanged; an opted-out user or `Sec-GPC: 1` writes
-  nothing; a failing view insert still marks the inbox row read; the
-  backfill copies `read` rows only.
+  nothing; a failing view insert still marks the inbox row read; a
+  `mark_played` progress write creates no view; the backfill copies
+  `read` rows of opted-in users only and skips an opted-out user's.
+- Phase 1 `listened_at`: `tick`, `pause` and `ended` set it; `seek`,
+  `mark_played` and `mark_unplayed` leave it unchanged; a `mark_played`
+  is not a completion and `ended` is; an opted-out user's writes leave
+  it unchanged; the backfill follows the Phase 0 rule and the opt-out filter.
 - Phase 2: a browser view increments the right row; a crawler, a
   signed-in reader, an unknown slug and a `public_pages = false` show
   increment nothing; no IP, user agent or referrer column exists.
@@ -410,11 +475,12 @@ Proposed; settle in review.
    user numbers a cutoff would hide nearly every row.
 4. **D4. No identifiers in PostHog.** The #95 rule holds; this spec adds
    nothing to the event allowlist.
-5. **D5. `user_episode_views` honours the usage opt-out and GPC.**
+5. **D5. `user_episode_views` and `listened_at` honour the usage
+   opt-out and GPC, in live writes and in backfills.**
    Follows and reads count everyone because the service needs them to
-   run (#95 D2); this table exists only to measure, so it follows the
-   measurement opt-outs. The cost is a small undercount of opted-out
-   readers, who still appear through follows and listening. The
+   run (#95 D2); these two facts exist only to measure, so they follow
+   the measurement opt-outs. The cost is a small undercount of opted-out
+   readers and listeners, who from Phase 1 appear only as followers. The
    alternative is to count everyone and say so in the Settings copy.
 
 ## Open questions
