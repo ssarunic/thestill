@@ -76,6 +76,8 @@ def test_text_report_content_block(available):
     quiet = next(line for line in out.splitlines() if line.lstrip().startswith("Quiet Show"))
     assert quiet.split()[2:4] == ["1", "new"]
     assert "Hard Fork — The AI Episode" in out
+    assert hard_fork.split()[-1] == "31"  # public views
+    assert "12 public views" in out
     assert "Technology" in out and "10 readers (−2)" in out
     assert "Note: A reader opened an episode" in out
 

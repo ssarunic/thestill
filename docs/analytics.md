@@ -70,6 +70,10 @@ Not built yet: `export` (no spec #91 export routes exist) and
   only to measure (spec #103): `user_episode_views` (first open) and
   `user_episode_progress.listened_at` (last playback). Turning the switch
   off deletes both for that user.
+- **Public page counts stay on our server.** `public_page_daily_views`
+  (spec #103) counts signed-out browser views per page per day, keyed by
+  the page's object id, with no visitor id, IP, user agent or referrer.
+  PostHog still gets only `kind` and `referrer_host`.
 - **Off by default.** No key, `ANALYTICS_ENABLED=false` or single-user mode
   gives `NullSink`; the startup log says `analytics_configured sink=null`.
 

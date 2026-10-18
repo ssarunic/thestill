@@ -339,6 +339,16 @@ CREATE TABLE IF NOT EXISTS user_episode_views (
 );
 CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_viewed_at);
 
+-- Spec #103 Phase 2 — signed-out views per public page per UTC day, keyed
+-- by object id ('' for landing and top). No visitor id, IP or referrer.
+CREATE TABLE IF NOT EXISTS public_page_daily_views (
+    day date NOT NULL,
+    kind text NOT NULL,
+    object_id text NOT NULL,
+    views integer NOT NULL,
+    PRIMARY KEY (day, kind, object_id)
+);
+
 CREATE TABLE IF NOT EXISTS user_briefings (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,

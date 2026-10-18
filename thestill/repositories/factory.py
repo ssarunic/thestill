@@ -41,6 +41,7 @@ from .link_decision_repository import LinkDecisionRepository
 from .listening_progress_repository import ListeningProgressRepository
 from .mcp_token_repository import McpTokenRepository
 from .podcast_follower_repository import PodcastFollowerRepository
+from .public_page_view_repository import PublicPageViewRepository
 from .user_repository import UserRepository
 
 if TYPE_CHECKING:
@@ -136,8 +137,9 @@ class RepositoryBundle:
     queue_manager: Any
     # Spec #95 Layer A; Postgres only, the unavailable stub on SQLite.
     analytics: AnalyticsRepository
-    # Spec #103: first episode opens, for analytics.
+    # Spec #103: first episode opens, and signed-out public page views.
     episode_view: EpisodeViewRepository
+    public_page_view: PublicPageViewRepository
 
 
 def make_repositories(config: "Config") -> RepositoryBundle:
@@ -162,6 +164,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_pending_operations_repository import PostgresPendingOperationsRepository
         from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
         from .postgres_podcast_repository import PostgresPodcastRepository
+        from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
         from .postgres_user_repository import PostgresUserRepository
 
         return RepositoryBundle(
@@ -182,6 +185,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             queue_manager=PostgresQueueManager(dsn),
             analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
             episode_view=PostgresEpisodeViewRepository(dsn),
+            public_page_view=PostgresPublicPageViewRepository(dsn),
         )
 
     db_path = str(config.database_path)
@@ -199,6 +203,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_pending_operations_repository import SqlitePendingOperationsRepository
     from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
     from .sqlite_podcast_repository import SqlitePodcastRepository
+    from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
     from .sqlite_user_repository import SqliteUserRepository
 
     return RepositoryBundle(
@@ -219,6 +224,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         queue_manager=QueueManager(db_path),
         analytics=UnavailableAnalyticsRepository(),
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
+        public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
     )
 
 

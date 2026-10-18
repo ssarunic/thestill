@@ -131,7 +131,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
         </h2>
         <p className="text-sm text-muted">
           Readers opened or listened to an episode in this window. Change is against the previous window of the same
-          length.
+          length. Public views are signed-out views of a show's public pages (its own and its episodes').
         </p>
       </div>
 
@@ -150,6 +150,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             <Th>Followers reading</Th>
             <Th right>Listeners</Th>
             <Th right>Completed</Th>
+            <Th right>Public views</Th>
           </>
         }
       >
@@ -179,6 +180,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             </td>
             <td className={NUM}>{p.listeners}</td>
             <td className={NUM}>{p.completions}</td>
+            <td className={NUM}>{p.public_views}</td>
           </Row>
         ))}
       </Group>
@@ -194,6 +196,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             <Th>Readers</Th>
             <Th right>Listeners</Th>
             <Th right>Completed</Th>
+            <Th right>Public views</Th>
           </>
         }
       >
@@ -216,6 +219,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             <Readers readers={e.readers} max={peak(content.episodes)} />
             <td className={NUM}>{e.listeners}</td>
             <td className={NUM}>{e.completions}</td>
+            <td className={NUM}>{e.public_views}</td>
           </Row>
         ))}
       </Group>
@@ -233,6 +237,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             <Th right>Followers</Th>
             <Th right>Shows followed</Th>
             <Th right>Shows read</Th>
+            <Th right>Public views</Th>
           </>
         }
       >
@@ -243,6 +248,7 @@ export default function ContentSection({ content }: { content: AnalyticsReport['
             <td className={NUM}>{c.followers}</td>
             <td className={NUM}>{c.shows}</td>
             <td className={NUM}>{c.shows_read}</td>
+            <td className={NUM}>{c.public_views}</td>
           </Row>
         ))}
       </Group>

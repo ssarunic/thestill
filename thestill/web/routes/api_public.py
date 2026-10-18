@@ -1005,6 +1005,41 @@ def _external_referrer_host(referrer: Optional[str], request: Request, public_ba
     return None if host in own else host[:200]
 
 
+def _counted_object_id(state: AppState, path: str, kind: str) -> Optional[str]:
+    """The id a public view is counted under (spec #103 Phase 2): ``''`` for
+    the landing and top pages, the object's id for a show, episode or
+    entity page, None for share and legal pages, an unknown slug or a page
+    the public site would 404 (hidden show, episode without a summary)."""
+    if kind in ("landing", "top"):
+        return ""
+    parts = path.split("?", 1)[0].split("#", 1)[0].strip("/").split("/")
+    visibility = get_public_visibility(state)
+    try:
+        if kind == "podcast":
+            return str(_public_podcast_row(state, visibility, parts[1])["id"])
+        if kind == "episode":
+            return str(_public_episode(state, visibility, parts[1], parts[3])[1].id)
+        if kind == "entity":
+            entity_id = _entity_id_from_path(state.entity_repository, parts[1], parts[2])
+            return entity_id if visibility.entity_is_public(entity_id) else None
+    except HTTPException:
+        return None
+    return None
+
+
+def _count_public_view(state: AppState, path: str, kind: str) -> None:
+    """One more view on today's counter for this page; never fails the beacon."""
+    repository = state.public_page_view_repository
+    if repository is None:
+        return
+    try:
+        object_id = _counted_object_id(state, path, kind)
+        if object_id is not None:
+            repository.increment(datetime.now(timezone.utc).date(), kind, object_id)
+    except Exception:  # noqa: BLE001 - a counter never breaks the page it counts
+        logger.warning("public_page_view_count_failed", kind=kind, exc_info=True)
+
+
 @router.post("/pageview", status_code=204)
 def public_page_view(payload: PageViewRequest, request: Request, state: AppState = Depends(get_app_state)) -> Response:
     """Count one signed-out view of a public page.
@@ -1013,8 +1048,10 @@ def public_page_view(payload: PageViewRequest, request: Request, state: AppState
     first load it navigates without asking the server for HTML. The server
     decides the page kind from the path (never the client), logs every
     view, and sends browsers (not crawlers or link previews) to PostHog
-    with a daily visitor key. Signed-in readers and unknown paths are
-    ignored. Always 204: the caller is fire-and-forget.
+    with a daily visitor key. Browser views of a show, episode, entity,
+    top or landing page also go on a per-page daily counter (spec #103),
+    with no visitor id. Signed-in readers and unknown paths are ignored.
+    Always 204: the caller is fire-and-forget.
     """
     kind = public_page_kind(payload.path)
     if kind is None or has_valid_session(request):
@@ -1024,4 +1061,5 @@ def public_page_view(payload: PageViewRequest, request: Request, state: AppState
     logger.info("public_page_view", kind=kind, ua_class=ua_class, referrer_host=referrer_host)
     if ua_class == "browser":
         capture_event(state, request, PublicPageView(kind=kind, referrer_host=referrer_host))
+        _count_public_view(state, payload.path, kind)
     return Response(status_code=204)

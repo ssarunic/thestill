@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spec #103 Phase 1 — ``user_episode_views`` on SQLite and Postgres, and
-the 0019 backfills. Postgres cases skip without ``TEST_DATABASE_URL``."""
+"""Spec #103 — ``user_episode_views`` (Phase 1) and
+``public_page_daily_views`` (Phase 2) on SQLite and Postgres, and the 0019
+backfills. Postgres cases skip without ``TEST_DATABASE_URL``."""
 
 from __future__ import annotations
 
@@ -124,7 +125,7 @@ def env(request, tmp_path):
 
     ensure_schema(PG_DSN)
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE user_episode_views, episodes, podcasts, users CASCADE")
+        conn.execute("TRUNCATE user_episode_views, public_page_daily_views, episodes, podcasts, users CASCADE")
     yield _PostgresEnv(PG_DSN)
 
 
@@ -167,6 +168,33 @@ def test_opting_out_erases_views_and_listened_at(env):
     assert rows == {leaver: (True, False), stayer: (True, True)}
     env.users.update_usage_analytics(leaver, True)  # turning it back on restores nothing
     assert [v[0] for v in env.views()] == [stayer]
+
+
+def test_public_page_counter_adds_up_per_day_and_page(env):
+    if env.is_pg:
+        from thestill.repositories.postgres_public_page_view_repository import PostgresPublicPageViewRepository
+
+        counter = PostgresPublicPageViewRepository(env.dsn)
+    else:
+        from thestill.repositories.sqlite_public_page_view_repository import SqlitePublicPageViewRepository
+
+        counter = SqlitePublicPageViewRepository(env.db_path)
+    today = NOW.date()
+    for day, kind, object_id in [(today, "podcast", "p1"), (today, "podcast", "p1"), (today, "landing", "")]:
+        counter.increment(day, kind, object_id)
+    counter.increment(today - timedelta(days=1), "podcast", "p1")
+    rows = sorted(
+        (str(day), kind, object_id, views)
+        for day, kind, object_id, views in env.execute(
+            "SELECT day, kind, object_id, views FROM public_page_daily_views"
+        )
+    )
+    yesterday = (today - timedelta(days=1)).isoformat()
+    assert rows == [
+        (yesterday, "podcast", "p1", 1),
+        (today.isoformat(), "landing", "", 1),
+        (today.isoformat(), "podcast", "p1", 2),
+    ]
 
 
 # ----- backfills -----------------------------------------------------------

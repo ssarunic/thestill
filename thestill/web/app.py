@@ -412,6 +412,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         analytics_service=AnalyticsService(repos.analytics, enabled=config.multi_user),
         analytics_sink=make_analytics_sink(config),
         episode_view_repository=repos.episode_view,
+        public_page_view_repository=repos.public_page_view,
     )
 
     # Create task worker with handlers that have access to app_state.

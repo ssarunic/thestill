@@ -17,6 +17,7 @@ const podcast = (over: Partial<AnalyticsPodcastStat> & { title: string }): Analy
   readers_previous: 0,
   listeners: 0,
   completions: 0,
+  public_views: 0,
   change: '—',
   ...over,
 })
@@ -91,7 +92,7 @@ const REPORT: AnalyticsReport = {
   },
   content: {
     podcasts: [
-      podcast({ title: 'Hard Fork', readers: 9, readers_previous: 7, change: '+2', followers: 12, follower_readers: 6, new_follows: 3 }),
+      podcast({ title: 'Hard Fork', readers: 9, readers_previous: 7, change: '+2', followers: 12, follower_readers: 6, new_follows: 3, public_views: 31 }),
       podcast({ title: 'Quiet Show', readers: 1, change: 'new', followers: 20, follower_readers: 1, category: null }),
       podcast({ title: 'Falling', readers: 6, readers_previous: 8, change: '\u22122', followers: 2, follower_readers: 2 }),
     ],
@@ -107,6 +108,7 @@ const REPORT: AnalyticsReport = {
         readers: 6,
         listeners: 3,
         completions: 1,
+        public_views: 12,
       },
       {
         episode_id: 'e2',
@@ -119,11 +121,12 @@ const REPORT: AnalyticsReport = {
         readers: 1,
         listeners: 0,
         completions: 0,
+        public_views: 0,
       },
     ],
     categories: [
-      { category: 'Technology', shows: 4, shows_read: 3, followers: 15, readers: 10, readers_previous: 12, change: '\u22122' },
-      { category: 'Uncategorised', shows: 1, shows_read: 1, followers: 20, readers: 1, readers_previous: 0, change: 'new' },
+      { category: 'Technology', shows: 4, shows_read: 3, followers: 15, readers: 10, readers_previous: 12, public_views: 44, change: '\u22122' },
+      { category: 'Uncategorised', shows: 1, shows_read: 1, followers: 20, readers: 1, readers_previous: 0, public_views: 0, change: 'new' },
     ],
     notes: ['A reader opened an episode from the inbox or listened to it.'],
   },
@@ -268,6 +271,19 @@ describe('Analytics content section (spec #103)', () => {
     expect(within(categories).getByRole('row', { name: /Technology/ })).toHaveTextContent('\u22122')
     expect(within(categories).getByRole('row', { name: /Uncategorised/ })).toHaveTextContent('new')
     expect(within(section).getByText('A reader opened an episode from the inbox or listened to it.')).toBeInTheDocument()
+  })
+
+  it('shows public views in each table', async () => {
+    renderPage()
+    const section = await contentSection()
+    const lastCell = (group: string, row: RegExp) =>
+      within(within(section).getByRole('group', { name: group }).querySelector('table')!)
+        .getByRole('row', { name: row })
+        .lastElementChild?.textContent
+    expect(within(section).getAllByRole('columnheader', { name: 'Public views' })).toHaveLength(3)
+    expect(lastCell('Podcasts', /Hard Fork/)).toBe('31')
+    expect(lastCell('Episodes', /The AI Episode/)).toBe('12')
+    expect(lastCell('Categories', /Technology/)).toBe('44')
   })
 
   it('links titles to the signed-in podcast and episode pages', async () => {

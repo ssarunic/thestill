@@ -184,7 +184,7 @@ stale-while-revalidate=300`; a request carrying a credential gets
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |
 | `/api/public/entities/{type}/{slug}/quotes` | GET | Paged quotes, `?kind=said\|about`, `?about=<type:slug>`, `?page=` |
 | `/api/public/who-said-what` | GET | Landing module: the week's most-quoted entity and three quotes from different speakers and shows |
-| `/api/public/pageview` | POST | Spec #95: the public site reports each route change as `{path, referrer}` (referrer only on the first view). The server derives the page kind, logs `public_page_view`, and sends browser views (not crawlers or link previews) to PostHog with a daily visitor key. Always 204; signed-in readers and unknown paths are ignored |
+| `/api/public/pageview` | POST | Spec #95: the public site reports each route change as `{path, referrer}` (referrer only on the first view). The server derives the page kind, logs `public_page_view`, and sends browser views (not crawlers or link previews) to PostHog with a daily visitor key. Browser views of a show, episode, entity, top or landing page the public site would serve also go on a per-page daily counter (spec #103, `public_page_daily_views`; no visitor id, IP or referrer). Always 204; signed-in readers and unknown paths are ignored |
 
 **Visibility.** An episode is public when it has a summary with a preview,
 both slugs, and its show is public. Hide a show with

@@ -96,6 +96,7 @@ class FakeAnalyticsRepository(AnalyticsRepository):
                     readers_previous=7,
                     listeners=4,
                     completions=2,
+                    public_views=31,
                 ),
                 PodcastStat(
                     podcast_id="p2",
@@ -123,6 +124,7 @@ class FakeAnalyticsRepository(AnalyticsRepository):
                     readers=6,
                     listeners=3,
                     completions=1,
+                    public_views=12,
                 )
             ],
             categories=[
