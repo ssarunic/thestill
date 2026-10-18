@@ -91,7 +91,12 @@ class UserRepository(ABC):
     @abstractmethod
     def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
         """Set the user's usage-events switch (spec #95). Returns True if a
-        row was updated."""
+        row was updated.
+
+        Turning it off also erases, in the same transaction, what was
+        recorded only to measure (spec #103): the user's
+        ``user_episode_views`` rows and ``user_episode_progress.listened_at``.
+        Positions and completions stay; the service needs them."""
 
     @abstractmethod
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:

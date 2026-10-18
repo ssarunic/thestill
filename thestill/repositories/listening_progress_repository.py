@@ -42,6 +42,13 @@ class ListeningProgressRepository(ABC):
         the latest action wins), or when the session matches and its
         ``seq`` is greater. ``duration_seconds`` keeps the stored value when
         the write carries none. Returns True when the row was written.
+
+        ``listened_at`` (spec #103) only moves forward and is kept when the
+        write carries none. It is written only if the user's
+        ``usage_analytics_enabled`` is on when the statement runs, checked
+        so that it serializes with ``UserRepository.update_usage_analytics``:
+        a write in flight when the user opts out can't restore what the
+        opt-out erased.
         """
 
     @abstractmethod

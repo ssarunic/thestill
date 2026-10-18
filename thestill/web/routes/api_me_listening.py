@@ -21,12 +21,13 @@ in app.py); in single-user mode the caller is the default user, as for
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from ...models.listening import ProgressWrite
 from ...models.user import User
 from ...services.listening_progress_service import InvalidProgressError, ListeningEpisodeNotFoundError
+from ..analytics_request import may_measure
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found
 
@@ -82,12 +83,13 @@ def get_listening(
 def put_listening(
     episode_id: str,
     body: ProgressWriteRequest,
+    request: Request,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ) -> dict:
     """Upsert the caller's position. ``accepted: false`` means an older write was ignored."""
     try:
-        outcome = state.listening_service.record(user.id, episode_id, body)
+        outcome = state.listening_service.record(user.id, episode_id, body, measure=may_measure(user, request))
     except ListeningEpisodeNotFoundError:
         not_found("Episode", episode_id)
     except InvalidProgressError as e:

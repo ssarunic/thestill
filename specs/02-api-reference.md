@@ -1191,6 +1191,8 @@ Record a position. Writes from one tab are ordered by `session_id` + `seq`, neve
 
 `event` is one of `tick`, `pause`, `seek`, `ended`, `stop`, `mark_played`, `mark_unplayed`. `ended`, `mark_played`, or a `pause` / `stop` with no more than 45 s of a known duration left, completes the episode: the position resets to 0 and an unread inbox row becomes read. `stop` hides the episode from `latest` until its next write. A position beyond `duration_seconds + 5` is clamped.
 
+`tick`, `pause`, `ended` and a completing `stop` also set `listened_at` (spec #103), which only analytics reads and no response carries. It is left unchanged for a caller who turned usage analytics off or sent `Sec-GPC: 1`.
+
 **Response:**
 
 ```json

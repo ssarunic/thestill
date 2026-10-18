@@ -35,6 +35,7 @@ from .analytics_repository import AnalyticsRepository, UnavailableAnalyticsRepos
 from .briefing_delivery_repository import BriefingDeliveryRepository
 from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
+from .episode_view_repository import EpisodeViewRepository
 from .inbox_repository import InboxRepository
 from .link_decision_repository import LinkDecisionRepository
 from .listening_progress_repository import ListeningProgressRepository
@@ -135,6 +136,8 @@ class RepositoryBundle:
     queue_manager: Any
     # Spec #95 Layer A; Postgres only, the unavailable stub on SQLite.
     analytics: AnalyticsRepository
+    # Spec #103: first episode opens, for analytics.
+    episode_view: EpisodeViewRepository
 
 
 def make_repositories(config: "Config") -> RepositoryBundle:
@@ -150,6 +153,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_briefing_repository import PostgresBriefingRepository
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
         from .postgres_entity_repository import PostgresEntityRepository
+        from .postgres_episode_view_repository import PostgresEpisodeViewRepository
         from .postgres_inbox_repository import PostgresInboxRepository
         from .postgres_legacy_claim_repository import PostgresLegacyClaimRepository
         from .postgres_link_decision_repository import PostgresLinkDecisionRepository
@@ -177,6 +181,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             entity=PostgresEntityRepository(dsn),
             queue_manager=PostgresQueueManager(dsn),
             analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
+            episode_view=PostgresEpisodeViewRepository(dsn),
         )
 
     db_path = str(config.database_path)
@@ -185,6 +190,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_briefing_repository import SqliteBriefingRepository
     from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
     from .sqlite_entity_repository import SqliteEntityRepository
+    from .sqlite_episode_view_repository import SqliteEpisodeViewRepository
     from .sqlite_inbox_repository import SqliteInboxRepository
     from .sqlite_legacy_claim_repository import SqliteLegacyClaimRepository
     from .sqlite_link_decision_repository import SqliteLinkDecisionRepository
@@ -212,6 +218,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         entity=SqliteEntityRepository(db_path=db_path),
         queue_manager=QueueManager(db_path),
         analytics=UnavailableAnalyticsRepository(),
+        episode_view=SqliteEpisodeViewRepository(db_path=db_path),
     )
 
 

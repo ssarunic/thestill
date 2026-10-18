@@ -50,6 +50,16 @@ _SELECT_COLS = (
 )
 
 
+def consents_to_measurement(conn, user_id: str) -> bool:
+    """The user's usage-analytics switch, read in ``conn``'s transaction
+    under a row lock that ``update_usage_analytics`` waits for (and that
+    waits for it). Measurement writes (spec #103 views, ``listened_at``)
+    check it in the same transaction, so none lands after an opt-out's
+    erase."""
+    row = conn.execute("SELECT usage_analytics_enabled FROM users WHERE id = %s FOR SHARE", (user_id,)).fetchone()
+    return bool(row and row["usage_analytics_enabled"])
+
+
 class PostgresUserRepository(UserRepository):
     """PostgreSQL-backed user repository. Thread-safe via connection-per-op.
 
@@ -146,7 +156,15 @@ class PostgresUserRepository(UserRepository):
 
     def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
         with connect(self.dsn) as conn:
+            # The row lock this takes is what measurement writes check under
+            # (FOR SHARE), so none can land between it and the erase below.
             cursor = conn.execute("UPDATE users SET usage_analytics_enabled = %s WHERE id = %s", (enabled, user_id))
+            if not enabled:
+                conn.execute("DELETE FROM user_episode_views WHERE user_id = %s", (user_id,))
+                conn.execute(
+                    "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = %s AND listened_at IS NOT NULL",
+                    (user_id,),
+                )
             return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:

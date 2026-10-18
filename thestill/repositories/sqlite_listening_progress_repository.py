@@ -27,7 +27,10 @@ from .listening_progress_repository import ListeningProgressRepository
 
 logger = get_logger(__name__)
 
-_COLS = "user_id, episode_id, position_seconds, duration_seconds, completed_at, stopped_at, session_id, seq, updated_at"
+_COLS = (
+    "user_id, episode_id, position_seconds, duration_seconds, completed_at, stopped_at, session_id, seq, updated_at,"
+    " listened_at"
+)
 
 
 def _iso(value: Optional[datetime]) -> Optional[str]:
@@ -68,8 +71,12 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                 """
                 INSERT INTO user_episode_progress
                     (user_id, episode_id, position_seconds, duration_seconds,
-                     completed_at, stopped_at, session_id, seq, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     completed_at, stopped_at, session_id, seq, updated_at, listened_at)
+                -- listened_at only for a user whose switch is on; one
+                -- statement, so it can't interleave with the opt-out's erase.
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = ? AND usage_analytics_enabled = 1)
+                             THEN ? END)
                 ON CONFLICT(user_id, episode_id) DO UPDATE SET
                     position_seconds = excluded.position_seconds,
                     duration_seconds = COALESCE(excluded.duration_seconds,
@@ -78,7 +85,11 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                     stopped_at       = excluded.stopped_at,
                     session_id       = excluded.session_id,
                     seq              = excluded.seq,
-                    updated_at       = excluded.updated_at
+                    updated_at       = excluded.updated_at,
+                    -- Only moves forward, so a write planned from a stale
+                    -- read never rewinds it (spec #103).
+                    listened_at      = COALESCE(max(excluded.listened_at, user_episode_progress.listened_at),
+                                         excluded.listened_at, user_episode_progress.listened_at)
                  WHERE ?
                     OR excluded.session_id <> user_episode_progress.session_id
                     OR excluded.seq > user_episode_progress.seq
@@ -93,6 +104,8 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
                     row.session_id,
                     row.seq,
                     row.updated_at.isoformat(),
+                    row.user_id,
+                    _iso(row.listened_at),
                     1 if force else 0,
                 ),
             )
@@ -136,4 +149,5 @@ class SqliteListeningProgressRepository(ListeningProgressRepository):
             session_id=row["session_id"],
             seq=row["seq"],
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            listened_at=_dt(row["listened_at"]),
         )

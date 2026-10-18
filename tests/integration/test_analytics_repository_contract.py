@@ -144,14 +144,21 @@ class _Seed:
             (str(uuid.uuid4()), user[0], episode_id, at - H, at),
         )
 
-    def progress(self, user, episode_id, at, *, position, completed_at=None):
+    def view(self, user, episode_id, at):
+        self.conn.execute(
+            "INSERT INTO user_episode_views (user_id, episode_id, first_viewed_at) VALUES (%s, %s, %s)",
+            (user[0], episode_id, at),
+        )
+
+    def progress(self, user, episode_id, at, *, position, completed_at=None, listened_at=None):
+        """A progress row; ``listened_at`` is set only by playback writes."""
         self.conn.execute(
             """
             INSERT INTO user_episode_progress (user_id, episode_id, position_seconds, session_id, seq,
-                                               updated_at, completed_at)
-            VALUES (%s, %s, %s, 's', 1, %s, %s)
+                                               updated_at, completed_at, listened_at)
+            VALUES (%s, %s, %s, 's', 1, %s, %s, %s)
             """,
-            (user[0], episode_id, position, at, completed_at),
+            (user[0], episode_id, position, at, completed_at, listened_at),
         )
 
     def briefing(self, user, created_at, opened_at=None):
@@ -358,8 +365,8 @@ def content():
         admin = s.user("admin", NOW - 90 * D, admin=True)
         s.follow_show(admin, alpha, NOW - 1 * D)
         for eid in (a1, b1, g1, d1, i1):
-            s.read_episode(admin, eid, NOW - 1 * D)
-        s.progress(admin, d1, NOW - 1 * D, position=600, completed_at=NOW - 1 * D)
+            s.view(admin, eid, NOW - 1 * D)
+        s.progress(admin, d1, NOW - 1 * D, position=600, completed_at=NOW - 1 * D, listened_at=NOW - 1 * D)
 
         u1, u2, u3, u4, u5 = (s.user(f"u{i}", NOW - 90 * D) for i in range(1, 6))
         # Alpha: followers u1 (old), u2, u3 (new in window) = 3, new 2.
@@ -376,24 +383,29 @@ def content():
         s.follow_show(u4, gamma, NOW - 3 * D)
         s.follow_show(u5, epsilon, NOW - 60 * D)
 
-        # Alpha readers in the window: u1, u2 (followers) and u5 (not).
-        s.read_episode(u1, a1, NOW - 1 * D)
-        s.read_episode(u2, a1, NOW - 2 * D)
-        s.read_episode(u5, a1, NOW - 3 * D)
-        s.progress(u2, a1, NOW - 2 * D, position=1800, completed_at=NOW - 2 * D)  # listened to the end
-        s.progress(u2, a2, NOW - 1 * D, position=200)  # a second Alpha episode: still one listener
+        # Alpha readers in the window: u1, u2 (followers) and u5 (not):
+        # first opens, and playback (listened_at).
+        s.view(u1, a1, NOW - 1 * D)
+        s.view(u2, a1, NOW - 2 * D)
+        s.view(u5, a1, NOW - 3 * D)
+        s.progress(u2, a1, NOW - 2 * D, position=0, completed_at=NOW - 2 * D, listened_at=NOW - 2 * D)  # ended
+        s.progress(u2, a2, NOW - 1 * D, position=200, listened_at=NOW - 1 * D)  # a second Alpha episode
         s.progress(u3, a2, NOW - 1 * D, position=0)  # "Mark unplayed": not a read, not a listen
+        # "Mark as played" by u4: completed, never listened; no completion, no reader.
+        s.progress(u4, a1, NOW - 1 * D, position=0, completed_at=NOW - 1 * D)
+        # An inbox read with no view (an opted-out reader): analytics no longer reads the inbox.
+        s.read_episode(u5, b1, NOW - 1 * D)
         # Previous window: u1 read A2 (Alpha, once in each window), u3 read B1.
-        s.read_episode(u1, a2, NOW - 30 * D)
-        s.read_episode(u3, b1, NOW - 35 * D)
-        # Gamma: u4 listened part-way (a reader with no inbox read); an older
-        # read falls before both windows.
-        s.progress(u4, g1, NOW - 1 * D, position=100)
-        s.read_episode(u4, g1, NOW - 80 * D)
+        s.view(u1, a2, NOW - 30 * D)
+        s.view(u3, b1, NOW - 35 * D)
+        # Gamma: u4 listened part-way (a reader who never opened the page);
+        # their first open falls before both windows.
+        s.progress(u4, g1, NOW - 1 * D, position=100, listened_at=NOW - 1 * D)
+        s.view(u4, g1, NOW - 80 * D)
         # Delta: reached only through discovery.
-        s.progress(u5, d1, NOW - 4 * D, position=50)
+        s.progress(u5, d1, NOW - 4 * D, position=50, listened_at=NOW - 4 * D)
         # An imported episode.
-        s.read_episode(u1, i1, NOW - 1 * D)
+        s.view(u1, i1, NOW - 1 * D)
 
     repo = PostgresAnalyticsRepository(PG_DSN, exclude_emails=(LOCAL_EMAIL,))
     service = AnalyticsService(repo, enabled=True, clock=lambda: NOW)

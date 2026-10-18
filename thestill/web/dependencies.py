@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from ..repositories.briefing_delivery_repository import BriefingDeliveryRepository
     from ..repositories.briefing_repository import BriefingRepository
     from ..repositories.briefing_schedule_repository import BriefingScheduleRepository
+    from ..repositories.episode_view_repository import EpisodeViewRepository
     from ..repositories.inbox_repository import InboxRepository
     from ..repositories.link_decision_repository import LinkDecisionRepository
     from ..repositories.pending_operations_repository import PendingOperationsRepository
@@ -187,6 +188,9 @@ class AppState:
     # Spec #95 — Layer A product analytics. ``Optional`` only for
     # hand-built test fixtures; production wiring always passes it.
     analytics_service: "Optional[AnalyticsService]" = None
+    # Spec #103 — first episode opens. ``Optional`` only for hand-built
+    # test fixtures; production wiring always passes it.
+    episode_view_repository: "Optional[EpisodeViewRepository]" = None
     # Spec #95 Layer B — usage events (PostHog, or NullSink when off).
     # ``None`` only in hand-built test fixtures; emitters treat it as off.
     analytics_sink: "Optional[AnalyticsSink]" = None

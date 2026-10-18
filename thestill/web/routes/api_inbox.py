@@ -20,14 +20,16 @@ the ``delivered_at`` of the last row they have as ``before`` to fetch older
 rows. Read state, saved state, and dismissals live on the row.
 """
 
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
 from ...services.inbox_service import InboxEntryNotFoundError, InvalidInboxQueryError, InvalidInboxStateError
+from ..analytics_request import may_measure
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request, not_found, parse_iso_datetime
 
@@ -95,19 +97,35 @@ def get_unread_count(
 @router.post("/{episode_id}/read")
 def mark_inbox_read(
     episode_id: str,
+    request: Request,
     app_state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ):
     """
     View-driven read tracking: transition the row to ``read`` only if it is
-    currently ``unread``.
+    currently ``unread``, and record the first time this user opened the
+    episode (spec #103), whatever its inbox state.
 
     Always returns 200 — the episode page fires this for every summary view,
     including episodes that were never delivered to this user's inbox, so a
     missing row is a no-op (``marked: false``) rather than a 404.
     """
     marked = app_state.inbox_service.mark_read(user.id, episode_id)
+    _record_view(app_state, request, user, episode_id)
     return api_response({"marked": marked})
+
+
+def _record_view(app_state: AppState, request: Request, user: User, episode_id: str) -> None:
+    """Spec #103 — the first open, for analytics. Here and not in
+    ``InboxService.mark_read``, which also runs for "Mark as played". Its
+    own statement: a failure is logged and never fails the read."""
+    repository = app_state.episode_view_repository
+    if repository is None or not may_measure(user, request):
+        return
+    try:
+        repository.record_view(user.id, episode_id, datetime.now(timezone.utc))
+    except Exception:  # noqa: BLE001 - a measurement never breaks reading
+        logger.warning("episode_view_record_failed", user_id=user.id, episode_id=episode_id, exc_info=True)
 
 
 @router.post("/{episode_id}/state")

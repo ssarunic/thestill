@@ -322,9 +322,22 @@ CREATE TABLE IF NOT EXISTS user_episode_progress (
     session_id text NOT NULL,
     seq bigint NOT NULL,
     updated_at timestamptz NOT NULL,
+    listened_at timestamptz NULL,
     PRIMARY KEY (user_id, episode_id)
 );
 CREATE INDEX IF NOT EXISTS idx_progress_user_updated ON user_episode_progress(user_id, updated_at DESC);
+-- Spec #103 — converge databases bootstrapped before listened_at (alembic
+-- 0019; the backfill lives only in the migration).
+ALTER TABLE user_episode_progress ADD COLUMN IF NOT EXISTS listened_at timestamptz NULL;
+
+-- Spec #103 — the first time each user opened each episode (analytics only).
+CREATE TABLE IF NOT EXISTS user_episode_views (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    first_viewed_at timestamptz NOT NULL,
+    PRIMARY KEY (user_id, episode_id)
+);
+CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_viewed_at);
 
 CREATE TABLE IF NOT EXISTS user_briefings (
     id uuid PRIMARY KEY,
