@@ -38,6 +38,13 @@ def request_gpc(request: Request) -> bool:
     return request.headers.get("sec-gpc", "").strip() == "1"
 
 
+def may_measure(user, request: Request) -> bool:
+    """Whether facts that exist only to measure (spec #103 views and
+    ``listened_at``) may be stored for ``user`` on this request: their usage
+    analytics switch is on and the browser sent no GPC (decision D5)."""
+    return bool(user.usage_analytics_enabled) and not request_gpc(request)
+
+
 def daily_visitor_key(secret: str, client_ip: str, user_agent: str, day: date) -> str:
     """16 bytes (hex) of ``HMAC(secret ‖ day, ip ‖ ua)``."""
     key = f"{secret}|{day.isoformat()}".encode()

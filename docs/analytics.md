@@ -66,7 +66,10 @@ Not built yet: `export` (no spec #91 export routes exist) and
   user id.
 - **Opt-outs on the server.** `users.usage_analytics_enabled` (Settings →
   Usage events) and `Sec-GPC: 1` both mean no key for the browser and no
-  server events for that user.
+  server events for that user. They also stop the two facts Thestill keeps
+  only to measure (spec #103): `user_episode_views` (first open) and
+  `user_episode_progress.listened_at` (last playback). Turning the switch
+  off deletes both for that user.
 - **Off by default.** No key, `ANALYTICS_ENABLED=false` or single-user mode
   gives `NullSink`; the startup log says `analytics_configured sink=null`.
 

@@ -1,6 +1,6 @@
 # Content Popularity
 
-> **Status:** 🚧 Phase 0 implemented (2026-10-18); Phases 1–2 open
+> **Status:** 🚧 Phases 0–1 implemented (2026-10-18); Phase 2 open
 > **Created:** 2026-10-17
 > **Priority:** Medium. Phase 0 needs no migration and can ship with the next deploy.
 > **Author:** Product & Engineering
@@ -290,7 +290,9 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
   response go ahead; the client ignores the response anyway.
 - **Opt-outs.** Rows are not written for a user with
   `usage_analytics_enabled = false` or a request carrying `Sec-GPC: 1`
-  (decision D5). Unlike follows and reads, the service doesn't need
+  (decision D5). Turning the switch off also deletes the user's rows
+  and clears their `listened_at`, in the same transaction
+  (`UserRepository.update_usage_analytics`; settled 2026-10-18). Unlike follows and reads, the service doesn't need
   this table to run; it exists to measure.
 - **Both backends.** Postgres via an Alembic migration with the DDL
   mirrored in `SCHEMA_SQL`; SQLite via `SqlitePodcastRepository`'s column
@@ -308,9 +310,16 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
   data ([privacy.md:29](../thestill/web/frontend/public/legal/privacy.md)),
   and the usage-analytics paragraph (line 57) stays true because views
   honour the switch. No policy change is expected; review confirms it.
-- **One source per metric.** After Phase 1, analytics reads views and
-  progress only. The inbox `read` state stays what the inbox UI shows
-  and is no longer an analytics input.
+- **One source per metric.** After Phase 1, the Content section reads
+  views and progress only. The inbox `read` state stays what the inbox
+  UI shows and is no longer a Content input. #95's own metrics
+  (engagement, activation, retention) keep reading inbox `read`: #95 D2
+  counts reads for everyone, and moving them onto opt-out-filtered views
+  would quietly change those numbers (settled 2026-10-18).
+- **Implementation.** The insert selects from `episodes`, so an unknown
+  or deleted episode writes nothing rather than failing on the foreign
+  key. `may_measure(user, request)` in `web/analytics_request.py` is the
+  one opt-out check for both writes.
 
 ### 4a. Phase 1: `user_episode_progress.listened_at`
 
@@ -335,6 +344,10 @@ and only a playing episode can be paused or end, so every listen of
   switch on: the Phase 0 rule, so old windows read the same before and
   after the migration.
 - **Both backends**, as for the views table.
+- **Implementation.** The upsert stores
+  `GREATEST(excluded.listened_at, stored)`: the value only moves forward,
+  so a write planned from a stale read never rewinds it and a
+  carried-forward value never clears it.
 
 ### 5. Phase 2: `public_page_daily_views`
 
@@ -425,7 +438,7 @@ top 10 episodes, every category. `--json` prints the full payload.
 | Phase | Scope | Ships alone? |
 |---|---|---|
 | 0 ✅ | `ContentReport` models; `AnalyticsRepository.content` (Postgres) and the stub; `previous` window in `AnalyticsService`; `content` in `GET /api/dashboard/analytics`; `ContentSection`; CLI Content block; notes; indexes as `EXPLAIN` decides (none needed, see below) | Yes; no migration |
-| 1 | `user_episode_views` and `user_episode_progress.listened_at` (Alembic + `SCHEMA_SQL` + SQLite guards); opt-out-filtered backfills; view write in the `POST /api/inbox/{id}/read` handler and `listened_at` in `plan_row`, both honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
+| 1 ✅ | `user_episode_views` and `user_episode_progress.listened_at` (Alembic + `SCHEMA_SQL` + SQLite guards); opt-out-filtered backfills; view write in the `POST /api/inbox/{id}/read` handler and `listened_at` in `plan_row`, both honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
 | 2 | `public_page_daily_views`; upsert in `POST /api/public/pageview`; "Public views" columns | Yes |
 
 **Phase 0 measurement (2026-10-18).** Production holds 99 shows and

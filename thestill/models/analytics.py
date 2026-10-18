@@ -33,15 +33,14 @@ SMALL_GROUP = 5
 # Category row for shows with no primary category (spec #103).
 UNCATEGORISED = "Uncategorised"
 
-# The undercounts of Phase 0 (spec #103), shown under the Content tables.
+# What the Content numbers can't see (spec #103 Phase 1), shown under its tables.
 CONTENT_NOTES = (
-    "A reader opened an episode from the inbox or listened to it. Episodes opened from search, "
-    "entity pages or shows not followed count only once listened to.",
-    "An episode read and later saved or dismissed no longer counts as read, and opening a saved "
-    "episode is not recorded.",
+    "A reader opened an episode (from any page) or listened to it. Readers who turned usage "
+    "analytics off, or whose browser sends Global Privacy Control, count only as followers.",
+    "Opens before the views table existed were copied from inbox reads: they miss episodes "
+    'opened outside the inbox and may include a few "Mark as played" clicks.',
     "Listening counts the latest playback per user and episode, so a listen in this window hides "
     "an earlier one: the change column is a trend, not an exact count.",
-    '"Mark as played" counts as a completion and as a read.',
     "Followers is the current count; new follows are follows made in the window that still exist.",
 )
 

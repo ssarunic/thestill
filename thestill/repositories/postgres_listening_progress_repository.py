@@ -32,7 +32,10 @@ from .listening_progress_repository import ListeningProgressRepository
 
 logger = get_logger(__name__)
 
-_COLS = "user_id, episode_id, position_seconds, duration_seconds, completed_at, stopped_at, session_id, seq, updated_at"
+_COLS = (
+    "user_id, episode_id, position_seconds, duration_seconds, completed_at, stopped_at, session_id, seq, updated_at,"
+    " listened_at"
+)
 
 
 class PostgresListeningProgressRepository(ListeningProgressRepository):
@@ -60,8 +63,8 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
                 """
                 INSERT INTO user_episode_progress
                     (user_id, episode_id, position_seconds, duration_seconds,
-                     completed_at, stopped_at, session_id, seq, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     completed_at, stopped_at, session_id, seq, updated_at, listened_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, episode_id) DO UPDATE SET
                     position_seconds = excluded.position_seconds,
                     duration_seconds = COALESCE(excluded.duration_seconds,
@@ -70,7 +73,10 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
                     stopped_at       = excluded.stopped_at,
                     session_id       = excluded.session_id,
                     seq              = excluded.seq,
-                    updated_at       = excluded.updated_at
+                    updated_at       = excluded.updated_at,
+                    -- Only moves forward, so a write planned from a stale
+                    -- read never rewinds it (spec #103).
+                    listened_at      = GREATEST(excluded.listened_at, user_episode_progress.listened_at)
                  WHERE %s
                     OR excluded.session_id <> user_episode_progress.session_id
                     OR excluded.seq > user_episode_progress.seq
@@ -85,6 +91,7 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
                     row.session_id,
                     row.seq,
                     row.updated_at,
+                    row.listened_at,
                     force,
                 ),
             )
@@ -130,4 +137,5 @@ class PostgresListeningProgressRepository(ListeningProgressRepository):
             session_id=row["session_id"],
             seq=row["seq"],
             updated_at=row["updated_at"],
+            listened_at=row["listened_at"],
         )

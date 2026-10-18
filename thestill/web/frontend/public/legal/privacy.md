@@ -54,7 +54,7 @@ We use PostHog, hosted in the EU, to see how thestill is used. It receives:
 
 PostHog does not receive your IP address: your browser's events pass through our own server, which removes it before forwarding them, and the events our server sends come from the server's own address. Signed-out visitors' browsers never contact PostHog at all: our own server forwards the page views.
 
-You can turn usage analytics off at any time in Settings, and we honour Global Privacy Control. Either way, the things the service has to keep to work (such as the shows you follow and the episodes you read) still count towards our overall numbers.
+You can turn usage analytics off at any time in Settings, and we honour Global Privacy Control. Either way, the things the service has to keep to work (such as the shows you follow and which inbox episodes you have read) still count towards our overall numbers. What we record only to measure, such as when you first opened an episode or last played one, is not recorded while usage analytics is off, and turning it off deletes what we had recorded.
 
 ## Cookies and browser storage
 

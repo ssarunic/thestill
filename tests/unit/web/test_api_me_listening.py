@@ -161,3 +161,43 @@ def test_progress_is_per_user(tmp_path):
     state = client.app.dependency_overrides[get_app_state]()
     state.auth_service.get_current_user.return_value = ADMIN_USER
     assert _body(client.get(f"{ROUTE}/{EP}"))["item"] is None
+
+
+# ---------------------------------------------------------------------------
+# Spec #103 — listened_at honours the usage opt-out and GPC
+# ---------------------------------------------------------------------------
+def _listened_at(tmp_path, user_id):
+    with connect(str(tmp_path / "t.db")) as conn:
+        row = conn.execute(
+            "SELECT listened_at FROM user_episode_progress WHERE user_id = ? AND episode_id = ?", (user_id, EP)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def test_playback_sets_listened_at(tmp_path):
+    client, _ = _client(tmp_path, current_user=PLAIN_USER)
+    assert _put(client).status_code == 200
+    assert _listened_at(tmp_path, PLAIN_USER.id) is not None
+
+
+def test_gpc_leaves_listened_at_unset(tmp_path):
+    client, _ = _client(tmp_path, current_user=PLAIN_USER)
+    payload = {"event": "tick", "position_seconds": 600.0, "duration_seconds": 3600.0, "session_id": "s1", "seq": 1}
+    assert client.put(f"{ROUTE}/{EP}", json=payload, headers={"Sec-GPC": "1"}).status_code == 200
+    assert _listened_at(tmp_path, PLAIN_USER.id) is None
+
+
+def test_opted_out_user_leaves_listened_at_unset(tmp_path, monkeypatch):
+    monkeypatch.setattr(PLAIN_USER, "usage_analytics_enabled", False)
+    client, _ = _client(tmp_path, current_user=PLAIN_USER)
+    assert _put(client).status_code == 200
+    assert _listened_at(tmp_path, PLAIN_USER.id) is None
+
+
+def test_mark_played_is_not_a_listen_or_a_view(tmp_path):
+    client, mark_read = _client(tmp_path, current_user=PLAIN_USER)
+    assert _put(client, event="mark_played").json()["completed"] is True
+    mark_read.assert_called_once()  # the inbox flip still happens
+    assert _listened_at(tmp_path, PLAIN_USER.id) is None
+    with connect(str(tmp_path / "t.db")) as conn:
+        assert conn.execute("SELECT count(*) FROM user_episode_views").fetchone()[0] == 0

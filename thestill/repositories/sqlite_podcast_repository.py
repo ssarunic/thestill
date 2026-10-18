@@ -1424,6 +1424,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     session_id       TEXT NOT NULL,
                     seq              INTEGER NOT NULL,
                     updated_at       TIMESTAMP NOT NULL,
+                    listened_at      TIMESTAMP NULL,
                     PRIMARY KEY (user_id, episode_id),
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                     FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
@@ -1434,6 +1435,43 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """
             )
             logger.info("Migration complete: user_episode_progress table created")
+
+        # Spec #103 Phase 1 (Postgres migration 0019): the last playback
+        # write, and the first time each user opened each episode. Both are
+        # analytics-only, so their backfills skip users who opted out.
+        progress_columns = {row["name"] for row in conn.execute("PRAGMA table_info(user_episode_progress)").fetchall()}
+        if "listened_at" not in progress_columns:
+            conn.execute("ALTER TABLE user_episode_progress ADD COLUMN listened_at TIMESTAMP NULL")
+            conn.execute(
+                """
+                UPDATE user_episode_progress SET listened_at = updated_at
+                 WHERE (position_seconds > 0 OR completed_at IS NOT NULL)
+                   AND user_id IN (SELECT id FROM users WHERE usage_analytics_enabled = 1)
+                """
+            )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_episode_views'")
+        if cursor.fetchone() is None:
+            logger.info("Migrating database: creating user_episode_views")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS user_episode_views (
+                    user_id         TEXT NOT NULL,
+                    episode_id      TEXT NOT NULL,
+                    first_viewed_at TIMESTAMP NOT NULL,
+                    PRIMARY KEY (user_id, episode_id),
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_viewed_at);
+
+                INSERT OR IGNORE INTO user_episode_views (user_id, episode_id, first_viewed_at)
+                SELECT i.user_id, i.episode_id, i.state_changed_at
+                  FROM user_episode_inbox i JOIN users u ON u.id = i.user_id
+                 WHERE i.state = 'read' AND i.state_changed_at IS NOT NULL AND u.usage_analytics_enabled = 1;
+                """
+            )
+            logger.info("Migration complete: user_episode_views table created")
 
         # Per-user briefings (spec #36). Cursor (cursor_from, cursor_to)
         # makes "what inbox window did this briefing cover" reproducible

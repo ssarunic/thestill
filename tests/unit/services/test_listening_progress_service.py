@@ -283,3 +283,40 @@ class TestReads:
         service.record(USER, EP, _write("mark_unplayed", session="m2", seq=0))
         assert service.latest(USER) is None
         assert service.list_in_progress(USER, 3) == []
+
+
+# ---------------------------------------------------------------------------
+# plan_row — listened_at (spec #103 §4a)
+# ---------------------------------------------------------------------------
+class TestListenedAt:
+    EARLIER = NOW - timedelta(days=2)
+
+    def _plan(self, write, *, stored=None, measure=True):
+        return plan_row(write, user_id=USER, episode_id=EP, stored=stored, now=NOW, measure=measure)
+
+    @pytest.mark.parametrize("event", ["tick", "pause", "ended"])
+    def test_playback_sets_it(self, event):
+        assert self._plan(_write(event), stored=_stored(listened_at=self.EARLIER)).listened_at == NOW
+
+    def test_completing_stop_sets_it_and_a_plain_stop_does_not(self):
+        assert self._plan(_write("stop", position=3580.0)).listened_at == NOW
+        assert self._plan(_write("stop", position=600.0), stored=_stored(listened_at=self.EARLIER)).listened_at == (
+            self.EARLIER
+        )
+
+    @pytest.mark.parametrize("event", ["seek", "mark_played", "mark_unplayed"])
+    def test_other_writes_carry_it_forward(self, event):
+        assert self._plan(_write(event), stored=_stored(listened_at=self.EARLIER)).listened_at == self.EARLIER
+        assert self._plan(_write(event)).listened_at is None
+
+    def test_playback_completion_matches_completed_at_and_mark_played_does_not(self):
+        ended = self._plan(_write("ended"))
+        assert ended.completed_at == ended.listened_at == NOW
+        marked = self._plan(_write("mark_played"), stored=_stored(listened_at=self.EARLIER))
+        assert marked.completed_at == NOW and marked.listened_at == self.EARLIER
+
+    def test_opted_out_writes_leave_it_unchanged(self):
+        row = self._plan(_write("ended"), stored=_stored(listened_at=self.EARLIER), measure=False)
+        assert row.completed_at == NOW  # completion still works
+        assert row.listened_at == self.EARLIER
+        assert self._plan(_write("tick"), measure=False).listened_at is None

@@ -181,32 +181,30 @@ SELECT
       WHERE f.created_at >= %(start)s AND f.created_at < %(end)s) AS follows
 """
 
-# Spec #103: a reader of an episode opened it (an inbox ``read``) or
-# listened to it, over the previous window and this one. A progress row
-# with position 0 and no completion is a "Mark unplayed" reset, not a
-# listen. Both facts are first-time or latest-only, so an old episode
-# reread counts once, when it last happened.
+# Spec #103: a reader of an episode opened it (``user_episode_views``,
+# the first open) or listened to it (``listened_at``, playback only, never
+# a "Mark as played / unplayed"), over the previous window and this one.
+# Both are written only for readers who allow usage analytics (D5). An
+# old episode reopened counts once, when first opened.
 _READS = """
 reads AS (
-    SELECT i.user_id, i.episode_id, i.state_changed_at AS at
-      FROM user_episode_inbox i JOIN real_users ru ON ru.id = i.user_id
-     WHERE i.state = 'read'
-       AND i.state_changed_at >= %(prev_start)s AND i.state_changed_at < %(end)s
+    SELECT v.user_id, v.episode_id, v.first_viewed_at AS at
+      FROM user_episode_views v JOIN real_users ru ON ru.id = v.user_id
+     WHERE v.first_viewed_at >= %(prev_start)s AND v.first_viewed_at < %(end)s
     UNION ALL
-    SELECT p.user_id, p.episode_id, p.updated_at
+    SELECT p.user_id, p.episode_id, p.listened_at
       FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
-     WHERE p.updated_at >= %(prev_start)s AND p.updated_at < %(end)s
-       AND (p.position_seconds > 0 OR p.completed_at IS NOT NULL)
+     WHERE p.listened_at >= %(prev_start)s AND p.listened_at < %(end)s
 )"""
 
-# Listening in this window only; ``completed`` when the row completed in it.
+# Listening in this window only; ``completed`` when playback completed the
+# row in it (a "Mark as played" sets completed_at but not listened_at).
 _LISTENS = """
 listens AS (
     SELECT p.user_id, p.episode_id,
-           COALESCE(p.completed_at >= %(start)s AND p.completed_at < %(end)s, false) AS completed
+           COALESCE(p.completed_at = p.listened_at, false) AS completed
       FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
-     WHERE p.updated_at >= %(start)s AND p.updated_at < %(end)s
-       AND (p.position_seconds > 0 OR p.completed_at IS NOT NULL)
+     WHERE p.listened_at >= %(start)s AND p.listened_at < %(end)s
 )"""
 
 # The union of the top ``limit`` shows by readers and by followers, so the

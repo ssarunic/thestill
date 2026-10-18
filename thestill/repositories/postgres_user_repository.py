@@ -147,6 +147,12 @@ class PostgresUserRepository(UserRepository):
     def update_usage_analytics(self, user_id: str, enabled: bool) -> bool:
         with connect(self.dsn) as conn:
             cursor = conn.execute("UPDATE users SET usage_analytics_enabled = %s WHERE id = %s", (enabled, user_id))
+            if not enabled:
+                conn.execute("DELETE FROM user_episode_views WHERE user_id = %s", (user_id,))
+                conn.execute(
+                    "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = %s AND listened_at IS NOT NULL",
+                    (user_id,),
+                )
             return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:

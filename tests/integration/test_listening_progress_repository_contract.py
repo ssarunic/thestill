@@ -342,3 +342,23 @@ def test_inbox_listening_is_the_inbox_owners_not_another_users(env):
 
     (item,) = env.inbox.list_items(alice)
     assert item.listening is None
+
+
+# ---------------------------------------------------------------------------
+# listened_at (spec #103) — only moves forward
+# ---------------------------------------------------------------------------
+def test_listened_at_round_trips_and_never_rewinds(env):
+    user, ep = env.add_user(), env.add_episode()
+    later = BASE + timedelta(hours=1)
+    first = _row(user, ep, seq=1).model_copy(update={"listened_at": later})
+    assert env.repo.upsert_if_newer(first)
+    assert env.repo.get(user, ep).listened_at == later
+
+    # A write planned from a stale read carries an older value, or none.
+    for stale in (BASE, None):
+        assert env.repo.upsert_if_newer(_row(user, ep, seq=2 if stale else 3).model_copy(update={"listened_at": stale}))
+        assert env.repo.get(user, ep).listened_at == later
+
+    newest = later + timedelta(hours=1)
+    assert env.repo.upsert_if_newer(_row(user, ep, seq=4).model_copy(update={"listened_at": newest}))
+    assert env.repo.get(user, ep).listened_at == newest
