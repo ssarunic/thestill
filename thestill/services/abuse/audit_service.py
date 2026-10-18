@@ -14,7 +14,7 @@
 
 """Spec #104 §1.6 — writing the admin audit log."""
 
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 from structlog import get_logger
 
@@ -45,6 +45,15 @@ class AuditLog:
     def __init__(self, repository: AuditLogRepository, *, clock: Callable[[], "datetime"] = now_utc) -> None:
         self._repo = repository
         self._clock = clock
+
+    def entries(
+        self, *, action: Optional[str] = None, target_user_id: Optional[str] = None, limit: int = 50, offset: int = 0
+    ) -> List[AuditEntry]:
+        """Newest first. Read-only: nothing edits or deletes entries."""
+        return self._repo.list(action=action, target_user_id=target_user_id, limit=limit, offset=offset)
+
+    def count(self, *, action: Optional[str] = None, target_user_id: Optional[str] = None) -> int:
+        return self._repo.count(action=action, target_user_id=target_user_id)
 
     def record(self, actor: Actor, action: str, *, target_user_id: Optional[str] = None, **details: Any) -> None:
         """Append one entry. ``details`` holds reasons and old/new values —

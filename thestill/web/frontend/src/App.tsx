@@ -22,6 +22,11 @@ const FailedTasks = lazy(() => import('./pages/FailedTasks'))
 const QueueViewer = lazy(() => import('./pages/QueueViewer'))
 // Spec #95 — product analytics (admin).
 const Analytics = lazy(() => import('./pages/Analytics'))
+// Spec #104 — the admin console.
+const AdminUsers = lazy(() => import('./pages/admin/AdminUsers'))
+const AdminUserDetail = lazy(() => import('./pages/admin/AdminUserDetail'))
+const AdminSettings = lazy(() => import('./pages/admin/AdminSettings'))
+const AdminAudit = lazy(() => import('./pages/admin/AdminAudit'))
 const Settings = lazy(() => import('./pages/Settings'))
 const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
@@ -163,6 +168,34 @@ function App() {
           <AdminRoute>
             <Suspense fallback={<PageLoader />}>
               <Analytics />
+            </Suspense>
+          </AdminRoute>
+        } />
+        <Route path="admin/users" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <AdminUsers />
+            </Suspense>
+          </AdminRoute>
+        } />
+        <Route path="admin/users/:userId" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <AdminUserDetail />
+            </Suspense>
+          </AdminRoute>
+        } />
+        <Route path="admin/settings" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <AdminSettings />
+            </Suspense>
+          </AdminRoute>
+        } />
+        <Route path="admin/audit" element={
+          <AdminRoute>
+            <Suspense fallback={<PageLoader />}>
+              <AdminAudit />
             </Suspense>
           </AdminRoute>
         } />

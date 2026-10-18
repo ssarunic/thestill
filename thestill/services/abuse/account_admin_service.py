@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Protocol, Tupl
 from structlog import get_logger
 
 from ...models.user import User, UserStatus
+from ...repositories.audit_log_repository import AuditEntry
 from ...repositories.user_directory_repository import UserSort, UserSummary
 from ...utils.datetime_utils import now_utc
 from .actor import Actor
@@ -74,6 +75,33 @@ class UserFootprint:
     feeds_brought_in: int
     #: Counted ledger rows per kind in the last 24h (Phase 2).
     usage_24h: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FollowInfo:
+    podcast_id: str
+    title: str
+    slug: str
+    image_url: Optional[str]
+    #: This user brought the feed in (§1.5).
+    introduced: bool
+    #: Moved aside by a ban.
+    suspended: bool
+    #: Other users following it now.
+    other_followers: int
+
+
+@dataclass(frozen=True)
+class UserDetail:
+    user: User
+    usage_24h: Dict[str, int]
+    usage_7d: Dict[str, int]
+    #: Per kind, one count per UTC day for the last 7 days, oldest first.
+    daily_7d: Dict[str, List[int]]
+    follows: List[FollowInfo]
+    quota_limits: Dict[str, int]
+    quota_overrides: Dict[str, int]
+    history: List[AuditEntry]
 
 
 @dataclass(frozen=True)
@@ -144,10 +172,26 @@ class AccountAdminService:
         offset: int = 0,
     ) -> List[UserSummary]:
         self._require_multi_user()
-        return self._directory.list_users(status=status, q=q, sort=sort, limit=limit, offset=offset)
+        return self._directory.list_users(
+            status=status, q=q, sort=sort, limit=limit, offset=offset, usage_since=self._clock() - timedelta(hours=24)
+        )
 
     def count_users(self, *, status: Optional[UserStatus] = None, q: Optional[str] = None) -> int:
+        self._require_multi_user()
         return self._directory.count_users(status=status, q=q)
+
+    def audit_page(
+        self, *, action: Optional[str] = None, target_user_id: Optional[str] = None, limit: int = 50, offset: int = 0
+    ) -> Tuple[List[AuditEntry], int, Dict[str, str]]:
+        """A page of the audit log, its total, and the emails of the users
+        it names (one query)."""
+        self._require_multi_user()
+        entries = self._audit.entries(action=action, target_user_id=target_user_id, limit=limit, offset=offset)
+        emails = self._directory.emails_by_id(
+            [e.actor_user_id for e in entries if e.actor_user_id]
+            + [e.target_user_id for e in entries if e.target_user_id]
+        )
+        return entries, self._audit.count(action=action, target_user_id=target_user_id), emails
 
     def footprint(self, user_id: str) -> UserFootprint:
         return UserFootprint(
@@ -155,6 +199,45 @@ class AccountAdminService:
             suspended_follows=len(self._suspended.list_podcast_ids(user_id)),
             feeds_brought_in=len(self._followers.introduced_podcast_ids(user_id)),
             usage_24h=self._quota.usage_last_day(user_id) if self._quota is not None else {},
+        )
+
+    def detail(self, user_id: str) -> UserDetail:
+        """Everything the console's user page shows."""
+        self._require_multi_user()
+        user = self._load(user_id)
+        introduced = set(self._followers.introduced_podcast_ids(user.id))
+        active = self._followers.get_followed_podcast_ids(user.id)
+        follows: List[FollowInfo] = []
+        for podcast_id, suspended in [(pid, False) for pid in active] + [
+            (pid, True) for pid in self._suspended.list_podcast_ids(user.id)
+        ]:
+            podcast = self._podcasts.get_by_id(podcast_id)
+            if podcast is None:
+                continue
+            followers = self._followers.count_by_podcast(podcast_id)
+            follows.append(
+                FollowInfo(
+                    podcast_id=podcast_id,
+                    title=podcast.title,
+                    slug=podcast.slug,
+                    image_url=podcast.image_url,
+                    introduced=podcast_id in introduced,
+                    suspended=suspended,
+                    other_followers=followers - (0 if suspended else 1),
+                )
+            )
+        follows.sort(key=lambda f: (not f.introduced, f.title.lower()))
+        now = self._clock()
+        quota = self._quota
+        return UserDetail(
+            user=user,
+            usage_24h=quota.usage_since(user.id, now - timedelta(hours=24)) if quota else {},
+            usage_7d=quota.usage_since(user.id, now - timedelta(days=7)) if quota else {},
+            daily_7d=quota.daily_usage(user.id, 7) if quota else {},
+            follows=follows,
+            quota_limits=quota.effective_limits(user.id) if quota else {},
+            quota_overrides=quota.overrides_for(user.id) if quota else {},
+            history=self._audit.entries(target_user_id=user.id, limit=100),
         )
 
     def resolve_user(self, email_or_id: str) -> User:
@@ -247,6 +330,24 @@ class AccountAdminService:
             user=self._load(target.id), follows_restored=len(restored), feeds_reactivated=reactivated
         )
 
+    def set_status(
+        self,
+        user_id: str,
+        status: UserStatus,
+        *,
+        reason: Optional[str],
+        actor: Actor,
+        remove_introduced_feeds: bool = False,
+    ) -> User:
+        """The console's single status action: suspend, ban or reinstate."""
+        if status == UserStatus.SUSPENDED:
+            return self.suspend(user_id, reason=reason or "", actor=actor)
+        if status == UserStatus.BANNED:
+            return self.ban(
+                user_id, reason=reason or "", actor=actor, remove_introduced_feeds=remove_introduced_feeds
+            ).user
+        return self.reinstate(user_id, actor=actor, reason=reason).user
+
     def _disable(self, user_id: str, status: UserStatus, reason: Optional[str], actor: Actor) -> Tuple[User, str]:
         """Shared first step of suspend and ban: validate, set the status,
         revoke every session and the MCP token. Returns the target as it
@@ -301,7 +402,12 @@ class AccountAdminService:
         return RemovedFeeds(user=target, feeds_removed=removed, tasks_cancelled=cancelled)
 
     def _remove_introduced(self, user_id: str, introduced: List[str]) -> Tuple[List[str], int]:
-        removable = [pid for pid in introduced if not self._other_active_followers(pid, user_id)]
+        # Only feeds the user still follows (or has moved aside): the ledger
+        # remembers feeds they brought in and later dropped.
+        following = set(self._followers.get_followed_podcast_ids(user_id)) | set(
+            self._suspended.list_podcast_ids(user_id)
+        )
+        removable = [pid for pid in introduced if pid in following and not self._other_active_followers(pid, user_id)]
         for podcast_id in removable:
             self._followers.remove(user_id, podcast_id)
         self._suspended.discard(user_id, removable)
@@ -339,7 +445,28 @@ class AccountAdminService:
         self._audit.record(actor, "user.quota_override", target_user_id=target.id, quota=quota, old=old, new=limit)
         return self._settings.get("quota_overrides").get(target.id, {})
 
+    def replace_quota_overrides(self, user_id: str, overrides: Dict[str, int], *, actor: Actor) -> Dict[str, int]:
+        """Set all of one user's overrides at once (the console's form); an
+        empty map clears them."""
+        self._require_multi_user()
+        if self._settings is None:
+            raise AdminActionError("unavailable", "Quota overrides need the settings service.")
+        target = self._load(user_id)
+        everyone = {uid: dict(limits) for uid, limits in self._settings.get("quota_overrides").items()}
+        old = everyone.pop(target.id, {})
+        if overrides:
+            everyone[target.id] = dict(overrides)
+        try:
+            self._settings.set("quota_overrides", everyone, actor=actor, audit=False)
+        except ValueError as exc:
+            raise AdminActionError("invalid_quota", str(exc)) from exc
+        self._audit.record(actor, "user.quota_override", target_user_id=target.id, old=old, new=dict(overrides))
+        return self._settings.get("quota_overrides").get(target.id, {})
+
     # ----- admin role -----
+
+    def set_admin(self, user_id: str, is_admin: bool, *, actor: Actor) -> User:
+        return self.grant_admin(user_id, actor=actor) if is_admin else self.revoke_admin(user_id, actor=actor)
 
     def grant_admin(self, user_id: str, *, actor: Actor) -> User:
         self._require_multi_user()

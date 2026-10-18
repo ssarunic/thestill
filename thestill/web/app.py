@@ -99,6 +99,7 @@ from .public_shell import (
     render_head,
 )
 from .routes import (
+    api_admin,
     api_briefings,
     api_commands,
     api_dashboard,
@@ -827,6 +828,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     app.include_router(
         api_dashboard.router, prefix="/api/dashboard", tags=["dashboard", "admin"], dependencies=require_operator
     )
+    # Spec #104 §4 — the admin console API (users, settings, alerts, audit).
+    app.include_router(api_admin.router, prefix="/api/admin", tags=["admin"], dependencies=require_operator)
     app.include_router(api_podcasts.router, prefix="/api/podcasts", tags=["podcasts"], dependencies=require_session)
     # spec #38 karaoke wipe: separate file, but URL pattern slots in next to
     # api_podcasts so it mounts under the same /api/podcasts prefix.

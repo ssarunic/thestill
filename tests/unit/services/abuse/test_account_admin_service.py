@@ -216,9 +216,17 @@ def test_ban_with_remove_introduced_feeds_ignores_suspended_co_followers(world, 
 def test_user_admin_needs_multi_user_mode(tmp_path):
     world = make_world(tmp_path, multi_user=False)
     user = world.add_user("local@example.com")
-    with pytest.raises(AdminActionError) as exc:
-        world.abuse.account_admin.suspend(user.id, reason="x", actor=Actor.cli())
-    assert exc.value.code == "single_user_mode"
+    svc = world.abuse.account_admin
+    for action in (
+        lambda: svc.suspend(user.id, reason="x", actor=Actor.cli()),
+        lambda: svc.list_users(),
+        lambda: svc.count_users(),
+        lambda: svc.audit_page(),
+        lambda: svc.detail(user.id),
+    ):
+        with pytest.raises(AdminActionError) as exc:
+            action()
+        assert exc.value.code == "single_user_mode"
 
 
 def test_resolve_user_by_email_case_insensitively_or_id(world):

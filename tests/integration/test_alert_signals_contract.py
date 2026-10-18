@@ -87,3 +87,40 @@ def test_queued_audio_durations_one_per_episode(env):
     env.queue.add_task(episodes[1], TaskStage.SUMMARIZE)  # not transcription
     durations = env.queue.queued_audio_durations(NOW - timedelta(days=365))
     assert durations == ["60"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 console reads
+# ---------------------------------------------------------------------------
+def test_listing_counts_recent_usage_and_sorts_by_attention(env):
+    quiet, noisy, busy = (env.add_user(f"{n}@example.com") for n in ("quiet", "noisy", "busy"))
+    env.usage.record(noisy.id, [UsageRecord("quota_exceeded", "q")] * 2, now=NOW)
+    env.usage.record(busy.id, [UsageRecord("feed_introduced", "p")] * 3, now=NOW)
+    env.usage.record(busy.id, [UsageRecord("feed_introduced", "old")], now=NOW - timedelta(days=3))
+    env.usage.record(busy.id, [UsageRecord("import", "e", state="released")], now=NOW)
+
+    rows = env.directory.list_users(sort="attention", usage_since=NOW - timedelta(hours=24))
+    assert [r.user.email for r in rows] == ["noisy@example.com", "busy@example.com", "quiet@example.com"]
+    busy_row = rows[1]
+    assert busy_row.usage_recent["feed_introduced"] == 3
+    assert busy_row.usage_recent["import"] == 0  # released rows don't count
+    assert busy_row.feeds_brought_in_total == 4
+    assert [r.user.email for r in env.directory.list_users(sort="email")][0] == "busy@example.com"
+
+
+def test_daily_counts_by_utc_day(env):
+    user = env.add_user("u@example.com")
+    env.usage.record(user.id, [UsageRecord("follow", "a")], now=NOW)
+    env.usage.record(user.id, [UsageRecord("follow", "b")] * 2, now=NOW - timedelta(days=1))
+    env.usage.record(user.id, [UsageRecord("import", "e")], now=NOW - timedelta(days=1))
+    counts = env.usage.daily_counts(user.id, NOW - timedelta(days=7))
+    assert counts == {
+        "follow": {"2026-10-18": 1, "2026-10-17": 2},
+        "import": {"2026-10-17": 1},
+    }
+
+
+def test_emails_by_id_in_one_query(env):
+    a, b = env.add_user("a@example.com"), env.add_user("b@example.com")
+    assert env.directory.emails_by_id([a.id, b.id, a.id, ""]) == {a.id: "a@example.com", b.id: "b@example.com"}
+    assert env.directory.emails_by_id([]) == {}

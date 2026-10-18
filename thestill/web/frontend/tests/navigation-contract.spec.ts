@@ -76,6 +76,38 @@ async function mockLists(page: Page) {
 // Links that need setup a table row cannot express live in their own spec but
 // still honour the contract:
 //   - Now Playing sheet → "Open transcript here" (spec #72): now-playing-sheet.spec.ts
+// Spec #104 — a multi-user admin session and the console's endpoints.
+async function mockAdminConsole(page: Page) {
+  await page.route('**/api/auth/status', (route) =>
+    route.fulfill({
+      json: {
+        multi_user: true,
+        authenticated: true,
+        email_delivery_available: false,
+        user: { id: 'admin', email: 'op@example.com', name: 'Op', picture: null, created_at: NOW, last_login_at: NOW, region: null, region_locked: false, is_admin: true },
+      },
+    }),
+  )
+  const users = Array.from({ length: 40 }, (_, i) => ({
+    id: `u-${i + 1}`, email: `user${i + 1}@example.com`, name: `User ${i + 1}`, picture: null, created_at: NOW,
+    last_login_at: NOW, signup_source: null, is_admin: false, status: 'active', status_reason: null,
+    status_changed_at: null, status_changed_by: null, follows: 40 - i, suspended_follows: 0,
+    feeds_brought_in_24h: 0, feeds_brought_in_total: 0, follows_24h: 0, imports_24h: 0, translations_24h: 0, quota_hits_24h: 0,
+  }))
+  await page.route('**/api/admin/settings', (route) =>
+    route.fulfill({ json: { status: 'ok', settings: [], non_default: {}, alert_channels: ['log'] } }),
+  )
+  await page.route(/\/api\/admin\/users(\?.*)?$/, (route) => route.fulfill({ json: paged('users', users) }))
+  await page.route(/\/api\/admin\/users\/u-\d+$/, (route) =>
+    route.fulfill({
+      json: {
+        status: 'ok', user: users[29], usage_24h: {}, usage_7d: {}, daily_7d: {}, follows: [],
+        quota_limits: { imports_per_day: 5 }, quota_overrides: {}, history: [],
+      },
+    }),
+  )
+}
+
 const ROUTES: { name: string; path: string; ready: (page: Page) => Promise<void>; link: (page: Page) => ReturnType<Page['locator']> }[] = [
   {
     name: 'Podcast detail → episode',
@@ -101,6 +133,13 @@ const ROUTES: { name: string; path: string; ready: (page: Page) => Promise<void>
     ready: async (page) => expect(page.getByRole('region', { name: 'People' })).toBeVisible(),
     link: (page) => page.getByRole('region', { name: 'People' }).getByRole('link').first(),
   },
+  {
+    // Spec #104 — the admin console's user list (multi-user admin session).
+    name: 'Admin users → user',
+    path: '/admin/users?sort=follows',
+    ready: async (page) => expect(page.getByRole('link', { name: 'user1@example.com' })).toBeVisible(),
+    link: (page) => page.getByRole('link', { name: 'user30@example.com' }),
+  },
 ]
 
 test.describe('navigation contract', () => {
@@ -119,6 +158,7 @@ test.describe('navigation contract', () => {
           }),
         )
       }
+      if (route.name === 'Admin users → user') await mockAdminConsole(page)
       await page.goto(route.path)
       await route.ready(page)
 

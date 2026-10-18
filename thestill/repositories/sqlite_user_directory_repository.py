@@ -16,23 +16,24 @@
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from ..models.user import User, UserStatus
 from ..utils.sqlite_ext import connect
 from .sqlite_user_repository import SELECT_COLS, row_to_user
-from .user_directory_repository import USER_SORT_ORDER, UserDirectoryRepository, UserSort, UserSummary, search_pattern
+from .user_directory_repository import (
+    USER_SORT_ORDER,
+    UserDirectoryRepository,
+    UserSort,
+    UserSummary,
+    listing_where,
+    summary_columns,
+    summary_from_row,
+)
 
 
 def _where(status: Optional[UserStatus], q: Optional[str]) -> Tuple[str, list]:
-    clauses, params = [], []
-    if status is not None:
-        clauses.append("u.status = ?")
-        params.append(UserStatus(status).value)
-    if q:
-        clauses.append("(lower(u.email) LIKE ? ESCAPE '\\' OR lower(coalesce(u.name, '')) LIKE ? ESCAPE '\\')")
-        params.extend([search_pattern(q)] * 2)
-    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+    return listing_where("?", status, q)
 
 
 class SqliteUserDirectoryRepository(UserDirectoryRepository):
@@ -47,22 +48,23 @@ class SqliteUserDirectoryRepository(UserDirectoryRepository):
         sort: UserSort = "created",
         limit: int = 50,
         offset: int = 0,
+        usage_since: Optional[datetime] = None,
     ) -> List[UserSummary]:
         where, params = _where(status, q)
         cols = ", ".join(f"u.{c.strip()}" for c in SELECT_COLS.split(","))
+        counts, count_params = summary_columns("?", usage_since)
         with connect(self.db_path) as conn:
             rows = conn.execute(
                 f"""
                 SELECT {cols},
-                    (SELECT COUNT(*) FROM podcast_followers f WHERE f.user_id = u.id) AS follows,
-                    (SELECT COUNT(*) FROM suspended_follows s WHERE s.user_id = u.id) AS suspended
+                    {counts}
                 FROM users u {where}
                 ORDER BY {USER_SORT_ORDER[sort]}
                 LIMIT ? OFFSET ?
                 """,
-                (*params, limit, offset),
+                (*[s.isoformat() for s in count_params], *params, limit, offset),
             ).fetchall()
-        return [UserSummary(user=row_to_user(r), follows=r["follows"], suspended_follows=r["suspended"]) for r in rows]
+        return [summary_from_row(r, row_to_user(r)) for r in rows]
 
     def count_users(self, *, status: Optional[UserStatus] = None, q: Optional[str] = None) -> int:
         where, params = _where(status, q)
@@ -76,6 +78,14 @@ class SqliteUserDirectoryRepository(UserDirectoryRepository):
                 (since.isoformat(),),
             ).fetchall()
         return [row_to_user(row) for row in rows]
+
+    def emails_by_id(self, user_ids: Sequence[str]) -> Dict[str, str]:
+        ids = list(dict.fromkeys(i for i in user_ids if i))
+        if not ids:
+            return {}
+        with connect(self.db_path) as conn:
+            rows = conn.execute(f"SELECT id, email FROM users WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()
+        return {row["id"]: row["email"] for row in rows}
 
     def count_admins(self) -> int:
         with connect(self.db_path) as conn:
