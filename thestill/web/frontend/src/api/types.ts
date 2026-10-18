@@ -66,6 +66,52 @@ export interface AnalyticsCohortCell {
   pct: number | null
 }
 
+// Spec #103 — what readers read (content popularity).
+export interface AnalyticsPodcastStat {
+  podcast_id: string
+  slug: string
+  title: string
+  category: string | null  // top-level name; null = uncategorised
+  followers: number
+  new_follows: number
+  follower_readers: number
+  readers: number
+  readers_previous: number
+  listeners: number
+  completions: number
+  change: string  // server-formatted: +n, −n, 0, new or —
+}
+
+export interface AnalyticsEpisodeStat {
+  episode_id: string
+  slug: string
+  title: string
+  podcast_slug: string
+  podcast_title: string
+  published_at: string | null
+  imported: boolean
+  readers: number
+  listeners: number
+  completions: number
+}
+
+export interface AnalyticsCategoryStat {
+  category: string
+  shows: number
+  shows_read: number
+  followers: number
+  readers: number
+  readers_previous: number
+  change: string
+}
+
+export interface AnalyticsContentReport {
+  podcasts: AnalyticsPodcastStat[]  // union of the top N by readers and by followers
+  episodes: AnalyticsEpisodeStat[]
+  categories: AnalyticsCategoryStat[]
+  notes: string[]
+}
+
 export interface AnalyticsReport {
   generated_at: string
   range: AnalyticsRange
@@ -90,6 +136,7 @@ export interface AnalyticsReport {
     follows: number
     follows_per_active_user: number | null
   }
+  content: AnalyticsContentReport
   notes: string[]
 }
 

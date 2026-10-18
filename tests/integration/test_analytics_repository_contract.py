@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from thestill.models.analytics import BEFORE_TRACKING, COHORT_ROWS
+from thestill.models.analytics import BEFORE_TRACKING, COHORT_ROWS, UNCATEGORISED
 from thestill.repositories.analytics_repository import AnalyticsUnavailableError, UnavailableAnalyticsRepository
 from thestill.services.analytics_service import AnalyticsService
 
@@ -94,6 +94,64 @@ class _Seed:
             VALUES (%s, %s, %s, 'follow_new', 'read', %s, %s)
             """,
             (str(uuid.uuid4()), user[0], eid, at - H, at),
+        )
+
+    # Spec #103 content helpers: shared shows and episodes, so several
+    # users can follow, read and listen to the same thing.
+    def category(self, name, parent=None):
+        return self.conn.execute(
+            "INSERT INTO categories (name, slug, parent_id) VALUES (%s, %s, %s) RETURNING id",
+            (name, name.lower().replace(" ", "-"), parent),
+        ).fetchone()[0]
+
+    def show(self, title, *, category=None, synthetic=False):
+        pid = str(uuid.uuid4())
+        slug = title.lower().replace(" ", "-")
+        self.conn.execute(
+            """
+            INSERT INTO podcasts (id, rss_url, title, slug, image_url, primary_category_id, synthetic)
+            VALUES (%s, %s, %s, %s, '', %s, %s)
+            """,
+            (pid, f"https://example.com/{pid}.xml", title, slug, category, synthetic),
+        )
+        return pid
+
+    def episode(self, podcast_id, title, published):
+        self._episodes += 1
+        eid = str(uuid.uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO episodes (id, podcast_id, external_id, title, slug, description,
+                                  description_html, audio_url, published_at, pub_date)
+            VALUES (%s, %s, %s, %s, %s, '', '', 'https://example.com/a.mp3', %s, %s)
+            """,
+            (eid, podcast_id, f"ext-{self._episodes}", title, title.lower(), published, published),
+        )
+        return eid
+
+    def follow_show(self, user, podcast_id, at):
+        self.conn.execute(
+            "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (%s, %s, %s, %s)",
+            (str(uuid.uuid4()), user[0], podcast_id, at),
+        )
+
+    def read_episode(self, user, episode_id, at):
+        self.conn.execute(
+            """
+            INSERT INTO user_episode_inbox (id, user_id, episode_id, source, state, delivered_at, state_changed_at)
+            VALUES (%s, %s, %s, 'follow_new', 'read', %s, %s)
+            """,
+            (str(uuid.uuid4()), user[0], episode_id, at - H, at),
+        )
+
+    def progress(self, user, episode_id, at, *, position, completed_at=None):
+        self.conn.execute(
+            """
+            INSERT INTO user_episode_progress (user_id, episode_id, position_seconds, session_id, seq,
+                                               updated_at, completed_at)
+            VALUES (%s, %s, %s, 's', 1, %s, %s)
+            """,
+            (user[0], episode_id, position, at, completed_at),
         )
 
     def briefing(self, user, created_at, opened_at=None):
@@ -256,11 +314,168 @@ def test_engagement(service):
     assert e.follows_per_active_user == 0.75
 
 
+# ----- spec #103 content popularity ---------------------------------------
+#
+# 28d window [09-17 00:00, NOW); previous window of the same 27.5 days
+# [08-20 12:00, 09-17 00:00). Category names carry a per-run tag because
+# the fixture leaves the categories table alone.
+
+
+@pytest.fixture
+def content():
+    import psycopg
+
+    from thestill.repositories.postgres_analytics_repository import PostgresAnalyticsRepository
+    from thestill.repositories.postgres_schema import ensure_schema
+
+    ensure_schema(PG_DSN)
+    tag = uuid.uuid4().hex[:8]
+    with psycopg.connect(PG_DSN) as conn:
+        conn.execute("TRUNCATE users, podcasts, episodes CASCADE")
+        s = _Seed(conn)
+        tech = s.category(f"Technology {tag}")
+        tech_news = s.category("Tech News", parent=tech)
+        comedy = s.category(f"Comedy {tag}")
+        history = s.category(f"History {tag}")  # one idle show: no row
+        news = s.category(f"News {tag}")  # followed, never read
+
+        alpha = s.show("Alpha", category=tech)
+        beta = s.show("Beta", category=tech_news)  # rolls up to Technology
+        gamma = s.show("Gamma")  # uncategorised
+        delta = s.show("Delta", category=comedy)  # nobody follows it
+        s.show("Zeta", category=history)
+        epsilon = s.show("Epsilon", category=news)
+        imports = s.show("Imports", synthetic=True)
+
+        a1 = s.episode(alpha, "A1", NOW - 6 * D)
+        a2 = s.episode(alpha, "A2", NOW - 31 * D)
+        b1 = s.episode(beta, "B1", NOW - 36 * D)
+        g1 = s.episode(gamma, "G1", NOW - 10 * D)
+        d1 = s.episode(delta, "D1", NOW - 20 * D)
+        i1 = s.episode(imports, "I1", NOW - 2 * D)
+
+        # The admin follows and reads everything; never counted.
+        admin = s.user("admin", NOW - 90 * D, admin=True)
+        s.follow_show(admin, alpha, NOW - 1 * D)
+        for eid in (a1, b1, g1, d1, i1):
+            s.read_episode(admin, eid, NOW - 1 * D)
+        s.progress(admin, d1, NOW - 1 * D, position=600, completed_at=NOW - 1 * D)
+
+        u1, u2, u3, u4, u5 = (s.user(f"u{i}", NOW - 90 * D) for i in range(1, 6))
+        # Alpha: followers u1 (old), u2, u3 (new in window) = 3, new 2.
+        s.follow_show(u1, alpha, NOW - 40 * D)
+        s.follow_show(u2, alpha, NOW - 5 * D)
+        s.follow_show(u3, alpha, NOW - 2 * D)
+        # Beta: five followers, one new; more followers than Alpha.
+        s.follow_show(u1, beta, NOW - 50 * D)
+        s.follow_show(u2, beta, NOW - 50 * D)
+        s.follow_show(u3, beta, NOW - 60 * D)  # reads Beta only in the previous window
+        s.follow_show(u4, beta, NOW - 50 * D)
+        s.follow_show(u5, beta, NOW - 10 * D)
+        # Gamma: u4, new. Epsilon: u5, nobody reads it.
+        s.follow_show(u4, gamma, NOW - 3 * D)
+        s.follow_show(u5, epsilon, NOW - 60 * D)
+
+        # Alpha readers in the window: u1, u2 (followers) and u5 (not).
+        s.read_episode(u1, a1, NOW - 1 * D)
+        s.read_episode(u2, a1, NOW - 2 * D)
+        s.read_episode(u5, a1, NOW - 3 * D)
+        s.progress(u2, a1, NOW - 2 * D, position=1800, completed_at=NOW - 2 * D)  # listened to the end
+        s.progress(u2, a2, NOW - 1 * D, position=200)  # a second Alpha episode: still one listener
+        s.progress(u3, a2, NOW - 1 * D, position=0)  # "Mark unplayed": not a read, not a listen
+        # Previous window: u1 read A2 (Alpha, once in each window), u3 read B1.
+        s.read_episode(u1, a2, NOW - 30 * D)
+        s.read_episode(u3, b1, NOW - 35 * D)
+        # Gamma: u4 listened part-way (a reader with no inbox read); an older
+        # read falls before both windows.
+        s.progress(u4, g1, NOW - 1 * D, position=100)
+        s.read_episode(u4, g1, NOW - 80 * D)
+        # Delta: reached only through discovery.
+        s.progress(u5, d1, NOW - 4 * D, position=50)
+        # An imported episode.
+        s.read_episode(u1, i1, NOW - 1 * D)
+
+    repo = PostgresAnalyticsRepository(PG_DSN, exclude_emails=(LOCAL_EMAIL,))
+    service = AnalyticsService(repo, enabled=True, clock=lambda: NOW)
+    return {"service": service, "repo": repo, "tag": tag}
+
+
+@pg_only
+def test_content_podcasts(content):
+    report = content["service"].report("28d").content
+    assert [p.title for p in report.podcasts] == ["Alpha", "Gamma", "Delta", "Beta", "Epsilon"]  # no Imports, Zeta
+    p = {p.title: p for p in report.podcasts}
+    tag = content["tag"]
+
+    alpha = p["Alpha"]
+    assert (alpha.category, alpha.slug) == (f"Technology {tag}", "alpha")
+    assert (alpha.followers, alpha.new_follows, alpha.follower_readers) == (3, 2, 2)  # u1 u2 read; u3 reset
+    assert (alpha.readers, alpha.readers_previous) == (3, 1)
+    assert (alpha.listeners, alpha.completions) == (1, 1)  # u2, across A1 and A2
+    assert alpha.change == "+2"
+
+    # Read only in the previous window, by a follower (u3), who is therefore
+    # not a follower reader now; the admin's read never counts.
+    beta = p["Beta"]
+    assert (beta.category, beta.followers, beta.new_follows) == (f"Technology {tag}", 5, 1)
+    assert (beta.readers, beta.readers_previous, beta.follower_readers, beta.listeners) == (0, 1, 0, 0)
+    assert beta.change == "−1"
+
+    gamma = p["Gamma"]  # a partial listen is a reader and a listener
+    assert gamma.category is None
+    assert (gamma.followers, gamma.readers, gamma.readers_previous, gamma.follower_readers) == (1, 1, 0, 1)
+    assert (gamma.listeners, gamma.completions) == (1, 0)
+
+    delta = p["Delta"]
+    assert (delta.followers, delta.readers, delta.listeners) == (0, 1, 1)
+
+
+@pg_only
+def test_content_podcasts_are_the_union_of_both_top_lists(content):
+    service, repo = content["service"], content["repo"]
+    window = service.window_for("28d", now=NOW)
+    report = repo.content(window, service.previous_window(window), limit=1)
+    assert [p.title for p in report.podcasts] == ["Alpha", "Beta"]  # top reader, top followed
+
+
+@pg_only
+def test_content_episodes(content):
+    episodes = content["service"].report("28d").content.episodes
+    # B1 was read only in the previous window; A2 is u2's partial listen
+    # (u1's read was earlier, u3's reset is not a read).
+    assert [e.title for e in episodes] == ["A1", "G1", "D1", "A2", "I1"]  # ties: listeners, then newest
+    e = {e.title: e for e in episodes}
+    assert (e["A1"].readers, e["A1"].listeners, e["A1"].completions) == (3, 1, 1)
+    assert (e["A1"].podcast_slug, e["A1"].slug, e["A1"].imported) == ("alpha", "a1", False)
+    assert e["A1"].published_at == NOW - 6 * D
+    assert (e["I1"].imported, e["I1"].readers, e["I1"].listeners) == (True, 1, 0)
+
+
+@pg_only
+def test_content_categories_roll_up_and_add_up(content):
+    tag = content["tag"]
+    categories = content["service"].report("28d").content.categories
+    assert [c.category for c in categories] == [f"Technology {tag}", UNCATEGORISED, f"Comedy {tag}", f"News {tag}"]
+    c = {c.category: c for c in categories}
+    tech = c[f"Technology {tag}"]  # Alpha + Beta (via its subcategory)
+    assert (tech.shows, tech.shows_read, tech.followers) == (2, 1, 5)
+    assert (tech.readers, tech.readers_previous) == (3, 2)  # u1 u2 u5; before: u1 (A2), u3 (B1)
+    assert (c[UNCATEGORISED].shows, c[UNCATEGORISED].followers, c[UNCATEGORISED].readers) == (1, 1, 1)
+    comedy = c[f"Comedy {tag}"]  # read through discovery only
+    assert (comedy.shows, comedy.shows_read, comedy.followers, comedy.readers) == (0, 1, 0, 1)
+    news = c[f"News {tag}"]  # follows alone list a category
+    assert (news.shows, news.shows_read, news.followers, news.readers, news.change) == (1, 0, 1, 0, "—")
+    assert sum(x.shows for x in categories) == 4  # Alpha, Beta, Gamma, Epsilon: every followed show once
+
+
 def test_unavailable_stub_raises_and_service_reports_unavailable():
     stub = UnavailableAnalyticsRepository()
     assert stub.available is False
     with pytest.raises(AnalyticsUnavailableError):
         stub.cohorts(NOW)
+    window = AnalyticsService(stub, enabled=True).window_for("7d", now=NOW)
+    with pytest.raises(AnalyticsUnavailableError):
+        stub.content(window, window, limit=20)
     service = AnalyticsService(stub, enabled=True, clock=lambda: NOW)
     assert service.available is False
     with pytest.raises(AnalyticsUnavailableError):

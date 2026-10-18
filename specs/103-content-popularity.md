@@ -1,6 +1,6 @@
 # Content Popularity
 
-> **Status:** 📝 Draft (2026-10-17)
+> **Status:** 🚧 Phase 0 implemented (2026-10-18); Phases 1–2 open
 > **Created:** 2026-10-17
 > **Priority:** Medium. Phase 0 needs no migration and can ship with the next deploy.
 > **Author:** Product & Engineering
@@ -221,11 +221,15 @@ class ContentReport(BaseModel):
     podcasts: List[PodcastStat]
     episodes: List[EpisodeStat]
     categories: List[CategoryStat]
+    notes: List[str] = []  # the undercounts of the deployed phase
 ```
 
 `AnalyticsReport` gains `content: ContentReport`, and
 `AnalyticsService.report` computes `previous` as the window of the same
-length ending at `window.start`.
+elapsed length ending at `window.start`: the window ends "now", part-way
+through today, so a 28-day range checked at noon compares 27.5 days with
+the 27.5 days before them. The service sets `content.notes`; the page
+shows them under the Content tables and the CLI after its Content block.
 
 The shared reads CTE, Phase 0 shape:
 
@@ -420,9 +424,18 @@ top 10 episodes, every category. `--json` prints the full payload.
 
 | Phase | Scope | Ships alone? |
 |---|---|---|
-| 0 | `ContentReport` models; `AnalyticsRepository.content` (Postgres) and the stub; `previous` window in `AnalyticsService`; `content` in `GET /api/dashboard/analytics`; `ContentSection`; CLI Content block; notes; indexes as `EXPLAIN` decides | Yes; no migration |
+| 0 ✅ | `ContentReport` models; `AnalyticsRepository.content` (Postgres) and the stub; `previous` window in `AnalyticsService`; `content` in `GET /api/dashboard/analytics`; `ContentSection`; CLI Content block; notes; indexes as `EXPLAIN` decides (none needed, see below) | Yes; no migration |
 | 1 | `user_episode_views` and `user_episode_progress.listened_at` (Alembic + `SCHEMA_SQL` + SQLite guards); opt-out-filtered backfills; view write in the `POST /api/inbox/{id}/read` handler and `listened_at` in `plan_row`, both honouring opt-outs; switch the reads CTE; privacy policy check | Yes |
 | 2 | `public_page_daily_views`; upsert in `POST /api/public/pageview`; "Public views" columns | Yes |
+
+**Phase 0 measurement (2026-10-18).** Production holds 99 shows and
+6.3k episodes. A synthetic set well past 10× (2,000 users, 1,000 shows,
+65,000 episodes, 400,000 inbox rows, 60,000 progress rows, 20,000
+follows) runs the whole content report in 0.15 s (7d), 0.31 s (28d) and
+0.57 s (90d). The partial `user_episode_inbox (state_changed_at) WHERE
+state = 'read'` and `user_episode_progress (updated_at)` indexes made no
+difference (the windows cover too much of each table for an index scan
+to win), so Phase 0 adds no index.
 
 ## Testing
 
@@ -465,7 +478,7 @@ and links titles to the signed-in pages.
 
 ## Decisions
 
-Proposed; settle in review.
+Accepted 2026-10-18 as proposed.
 
 1. **D1. Rank by readers, not follows.** Follows show intent, reads show
    use. Both columns are shown and both sorts are exact (§2).
@@ -485,8 +498,9 @@ Proposed; settle in review.
 
 ## Open questions
 
-- Should the episode table also offer "top episodes published in the
-  window" next to "most read in the window"? The first answers "what
-  landed well this week", the second "what people are reading".
-- Is 20 rows the right cut, or should the page page through the full
-  list?
+Settled for Phase 0 (2026-10-18); revisit once there is real data.
+
+- ~~Should the episode table also offer "top episodes published in the
+  window"?~~ Not now: the page shows only "most read in the window".
+- ~~Is 20 rows the right cut?~~ Yes: 20 per table on the page, the first
+  10 in the CLI, no paging.

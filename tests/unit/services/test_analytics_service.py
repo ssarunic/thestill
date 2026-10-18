@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from tests.unit.analytics_fakes import NOW, FakeAnalyticsRepository
+from thestill.models.analytics import CONTENT_NOTES, change_label
 from thestill.repositories.analytics_repository import AnalyticsUnavailableError
-from thestill.services.analytics_service import NOTES, AnalyticsService, InvalidRangeError
+from thestill.services.analytics_service import CONTENT_LIMIT, NOTES, AnalyticsService, InvalidRangeError
 
 
 @pytest.fixture
@@ -39,6 +40,19 @@ def test_report_assembles_all_four_reads_with_one_clock(repo):
     windows = {name: arg for name, arg in repo.calls}
     assert windows["signups"] == windows["activation"] == windows["engagement"] == report.window
     assert windows["cohorts"] == NOW
+    assert report.content.podcasts[0].slug == "hard-fork"
+    assert report.content.notes == list(CONTENT_NOTES)
+
+
+def test_content_compares_against_the_previous_window_of_the_same_length(repo):
+    report = AnalyticsService(repo, enabled=True, clock=lambda: NOW).report("28d")
+    window, previous, limit = dict(repo.calls)["content"]
+    assert window == report.window
+    assert previous.end == window.start
+    # 27.5 days so far (NOW is midday): the previous window is 27.5 days too.
+    assert previous.end - previous.start == window.end - window.start
+    assert previous.start == datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    assert limit == CONTENT_LIMIT
 
 
 def test_single_user_mode_is_unavailable_even_with_a_working_repository(repo):
@@ -47,3 +61,11 @@ def test_single_user_mode_is_unavailable_even_with_a_working_repository(repo):
     with pytest.raises(AnalyticsUnavailableError):
         service.report()
     assert repo.calls == []
+
+
+@pytest.mark.parametrize(
+    ("now", "before", "label"),
+    [(0, 0, "—"), (5, 0, "new"), (0, 5, "−5"), (5, 8, "−3"), (8, 5, "+3"), (4, 4, "0")],
+)
+def test_change_label(now, before, label):
+    assert change_label(now, before) == label

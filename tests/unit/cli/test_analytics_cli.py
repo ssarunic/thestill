@@ -53,6 +53,7 @@ def test_json_report(available):
     assert payload["available"] is True
     assert payload["range"] == "7d"
     assert payload["engagement"]["opened_ratio"] == 0.75
+    assert payload["content"]["podcasts"][0]["title"] == "Hard Fork"
 
 
 def test_text_report(available):
@@ -65,6 +66,18 @@ def test_text_report(available):
     assert "2026-08-03" in out  # cohort row
     assert "Briefings opened: 3 of 4 (75%)" in out
     assert "Note: Admin accounts" in out
+
+
+def test_text_report_content_block(available):
+    out = CliRunner().invoke(main, ["-q", "analytics"]).output
+    assert "Content: top podcasts by readers" in out
+    hard_fork = next(line for line in out.splitlines() if line.lstrip().startswith("Hard Fork"))
+    assert hard_fork.split()[2:4] == ["9", "+2"]  # readers 9, previously 7
+    quiet = next(line for line in out.splitlines() if line.lstrip().startswith("Quiet Show"))
+    assert quiet.split()[2:4] == ["1", "new"]
+    assert "Hard Fork — The AI Episode" in out
+    assert "Technology" in out and "10 readers (−2)" in out
+    assert "Note: A reader opened an episode" in out
 
 
 def test_rejects_unknown_range(cli_env):
