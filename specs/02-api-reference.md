@@ -366,9 +366,35 @@ that step's horizon ago. Cached in-process for 10 minutes per range.
   },
   "cohorts": {"weeks": [1, 2, 4, 8], "rows": [{"week_start": "2026-08-03", "size": 7, "cells": [...]}]},
   "engagement": {"active_users": 6, "reads": 30, "opened_ratio": 0.75, ...},
+  "content": {
+    "podcasts": [
+      {"podcast_id": "...", "slug": "hard-fork", "title": "Hard Fork", "category": "Technology",
+       "followers": 12, "new_follows": 3, "follower_readers": 6, "readers": 9, "readers_previous": 7,
+       "listeners": 4, "completions": 2, "change": "+2"}
+    ],
+    "episodes": [
+      {"episode_id": "...", "slug": "...", "title": "...", "podcast_slug": "hard-fork", "podcast_title": "Hard Fork",
+       "published_at": "2026-10-10T00:00:00Z", "imported": false, "readers": 6, "listeners": 3, "completions": 1}
+    ],
+    "categories": [
+      {"category": "Technology", "shows": 4, "shows_read": 3, "followers": 15, "readers": 10,
+       "readers_previous": 12, "change": "−2"}
+    ],
+    "notes": ["..."]
+  },
   "notes": ["..."]
 }
 ```
+
+`content` (spec #103) says what readers read. A reader opened an episode
+(an inbox read) or listened to it in the window. `readers_previous` covers
+the window of the same elapsed length before it, and `change` is the
+server's label for the difference: `+n`, `−n`, `0`, `new` or `—`.
+`podcasts` is the union of the top 20 by readers and the top 20 by
+followers, so either sort is an exact top 20; synthetic import parents are
+left out. `episodes` is the top 20 by readers. `categories` rolls each show
+up to the top level of its primary category, plus "Uncategorised". Every
+figure is an aggregate; no row carries user ids.
 
 In single-user mode or on the SQLite backend the response is
 `{"status": "ok", "timestamp": "...", "available": false}` with status 200.

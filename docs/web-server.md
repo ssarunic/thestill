@@ -123,7 +123,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/dashboard/stats` | GET | Dashboard statistics |
 | `/api/dashboard/activity` | GET | Recent activity feed (paginated) |
 | `/api/dashboard/narration` | GET | Aggregated narration runs for the dashboard tile |
-| `/api/dashboard/analytics` | GET | Spec #95 Layer A product analytics: signups by source, activation funnel, 12-week cohort retention, engagement. Query: `range` = `7d`/`28d`/`90d` (default `28d`). Aggregates only; admins and the single-user local account excluded; cached 10 min per range. Returns `{"available": false}` in single-user mode or on SQLite |
+| `/api/dashboard/analytics` | GET | Spec #95 Layer A product analytics: signups by source, activation funnel, 12-week cohort retention, engagement, and (spec #103) content: top podcasts, episodes and categories by readers against the previous window. Query: `range` = `7d`/`28d`/`90d` (default `28d`). Aggregates only; admins and the single-user local account excluded; cached 10 min per range. Returns `{"available": false}` in single-user mode or on SQLite |
 
 ### Search (`/api/search`)
 

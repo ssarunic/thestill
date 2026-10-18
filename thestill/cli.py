@@ -38,7 +38,7 @@ from .evals.compare import compare_runs
 from .evals.rubrics import ENTITY_LINKING, RUBRICS, get_rubric
 from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
-from .models.analytics import COHORT_ROWS, SMALL_GROUP
+from .models.analytics import COHORT_ROWS, SMALL_GROUP, ContentReport
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.briefing_repository import BriefingRepository
@@ -5537,8 +5537,49 @@ def _pct_cell(numerator: int, denominator: int, pct, width: int = 0) -> str:
     else:
         shown = f"{pct * 100:.1f}%" if pct is not None else "—"
         text = f"{shown} ({numerator}/{denominator})"
-    text = text.rjust(width)
-    return click.style(text, dim=True) if denominator < SMALL_GROUP else text
+    return _dim_if_small(text.rjust(width), denominator)
+
+
+def _dim_if_small(text: str, n: int) -> str:
+    """Dim ``text`` when ``n`` is under SMALL_GROUP (spec #95 D1)."""
+    return click.style(text, dim=True) if n < SMALL_GROUP else text
+
+
+def _fit(text: str, width: int) -> str:
+    """``text`` cut to ``width`` with an ellipsis, padded to ``width``."""
+    return (text if len(text) <= width else text[: width - 1] + "…").ljust(width)
+
+
+def _render_content(content: ContentReport, top: int = 10) -> None:
+    """Spec #103: top podcasts and episodes by readers, every category."""
+    click.echo("\nContent: top podcasts by readers")
+    if not content.podcasts:
+        click.echo("  No reading or follows in this window.")
+    else:
+        click.echo(f"  {'Podcast':<36} {'Readers':>7} {'Change':>6} {'Followers':>9} {'New':>4} {'Listeners':>9}")
+    for p in content.podcasts[:top]:
+        line = (
+            f"  {_fit(p.title, 36)} {p.readers:>7} {p.change:>6}"
+            f" {p.followers:>9} {p.new_follows:>4} {p.listeners:>9}"
+        )
+        click.echo(_dim_if_small(line, p.readers))
+
+    click.echo("\nContent: top episodes by readers")
+    if not content.episodes:
+        click.echo("  No episodes read in this window.")
+    for ep in content.episodes[:top]:
+        label = f"{ep.podcast_title} — {ep.title}" + (" (imported)" if ep.imported else "")
+        line = f"  {_fit(label, 60)} {ep.readers:>3} readers, {ep.listeners} listeners, {ep.completions} completed"
+        click.echo(_dim_if_small(line, ep.readers))
+
+    click.echo("\nContent: categories")
+    for c in content.categories:
+        line = (
+            f"  {_fit(c.category, 28)} {c.readers:>3} readers ({c.change}), {c.followers} followers of {c.shows} shows"
+        )
+        click.echo(_dim_if_small(line, c.readers))
+    for note in content.notes:
+        click.echo(click.style(f"Note: {note}", dim=True))
 
 
 def _render_analytics(report) -> None:
@@ -5574,6 +5615,8 @@ def _render_analytics(report) -> None:
     opened = f"{e.opened_ratio * 100:.0f}%" if e.opened_ratio is not None else "—"
     click.echo(f"  Briefings opened: {e.briefings_opened} of {e.briefings_generated} ({opened})")
     click.echo(f"  Follows: {e.follows}")
+
+    _render_content(report.content)
 
     click.echo("")
     for note in report.notes:

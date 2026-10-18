@@ -51,6 +51,12 @@ def test_returns_the_report(client):
     assert body["activation"]["overall"]["steps"][0]["key"] == "follow_24h"
     assert body["cohorts"]["weeks"] == [1, 2, 4, 8]
     assert body["notes"]
+    content = body["content"]
+    assert content["podcasts"][0]["readers_previous"] == 7
+    assert content["podcasts"][0]["change"] == "+2"  # the server owns the label
+    assert content["episodes"][0]["published_at"] == "2026-10-10T00:00:00Z"
+    assert content["categories"][1]["category"] == "Uncategorised"
+    assert content["notes"]
 
 
 def test_defaults_to_28_days(client):

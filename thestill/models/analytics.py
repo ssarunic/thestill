@@ -22,13 +22,28 @@ accounts and the single-user ``local`` account are excluded throughout.
 from datetime import date, datetime
 from typing import Dict, List, NamedTuple, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, computed_field
 
 # ``users.signup_source IS NULL``: accounts created before it was tracked.
 BEFORE_TRACKING = "before_tracking"
 
 # Groups smaller than this are shown greyed out (spec #95 decision D1).
 SMALL_GROUP = 5
+
+# Category row for shows with no primary category (spec #103).
+UNCATEGORISED = "Uncategorised"
+
+# The undercounts of Phase 0 (spec #103), shown under the Content tables.
+CONTENT_NOTES = (
+    "A reader opened an episode from the inbox or listened to it. Episodes opened from search, "
+    "entity pages or shows not followed count only once listened to.",
+    "An episode read and later saved or dismissed no longer counts as read, and opening a saved "
+    "episode is not recorded.",
+    "Listening counts the latest playback per user and episode, so a listen in this window hides "
+    "an earlier one: the change column is a trend, not an exact count.",
+    '"Mark as played" counts as a completion and as a read.',
+    "Followers is the current count; new follows are follows made in the window that still exist.",
+)
 
 
 class StepDef(NamedTuple):
@@ -129,6 +144,74 @@ class EngagementReport(BaseModel):
     follows_per_active_user: Optional[float]
 
 
+def change_label(now: int, before: int) -> str:
+    """Readers against the previous window: ``+3``, ``−2`` (true minus),
+    ``0``, ``new`` when the previous window had none, ``—`` when neither had.
+    The one formatter: the API sends it as ``change``, the CLI prints it."""
+    if before == 0:
+        return "new" if now else "—"
+    diff = now - before
+    return f"{diff:+d}".replace("-", "−") if diff else "0"
+
+
+class PodcastStat(BaseModel):
+    """One show's readers and follows in the window (spec #103)."""
+
+    podcast_id: str
+    slug: str
+    title: str
+    category: Optional[str]  # top-level name; None = uncategorised
+    followers: int
+    new_follows: int  # surviving follows created in the window
+    follower_readers: int  # followers who were readers in the window
+    readers: int
+    readers_previous: int
+    listeners: int
+    completions: int
+
+    @computed_field
+    @property
+    def change(self) -> str:
+        return change_label(self.readers, self.readers_previous)
+
+
+class EpisodeStat(BaseModel):
+    episode_id: str
+    slug: str
+    title: str
+    podcast_slug: str
+    podcast_title: str
+    published_at: Optional[datetime]
+    imported: bool  # synthetic parent (spec #31)
+    readers: int
+    listeners: int
+    completions: int
+
+
+class CategoryStat(BaseModel):
+    category: str  # top-level name, or UNCATEGORISED
+    shows: int  # shows with at least one follower
+    shows_read: int  # shows with at least one reader in the window
+    followers: int  # distinct users following any show in it
+    readers: int
+    readers_previous: int
+
+    @computed_field
+    @property
+    def change(self) -> str:
+        return change_label(self.readers, self.readers_previous)
+
+
+class ContentReport(BaseModel):
+    """What readers read (spec #103): podcasts (the union of the top
+    ``limit`` by readers and by followers), episodes, categories."""
+
+    podcasts: List[PodcastStat]
+    episodes: List[EpisodeStat]
+    categories: List[CategoryStat]
+    notes: List[str] = Field(default_factory=lambda: list(CONTENT_NOTES))
+
+
 class AnalyticsReport(BaseModel):
     generated_at: datetime
     range: str
@@ -137,6 +220,7 @@ class AnalyticsReport(BaseModel):
     activation: ActivationReport
     cohorts: CohortsReport
     engagement: EngagementReport
+    content: ContentReport
     notes: List[str]
 
 

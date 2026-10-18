@@ -22,7 +22,14 @@ single-user self-host with nothing to measure, so it gets
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..models.analytics import ActivationReport, AnalyticsWindow, CohortsReport, EngagementReport, SignupsReport
+from ..models.analytics import (
+    ActivationReport,
+    AnalyticsWindow,
+    CohortsReport,
+    ContentReport,
+    EngagementReport,
+    SignupsReport,
+)
 
 
 class AnalyticsUnavailableError(RuntimeError):
@@ -52,6 +59,12 @@ class AnalyticsRepository(ABC):
     def engagement(self, window: AnalyticsWindow) -> EngagementReport:
         """Reads, briefings and follows in ``window``."""
 
+    @abstractmethod
+    def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
+        """Top podcasts, top episodes and categories for ``window``, with
+        readers in ``previous`` for the change column (spec #103). One
+        statement per table."""
+
 
 class UnavailableAnalyticsRepository(AnalyticsRepository):
     """Stand-in for backends with no analytics (SQLite)."""
@@ -71,4 +84,7 @@ class UnavailableAnalyticsRepository(AnalyticsRepository):
         self._unavailable()
 
     def engagement(self, window: AnalyticsWindow) -> EngagementReport:
+        self._unavailable()
+
+    def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
         self._unavailable()
