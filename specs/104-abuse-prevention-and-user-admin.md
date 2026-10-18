@@ -305,7 +305,7 @@ An `AlertService` evaluates conditions on a background tick every 5 minutes. The
 
 Thresholds live in the runtime setting `alerts` (with env defaults), so they can be tuned without a redeploy.
 
-Each alert names the user (email and a link to their console page) and the numbers, and suggests the obvious action. For example: "alice@example.com hit the new-feed quota 7 times in the last hour. Suspend: <link>".
+Each alert names the user (email and a link to their console page) and the numbers, and suggests the obvious action. For example: "<alice@example.com> hit the new-feed quota 7 times in the last hour. Suspend: <link>".
 
 `spend_breaker` is the only alert that acts on its own. When `alerts.spend_breaker_action = "pause_new_feeds"` it also sets `new_feeds_enabled = false` and says so in the alert. That stops every route to new spend, including a first follow of a dormant feed already in the database (see the follow gate in 1.3). It never suspends users. The estimate uses episode durations from the feed, which every queued episode already has.
 

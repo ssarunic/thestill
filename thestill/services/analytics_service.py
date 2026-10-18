@@ -16,7 +16,7 @@
 
 The one code path behind ``GET /api/dashboard/analytics`` and
 ``thestill analytics``: range → UTC window, the availability decision, and
-assembling the four repository reads into one report. No cache and no I/O
+assembling the repository reads into one report. No cache and no I/O
 of its own; the route caches.
 """
 
@@ -40,6 +40,10 @@ NOTES: Final[List[str]] = [
     "Active means an episode read, a show followed or a briefing opened.",
     "Briefing opens are recorded from spec #95 onwards; earlier ones count only if they were marked listened.",
 ]
+
+
+# Rows per ranked content table (spec #103); the CLI prints the first 10.
+CONTENT_LIMIT: Final = 20
 
 
 class InvalidRangeError(ValueError):
@@ -84,6 +88,12 @@ class AnalyticsService:
         start = datetime.combine(first_day, time.min, tzinfo=timezone.utc)
         return AnalyticsWindow(start=start, end=now, days=days)
 
+    @staticmethod
+    def previous_window(window: AnalyticsWindow) -> AnalyticsWindow:
+        """The window of the same elapsed length ending at ``window.start``,
+        so a part-day "now" compares like for like (spec #103)."""
+        return AnalyticsWindow(start=window.start - (window.end - window.start), end=window.start, days=window.days)
+
     def report(self, range_: str = DEFAULT_RANGE) -> AnalyticsReport:
         """The full Layer A report for ``range_``.
 
@@ -103,6 +113,7 @@ class AnalyticsService:
             activation=self._repository.activation(window),
             cohorts=self._repository.cohorts(now),
             engagement=self._repository.engagement(window),
+            content=self._repository.content(window, self.previous_window(window), limit=CONTENT_LIMIT),
             notes=NOTES,
         )
         logger.info("analytics_report_built", range=range_, signups=report.signups.total)

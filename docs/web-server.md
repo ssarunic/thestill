@@ -114,7 +114,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/inbox/{episode_id}` | GET | Spec #88: your row for one episode, `{"entry": …}` or `{"entry": null}` when never delivered |
 | `/api/inbox/{episode_id}` | POST | Spec #88 "Send to my inbox": creates an `ad_hoc` row only when none exists and starts the pipeline if the episode is unprocessed. `201` with `{"entry", "created": true}`; `200` with the untouched existing row and `created: false`; `404` when the episode does not exist. Delivery is immutable: an existing row's `delivered_at`, `source` and `state` never change |
 | `/api/inbox/{episode_id}/state` | POST | Set row state explicitly. Body: `{"state": "read"\|"saved"\|"dismissed"\|"unread"}`. 404 when no row exists |
-| `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available |
+| `/api/inbox/{episode_id}/read` | POST | View-driven read tracking: transitions `unread → read` only, never touching `saved`/`dismissed`. Always 200 with `{"marked": bool}`; a missing row is a no-op. Fired by the episode page once a summary is available. Also records the first time the reader opened the episode (spec #103, `user_episode_views`) unless they opted out of usage analytics or sent `Sec-GPC: 1` |
 
 ### Dashboard (`/api/dashboard`)
 
@@ -123,7 +123,7 @@ Per-user episode deliveries (spec #29). All endpoints operate on the authenticat
 | `/api/dashboard/stats` | GET | Dashboard statistics |
 | `/api/dashboard/activity` | GET | Recent activity feed (paginated) |
 | `/api/dashboard/narration` | GET | Aggregated narration runs for the dashboard tile |
-| `/api/dashboard/analytics` | GET | Spec #95 Layer A product analytics: signups by source, activation funnel, 12-week cohort retention, engagement. Query: `range` = `7d`/`28d`/`90d` (default `28d`). Aggregates only; admins and the single-user local account excluded; cached 10 min per range. Returns `{"available": false}` in single-user mode or on SQLite |
+| `/api/dashboard/analytics` | GET | Spec #95 Layer A product analytics: signups by source, activation funnel, 12-week cohort retention, engagement, and (spec #103) content: top podcasts, episodes and categories by readers against the previous window. Query: `range` = `7d`/`28d`/`90d` (default `28d`). Aggregates only; admins and the single-user local account excluded; cached 10 min per range. Returns `{"available": false}` in single-user mode or on SQLite |
 
 ### Search (`/api/search`)
 
@@ -225,7 +225,7 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
-| `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position |
+| `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position. Playback writes also set the analytics-only `listened_at` (spec #103) unless the caller turned usage analytics off or sent `Sec-GPC: 1` |
 | `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
 | `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
 | `/api/me/listening` | GET | `?state=in_progress&limit=3` — unfinished episodes written in the last 3 days, newest first, for the Continue listening strip |

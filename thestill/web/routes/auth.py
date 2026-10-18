@@ -36,7 +36,7 @@ from structlog import get_logger
 
 from ...services.analytics_sink import LoginCompleted, LoginStarted
 from ...utils.page_kind import public_page_kind, signup_source_for
-from ..analytics_request import capture_event, login_flow_key, request_gpc
+from ..analytics_request import capture_event, login_flow_key, may_measure
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
 from ..responses import api_response
@@ -201,9 +201,7 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             # browser never loads the analytics code for them.
             "usage_analytics_available": usage_events,
             "analytics": (
-                {"key": sink.browser_key}
-                if usage_events and user is not None and user.usage_analytics_enabled and not request_gpc(request)
-                else None
+                {"key": sink.browser_key} if usage_events and user is not None and may_measure(user, request) else None
             ),
         }
     )

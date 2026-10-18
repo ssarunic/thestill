@@ -33,6 +33,7 @@ from ..models.listening import (
     CLAMP_SLACK_SECONDS,
     COMPLETION_TAIL_SECONDS,
     MANUAL_EVENTS,
+    PLAYBACK_EVENTS,
     ListeningProgress,
     ListeningSummary,
     ProgressWrite,
@@ -83,6 +84,17 @@ def _usable_duration(value: Optional[float]) -> Optional[float]:
     return float(value)
 
 
+def _was_playing(stored: Optional[ListeningProgress], write: ProgressWrite) -> bool:
+    """Whether this session's previous write was playback: the stored row is
+    from the same session and its last write set ``listened_at``."""
+    return (
+        stored is not None
+        and stored.session_id == write.session_id
+        and stored.listened_at is not None
+        and stored.listened_at == stored.updated_at
+    )
+
+
 def plan_row(
     write: ProgressWrite,
     *,
@@ -90,6 +102,7 @@ def plan_row(
     episode_id: str,
     stored: Optional[ListeningProgress],
     now: datetime,
+    measure: bool = False,
 ) -> ListeningProgress:
     """Turn one client write into the row to store.
 
@@ -106,6 +119,15 @@ def plan_row(
 
     The duration is the written one, else the stored one, so a write
     without a duration still applies the 45 s rule.
+
+    ``listened_at`` (spec #103) becomes ``now`` for playback when
+    ``measure`` (the request's usage-analytics consent, off unless the
+    caller passes it). Playback is ``tick``, ``pause`` and ``ended``, and a
+    completing ``stop`` only when the same session's previous write was
+    playback: the player also stops paused and restored sessions. Every
+    other write leaves it None, which the repository keeps as stored —
+    never a value carried from ``stored``, which may be stale — so "Mark as
+    played / unplayed" never counts as listening.
     """
     if not write.session_id or len(write.session_id) > MAX_SESSION_ID_LENGTH:
         raise InvalidProgressError(f"session_id must be 1-{MAX_SESSION_ID_LENGTH} characters")
@@ -131,6 +153,9 @@ def plan_row(
         if completed:
             position = 0.0
 
+    playback = write.event in PLAYBACK_EVENTS or (write.event == "stop" and completed and _was_playing(stored, write))
+    listened_at = now if measure and playback else None
+
     return ListeningProgress(
         user_id=user_id,
         episode_id=episode_id,
@@ -141,6 +166,7 @@ def plan_row(
         session_id=write.session_id,
         seq=write.seq,
         updated_at=now,
+        listened_at=listened_at,
     )
 
 
@@ -183,8 +209,10 @@ class ListeningProgressService:
         if not is_uuid(episode_id) or self.podcast_repository.get_episode(episode_id) is None:
             raise ListeningEpisodeNotFoundError(episode_id)
 
-    def record(self, user_id: str, episode_id: str, write: ProgressWrite) -> WriteOutcome:
-        """Apply one client write.
+    def record(self, user_id: str, episode_id: str, write: ProgressWrite, *, measure: bool = False) -> WriteOutcome:
+        """Apply one client write. ``measure`` is the caller's usage-analytics
+        consent for this request (``may_measure``); see :func:`plan_row`.
+        Off by default, so a caller that forgets it records nothing.
 
         Raises:
             ListeningEpisodeNotFoundError: Unknown episode.
@@ -192,7 +220,7 @@ class ListeningProgressService:
         """
         self._require_episode(episode_id)
         stored = self.repository.get(user_id, episode_id)
-        row = plan_row(write, user_id=user_id, episode_id=episode_id, stored=stored, now=self.clock())
+        row = plan_row(write, user_id=user_id, episode_id=episode_id, stored=stored, now=self.clock(), measure=measure)
         accepted = self.repository.upsert_if_newer(row, force=write.event in MANUAL_EVENTS)
 
         if not accepted:

@@ -14,8 +14,9 @@
 
 """PostgreSQL implementation of ``AnalyticsRepository`` (spec #95 Layer A).
 
-One statement per method; Python only pivots rows and divides. Two known
-lower bounds, surfaced on the page as notes:
+One statement per method (one per table for ``content``); Python only
+pivots rows and divides. Two known lower bounds, surfaced on the page as
+notes:
 
 - ``user_episode_inbox.state_changed_at`` keeps only the latest change, so
   an episode read and later saved or dismissed no longer counts as read.
@@ -36,13 +37,18 @@ from ..models.analytics import (
     COHORT_ROWS,
     COHORT_WEEKS,
     STEPS,
+    UNCATEGORISED,
     ActivationGroup,
     ActivationReport,
     AnalyticsWindow,
+    CategoryStat,
     CohortCell,
     CohortRow,
     CohortsReport,
+    ContentReport,
     EngagementReport,
+    EpisodeStat,
+    PodcastStat,
     SignupDay,
     SignupsReport,
     StepStat,
@@ -175,6 +181,156 @@ SELECT
       WHERE f.created_at >= %(start)s AND f.created_at < %(end)s) AS follows
 """
 
+# Spec #103: a reader of an episode opened it (``user_episode_views``,
+# the first open) or listened to it (``listened_at``, playback only, never
+# a "Mark as played / unplayed"), over the previous window and this one.
+# Both are written only for readers who allow usage analytics (D5). An
+# old episode reopened counts once, when first opened.
+_READS = """
+reads AS (
+    SELECT v.user_id, v.episode_id, v.first_viewed_at AS at
+      FROM user_episode_views v JOIN real_users ru ON ru.id = v.user_id
+     WHERE v.first_viewed_at >= %(prev_start)s AND v.first_viewed_at < %(end)s
+    UNION ALL
+    SELECT p.user_id, p.episode_id, p.listened_at
+      FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
+     WHERE p.listened_at >= %(prev_start)s AND p.listened_at < %(end)s
+)"""
+
+# Listening in this window only; ``completed`` when playback completed the
+# row in it (a "Mark as played" sets completed_at but not listened_at).
+_LISTENS = """
+listens AS (
+    SELECT p.user_id, p.episode_id,
+           COALESCE(p.completed_at = p.listened_at, false) AS completed
+      FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
+     WHERE p.listened_at >= %(start)s AND p.listened_at < %(end)s
+)"""
+
+# The union of the top ``limit`` shows by readers and by followers, so the
+# page can sort either way and still show an exact top N. Imported
+# episodes' synthetic parents (spec #31) are not shows.
+_CONTENT_PODCASTS_SQL = f"""
+WITH {_REAL_USERS},
+{_READS.strip()},
+{_LISTENS.strip()},
+follows AS (
+    SELECT f.podcast_id, f.user_id, f.created_at
+      FROM podcast_followers f JOIN real_users ru ON ru.id = f.user_id
+),
+follow_stats AS (
+    SELECT podcast_id, count(*) AS followers,
+           count(*) FILTER (WHERE created_at >= %(start)s AND created_at < %(end)s) AS new_follows
+      FROM follows
+     GROUP BY podcast_id
+),
+read_stats AS (
+    SELECT e.podcast_id,
+           count(DISTINCT r.user_id) FILTER (WHERE r.at >= %(start)s) AS readers,
+           count(DISTINCT r.user_id) FILTER (WHERE r.at < %(start)s) AS readers_previous,
+           count(DISTINCT r.user_id) FILTER (WHERE r.at >= %(start)s AND f.user_id IS NOT NULL) AS follower_readers
+      FROM reads r
+      JOIN episodes e ON e.id = r.episode_id
+      LEFT JOIN follows f ON f.podcast_id = e.podcast_id AND f.user_id = r.user_id
+     GROUP BY e.podcast_id
+),
+listen_stats AS (
+    SELECT e.podcast_id, count(DISTINCT l.user_id) AS listeners,
+           count(DISTINCT l.user_id) FILTER (WHERE l.completed) AS completions
+      FROM listens l JOIN episodes e ON e.id = l.episode_id
+     GROUP BY e.podcast_id
+),
+shows AS (
+    SELECT p.id, p.slug, p.title, p.primary_category_id,
+           COALESCE(fs.followers, 0) AS followers, COALESCE(fs.new_follows, 0) AS new_follows,
+           COALESCE(rs.follower_readers, 0) AS follower_readers,
+           COALESCE(rs.readers, 0) AS readers, COALESCE(rs.readers_previous, 0) AS readers_previous,
+           COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions
+      FROM podcasts p
+      LEFT JOIN follow_stats fs ON fs.podcast_id = p.id
+      LEFT JOIN read_stats rs ON rs.podcast_id = p.id
+      LEFT JOIN listen_stats ls ON ls.podcast_id = p.id
+     WHERE NOT p.synthetic AND (fs.podcast_id IS NOT NULL OR rs.podcast_id IS NOT NULL)
+),
+ranked AS (
+    SELECT s.*,
+           row_number() OVER (ORDER BY readers DESC, followers DESC, title, id) AS by_readers,
+           row_number() OVER (ORDER BY followers DESC, readers DESC, title, id) AS by_followers
+      FROM shows s
+)
+SELECT r.*, top.name AS category
+  FROM ranked r
+  LEFT JOIN categories c ON c.id = r.primary_category_id
+  LEFT JOIN categories top ON top.id = COALESCE(c.parent_id, c.id)
+ WHERE r.by_readers <= %(limit)s OR r.by_followers <= %(limit)s
+ ORDER BY r.by_readers
+"""
+
+_CONTENT_EPISODES_SQL = f"""
+WITH {_REAL_USERS},
+{_READS.strip()},
+{_LISTENS.strip()},
+read_stats AS (
+    SELECT episode_id, count(DISTINCT user_id) AS readers
+      FROM reads
+     WHERE at >= %(start)s
+     GROUP BY episode_id
+),
+listen_stats AS (
+    SELECT episode_id, count(DISTINCT user_id) AS listeners,
+           count(DISTINCT user_id) FILTER (WHERE completed) AS completions
+      FROM listens
+     GROUP BY episode_id
+)
+SELECT e.id, e.slug, e.title, p.slug AS podcast_slug, p.title AS podcast_title,
+       COALESCE(e.pub_date, e.published_at) AS published_at, p.synthetic AS imported,
+       rs.readers, COALESCE(ls.listeners, 0) AS listeners, COALESCE(ls.completions, 0) AS completions
+  FROM read_stats rs
+  JOIN episodes e ON e.id = rs.episode_id
+  JOIN podcasts p ON p.id = e.podcast_id
+  LEFT JOIN listen_stats ls ON ls.episode_id = rs.episode_id
+ ORDER BY rs.readers DESC, listeners DESC, COALESCE(e.pub_date, e.published_at) DESC NULLS LAST, e.id
+ LIMIT %(limit)s
+"""
+
+# Each show counts once, under the top level of its primary category
+# (decision D2); 0 stands for "no category" so it joins like any other key.
+# A category is listed for follows or reading activity in either window.
+_CONTENT_CATEGORIES_SQL = f"""
+WITH {_REAL_USERS},
+{_READS.strip()},
+shows AS (
+    SELECT p.id, COALESCE(c.parent_id, c.id, 0) AS top_id
+      FROM podcasts p LEFT JOIN categories c ON c.id = p.primary_category_id
+     WHERE NOT p.synthetic
+),
+follow_stats AS (
+    SELECT s.top_id, count(DISTINCT f.podcast_id) AS shows, count(DISTINCT f.user_id) AS followers
+      FROM podcast_followers f
+      JOIN real_users ru ON ru.id = f.user_id
+      JOIN shows s ON s.id = f.podcast_id
+     GROUP BY s.top_id
+),
+read_stats AS (
+    SELECT s.top_id,
+           count(DISTINCT e.podcast_id) FILTER (WHERE r.at >= %(start)s) AS shows_read,
+           count(DISTINCT r.user_id) FILTER (WHERE r.at >= %(start)s) AS readers,
+           count(DISTINCT r.user_id) FILTER (WHERE r.at < %(start)s) AS readers_previous
+      FROM reads r
+      JOIN episodes e ON e.id = r.episode_id
+      JOIN shows s ON s.id = e.podcast_id
+     GROUP BY s.top_id
+)
+SELECT COALESCE(top.name, %(uncategorised)s) AS category,
+       COALESCE(fs.shows, 0) AS shows, COALESCE(rs.shows_read, 0) AS shows_read,
+       COALESCE(fs.followers, 0) AS followers,
+       COALESCE(rs.readers, 0) AS readers, COALESCE(rs.readers_previous, 0) AS readers_previous
+  FROM follow_stats fs
+  FULL JOIN read_stats rs ON rs.top_id = fs.top_id
+  LEFT JOIN categories top ON top.id = COALESCE(fs.top_id, rs.top_id)
+ ORDER BY readers DESC, followers DESC, category
+"""
+
 
 def _monday(day: date) -> date:
     return day - timedelta(days=day.weekday())
@@ -280,4 +436,23 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
             opened_ratio=ratio(opened, generated),
             follows=follows,
             follows_per_active_user=ratio(follows, active),
+        )
+
+    def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
+        # The SQL names every column after its model field and coalesces
+        # every count, so rows validate as they are.
+        params = {"start": window.start, "end": window.end, "prev_start": previous.start, "limit": limit}
+        return ContentReport(
+            podcasts=[
+                PodcastStat.model_validate({**row, "podcast_id": str(row["id"])})
+                for row in self._rows(_CONTENT_PODCASTS_SQL, **params)
+            ],
+            episodes=[
+                EpisodeStat.model_validate({**row, "episode_id": str(row["id"])})
+                for row in self._rows(_CONTENT_EPISODES_SQL, **params)
+            ],
+            categories=[
+                CategoryStat.model_validate(row)
+                for row in self._rows(_CONTENT_CATEGORIES_SQL, uncategorised=UNCATEGORISED, **params)
+            ],
         )

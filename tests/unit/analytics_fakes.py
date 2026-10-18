@@ -12,10 +12,14 @@ from thestill.models.analytics import (
     ActivationGroup,
     ActivationReport,
     AnalyticsWindow,
+    CategoryStat,
     CohortCell,
     CohortRow,
     CohortsReport,
+    ContentReport,
     EngagementReport,
+    EpisodeStat,
+    PodcastStat,
     SignupDay,
     SignupsReport,
     StepStat,
@@ -74,6 +78,61 @@ class FakeAnalyticsRepository(AnalyticsRepository):
             opened_ratio=0.75,
             follows=5,
             follows_per_active_user=2.5,
+        )
+
+    def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
+        self.calls.append(("content", (window, previous, limit)))
+        return ContentReport(
+            podcasts=[
+                PodcastStat(
+                    podcast_id="p1",
+                    slug="hard-fork",
+                    title="Hard Fork",
+                    category="Technology",
+                    followers=12,
+                    new_follows=3,
+                    follower_readers=6,
+                    readers=9,
+                    readers_previous=7,
+                    listeners=4,
+                    completions=2,
+                ),
+                PodcastStat(
+                    podcast_id="p2",
+                    slug="quiet-show",
+                    title="Quiet Show",
+                    category=None,
+                    followers=20,
+                    new_follows=0,
+                    follower_readers=1,
+                    readers=1,
+                    readers_previous=0,
+                    listeners=0,
+                    completions=0,
+                ),
+            ],
+            episodes=[
+                EpisodeStat(
+                    episode_id="e1",
+                    slug="the-ai-episode",
+                    title="The AI Episode",
+                    podcast_slug="hard-fork",
+                    podcast_title="Hard Fork",
+                    published_at=datetime(2026, 10, 10, tzinfo=timezone.utc),
+                    imported=False,
+                    readers=6,
+                    listeners=3,
+                    completions=1,
+                )
+            ],
+            categories=[
+                CategoryStat(
+                    category="Technology", shows=4, shows_read=3, followers=15, readers=10, readers_previous=12
+                ),
+                CategoryStat(
+                    category="Uncategorised", shows=1, shows_read=1, followers=20, readers=1, readers_previous=0
+                ),
+            ],
         )
 
 

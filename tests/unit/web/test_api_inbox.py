@@ -364,3 +364,34 @@ class TestSendToInbox:
 
         assert response.status_code == 404
         mock_app_state.inbox_service.deliver_to_user.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec #103 — the read call records the first view
+# ---------------------------------------------------------------------------
+class TestRecordsView:
+    EP = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+
+    def test_records_a_view_even_without_an_inbox_row(self, client, mock_app_state):
+        mock_app_state.inbox_service.mark_read.return_value = False
+        response = client.post(f"/api/inbox/{self.EP}/read")
+        assert response.status_code == 200 and response.json()["marked"] is False
+        user_id, episode_id, _at = mock_app_state.episode_view_repository.record_view.call_args.args
+        assert (user_id, episode_id) == ("user-1", self.EP)
+
+    def test_gpc_records_nothing(self, client, mock_app_state):
+        client.post(f"/api/inbox/{self.EP}/read", headers={"Sec-GPC": "1"})
+        mock_app_state.inbox_service.mark_read.assert_called_once()
+        mock_app_state.episode_view_repository.record_view.assert_not_called()
+
+    def test_opted_out_user_records_nothing(self, client, mock_app_state, mock_user):
+        mock_user.usage_analytics_enabled = False
+        client.post(f"/api/inbox/{self.EP}/read")
+        mock_app_state.inbox_service.mark_read.assert_called_once()
+        mock_app_state.episode_view_repository.record_view.assert_not_called()
+
+    def test_a_failing_view_write_still_marks_the_row_read(self, client, mock_app_state):
+        mock_app_state.inbox_service.mark_read.return_value = True
+        mock_app_state.episode_view_repository.record_view.side_effect = RuntimeError("db down")
+        response = client.post(f"/api/inbox/{self.EP}/read")
+        assert response.status_code == 200 and response.json()["marked"] is True

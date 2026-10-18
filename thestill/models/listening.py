@@ -37,6 +37,11 @@ COMPLETION_TAIL_SECONDS = 45.0
 # Positions beyond ``duration + slack`` are clamped to the duration.
 CLAMP_SLACK_SECONDS = 5.0
 
+# Writes the player sends only while audio plays (spec #103 §4a): ``pause``
+# and ``ended`` follow playback, ``tick`` fires during it. A ``stop`` is
+# also sent for paused and restored sessions, so it is not one of them.
+PLAYBACK_EVENTS = frozenset({"tick", "pause", "ended"})
+
 
 class ListeningProgress(BaseModel):
     """A stored ``user_episode_progress`` row."""
@@ -50,6 +55,12 @@ class ListeningProgress(BaseModel):
     session_id: str
     seq: int
     updated_at: datetime
+    # Spec #103: the last write that came from playback, for analytics only;
+    # never in a summary. On a row planned for a write it is the time this
+    # write sets, or None to keep the stored value; the repository applies
+    # it only while the user's usage-analytics switch is on. A completion
+    # counts as listened when it equals completed_at.
+    listened_at: Optional[datetime] = None
 
     def summary(self) -> "ListeningSummary":
         return ListeningSummary(
