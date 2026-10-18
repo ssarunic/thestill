@@ -289,6 +289,9 @@ class TestReads:
 # plan_row — listened_at (spec #103 §4a)
 # ---------------------------------------------------------------------------
 class TestListenedAt:
+    """None on a planned row means "keep the stored value" (the repository
+    never rewinds or clears it)."""
+
     EARLIER = NOW - timedelta(days=2)
 
     def _plan(self, write, *, stored=None, measure=True):
@@ -298,25 +301,34 @@ class TestListenedAt:
     def test_playback_sets_it(self, event):
         assert self._plan(_write(event), stored=_stored(listened_at=self.EARLIER)).listened_at == NOW
 
-    def test_completing_stop_sets_it_and_a_plain_stop_does_not(self):
-        assert self._plan(_write("stop", position=3580.0)).listened_at == NOW
-        assert self._plan(_write("stop", position=600.0), stored=_stored(listened_at=self.EARLIER)).listened_at == (
-            self.EARLIER
-        )
-
     @pytest.mark.parametrize("event", ["seek", "mark_played", "mark_unplayed"])
-    def test_other_writes_carry_it_forward(self, event):
-        assert self._plan(_write(event), stored=_stored(listened_at=self.EARLIER)).listened_at == self.EARLIER
-        assert self._plan(_write(event)).listened_at is None
+    def test_other_writes_keep_the_stored_value(self, event):
+        assert self._plan(_write(event), stored=_stored(listened_at=self.EARLIER)).listened_at is None
+
+    def test_a_completing_stop_counts_only_after_playback_in_the_same_session(self):
+        near_end = _write("stop", position=3590.0, session="tab-a", seq=6)
+        # The session's last write was a tick: it was playing.
+        playing = _stored(
+            session_id="tab-a", listened_at=NOW - timedelta(seconds=10), updated_at=NOW - timedelta(seconds=10)
+        )
+        assert self._plan(near_end, stored=playing).listened_at == NOW
+        # A restored (or held) bar: a new session that never played.
+        restored = _stored(session_id="tab-old", listened_at=self.EARLIER, updated_at=self.EARLIER)
+        assert self._plan(near_end, stored=restored).listened_at is None
+        assert self._plan(near_end).listened_at is None
+        # Paused, then seeked near the end while paused: the last write was a seek.
+        seeked = _stored(session_id="tab-a", listened_at=self.EARLIER, updated_at=NOW - timedelta(seconds=5))
+        assert self._plan(near_end, stored=seeked).listened_at is None
+        # A plain stop never sets it.
+        assert self._plan(_write("stop", position=600.0, session="tab-a"), stored=playing).listened_at is None
 
     def test_playback_completion_matches_completed_at_and_mark_played_does_not(self):
         ended = self._plan(_write("ended"))
         assert ended.completed_at == ended.listened_at == NOW
         marked = self._plan(_write("mark_played"), stored=_stored(listened_at=self.EARLIER))
-        assert marked.completed_at == NOW and marked.listened_at == self.EARLIER
+        assert marked.completed_at == NOW and marked.listened_at is None
 
-    def test_opted_out_writes_leave_it_unchanged(self):
+    def test_opted_out_writes_set_nothing(self):
         row = self._plan(_write("ended"), stored=_stored(listened_at=self.EARLIER), measure=False)
         assert row.completed_at == NOW  # completion still works
-        assert row.listened_at == self.EARLIER
-        assert self._plan(_write("tick"), measure=False).listened_at is None
+        assert row.listened_at is None

@@ -362,3 +362,58 @@ def test_listened_at_round_trips_and_never_rewinds(env):
     newest = later + timedelta(hours=1)
     assert env.repo.upsert_if_newer(_row(user, ep, seq=4).model_copy(update={"listened_at": newest}))
     assert env.repo.get(user, ep).listened_at == newest
+
+
+# ---------------------------------------------------------------------------
+# listened_at vs opt-out (spec #103): a write in flight can't restore an erase
+# ---------------------------------------------------------------------------
+def _opt_out(env, user_id):
+    if env.is_pg:
+        from thestill.repositories.postgres_user_repository import PostgresUserRepository
+
+        return PostgresUserRepository(env.dsn).update_usage_analytics(user_id, False)
+    from thestill.repositories.sqlite_user_repository import SqliteUserRepository
+
+    return SqliteUserRepository(env.db_path).update_usage_analytics(user_id, False)
+
+
+def test_a_write_planned_before_an_opt_out_stores_no_listen(env):
+    user, ep = env.add_user(), env.add_episode()
+    assert env.repo.upsert_if_newer(_row(user, ep, seq=1).model_copy(update={"listened_at": BASE}))
+    # The request passed may_measure and planned a playback write; then the
+    # user opted out (erasing listened_at); then the write lands.
+    planned = _row(user, ep, seq=2).model_copy(update={"listened_at": BASE + timedelta(minutes=1)})
+    assert _opt_out(env, user)
+    assert env.repo.upsert_if_newer(planned)
+    stored = env.repo.get(user, ep)
+    assert stored.seq == 2 and stored.listened_at is None  # the position landed, the listen did not
+
+
+@pytest.mark.skipif(not PG_OK, reason="Postgres not reachable — set TEST_DATABASE_URL")
+def test_postgres_measurement_write_waits_for_a_concurrent_opt_out(env):
+    """The opt-out holds the user row; the write blocks on it and then sees
+    the switch off, rather than reading it before the opt-out commits."""
+    if not env.is_pg:
+        pytest.skip("Postgres locking")
+    import threading
+    import time
+
+    import psycopg
+
+    user, ep = env.add_user(), env.add_episode()
+    opt_out = psycopg.connect(PG_DSN)
+    try:
+        opt_out.execute("UPDATE users SET usage_analytics_enabled = false WHERE id = %s", (user,))
+        done = []
+        planned = _row(user, ep, seq=1).model_copy(update={"listened_at": BASE})
+        writer = threading.Thread(target=lambda: done.append(env.repo.upsert_if_newer(planned)))
+        writer.start()
+        time.sleep(0.3)
+        assert writer.is_alive()  # blocked on the opt-out's row lock
+        opt_out.execute("UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = %s", (user,))
+        opt_out.commit()
+        writer.join(timeout=5)
+    finally:
+        opt_out.close()
+    assert done == [True]
+    assert env.repo.get(user, ep).listened_at is None

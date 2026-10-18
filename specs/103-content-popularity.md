@@ -344,10 +344,22 @@ and only a playing episode can be paused or end, so every listen of
   switch on: the Phase 0 rule, so old windows read the same before and
   after the migration.
 - **Both backends**, as for the views table.
-- **Implementation.** The upsert stores
-  `GREATEST(excluded.listened_at, stored)`: the value only moves forward,
-  so a write planned from a stale read never rewinds it and a
-  carried-forward value never clears it.
+- **Implementation.** A write that isn't playback sends no value and the
+  upsert keeps the stored one; a playback write stores
+  `GREATEST(new, stored)`, so the value only moves forward. Nothing is
+  carried from the row the service read, which may be stale.
+- **Stop is not proof of playback.** The player also sends `stop` for a
+  paused session and for a restored bar that never played, so a
+  completing `stop` sets `listened_at` only when the same session's
+  previous write was playback (`stored.listened_at = stored.updated_at`
+  and the same `session_id`). Found in review, 2026-10-18.
+- **Opt-out races.** The route's `may_measure` runs before the write, so
+  a user can opt out in between. Both writes therefore re-check
+  `usage_analytics_enabled` in their own transaction: Postgres with
+  `SELECT … FOR SHARE` on the user row, which the opt-out's
+  `UPDATE users` waits for and vice versa; SQLite inside the single
+  write statement. A write in flight during an opt-out can't restore
+  what the opt-out erased.
 
 ### 5. Phase 2: `public_page_daily_views`
 

@@ -135,6 +135,15 @@ def test_first_view_is_kept(env):
     assert env.views() == [(user, ep, NOW.isoformat())]
 
 
+def test_a_view_after_the_opt_out_stores_nothing(env):
+    """The route passed may_measure, then the user opted out, then the
+    insert ran: the repository's own check under the opt-out's lock wins."""
+    user, ep = env.seed()
+    env.users.update_usage_analytics(user, False)
+    assert env.repo.record_view(user, ep, NOW) is False
+    assert env.views() == []
+
+
 def test_unknown_or_malformed_episode_stores_nothing(env):
     user, _ = env.seed()
     assert env.repo.record_view(user, MISSING_ID, NOW) is False

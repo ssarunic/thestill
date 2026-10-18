@@ -26,6 +26,7 @@ from structlog import get_logger
 from ..utils.ids import is_uuid
 from ..utils.postgres_ext import connect
 from .episode_view_repository import EpisodeViewRepository
+from .postgres_user_repository import consents_to_measurement
 
 logger = get_logger(__name__)
 
@@ -42,6 +43,8 @@ class PostgresEpisodeViewRepository(EpisodeViewRepository):
             return False
         # Selecting from episodes makes an unknown id a no-op, not an FK error.
         with connect(self.dsn) as conn:
+            if not consents_to_measurement(conn, user_id):
+                return False
             cursor = conn.execute(
                 """
                 INSERT INTO user_episode_views (user_id, episode_id, first_viewed_at)
