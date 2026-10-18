@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft
 > **Created:** 2026-10-17
-> **Updated:** 2026-10-17
+> **Updated:** 2026-10-18
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
 > **Author:** Product & Engineering
 > **Related:** [#06 authentication](06-authentication.md) (lists per-user quotas as a goal), [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md) (leaves the follow limit open), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md), [#63 universal-follower-gate](63-universal-follower-gate.md) (why a follow costs money), [#78 remote-mcp-access](78-remote-mcp-access.md), [#95 product-analytics](95-product-analytics.md) (the admin `/analytics` page this sits beside)
@@ -85,7 +85,18 @@ The two non-active states differ in what they do to follows:
 - `handle_google_callback`, after the user is found. Sign-in redirects to `/login?error=account_disabled`, and `/login` shows "This account has been disabled. Contact <operator email>."
 - The MCP HTTP auth path at [mcp_http.py:176](../thestill/web/mcp_http.py#L176), returning 403.
 
-All three already load the user row fresh on each request, so a status change takes effect on the user's next request with no cache to clear. Changing status also revokes the user's outstanding JWTs. Each `jti` is not stored per user today, so revocation adds a `tokens_valid_after timestamptz` column on `users`. `verify_jwt` rejects any token whose `iat` is earlier. This also gives "sign out everywhere" for free. MCP tokens are revoked through their existing table.
+All three already load the user row fresh on each request, so a status change takes effect on the user's next request with no cache to clear.
+
+**Where status is checked in background work.** Authentication is not the only way a user causes spend. The briefing scheduler runs per user on its own clock ([briefing_scheduler.py:145](../thestill/core/briefing_scheduler.py#L145)). It generates a script with the LLM, chains narration (LLM plus TTS), and queues an email. Its deferral retries and the delivery pass also run without a request. So `ensure_active` is also enforced at each costly boundary, where the work starts, not only where it is scheduled:
+
+| Boundary | Check | On a non-active user |
+|---|---|---|
+| `BriefingService.generate_for_user` ([briefing_service.py:140](../thestill/services/briefing_service.py#L140)) | User status, read fresh | Returns `None`, as for an empty inbox, and logs `briefing_skipped_account_disabled`. The scheduler still claims and advances the slot, so a suspended user isn't reconsidered every tick, and a reinstated user's next briefing covers everything since their last one |
+| `BriefingScheduler._retry_pending_briefings` | Same call, so same check | The deferral is dropped |
+| `NarrationRunner.run` ([narration_runner.py:107](../thestill/services/narration/narration_runner.py#L107)) | Status of the briefing's owner | Raises `AccountDisabledError` before any LLM or TTS call. The scheduler's narration chain already logs and moves on after a failure |
+| `BriefingDeliveryService._send_one` ([briefing_delivery_service.py:182](../thestill/services/briefing_delivery_service.py#L182)) | Status, next to the existing opt-in re-check at send time | Raises `_PermanentDeliveryError("account disabled")`. This parks the row as failed without spending retries, so the check also covers deliveries already queued and those waiting on a backoff retry. A reinstated user doesn't get the parked emails |
+
+Putting the check inside each service rather than in the scheduler means a new caller can't skip it. That includes the manual narrate route ([api_briefings.py:546](../thestill/web/routes/api_briefings.py#L546)), which authentication already covers. The lookup is one primary-key read per briefing, cheap next to the LLM call it guards. Changing status also revokes the user's outstanding JWTs. Each `jti` is not stored per user today, so revocation adds a `tokens_valid_after timestamptz` column on `users`. `verify_jwt` rejects any token whose `iat` is earlier. This also gives "sign out everywhere" for free. MCP tokens are revoked through their existing table.
 
 **Banning and the follower gate.** About 33 queries read `podcast_followers` to decide whether a feed has followers. Changing all of them to skip banned users is invasive and easy to get wrong. Banning instead *moves* the user's follows aside:
 
@@ -119,15 +130,38 @@ New table `app_settings(key text primary key, value jsonb not null, updated_at t
 |---|---|---|---|
 | `signup_mode` | `open` \| `allowlist` \| `closed` | `SIGNUP_MODE=open` | See 1.2 |
 | `signup_allowlist` | list of strings | `SIGNUP_ALLOWLIST=` (comma-separated) | See 1.2 |
-| `new_feeds_enabled` | bool | true | Off: add-feed, resolve and the MCP `add_podcast` tool return `503 feature_paused` for a feed not already in the database. Following existing feeds still works |
-| `imports_enabled` | bool | true | Off: `POST /api/imports` returns 503 |
-| `translations_enabled` | bool | true | Off: `?lang=` serves a translation that already exists and returns 503 for one that doesn't |
-| `narration_enabled` | bool | `NARRATION_ENABLED` | Same as the env flag, but can be changed at runtime |
-| `read_only` | bool | false | Panic mode: every non-admin `POST`, `PATCH`, `PUT` and `DELETE` under `/api` and every MCP mutating tool returns `503 read_only`. Reading still works. Scheduled refresh and processing of *already-followed* feeds carry on |
+| `new_feeds_enabled` | bool | true | Off: refuses any action that would take a feed from zero active followers to one. That covers add-feed, resolve, MCP `add_podcast`, *and a follow of an existing feed nobody follows*. Following a feed that already has followers still works. See below |
+| `imports_enabled` | bool | true | Off: `POST /api/imports` and its MCP equivalent return 503 |
+| `translations_enabled` | bool | true | Off: `?lang=` serves a translation that already exists and returns 503 for one that doesn't. Enforced in the service, not by HTTP method. See below |
+| `narration_enabled` | bool | `NARRATION_ENABLED` | Same as the env flag, but can be changed at runtime. Off: manual and scheduled narration both stop |
+| `read_only` | bool | false | Panic mode. Every non-admin `POST`, `PATCH`, `PUT` and `DELETE` under `/api` and every MCP mutating tool returns `503 read_only`. **It also turns off `new_feeds_enabled`, `imports_enabled`, `translations_enabled` and `narration_enabled`**, whatever their own values, so spending a user can start through a `GET` or a background job stops too. Reading cached content still works. Pipeline processing of feeds that already have followers, and scheduled briefing *scripts*, carry on. To stop those, see the open question on a processing pause |
 | `quota_overrides` | Phase 2 | | |
 | `alerts` | Phase 3 | | |
 
 A 503 carries a short message the frontend shows as a toast, for example "Adding new podcasts is paused right now."
+
+**Switches are enforced where the cost starts, not by HTTP method.** A filter on `POST` routes misses spending that a `GET` or a background job starts. The summary route, for example, is a `GET` that generates a missing translation on the spot ([api_podcasts.py:530](../thestill/web/routes/api_podcasts.py#L530)). So each switch is checked in the service method that makes the paid call, through `SettingsService.allowed(feature)`, which returns false when the feature's switch is off *or* `read_only` is on:
+
+| Feature | Checked in | Cached content still served |
+|---|---|---|
+| `translations` | `PodcastService.get_or_create_summary_translation` ([podcast_service.py:1040](../thestill/services/podcast_service.py#L1040)), before the LLM call and after the lookup for an existing translation | Yes: an existing translation is returned |
+| `narration` | `NarrationRunner.run`, before any LLM or TTS call. This also covers the scheduler's narration chain | Yes: existing narration audio still plays |
+| `imports` | `ImportService`, before the episode row is created | n/a |
+| `new_feeds` | The follow gate below, and the add-feed and resolve paths before a podcast row is created | n/a |
+
+The service raises `FeaturePausedError(feature)`. Routes map it to 503 and MCP tools to a tool error. The scheduler logs it and moves on. The `read_only` method filter stays as a blunt second layer, but no costly path relies on it.
+
+**The follow gate.** A follow is a costly action only when it takes a feed from zero active followers to one. That follow seeds the newest `INBOX_SEED_ON_FOLLOW` episodes through the pipeline and turns on processing for every future episode (spec #63). `new_feeds_enabled` therefore gates that zero-to-one step, whatever route makes it:
+
+- `FollowerService.follow` and the add-feed auto-follow call one new repository method, `follow_with_gate(user_id, podcast_id, gate)`. In a single transaction it:
+  1. takes a per-podcast lock (Postgres `pg_advisory_xact_lock`; SQLite `BEGIN IMMEDIATE`);
+  2. counts the feed's current followers;
+  3. if the count is zero, refuses with `FeaturePausedError("new_feeds")` when the feature isn't allowed, and otherwise takes the `feeds_introduced_per_day` reservation from Phase 2;
+  4. inserts the follow.
+
+  Locking means two concurrent first follows can't both see a non-zero count from each other's uncommitted row.
+- An unban (1.1) restores follows through the same table but bypasses the gate, since an admin chose it. It is logged in the audit log with the number of feeds it reactivated.
+- Admins are not exempt from the gate. A tripped breaker should stop the operator's own clicks too, and the operator can flip the switch back.
 
 #### 1.4 CLI
 
@@ -170,16 +204,16 @@ Actions: `user.suspend`, `user.ban`, `user.reinstate`, `user.logout_everywhere`,
 
 #### 2.1 Usage ledger
 
-New table `usage_events(id, user_id, kind text, created_at, subject_id text null)`, indexed on `(user_id, kind, created_at)`. One row is written per costly action:
+New table `usage_events(id, user_id, kind text, state text, created_at, settled_at null, subject_id text null)`, indexed on `(user_id, kind, created_at)`. `state` is `reserved`, `committed` or `released`. One row is written per costly action, *before* the action runs (see 2.2):
 
-| `kind` | Written when | `subject_id` |
+| `kind` | Reserved when | `subject_id` |
 |---|---|---|
-| `feed_introduced` | A follow, add-feed or MCP `add_podcast` takes a feed from 0 to 1 followers | podcast id |
+| `feed_introduced` | A follow, add-feed or MCP `add_podcast` is about to take a feed from 0 to 1 followers | podcast id |
 | `follow` | Any follow | podcast id |
-| `import` | An import is accepted | episode id |
-| `translation` | A translation is generated, not when an existing one is served | episode id |
-| `narration` | A narration is started | briefing id |
-| `quota_exceeded` | A quota refuses a request | the quota name |
+| `import` | An import is about to be accepted | episode id |
+| `translation` | A translation is about to be generated, not when an existing one is served | episode id |
+| `narration` | A narration is about to start | briefing id |
+| `quota_exceeded` | A quota refuses a request. Written `committed`, never reserved | the quota name |
 
 The import counter already logged in [import_service.py:851](../thestill/services/import_service.py#L851) moves to this ledger, as its comment there asks. The ledger also feeds the console and the digest, so the number that limits a user is the number the operator sees.
 
@@ -198,7 +232,34 @@ Rows older than 90 days are deleted by the existing housekeeping job, keeping `f
 
 The windows roll over 24 hours rather than resetting at midnight, so there is no burst at the turn of the day. `0` means unlimited. Admins are exempt.
 
-`QuotaService.check(user, quota)` runs *before* the action, in the service layer (`FollowerService.follow`, the add-feed route, `ImportService`, the translation path, narration). The REST routes and MCP tools then share one rule. A refusal:
+**Check and record must be one atomic step.** If the check reads the count first and the usage row is written after the action, concurrent requests all pass with one allowance left. The window is widest for translations and narration, which take seconds. So the quota is enforced by an atomic *reserve*, and the action then *commits* or *releases* the reservation:
+
+```python
+with quota_service.reserve(user, "translations_per_day", subject_id=episode_id) as reservation:
+    summary = generate_translation(...)   # the paid call
+    reservation.commit()
+# Leaving the block without commit() (an exception, a FeaturePausedError) releases it.
+```
+
+`QuotaService.reserve` runs one short database transaction:
+
+1. Take a lock scoped to `(user_id, quota)`. On Postgres: `pg_advisory_xact_lock(hashtextextended(user_id || ':' || quota, 0))`. On SQLite: `BEGIN IMMEDIATE`, which serialises writers on the whole database. That's acceptable for a handful of costly actions a minute.
+2. Count the user's rows for the quota's kind in the window with `state IN ('reserved', 'committed')`. A pending reservation counts against the limit, so a slow translation can't let a second one through.
+3. If the count is at the limit, write a `quota_exceeded` event and raise `QuotaExceededError`. Otherwise insert the row as `reserved`.
+4. Commit, which releases the lock.
+
+The lock is held only for the count and the insert, never during the paid call. Two requests from the same user for the same quota wait for each other for milliseconds. Requests from different users, or for different quotas, never wait.
+
+Settling the reservation:
+
+- **Commit** sets `state = 'committed'` once the paid work has been handed off. For translation and narration that is when the result is stored. For a follow or import, it is in the same transaction as the follow or episode insert, so a crash can't leave a follow without its usage row.
+- **Release** sets `state = 'released'`, which stops it counting. This happens when the action fails *before* any money is spent: validation errors, `FeaturePausedError`, a provider error before the first token. A failure after the provider has charged (a timeout after the response started, a storage write failing after generation) still commits, because the quota tracks spend, not success.
+- **Abandoned reservations.** A process killed between reserve and settle leaves a `reserved` row. It keeps counting, so the system fails closed. The housekeeping job releases `reserved` rows older than `QUOTA_RESERVATION_TTL_SECONDS` (default 900, longer than any translation or narration) and logs `quota_reservation_expired`. A burst of these points at a crash loop.
+- **Releasing never refunds a quota at the user's request.** No API releases a reservation except the code path that made it.
+
+`follows_total` counts live rows in `podcast_followers` rather than the ledger. It is checked inside `follow_with_gate`'s transaction (1.3) under a per-user lock taken *before* the per-podcast lock. Every path takes locks in the same order: user quota locks, then the podcast lock. That ordering rules out deadlocks between two follows.
+
+The reservation runs in the service layer (`FollowerService.follow` through `follow_with_gate`, the add-feed route, `ImportService`, `get_or_create_summary_translation`, `NarrationRunner.run`). The REST routes and MCP tools then share one rule. Scheduled narration reserves against the briefing owner's `narrations_per_day` like a manual one. A refusal there is logged and the briefing ships without audio. A refusal:
 
 - raises `QuotaExceededError(quota, limit, retry_after_seconds)`;
 - is mapped to `429 {"error": "quota_exceeded", "quota": "...", "limit": N, "retry_after": S}` with a `Retry-After` header, or to an MCP tool error with the same text;
@@ -246,7 +307,7 @@ Thresholds live in the runtime setting `alerts` (with env defaults), so they can
 
 Each alert names the user (email and a link to their console page) and the numbers, and suggests the obvious action. For example: "alice@example.com hit the new-feed quota 7 times in the last hour. Suspend: <link>".
 
-`spend_breaker` is the only alert that acts on its own. When `alerts.spend_breaker_action = "pause_new_feeds"` it also sets `new_feeds_enabled = false` and says so in the alert. It never suspends users. The estimate uses episode durations from the feed, which every queued episode already has.
+`spend_breaker` is the only alert that acts on its own. When `alerts.spend_breaker_action = "pause_new_feeds"` it also sets `new_feeds_enabled = false` and says so in the alert. That stops every route to new spend, including a first follow of a dormant feed already in the database (see the follow gate in 1.3). It never suspends users. The estimate uses episode durations from the feed, which every queued episode already has.
 
 `rate_limit_pressure` is counted per process from the in-memory limiter and summed by the tick reading the log events it emits. With several workers each process reports its own count, so the threshold is a per-worker lower bound. That is good enough to spot a user hammering the server.
 
@@ -334,7 +395,7 @@ All routes are under `/api/admin`, mounted with `require_admin`, and return the 
 | New `suspended_follows` | 1 |
 | New `app_settings` | 1 |
 | New `admin_audit_log` | 1 |
-| New `usage_events` | 2 |
+| New `usage_events` (with `state` and `settled_at` for reservations) | 2 |
 
 Each change follows the repo's three-part pattern:
 
@@ -376,6 +437,11 @@ Each phase is its own PR and works without the later ones.
   - A suspended or banned user's cookie, Bearer token and MCP token each get 403, never a redirect loop.
   - A token issued before `tokens_valid_after` is rejected.
   - Reinstating restores access.
+- **Status in background work:**
+  - A due schedule for a suspended user advances its slot without generating a briefing.
+  - A deferred briefing for a user suspended mid-deferral is dropped on the next retry.
+  - `NarrationRunner.run` for a disabled owner makes no LLM or TTS call.
+  - Three delivery cases are parked as failed without sending and without using a retry: a pending delivery, one waiting on backoff, and one queued just before the suspension.
 - **Ban and follows:**
   - A ban moves the follows to `suspended_follows`, a feed left with no followers stops being enqueued, and its queued tasks are cancelled.
   - A feed another user still follows is unaffected.
@@ -388,8 +454,21 @@ Each phase is its own PR and works without the later ones.
   - The env default applies with no row, and a row overrides it.
   - The cache expires after the TTL.
   - Each switch blocks exactly its paths. `read_only` lets admins and reads through.
+  - With `translations_enabled` off, or `read_only` on, a `GET .../summary?lang=` for a missing translation returns 503 and makes no LLM call, while an existing translation is still served.
+  - `read_only` stops scheduled narration.
+  - With `new_feeds_enabled` off:
+    - following a feed with zero followers is refused, through both REST and MCP;
+    - following a feed that already has followers succeeds;
+    - two concurrent first follows of the same dormant feed are both refused, with no follow row left behind;
+    - an unban that restores follows to dormant feeds succeeds and writes an audit entry.
 - **Quotas:**
   - Each quota refuses at limit + 1 with 429 and `Retry-After`.
+  - **Concurrency, against Postgres and SQLite.** With one allowance left, N parallel requests (threads, each with its own connection) for the same quota let exactly one through, and record N-1 `quota_exceeded` events. Run this for a slow translation (the paid call is stubbed to sleep) and for a follow.
+  - A pending reservation counts: while one translation is in progress at limit - 1, a second request is refused.
+  - A failure before spend (stub raises a validation or provider error) releases the reservation. A later request succeeds.
+  - A failure after spend (stub raises after "charging") commits it.
+  - A `reserved` row older than the TTL is released by housekeeping and stops counting. A fresher one keeps counting.
+  - No deadlock: parallel follows by several users of overlapping feeds all finish within a timeout.
   - Following an already-followed feed doesn't count as `feed_introduced`.
   - Admins are exempt. Overrides raise and lower limits. MCP tools hit the same quotas as REST.
 - **Alerts:**
@@ -407,4 +486,5 @@ Each phase is its own PR and works without the later ones.
 1. **Ban notice.** Should a banned user get an email? The proposal is no: the `/login` message is enough, and an email invites argument. Revisit if users ask.
 2. **Account deletion.** Should "ban" eventually become "delete" after N days? `UserRepository.delete` exists but cascades to inbox and briefings. This is left to a GDPR-driven spec.
 3. **Quota defaults.** The defaults in 2.2 are guesses. Phase 2 should look at real usage from `usage_events` in the first week, with limits logged but not enforced (`QUOTA_ENFORCE=false`) before switching on.
-4. **Per-IP signup limit.** Google accounts are cheap to make. If `signup_spike` fires in practice, add a cap on new accounts per IP per day, or move the default to `allowlist`.
+4. **Processing pause.** `read_only` stops what users can start, but feeds that are already followed keep being processed, and scheduled briefing scripts keep being written. A separate `processing_paused` switch would hold the pipeline queue and the briefing scheduler. Left out for now because spec #63's follower gate and the `spend_breaker` cover the realistic cases. Add it if an incident needs it.
+5. **Per-IP signup limit.** Google accounts are cheap to make. If `signup_spike` fires in practice, add a cap on new accounts per IP per day, or move the default to `allowlist`.
