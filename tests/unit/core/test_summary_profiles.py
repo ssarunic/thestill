@@ -112,7 +112,7 @@ def test_genre_profile_keeps_fixed_slots_and_adds_rules_guidance_and_example():
     )
     prompt = compose_system_prompt(profile)
 
-    assert "## 1. 🎙️ The Gist\nOne line saying who is speaking" in prompt
+    assert "## 1. 🎙️ The Gist\nOne short line with just who is speaking" in prompt
     assert "## 2. ⏱️ Timeline\nBreak the episode" in prompt
     assert "## 3. 🧪 true_crime slot 3\n* true_crime instructions for slot 3" in prompt
     assert prompt.index('"alleged"') < prompt.index("## 1. ")  # rules follow the style guide

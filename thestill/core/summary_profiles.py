@@ -93,11 +93,14 @@ STYLE_GUIDE = """You are a sharp, no-nonsense research assistant. You are not a 
 * **Citations:** Every claim must have a timestamp. Use [MM:SS] for episodes under 60 minutes, [HH:MM:SS] for longer episodes."""
 
 # Spec #98 Phase 2: rules every profile shares, placed after the style guide.
-# The publication date the second bullet refers to is sent with the
-# transcript (``TranscriptSummarizer``), not in the system prompt.
-SHARED_RULES = """**Faithfulness:**
-* Report only what the episode says. Do not update, correct or extend its facts, results or developments from your own knowledge, even when you believe they are out of date.
-* Time-sensitive facts (results, scores, prices, polls, who holds which job) are as of the episode's publication date, given above the transcript. Report them as the episode states them, and keep relative times ("next spring", "last year") in the episode's words rather than turning them into calendar years."""
+# Written in the style guide's own voice: a stiffer, compliance-style wording
+# measurably pulled the summaries towards a reporting register. The
+# publication date the second bullet refers to is sent with the transcript
+# (``TranscriptSummarizer``), not in the system prompt.
+SHARED_RULES = """**Stick to the episode:**
+* Only say what the episode says. Don't top it up with things you know, and don't "fix" facts you think are out of date.
+* Scores, prices, polls and who holds which job are as of the publication date (it's above the transcript), so give them the way the episode does. "Next spring" stays "next spring"; don't turn it into a year.
+* Being accurate doesn't mean being formal. Keep the smart-friend voice."""
 
 FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
     {
@@ -105,12 +108,14 @@ FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
             "🎙️",
             "The Gist",
             # Spec #98 Phase 2: one line on who is speaking and in what
-            # format, not an assumed interview. The preview drops this line.
-            "One line saying who is speaking and in what format, with roles or titles where the episode gives them,"
-            ' e.g. "[host name] interviews [guest name, role]", "[host name] and [co-host names] discuss [topic]",'
-            ' "Narrated by [host name]", "[host name]\'s daily news round-up" or "A full-cast audio drama,'
-            ' introduced by [name]". Replace every bracketed part with the real names; never leave brackets in.'
-            " Only call it an interview when someone is being interviewed, and use only names the episode gives.\n\n"
+            # format, not an assumed interview. No topic here: a topic in this
+            # line turned it into a listings blurb and left the summary below
+            # without a hook. The preview drops this line.
+            'One short line with just who is speaking and how, e.g. "[host name] interviews [guest name, role]",'
+            ' "Co-hosts [names]", "[host name] with a panel: [names]", "[host name], solo", "Narrated by [host name]"'
+            ' or "A full-cast audio drama, introduced by [name]". Leave the topic for the summary below. Replace'
+            " every bracketed part with the real names; never leave brackets in. Only call it an interview when"
+            " someone is being interviewed, and use only names and roles the episode gives.\n\n"
             "A 2-sentence summary of the episode. Do NOT include the episode title, date, or duration"
             " - these are displayed elsewhere.",
         ),
