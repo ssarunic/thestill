@@ -169,6 +169,8 @@ def setup_tools(
         repos.follower,
         queue_manager=repos.queue_manager,
         podcast_repository=repository,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
     follower_service = FollowerService(
         repos.follower, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy

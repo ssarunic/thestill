@@ -256,6 +256,7 @@ def main(ctx, config, quiet):
             follower_repository,
             queue_manager=repos.queue_manager,
             podcast_repository=repository,
+            access=abuse.guard,
         )
         # Spec #63 — the auto-follow-on-add path needs full follow
         # semantics (validation + inbox seed), mirroring the web wiring.
