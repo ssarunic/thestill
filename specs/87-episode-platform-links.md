@@ -376,7 +376,7 @@ Gate: contract tests on SQLite and on Postgres via `TEST_DATABASE_URL`.
 
 | # | File | Change |
 | --- | --- | --- |
-| C1 | `thestill/services/platform_link_service.py` | `search_channels` injectable; `_discover_youtube_channel` before the listing; wrong-chart detection; dry-run / force behaviour; outcome `matched_by["discovered"]` and a `platform_links_channel_discovery` log line |
+| C1 | `thestill/services/platform_link_service.py` | `search_channels` injectable; `_discover_youtube_channel` before the listing; wrong-chart detection on the source of the channel *used in the pass* (a publisher-stated channel found this pass counts as `publisher` even in a dry run, where it is never stored); dry-run / force behaviour; a `platform_links_channel_discovery` log line (query, per-result scores, outcome) and `channel_discovered` on `platform_links_resolved` |
 | C2 | `thestill/utils/config.py`, `cli.py`, `web/app.py` | `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` (7, 0 = off); `thestill link-platforms --forget-discovered [--podcast-id X] [--dry-run]` |
 | C3 | `tests/unit/services/test_platform_link_service.py` | Empty channel found and used in the same pass; verification uses the sample when only one candidate is eligible; an unverified result defers even when a rival has 3+ matches; nothing accepted stamps and writes not-found markers; throttle respected and ignored under `--force`; dry run stores nothing; a wrong chart channel is replaced even beside an unrelated publisher link; a chart channel with a channel-listing link, or a failed listing, is never replaced; publisher / curated never replaced; search failure stamps |
 | C4 | `docs/configuration.md`, this spec, `specs/README.md` | Document the setting and the outcome |

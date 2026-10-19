@@ -366,6 +366,7 @@ def _make_platform_link_service(repository):
         get_platform_links_recheck_hours,
         get_platform_links_young_age_hours,
         get_platform_links_young_recheck_hours,
+        get_platform_links_youtube_discovery_days,
         is_platform_links_enabled,
     )
 
@@ -376,6 +377,7 @@ def _make_platform_link_service(repository):
         recheck_hours=get_platform_links_recheck_hours(),
         young_recheck_hours=get_platform_links_young_recheck_hours(),
         young_age_hours=get_platform_links_young_age_hours(),
+        youtube_discovery_days=get_platform_links_youtube_discovery_days(),
     )
 
 
@@ -500,12 +502,20 @@ def set_entity_visibility(ctx, entity_id, public):
 @click.option("--podcast-id", help="Only this podcast (index or RSS URL)")
 @click.option("--dry-run", "-d", is_flag=True, help="Fetch and match, but write nothing")
 @click.option(
-    "--force", "-f", is_flag=True, help="Ignore the not-found recheck interval (re-query every unlinked episode)"
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Ignore the not-found recheck interval and the weekly YouTube channel search throttle",
+)
+@click.option(
+    "--forget-discovered",
+    is_flag=True,
+    help="Roll back YouTube channel discovery: drop discovered channels and the episode links they made",
 )
 @click.pass_context
 @require_config
 @log_command
-def link_platforms(ctx, podcast_id, dry_run, force):
+def link_platforms(ctx, podcast_id, dry_run, force, forget_discovered):
     """Resolve per-episode Apple / Spotify / YouTube links (spec #87).
 
     Per show: one iTunes lookup for Apple, the feed's own links for Spotify
@@ -513,7 +523,27 @@ def link_platforms(ctx, podcast_id, dry_run, force):
     Only shows with unlinked episodes among their newest 200 cost a request.
     Runs automatically after every refresh; this command is the backfill
     and the debugging surface.
+
+    --forget-discovered undoes spec #87 Phase 3d for every show whose
+    YouTube channel was found by search (or only --podcast-id): it deletes
+    the episode links that channel's listing made and the not-found
+    markers, keeps publisher-provided links, and clears the channel. Set
+    PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS=0 first, or the next pass
+    searches again.
     """
+    if forget_discovered:
+        target_id = None
+        if podcast_id:
+            podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+            if not podcast:
+                click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+                ctx.exit(1)
+            target_id = podcast.id
+        shows, links = ctx.obj.repository.forget_discovered_youtube_channels(target_id, dry_run=dry_run)
+        verb = "Would forget" if dry_run else "Forgot"
+        click.echo(f"✓ {verb} {shows} discovered YouTube channel(s) and {links} episode link row(s).")
+        return
+
     service = _make_platform_link_service(ctx.obj.repository)
     if service is None:
         click.echo("❌ PLATFORM_LINKS_ENABLED is false — nothing to do.", err=True)

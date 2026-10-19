@@ -27,7 +27,9 @@ candidates costs no request, which is the steady state.
   lists, so the feed itself is the only source (spec #87 "Spotify").
 - **YouTube** (Phase 2): publisher-provided links first (import, alternate
   enclosure, item link, unique description link), then a flat yt-dlp
-  listing of the show's channel matched on title, date and duration.
+  listing of the show's channel matched on title, date and duration. A
+  show with no channel, or a chart channel that matches none of its
+  episodes, gets a verified channel search at most once a week (Phase 3d).
 
 Wired into both refresh paths (queued ``handle_refresh_feed`` and inline
 ``RefreshService``) as best-effort work, and into ``thestill link-platforms``
@@ -44,6 +46,7 @@ from urllib.parse import quote_plus, urlsplit, urlunsplit
 
 from structlog import get_logger
 
+from ..core import youtube_channel_discovery as discovery
 from ..core import youtube_episode_linker as youtube
 from ..core.apple_episode_linker import apple_collection_id, match_candidates, normalize_title, parse_lookup_window
 from ..core.publisher_links import (
@@ -70,6 +73,8 @@ DEFAULT_WINDOW = 200
 PLATFORM_APPLE = "apple"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_YOUTUBE = "youtube"
+# Match methods a channel listing produces (as opposed to ``publisher``).
+_CHANNEL_LISTING_METHODS = ("title_date", "title_duration")
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,7 @@ class PlatformLinkService:
         young_recheck_hours: int = 2,
         young_age_hours: int = 48,
         youtube_listing_limit: int = youtube.DEFAULT_LISTING_LIMIT,
+        youtube_discovery_days: int = 7,
         lookup: Callable[[str], list] = itunes_lookup,
         search: Callable[[str], list] = itunes_search,
         list_videos: Callable[..., List[youtube.YouTubeVideoEntry]] = youtube.list_channel_videos,
@@ -149,6 +155,7 @@ class PlatformLinkService:
         ),
         fetch_spotify_latest: Callable[[str], Optional[SpotifyLatestEpisode]] = fetch_latest_episode,
         fetch_website: Callable[[str], str] = lambda url: fetch_website_text(url),
+        search_channels: Callable[[str], List[discovery.ChannelHit]] = discovery.search_channels,
         clock: Callable[[], datetime] = now_utc,
     ) -> None:
         self.repository = repository
@@ -161,6 +168,8 @@ class PlatformLinkService:
         self.young_recheck = timedelta(hours=young_recheck_hours)
         self.young_age = timedelta(hours=young_age_hours)
         self.youtube_listing_limit = youtube_listing_limit
+        # Spec #87 Phase 3d: days between channel searches for one show; 0 = off.
+        self.youtube_discovery_days = youtube_discovery_days
         self._lookup = lookup
         self._search = search
         self._list_videos = list_videos
@@ -168,6 +177,7 @@ class PlatformLinkService:
         self._fetch_spotify_episode = fetch_spotify_episode
         self._fetch_spotify_latest = fetch_spotify_latest
         self._fetch_website = fetch_website
+        self._search_channels = search_channels
         self._clock = clock
 
     # ------------------------------------------------------------------
@@ -511,6 +521,10 @@ class PlatformLinkService:
                 dry_run=dry_run,
             )
         channel_url = urls.get("youtube_url")
+        # Where the channel used in this pass came from: a publisher-stated
+        # channel is never second-guessed by discovery (Phase 3d), and a dry
+        # run never stores it, so the stored source alone would say 'chart'.
+        channel_source: Optional[str] = None
         if not channel_url and show.youtube_url:
             self._store_show_url(
                 podcast,
@@ -521,6 +535,7 @@ class PlatformLinkService:
                 dry_run=dry_run,
             )
             channel_url = show.youtube_url
+            channel_source = "publisher"
 
         # 3. Spotify: description claims checked against the episode page's
         #    own title / date / duration, then — when the show's Spotify id
@@ -575,10 +590,13 @@ class PlatformLinkService:
         skipped: Optional[str] = None if youtube_cands else "no_candidates"
         channel_linked = 0
         listing_shape: Dict[str, int] = {}
-        entries: List[youtube.YouTubeVideoEntry] = []
+        listing: Optional[List[youtube.YouTubeVideoEntry]] = None  # None: no channel listed
+        listing_failed = False
+        discovered = False
+        discovery_due = bool(youtube_rest) and self._discovery_due(podcast.id, now, force=recheck.before is None)
         if youtube_rest and channel_url:
             try:
-                entries = self._list_videos(channel_url, limit=self.youtube_listing_limit)
+                listing = self._list_videos(channel_url, limit=self.youtube_listing_limit)
             except Exception as exc:  # noqa: BLE001 — bot checks, network, private channel
                 logger.warning(
                     "platform_links_lookup_failed",
@@ -587,26 +605,43 @@ class PlatformLinkService:
                     channel_url=channel_url,
                     error=str(exc),
                 )
-                skipped = "lookup_failed"
-                youtube_rest = []  # nothing written for them: retried next refresh
-            else:
-                listing_shape = youtube.describe(entries)
-                matches = youtube.match_candidates(youtube_rest, entries, now=now, show_name=podcast.title)
-                matched = {m.episode_id for m in matches}
-                channel_linked = len(matches)
-                for m in matches:
-                    matched_by[m.match_method] = matched_by.get(m.match_method, 0) + 1
-                    rows.append(
-                        PlatformLink(
-                            episode_id=m.episode_id,
-                            platform=PLATFORM_YOUTUBE,
-                            url=m.url,
-                            external_ref=m.external_ref,
-                            match_method=m.match_method,
-                            checked_at=now,
-                        )
+                listing_failed = True
+            if (
+                listing is not None
+                and discovery_due
+                and self._recorded_channel_is_wrong(podcast, listing, now, channel_source=channel_source)
+            ):
+                found_channel = self._discover_youtube_channel(podcast, now, replacing=channel_url, dry_run=dry_run)
+                if found_channel is not None:
+                    channel_url, listing = found_channel
+                    discovered = True
+        elif youtube_rest and discovery_due:
+            found_channel = self._discover_youtube_channel(podcast, now, replacing=None, dry_run=dry_run)
+            if found_channel is not None:
+                channel_url, listing = found_channel
+                discovered = True
+        entries: List[youtube.YouTubeVideoEntry] = listing or []
+        if listing_failed:
+            skipped = "lookup_failed"
+            youtube_rest = []  # nothing written for them: retried next refresh
+        elif listing is not None:
+            listing_shape = youtube.describe(entries)
+            matches = youtube.match_candidates(youtube_rest, entries, now=now, show_name=podcast.title)
+            matched = {m.episode_id for m in matches}
+            channel_linked = len(matches)
+            for m in matches:
+                matched_by[m.match_method] = matched_by.get(m.match_method, 0) + 1
+                rows.append(
+                    PlatformLink(
+                        episode_id=m.episode_id,
+                        platform=PLATFORM_YOUTUBE,
+                        url=m.url,
+                        external_ref=m.external_ref,
+                        match_method=m.match_method,
+                        checked_at=now,
                     )
-                youtube_rest = [c for c in youtube_rest if c.episode_id not in matched]
+                )
+            youtube_rest = [c for c in youtube_rest if c.episode_id not in matched]
         elif youtube_rest:
             skipped = "no_channel"
         if skipped != "lookup_failed":
@@ -649,10 +684,137 @@ class PlatformLinkService:
                 youtube_outcome,
                 dry_run=dry_run,
                 channel_url=channel_url,
+                channel_discovered=discovered,
                 sources=describe_sources(publisher_found[PLATFORM_YOUTUBE]),
                 **listing_shape,
             )
         return [spotify_outcome, youtube_outcome]
+
+    # ------------------------------------------------------------------
+    # YouTube channel discovery (Phase 3d)
+    # ------------------------------------------------------------------
+
+    def _discovery_due(self, podcast_id: str, now: datetime, *, force: bool) -> bool:
+        """Discovery is on and has not run for this show inside the interval (``force`` ignores it)."""
+        if self.youtube_discovery_days <= 0:
+            return False
+        if force:
+            return True
+        last = self.repository.get_youtube_discovery_checked_at(podcast_id)
+        return not isinstance(last, datetime) or last <= now - timedelta(days=self.youtube_discovery_days)
+
+    def _recorded_channel_is_wrong(
+        self,
+        podcast: Podcast,
+        listing: List[youtube.YouTubeVideoEntry],
+        now: datetime,
+        *,
+        channel_source: Optional[str] = None,
+    ) -> bool:
+        """
+        A chart-sourced channel that demonstrably is not the show's: its
+        listing (which succeeded) matches none of the newest episodes, and
+        no channel listing ever linked one of the show's episodes. Publisher
+        links say nothing about the channel, so they do not count; a
+        publisher-stated or curated channel is never second-guessed.
+        """
+        if channel_source is None:
+            sources = self.repository.get_podcast_platform_url_sources(podcast.id)
+            channel_source = sources.get(PLATFORM_YOUTUBE) if isinstance(sources, dict) else None
+        if channel_source != "chart":
+            return False
+        if self.repository.count_platform_links(podcast.id, PLATFORM_YOUTUBE, _CHANNEL_LISTING_METHODS):
+            return False
+        sample = self.repository.get_platform_link_sample(podcast.id, discovery.VERIFY_EPISODES)
+        if len(sample) < discovery.MIN_WRONG_CHANNEL_SAMPLE:
+            return False
+        return not youtube.match_candidates(sample, listing, now=now, show_name=podcast.title)
+
+    def _discover_youtube_channel(
+        self, podcast: Podcast, now: datetime, *, replacing: Optional[str], dry_run: bool
+    ) -> Optional[Tuple[str, List[youtube.YouTubeVideoEntry]]]:
+        """
+        Search for the show's channel and accept one only when its uploads
+        match the show's own newest episodes (spec #87 Phase 3d). Returns the
+        accepted channel URL and its listing, which the pass then matches
+        against its candidates. Stamps the attempt whatever the outcome.
+        """
+        sample = self.repository.get_platform_link_sample(podcast.id, discovery.VERIFY_EPISODES)
+        sample = list(sample) if isinstance(sample, list) else []
+        outcome = "too_few_episodes"
+        attempts: List[Dict[str, Any]] = []
+        accepted: Optional[Tuple[str, List[youtube.YouTubeVideoEntry]]] = None
+        if len(sample) >= discovery.MIN_CHANNEL_MATCHES:
+            for query in discovery.search_queries(podcast.title, getattr(podcast, "author", None)):
+                try:
+                    hits = self._search_channels(query)
+                except Exception as exc:  # noqa: BLE001 — bot checks, network
+                    logger.warning(
+                        "platform_links_channel_search_failed", podcast_id=podcast.id, query=query, error=str(exc)
+                    )
+                    outcome = "search_failed"
+                    break
+                scores, listings = self._score_channels(podcast, hits, sample, now, replacing=replacing)
+                pick = discovery.pick_channel(scores)
+                outcome = pick.reason
+                attempts.append(
+                    {"query": query, "reason": pick.reason, "scores": {s.hit.url: s.matches for s in scores}}
+                )
+                if pick.channel is not None:
+                    accepted = (pick.channel.url, listings[pick.channel.url])
+                    break
+                if pick.reason == "deferred":
+                    # An unverified result may be the real channel; a looser
+                    # query must not pick a rival in its place this week.
+                    break
+        if not dry_run:
+            self.repository.set_youtube_discovery_checked_at(podcast.id, now)
+        logger.info(
+            "platform_links_channel_discovery",
+            podcast_id=podcast.id,
+            podcast_title=podcast.title,
+            replacing=replacing,
+            outcome=outcome,
+            channel_url=accepted[0] if accepted else None,
+            sample=len(sample),
+            attempts=attempts,
+            dry_run=dry_run,
+        )
+        if accepted is not None:
+            self._store_show_url(
+                podcast,
+                PLATFORM_YOUTUBE,
+                accepted[0],
+                verified_by="channel_uploads",
+                source="resolver",
+                dry_run=dry_run,
+            )
+        return accepted
+
+    def _score_channels(
+        self,
+        podcast: Podcast,
+        hits: List[discovery.ChannelHit],
+        sample: List[PlatformLinkCandidate],
+        now: datetime,
+        *,
+        replacing: Optional[str],
+    ) -> Tuple[List[discovery.ChannelScore], Dict[str, List[youtube.YouTubeVideoEntry]]]:
+        """Each result's matches against the sample; a failed listing is unverified (None), never 0."""
+        scores: List[discovery.ChannelScore] = []
+        listings: Dict[str, List[youtube.YouTubeVideoEntry]] = {}
+        for hit in hits:
+            if replacing and discovery.same_channel(hit, replacing):
+                continue
+            try:
+                entries = self._list_videos(hit.url, limit=discovery.VERIFY_LISTING_LIMIT)
+            except Exception as exc:  # noqa: BLE001 — bot checks, network, unavailable channel
+                scores.append(discovery.ChannelScore(hit, 0 if discovery.is_no_uploads_error(exc) else None))
+                continue
+            listings[hit.url] = entries
+            matched = youtube.match_candidates(sample, entries, now=now, show_name=podcast.title)
+            scores.append(discovery.ChannelScore(hit, len(matched)))
+        return scores, listings
 
     def _website_text(self, podcast: Podcast) -> str:
         """The publisher's website page, or '' when it cannot be fetched (logged, never raised)."""

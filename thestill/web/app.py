@@ -70,6 +70,7 @@ from ..utils.config import (
     get_platform_links_recheck_hours,
     get_platform_links_young_age_hours,
     get_platform_links_young_recheck_hours,
+    get_platform_links_youtube_discovery_days,
     get_refresh_min_interval_seconds,
     is_platform_links_enabled,
     is_refresh_on_open_enabled,
@@ -281,6 +282,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             recheck_hours=get_platform_links_recheck_hours(),
             young_recheck_hours=get_platform_links_young_recheck_hours(),
             young_age_hours=get_platform_links_young_age_hours(),
+            youtube_discovery_days=get_platform_links_youtube_discovery_days(),
         )
         if is_platform_links_enabled()
         else None
