@@ -64,12 +64,31 @@ def _find_sections(markdown: str) -> Dict[int, List[str]]:
     return found
 
 
+def _normalise_title(text: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def _accepted_titles() -> Dict[int, List[str]]:
+    """Every defined profile's title per slot (spec #98): a news summary's
+    "The Stories" satisfies slot 3 just as general's "Key Takeaways" does."""
+    from thestill.core.summary_profiles import FIXED_SLOT_SPECS, PROFILES
+
+    accepted: Dict[int, List[str]] = {n: [title] for n, title in REQUIRED_SECTIONS}
+    for number, spec in FIXED_SLOT_SPECS.items():
+        accepted[number].append(spec.title)
+    for profile in PROFILES.values():
+        for number, spec in profile.slots.items():
+            accepted[number].append(spec.title)
+    return {n: sorted({_normalise_title(t) for t in titles}) for n, titles in accepted.items()}
+
+
 def _check_sections(markdown: str) -> dict:
     found = _find_sections(markdown)
+    accepted = _accepted_titles()
     missing = []
     for number, title in REQUIRED_SECTIONS:
-        titles = found.get(number, [])
-        if not any(title.lower() in heading.lower() for heading in titles):
+        headings = [_normalise_title(h) for h in found.get(number, [])]
+        if not any(t in heading for t in accepted[number] for heading in headings):
             missing.append(f"{number}. {title}")
     return {"ok": not missing, "missing": missing}
 
