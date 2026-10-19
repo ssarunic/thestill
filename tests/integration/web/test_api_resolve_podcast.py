@@ -84,7 +84,7 @@ def test_resolve_invalid_url_returns_400(client, monkeypatch, app_state):
     """When ``add_podcast`` returns None (failed validation/fetch), the route
     surfaces it as a 400 rather than leaking the empty-result confusion."""
 
-    def fake_add(url: str):
+    def fake_add(url: str, precheck=None):
         return None
 
     monkeypatch.setattr(app_state.podcast_service, "add_podcast", fake_add)
@@ -116,7 +116,7 @@ def test_resolve_new_podcast_returns_slug_and_enqueues_discovery(client, monkeyp
         episodes=[],
     )
 
-    def fake_add(url: str):
+    def fake_add(url: str, precheck=None):
         app_state.repository.save(new_podcast)
         return new_podcast
 

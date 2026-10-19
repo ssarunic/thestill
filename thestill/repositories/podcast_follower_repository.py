@@ -20,9 +20,50 @@ supporting the multi-user shared podcasts architecture.
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from dataclasses import dataclass
+from typing import Callable, List, Optional
 
 from ..models.user import PodcastFollower
+
+
+@dataclass(frozen=True)
+class FollowFacts:
+    """What ``follow_with_gate`` measures under its lock (spec #104)."""
+
+    #: Current followers of the podcast. Zero means this follow would
+    #: introduce the feed: seed its newest episodes and process every
+    #: future one (spec #63).
+    podcast_followers: int
+    #: The user's current follows (Phase 2's ``follows_total`` quota).
+    user_follows_total: int
+
+
+@dataclass(frozen=True)
+class FollowDecision:
+    """A policy's verdict on one follow. ``refusal`` is raised by the
+    repository after its transaction closes."""
+
+    refusal: Optional[Exception] = None
+
+
+ALLOW_FOLLOW = FollowDecision()
+
+#: Pure callback the policy hands in. Called inside the transaction, so it
+#: must do no I/O of its own.
+FollowDecider = Callable[[FollowFacts], FollowDecision]
+
+
+def allow_all(_facts: FollowFacts) -> FollowDecision:
+    """The decider for an ungated follow."""
+    return ALLOW_FOLLOW
+
+
+@dataclass(frozen=True)
+class FollowOutcome:
+    follower: Optional[PodcastFollower]
+    already_following: bool = False
+    #: The follow took the feed from zero followers to one.
+    introduced: bool = False
 
 
 class PodcastFollowerRepository(ABC):
@@ -48,6 +89,25 @@ class PodcastFollowerRepository(ABC):
             sqlite3.IntegrityError: If relationship already exists
         """
         pass
+
+    @abstractmethod
+    def follow_with_gate(self, follower: PodcastFollower, decide: FollowDecider) -> FollowOutcome:
+        """Spec #104 — insert ``follower`` if ``decide`` allows it, atomically.
+
+        In one transaction: take a per-podcast lock (Postgres advisory
+        lock; SQLite ``BEGIN IMMEDIATE``), return ``already_following`` if
+        the row exists, measure ``FollowFacts``, ask ``decide``, then insert.
+        The lock means two concurrent first follows of a dormant feed can't
+        both see a follower count that excludes the other.
+
+        Raises ``decide``'s refusal after the transaction has closed.
+        """
+
+    @abstractmethod
+    def introduced_podcast_ids(self, user_id: str) -> List[str]:
+        """Podcasts this user brought in: their follow is the earliest of
+        all follows of the feed, active or moved aside by a ban (spec #104
+        §1.5 — a good-enough stand-in until the Phase 2 usage ledger)."""
 
     @abstractmethod
     def remove(self, user_id: str, podcast_id: str) -> bool:

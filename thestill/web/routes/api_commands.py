@@ -28,6 +28,7 @@ import json
 import sqlite3
 import threading
 from collections import Counter
+from functools import partial
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -40,6 +41,7 @@ from ...core.queue_manager import TaskStatus as QueueTaskStatus
 from ...core.queue_manager import is_feed_scoped_stage, starting_stage_for
 from ...models.podcast import EpisodeState
 from ...models.user import User
+from ...services.abuse.errors import AbusePreventionError
 from ...utils.url_patterns import is_remote_fetchable_audio_url
 from ..dependencies import AppState, get_app_state, require_admin, require_auth
 from ..task_manager import TaskStatus, TaskType
@@ -133,8 +135,11 @@ def run_add_podcast_task(
         # Get count of podcasts before adding (to detect if it's new)
         podcasts_before = state.repository.count_podcasts()
 
-        # Execute the add podcast (returns existing if already exists)
-        podcast = state.podcast_service.add_podcast(url)
+        # Execute the add podcast (returns existing if already exists).
+        # Spec #104: refused before any row is written when new feeds are
+        # paused and nobody follows this one yet.
+        precheck = partial(state.abuse.new_feed_precheck.check, will_follow=True) if state.abuse else None
+        podcast = state.podcast_service.add_podcast(url, precheck=precheck)
 
         if podcast is None:
             task_manager.fail_task(
@@ -194,6 +199,9 @@ def run_add_podcast_task(
         message = f"Following: {podcast.title} ({episodes_count} episodes)"
         task_manager.complete_task(TaskType.ADD_PODCAST, result=result_data, message=message)
 
+    except AbusePreventionError as e:
+        # Spec #104 — paused or over quota: the message is written for the user.
+        task_manager.fail_task(TaskType.ADD_PODCAST, str(e))
     except ValueError as e:
         # URL validation error
         task_manager.fail_task(TaskType.ADD_PODCAST, str(e))

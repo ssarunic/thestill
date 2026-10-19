@@ -63,13 +63,25 @@ CREATE TABLE IF NOT EXISTS users (
     region_locked boolean NOT NULL DEFAULT false,
     is_admin boolean NOT NULL DEFAULT false,
     signup_source text NULL,
-    usage_analytics_enabled boolean NOT NULL DEFAULT true
+    usage_analytics_enabled boolean NOT NULL DEFAULT true,
+    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'banned')),
+    status_reason text NULL,
+    status_changed_at timestamptz NULL,
+    status_changed_by uuid NULL,
+    tokens_valid_after timestamptz NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 -- Spec #95 — converge databases bootstrapped before signup_source (alembic 0017).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source text NULL;
 -- Spec #95 Layer B — per-user usage-events switch (alembic 0018).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_analytics_enabled boolean NOT NULL DEFAULT true;
+-- Spec #104 — account status + token revocation (alembic 0021).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'suspended', 'banned'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status_reason text NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status_changed_at timestamptz NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status_changed_by uuid NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tokens_valid_after timestamptz NULL;
 CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -93,6 +105,28 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
     revoked_at timestamptz NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
+
+-- Spec #104 — runtime switches that override env defaults, and the
+-- append-only record of every admin action. No FK on the user columns:
+-- the log must outlive a deleted account.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key text PRIMARY KEY,
+    value jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    updated_by uuid NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    actor_user_id uuid NULL,
+    actor text NOT NULL CHECK (actor IN ('web', 'cli', 'system')),
+    action text NOT NULL,
+    target_user_id uuid NULL,
+    details jsonb NOT NULL DEFAULT '{{}}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_target ON admin_audit_log(target_user_id, created_at DESC);
 
 -- ===== categories / podcasts / episodes ==================================
 CREATE TABLE IF NOT EXISTS categories (
@@ -290,6 +324,18 @@ CREATE TABLE IF NOT EXISTS podcast_followers (
 );
 CREATE INDEX IF NOT EXISTS idx_followers_user ON podcast_followers(user_id);
 CREATE INDEX IF NOT EXISTS idx_followers_podcast ON podcast_followers(podcast_id);
+
+-- Spec #104 — a banned user's follows, moved out of podcast_followers so
+-- the follower gate stops feeds only they followed. Unban moves them back
+-- with the original created_at.
+CREATE TABLE IF NOT EXISTS suspended_follows (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    podcast_id uuid NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    created_at timestamptz NOT NULL,
+    suspended_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, podcast_id)
+);
+CREATE INDEX IF NOT EXISTS idx_suspended_follows_podcast ON suspended_follows(podcast_id);
 
 CREATE TABLE IF NOT EXISTS user_episode_inbox (
     id uuid PRIMARY KEY,

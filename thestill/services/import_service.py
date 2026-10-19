@@ -52,6 +52,7 @@ from ..utils.url_patterns import (
     is_youtube_url,
 )
 from ..utils.youtube_errors import describe_youtube_failure
+from .abuse.access_guard import NULL_GUARD, AccessGuard
 from .inbox_service import enqueue_pipeline_for
 
 logger = get_logger(__name__)
@@ -861,8 +862,11 @@ class ImportService:
         resolvers: Optional[Sequence[Resolver]] = None,
         feed_manager: Optional[Any] = None,
         transcription_provider: Optional[str] = None,
+        access: AccessGuard = NULL_GUARD,
     ) -> None:
         self._repository = repository
+        # Spec #104: refuses every import while imports are paused.
+        self._access = access
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
         # Optional. When set, imports that auto-create a parent podcast also
@@ -891,7 +895,12 @@ class ImportService:
         )
 
     def import_url(self, *, user_id: str, url: str) -> ImportResult:
-        """Import ``url`` into ``user_id``'s inbox. See class docstring for idempotency."""
+        """Import ``url`` into ``user_id``'s inbox. See class docstring for idempotency.
+
+        Raises ``FeaturePausedError`` while imports are paused (spec #104),
+        before the URL is resolved or any row is written.
+        """
+        self._access.require_feature("imports")
         canonical = self._resolve(url)
         episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
         inbox_entry, inbox_created = self._inbox_repo.find_or_create(

@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Optional
 
 from structlog import get_logger
 
+from ..services.abuse.errors import AbusePreventionError
 from ..services.briefing_service import Deferred
 from ..utils.briefing_cadence import latest_run_for, next_run_for
 from ..utils.duration import slug_for_duration_seconds
@@ -364,6 +365,16 @@ class BriefingScheduler:
                 target_duration_seconds=self.narration_target_seconds,
                 slug=slug,
             )
+        except AbusePreventionError as exc:
+            # Spec #104 — narration paused or the owner disabled: a decision,
+            # not a failure. The briefing ships without audio.
+            logger.info(
+                "briefing_scheduled_narration_skipped",
+                user_id=user_id,
+                briefing_id=briefing.id,
+                reason=type(exc).__name__,
+            )
+            return
         except Exception:
             logger.exception(
                 "briefing_scheduled_narration_failed",

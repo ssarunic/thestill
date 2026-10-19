@@ -525,6 +525,12 @@ class Config(BaseModel):
     jwt_secret_key: str = ""  # Secret key for signing JWTs
     jwt_algorithm: str = "HS256"  # JWT signing algorithm
     jwt_expire_days: int = 30  # JWT token expiration in days
+    # Spec #104 — env defaults for the runtime signup gate. A row in
+    # ``app_settings`` overrides them (``thestill settings set``).
+    signup_mode: str = "open"  # open | allowlist | closed
+    signup_allowlist: list[str] = Field(default_factory=list)  # "a@x.com" or "@x.com"
+    # Shown on /login when an account is disabled or signups are paused.
+    admin_contact_email: str = ""
 
     # Deployment / Web Surface Configuration
     # "production" locks down cookies, docs endpoints, CORS and verbose errors.
@@ -900,6 +906,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "jwt_secret_key": os.getenv("JWT_SECRET_KEY", ""),
         "jwt_algorithm": os.getenv("JWT_ALGORITHM", "HS256"),
         "jwt_expire_days": int(os.getenv("JWT_EXPIRE_DAYS", "30")),
+        # Abuse prevention (spec #104)
+        "signup_mode": os.getenv("SIGNUP_MODE", "open").strip().lower(),
+        "signup_allowlist": [e.strip() for e in os.getenv("SIGNUP_ALLOWLIST", "").split(",") if e.strip()],
+        "admin_contact_email": os.getenv("ADMIN_CONTACT_EMAIL", "").strip(),
         # Deployment / Web Surface
         "environment": os.getenv("ENVIRONMENT", "production").lower(),
         "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",
@@ -976,6 +986,16 @@ def load_config(env_file: Optional[str] = None) -> Config:
         )
     if config_data["wikidata_max_rps"] <= 0:
         raise ValueError(f"WIKIDATA_MAX_RPS must be > 0; got {config_data['wikidata_max_rps']}")
+    # Spec #104 — these are the env defaults of runtime switches every
+    # costly path reads; a typo must stop the boot, not each request.
+    from ..services.abuse.settings_registry import SIGNUP_MODES, normalize_allowlist_entry
+
+    if config_data["signup_mode"] not in SIGNUP_MODES:
+        raise ValueError(f"SIGNUP_MODE must be one of {', '.join(SIGNUP_MODES)}; got {config_data['signup_mode']!r}")
+    try:
+        config_data["signup_allowlist"] = [normalize_allowlist_entry(e) for e in config_data["signup_allowlist"]]
+    except ValueError as exc:
+        raise ValueError(f"SIGNUP_ALLOWLIST: {exc}") from exc
     # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
     # for exactly 0; a negative TTL would silently mean the same thing,
     # and a non-positive request limit would refuse every request.

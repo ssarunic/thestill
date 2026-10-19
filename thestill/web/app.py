@@ -48,6 +48,8 @@ from ..repositories.briefing_repository import BriefingRepository
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
+from ..services.abuse.access_guard import AccessGuard
+from ..services.abuse.wiring import build_abuse_services
 from ..services.analytics_service import AnalyticsService
 from ..services.analytics_sink import make_analytics_sink
 from ..services.auth_service import AuthService
@@ -74,7 +76,8 @@ from ..utils.config import (
 )
 from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
-from .dependencies import AppState, require_admin, require_auth
+from .dependencies import AppState, enforce_read_only, require_admin, require_auth
+from .error_handlers import register_abuse_handlers
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .public_shell import (
     ROBOTS_PRIVATE,
@@ -140,15 +143,16 @@ def _build_narration_runner(
     podcast_repository: PodcastRepository,
     briefing_repository: BriefingRepository,
     inbox_repository: InboxRepository,
+    access: AccessGuard,
 ) -> Optional[NarrationRunner]:
-    """Construct a ``NarrationRunner`` when narration is enabled (spec #33).
+    """Construct the ``NarrationRunner`` (spec #33).
 
-    Returns ``None`` when ``config.narration_enabled`` is False or the
-    LLM provider cannot be initialised — the API surface returns 503
-    in that mode so callers can handle the rollout gate cleanly.
+    Always built, so the spec #104 ``narration_enabled`` runtime switch
+    (``NARRATION_ENABLED`` is its default) can turn narration on without a
+    restart; ``run()`` checks the switch before any LLM call. Returns
+    ``None`` only when the LLM provider cannot be initialised — the API
+    surface returns 503 in that mode.
     """
-    if not config.narration_enabled:
-        return None
     from ..core.llm_provider import create_llm_provider_from_config
 
     # Spec #77 §7 — a misnamed voice file is a deployment error: fail the
@@ -173,6 +177,7 @@ def _build_narration_runner(
         briefing_repository=briefing_repository,
         inbox_repository=inbox_repository,
         podcast_repository=podcast_repository,
+        access=access,
     )
 
 
@@ -223,6 +228,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # persistence resolves through the backend factory: SQLite by default,
     # Postgres when DATABASE_URL is set.
     repos = make_repositories(config)
+    # Spec #104 — kill switches, follow gate, audit log, account admin.
+    abuse = build_abuse_services(config, repos)
     path_manager = PathManager(str(config.storage_path))
     repository = repos.podcast
     feed_manager = PodcastFeedManager(
@@ -231,7 +238,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         max_workers=config.refresh_max_workers,
         max_per_host=config.refresh_max_per_host,
     )
-    podcast_service = PodcastService(config.storage_path, repository, path_manager, file_storage=config.file_storage)
+    podcast_service = PodcastService(
+        config.storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard
+    )
     stats_service = StatsService(config.storage_path, repository, path_manager)
     task_manager = get_task_manager()
 
@@ -265,7 +274,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
 
     # Initialize authentication services
     user_repository = repos.user
-    auth_service = AuthService(config, user_repository)
+    auth_service = AuthService(config, user_repository, signup_policy=abuse.signup)
     # Spec #64 — first real login claims the legacy local account's data.
     from ..services.legacy_claim_service import LegacyClaimService
 
@@ -282,7 +291,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         queue_manager=queue_manager,
         podcast_repository=repository,
     )
-    follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
+    follower_service = FollowerService(
+        follower_repository, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
+    )
 
     import_service = ImportService(
         repository=repository,
@@ -290,6 +301,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         queue_manager=queue_manager,
         feed_manager=feed_manager,
         transcription_provider=config.transcription_provider,
+        access=abuse.guard,
     )
 
     # Spec #40 — pending transcription operations (backend-resolved).
@@ -310,6 +322,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_repository,
         inbox_repository,
         renderer=briefing_renderer,
+        access=abuse.guard,
     )
 
     # Spec #51 — briefing email delivery. ``make_email_sender`` returns
@@ -343,6 +356,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             file_storage=config.file_storage,
             max_attempts=config.briefing_email_max_attempts,
             backoff_seconds=config.briefing_email_backoff_seconds,
+            access=abuse.guard,
         )
 
     # Spec #28 — entity-layer repository + search backend, backend-resolved
@@ -400,7 +414,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         search_backend=search_backend,
         embedding_model=embedding_model,
         narration_runner=_build_narration_runner(
-            config, path_manager, repository, briefing_repository, inbox_repository
+            config, path_manager, repository, briefing_repository, inbox_repository, abuse.guard
         ),
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
@@ -413,6 +427,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         analytics_sink=make_analytics_sink(config),
         episode_view_repository=repos.episode_view,
         public_page_view_repository=repos.public_page_view,
+        abuse=abuse,
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -516,7 +531,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             if podcasts_to_follow:
                 for podcast in podcasts_to_follow:
                     try:
-                        follower_service.follow(default_user.id, podcast.id)
+                        # Restoring existing state, not a new feed: no gate.
+                        follower_service.follow(default_user.id, podcast.id, gated=False)
                         logger.info(
                             "auto_followed_podcast",
                             podcast_title=podcast.title,
@@ -588,7 +604,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         app_state.briefing_scheduler = briefing_scheduler
         logger.info(
             "briefing_scheduler_started",
-            narration_chained=app_state.narration_runner is not None,
+            narration_enabled=abuse.settings.get("narration_enabled"),
             email_delivery=briefing_delivery_service is not None,
         )
 
@@ -671,6 +687,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             )
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
+    # Spec #104 — paused features, quotas and disabled accounts map to
+    # 503 / 429 / 403 wherever below a route they are raised.
+    register_abuse_handlers(app)
+
     # Spec #69 Phase 6 — compress large JSON payloads (transcripts, word
     # timestamps, search results). A 2-hour episode's word payload is
     # ~1 MB raw and ~100–150 KB gzipped. Added first so it runs innermost:
@@ -752,7 +772,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # opts it out. Admin-only surfaces layer require_admin on top via
     # dedicated admin routers (api_commands.admin_router) or per-endpoint
     # dependencies. In single-user mode both checks always pass.
-    require_session = [Depends(require_auth)]
+    # Spec #104: read_only's blunt method filter rides on every session
+    # router (admins and reads pass; the costly paths check in services).
+    require_session = [Depends(require_auth), Depends(enforce_read_only)]
     # Operator dashboards: system-wide pipeline activity, storage paths and
     # provider configuration. The frontend already gates the /status page
     # behind AdminRoute — the API matches.

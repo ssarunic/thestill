@@ -103,6 +103,7 @@ def resolve_podcast(
             state.auth_service,
             state.config,
             url,
+            new_feed_precheck=state.abuse.new_feed_precheck if state.abuse else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

@@ -35,10 +35,12 @@ import structlog
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from ..mcp.identity import STATE_GPC, STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
+from ..services.abuse.access_guard import AccessGuard
+from ..services.abuse.errors import AccountDisabledError
 from ..services.mcp_token_service import McpTokenService
 from ..utils.datetime_utils import now_utc
 from .analytics_request import request_gpc
@@ -87,6 +89,8 @@ class McpHttpRuntime:
         self._config = config
         self._analytics = analytics_sink
         self._users = repos.user
+        # Spec #104 — the same account-status rule as the web session check.
+        self._access = AccessGuard(repos.user, None, multi_user=config.multi_user)
         # The app passes its own service so there is one instance per
         # process; tests and embedders may let the guard build one.
         self._tokens = token_service or McpTokenService(repos.mcp_token, ttl_days=config.mcp_token_ttl_days)
@@ -176,6 +180,13 @@ class McpHttpRuntime:
         user = self._users.get_by_id(token.user_id)
         if user is None:
             await Response(status_code=404)(scope, receive, send)
+            return
+        # Spec #104: a suspended or banned account is refused outright. The
+        # ban also revoked the token; this covers a revocation that failed.
+        try:
+            self._access.ensure_active(user)
+        except AccountDisabledError as exc:
+            await JSONResponse(status_code=exc.status_code, content={"detail": exc.detail()})(scope, receive, send)
             return
 
         self._tokens.touch_last_used(user.id, ip=ip, now=now)

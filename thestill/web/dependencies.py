@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import Depends, HTTPException, Request
 
+from ..services.abuse.errors import ReadOnlyError
+
 if TYPE_CHECKING:
     from ..core.briefing_scheduler import BriefingScheduler
     from ..core.embedding_model import EmbeddingModel
@@ -58,6 +60,7 @@ if TYPE_CHECKING:
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
+    from ..services.abuse.wiring import AbuseServices
     from ..services.analytics_service import AnalyticsService
     from ..services.analytics_sink import AnalyticsSink
     from ..services.auth_service import AuthService
@@ -197,6 +200,9 @@ class AppState:
     # Spec #95 Layer B — usage events (PostHog, or NullSink when off).
     # ``None`` only in hand-built test fixtures; emitters treat it as off.
     analytics_sink: "Optional[AnalyticsSink]" = None
+    # Spec #104 — runtime switches, follow gate, audit log, account admin.
+    # ``None`` only in hand-built test fixtures, where everything is allowed.
+    abuse: "Optional[AbuseServices]" = None
 
 
 def get_app_state(request: Request) -> AppState:
@@ -359,3 +365,25 @@ def is_effective_admin(user: "User", config: "Config") -> bool:
     if not config.multi_user:
         return True
     return bool(user.is_admin)
+
+
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def enforce_read_only(
+    request: Request,
+    state: AppState = Depends(get_app_state),
+    user: "User" = Depends(require_auth),
+) -> None:
+    """Spec #104 — panic mode's blunt second layer, on every session router.
+
+    With ``read_only`` on, a non-admin ``POST`` / ``PATCH`` / ``PUT`` /
+    ``DELETE`` gets 503. No costly path relies on this: each one checks its
+    own switch in the service (a ``GET`` can start a translation). The
+    ``require_auth`` dependency is the router's own, cached per request.
+    """
+    if request.method in _READ_METHODS or state.abuse is None:
+        return
+    if not state.abuse.settings.get("read_only") or is_effective_admin(user, state.config):
+        return
+    raise ReadOnlyError()

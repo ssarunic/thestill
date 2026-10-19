@@ -26,10 +26,12 @@ from structlog import get_logger
 
 from ..models.podcast import Podcast
 from ..models.user import PodcastFollower
-from ..repositories.podcast_follower_repository import PodcastFollowerRepository
+from ..repositories.podcast_follower_repository import PodcastFollowerRepository, allow_all
 from ..repositories.podcast_repository import PodcastRepository
+from .abuse.errors import AbusePreventionError
 
 if TYPE_CHECKING:
+    from .abuse.follow_policy import FollowPolicy
     from .inbox_service import InboxService
 
 logger = get_logger(__name__)
@@ -71,6 +73,7 @@ class FollowerService:
         follower_repository: PodcastFollowerRepository,
         podcast_repository: PodcastRepository,
         inbox_service: Optional["InboxService"] = None,
+        follow_policy: Optional["FollowPolicy"] = None,
     ):
         """
         Initialize the follower service.
@@ -81,20 +84,26 @@ class FollowerService:
             inbox_service: Optional inbox service. When provided, ``follow``
                 seeds the new follower's inbox with recent published episodes
                 (best-effort — seed failures do not roll back the follow).
+            follow_policy: Spec #104 follow gate. None allows every follow
+                (hand-built fixtures); production wiring always passes one.
         """
         self.follower_repository = follower_repository
         self.podcast_repository = podcast_repository
         self._inbox_service = inbox_service
+        self._follow_policy = follow_policy
 
         logger.info("FollowerService initialized", inbox_seeding=inbox_service is not None)
 
-    def follow(self, user_id: str, podcast_id: str) -> PodcastFollower:
+    def follow(self, user_id: str, podcast_id: str, *, gated: bool = True) -> PodcastFollower:
         """
         User follows a podcast.
 
         Args:
             user_id: ID of the user
             podcast_id: ID of the podcast to follow
+            gated: Spec #104 — apply the follow gate. Only system callers
+                restoring existing state (the single-user startup
+                auto-follow) pass False.
 
         Returns:
             The created PodcastFollower relationship
@@ -102,25 +111,29 @@ class FollowerService:
         Raises:
             PodcastNotFoundError: If podcast doesn't exist
             AlreadyFollowingError: If user already follows the podcast
+            FeaturePausedError: If ``new_feeds_enabled`` is off and nobody
+                follows the podcast yet (spec #104)
         """
         # Validate podcast exists
         podcast = self.podcast_repository.get_by_id(podcast_id)
         if not podcast:
             raise PodcastNotFoundError(f"Podcast not found: {podcast_id}")
 
-        # Check if already following
-        if self.follower_repository.exists(user_id, podcast_id):
-            raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}")
-
-        # Create follower relationship
+        decide = self._follow_policy.bind(user_id) if gated and self._follow_policy is not None else allow_all
         follower = PodcastFollower(user_id=user_id, podcast_id=podcast_id)
-
         try:
-            saved = self.follower_repository.add(follower)
-            logger.info(f"User {user_id} followed podcast {podcast_id}")
-        except sqlite3.IntegrityError as e:
-            # Handle race condition where another request created the relationship
-            raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}") from e
+            # Exists check, gate and insert in one locked transaction.
+            outcome = self.follower_repository.follow_with_gate(follower, decide)
+        except Exception as e:
+            # A concurrent follow of the same pair can still hit the unique
+            # constraint (sqlite3.IntegrityError / psycopg UniqueViolation).
+            if isinstance(e, sqlite3.IntegrityError) or type(e).__name__ == "UniqueViolation":
+                raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}") from e
+            raise
+        if outcome.already_following:
+            raise AlreadyFollowingError(f"User {user_id} already follows podcast {podcast_id}")
+        saved = outcome.follower
+        logger.info("podcast_followed", user_id=user_id, podcast_id=podcast_id, introduced=outcome.introduced)
 
         # Spec #63 gates background refresh on followers, and the scheduler
         # never revives a feed that already has a failure record — so a feed
@@ -153,7 +166,8 @@ class FollowerService:
         any other failure.
 
         Spec #63 — used by the add paths, where a follow failure must not
-        surface as an add failure.
+        surface as an add failure. A spec #104 policy refusal is not a
+        follow *failure*: it propagates so the caller can tell the user.
 
         Returns:
             True iff the user follows the podcast after this call.
@@ -163,6 +177,8 @@ class FollowerService:
             return True
         except AlreadyFollowingError:
             return True
+        except AbusePreventionError:
+            raise
         except Exception:
             logger.exception(
                 "follow_best_effort_failed",

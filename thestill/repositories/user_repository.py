@@ -23,7 +23,11 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional
 
-from ..models.user import User
+from ..models.user import User, UserStatus
+
+
+class LastActiveAdminError(Exception):
+    """A status or role change would leave no active admin (spec #104)."""
 
 
 class UserRepository(ABC):
@@ -139,6 +143,39 @@ class UserRepository(ABC):
             True if user was deleted, False if not found
         """
         pass
+
+    # ----- Spec #104: account status and admin flag -----
+
+    @abstractmethod
+    def apply_status(
+        self,
+        user_id: str,
+        status: UserStatus,
+        *,
+        reason: Optional[str],
+        changed_by: Optional[str],
+        changed_at: datetime,
+        tokens_valid_after: Optional[datetime] = None,
+        keep_an_active_admin: bool = False,
+    ) -> bool:
+        """Set the account status with the operator's reason, in one UPDATE.
+
+        ``tokens_valid_after``, when given, also revokes every JWT issued
+        before it (suspend and ban do; reinstate leaves it). With
+        ``keep_an_active_admin``, raises ``LastActiveAdminError`` instead of
+        disabling the last active admin — checked and applied in one
+        transaction under a lock, so two concurrent changes can't both pass.
+        Returns True if a row was updated."""
+
+    @abstractmethod
+    def set_tokens_valid_after(self, user_id: str, when: datetime) -> bool:
+        """Reject every JWT issued before ``when`` ("sign out everywhere")."""
+
+    @abstractmethod
+    def set_admin(self, user_id: str, is_admin: bool, *, keep_an_active_admin: bool = False) -> bool:
+        """Grant or revoke admin. Returns True if a row was updated. With
+        ``keep_an_active_admin``, a revoke that would leave no active admin
+        raises ``LastActiveAdminError`` (atomically, as ``apply_status``)."""
 
     # ----- JWT revocation deny-list (spec #25 item 4.2) -----
 

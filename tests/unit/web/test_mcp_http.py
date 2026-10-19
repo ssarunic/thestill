@@ -157,6 +157,35 @@ class TestTokenGuard:
             assert Harness.rpc(c, token, "tools/list").status_code == 404
 
 
+class TestAccountStatusAndReadOnly:
+    """Spec #104 — the guard refuses a disabled account; mutating tools
+    honour panic mode."""
+
+    def test_disabled_account_is_403_even_with_a_live_token(self, harness):
+        from thestill.models.user import UserStatus
+
+        token = harness.mint()
+        harness.repos.user.apply_status(USER_A, UserStatus.SUSPENDED, reason="x", changed_by=None, changed_at=now_utc())
+        with harness.client() as c:
+            response = Harness.rpc(c, token, "tools/list")
+        assert response.status_code == 403
+        assert response.json()["detail"]["error"] == "account_disabled"
+
+    def test_read_only_refuses_mutating_tools_for_non_admins(self, harness):
+        from thestill.repositories.sqlite_settings_repository import SqliteSettingsRepository
+
+        token = harness.mint(scopes=("follows",))
+        SqliteSettingsRepository(harness.config.database_path).upsert(
+            "read_only", True, updated_by=None, updated_at=now_utc()
+        )
+        with harness.client() as c:
+            response = Harness.rpc(
+                c, token, "tools/call", {"name": "add_podcast", "arguments": {"url": "https://example.com/f.xml"}}
+            )
+        assert response.status_code == 200
+        assert "read-only right now" in response.text
+
+
 class TestStreamableHttpRoundTrip:
     def test_initialize_and_tools_list(self, harness):
         token = harness.mint()

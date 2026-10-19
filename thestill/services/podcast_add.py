@@ -22,6 +22,7 @@ authenticated caller to follow on behalf of (CLI ``thestill add``, the MCP
 ``add_podcast`` tool, and the web resolve endpoint).
 """
 
+from functools import partial
 from typing import TYPE_CHECKING, Optional
 
 from structlog import get_logger
@@ -30,6 +31,7 @@ from ..models.podcast import Podcast
 
 if TYPE_CHECKING:
     from ..utils.config import Config
+    from .abuse.follow_policy import NewFeedPrecheck
     from .auth_service import AuthService
     from .follower_service import FollowerService
     from .podcast_service import PodcastService
@@ -43,6 +45,8 @@ def add_podcast_and_auto_follow(
     auth_service: "AuthService",
     config: "Config",
     url: str,
+    *,
+    new_feed_precheck: Optional["NewFeedPrecheck"] = None,
 ) -> Optional[Podcast]:
     """Add a podcast and, in single-user mode only, follow it for the
     default user in the same call.
@@ -54,9 +58,11 @@ def add_podcast_and_auto_follow(
     in their feed" are the same intent.
 
     The follow is best-effort — a follow failure never turns a
-    successful add into a failure.
+    successful add into a failure. A spec #104 refusal (``new_feeds``
+    paused) is raised before any row is written.
     """
-    podcast = podcast_service.add_podcast(url)
+    precheck = partial(new_feed_precheck.check, will_follow=not config.multi_user) if new_feed_precheck else None
+    podcast = podcast_service.add_podcast(url, precheck=precheck)
     if podcast is not None and not config.multi_user:
         default_user = auth_service.get_or_create_default_user()
         follower_service.follow_best_effort(default_user.id, podcast.id)

@@ -1,6 +1,6 @@
 # Abuse Prevention and User Administration
 
-> **Status:** 📝 Draft
+> **Status:** 🚧 In progress. Phase 1 implemented (see [Implementation notes](#implementation-notes)); Phases 2–4 open
 > **Created:** 2026-10-17
 > **Updated:** 2026-10-18
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
@@ -81,13 +81,13 @@ The two non-active states differ in what they do to follows:
 
 **Where status is checked.** One helper, `AuthService.ensure_active(user)`, raises `AccountDisabledError` for a non-active user. It is called in:
 
-- `get_user_from_token` (every cookie and Bearer request). The web layer maps the error to `403 {"error": "account_disabled"}`. It does not return `None`, because the frontend treats `None` as "signed out" and would loop through `/login`.
+- `get_user_from_token` (every cookie and Bearer request). The web layer maps the error to `403 {"detail": {"error": "account_disabled", ...}}`. It does not return `None`, because the frontend treats `None` as "signed out" and would loop through `/login`. The one exception is `/api/auth/status`, which the app calls on every page load: it answers `authenticated: false` plus `account_disabled: true`, so the app lands on `/login` and shows the message.
 - `handle_google_callback`, after the user is found. Sign-in redirects to `/login?error=account_disabled`, and `/login` shows "This account has been disabled. Contact <operator email>."
 - The MCP HTTP auth path at [mcp_http.py:176](../thestill/web/mcp_http.py#L176), returning 403.
 
 All three already load the user row fresh on each request, so a status change takes effect on the user's next request with no cache to clear.
 
-**Where status is checked in background work.** Authentication is not the only way a user causes spend. The briefing scheduler runs per user on its own clock ([briefing_scheduler.py:145](../thestill/core/briefing_scheduler.py#L145)). It generates a script with the LLM, chains narration (LLM plus TTS), and queues an email. Its deferral retries and the delivery pass also run without a request. So `ensure_active` is also enforced at each costly boundary, where the work starts, not only where it is scheduled:
+**Where status is checked in background work.** Authentication is not the only way a user causes spend. The briefing scheduler runs per user on its own clock ([briefing_scheduler.py:145](../thestill/core/briefing_scheduler.py#L145)). It generates a script with the LLM, chains narration (an LLM-written narration script), and queues an email. Its deferral retries and the delivery pass also run without a request. So `ensure_active` is also enforced at each costly boundary, where the work starts, not only where it is scheduled:
 
 | Boundary | Check | On a non-active user |
 |---|---|---|
@@ -399,11 +399,11 @@ All routes are under `/api/admin`, mounted with `require_admin`, and return the 
 
 Each change follows the repo's three-part pattern:
 
-1. an Alembic revision (`0019_user_status_admin_tables`, then `0020_usage_events`);
+1. an Alembic revision (`0021_user_status_admin_tables`, then `0022_usage_events`; 0019 and 0020 went to spec #103);
 2. the same idempotent DDL in `postgres_schema.SCHEMA_SQL`;
 3. the SQLite `CREATE TABLE` plus `PRAGMA table_info` / `ALTER TABLE` in `SqlitePodcastRepository._run_migrations`.
 
-The SQLite-to-Postgres copy tool ([db_migration.py](../thestill/utils/db_migration.py)) learns the new tables.
+The SQLite-to-Postgres copy tool ([db_migration.py](../thestill/utils/db_migration.py)) needs no change: it discovers tables from `sqlite_master`.
 
 ## Single-user mode
 
@@ -430,6 +430,25 @@ Each phase is its own PR and works without the later ones.
 4. **Phase 4**: the console. Until it ships, the CLI from Phase 1 does everything the console will.
 
 `docs/configuration.md` gains every new env var. `docs/web-server.md` and `specs/02-api-reference.md` gain the `/api/admin` routes. `CLAUDE.md` gains the `thestill user` / `admin` / `settings` commands.
+
+## Implementation notes
+
+Where the build differs from, or adds to, the design above.
+
+**Phase 1** (branch `feat/104-p1-kill-switches`):
+
+- **Layout.** Everything lives in `thestill/services/abuse/`. `build_abuse_services(config, repos)` is the one place the web app, the CLI and the MCP server construct the services, so no entry point can forget the guard. Costly services take an `AccessGuard` that defaults to allow-all, so hand-built test fixtures keep working. Each new table has its own repository (ABC, SQLite, Postgres). `UserRepository.list_users` became a separate `UserDirectoryRepository`, which keeps cross-table counts off the per-request auth path.
+- **Error bodies** sit under `detail`, the shape `HTTPException(detail=dict)` produces and the frontend already parses: `{"detail": {"error": "feature_paused", "feature": "new_feeds", "message": "..."}}`. One exception handler maps every refusal (403 disabled, 503 paused, 409 forbidden admin action).
+- **Token revocation** stores `tokens_valid_after` rounded *up* to the next whole second, because a JWT's `iat` has whole-second precision. A re-login inside the same second is also rejected.
+- **Account status is checked before revocation** in `get_user_from_token`, so a banned user's old cookie still reaches the "account disabled" message rather than a sign-in loop.
+- **Narration.** `NarrationRunner` writes the script with the LLM; there is no TTS step. The runner is now always built, and `NARRATION_ENABLED` only sets the default of the runtime switch. The operator's own `thestill narrate` is not gated, since it always ignored `NARRATION_ENABLED`.
+- **Add-feed and resolve.** The new-feed check runs once the URL is canonical, before any podcast row is written. Add-feed and MCP `add_podcast` refuse an unknown feed, or a known feed nobody follows. Multi-user resolve only browses, so it refuses only an unknown feed. Add-feed runs as a background task, so a refusal reaches the user as the task's failure message, not as an HTTP 503.
+- **Read-only filter.** `enforce_read_only` rides on every session router, next to `require_auth`. MCP checks `_MUTATING_TOOLS`. Admins pass both, but the follow gate still applies to them.
+- **Audit actors** are `web`, `cli` and `system` (`system` is for the Phase 3 breaker). The CLI also has `thestill user remove-introduced-feeds` and `thestill settings reset`.
+- **New config.** `ADMIN_CONTACT_EMAIL` is new, alongside `SIGNUP_MODE` and `SIGNUP_ALLOWLIST`.
+- **Housekeeping.** Phase 2's reservation expiry and ledger pruning need a new periodic loop: there was no housekeeping job to reuse.
+- **Running work after a ban.** Cancelling queued tasks isn't enough: a stage already running would chain the next paid one. So a pipeline started on someone's behalf (`initiated_by` `refresh`, `refresh-feed`, `import` or `inbox-*`) stops chaining once nobody wants the episode: its feed has no live follower, and no active user imported or sent it. Operator runs always chain to the end.
+- **Last active admin.** The guard is atomic. Counting the other active admins and the status or role change happen in one transaction under a lock (Postgres advisory lock, SQLite `BEGIN IMMEDIATE`), so two concurrent demotions can't both pass.
 
 ## Testing
 

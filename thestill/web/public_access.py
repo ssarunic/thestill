@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Hashable, Optional, Set, 
 
 from fastapi import HTTPException, Request, Response, status
 
+from ..services.abuse.errors import AccountDisabledError
 from .dependencies import _get_token_from_request
 from .middleware.rate_limit import PUBLIC_LIMIT, allow_public_request
 
@@ -242,7 +243,10 @@ def has_valid_session(request: Request) -> bool:
     token = _get_token_from_request(request)
     if not token:
         return False
-    return request.app.state.app_state.auth_service.get_current_user(token) is not None
+    try:
+        return request.app.state.app_state.auth_service.get_current_user(token) is not None
+    except AccountDisabledError:
+        return False  # spec #104: a disabled account reads as signed out
 
 
 def public_rate_limit(request: Request) -> None:

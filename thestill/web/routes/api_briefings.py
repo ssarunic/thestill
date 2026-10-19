@@ -527,10 +527,7 @@ def narrate_briefing(
     if app_state.narration_runner is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Narration is disabled — set NARRATION_ENABLED=true and"
-                " configure an LLM provider to enable briefing narration."
-            ),
+            detail="Narration is unavailable — configure an LLM provider to enable briefing narration.",
         )
 
     try:

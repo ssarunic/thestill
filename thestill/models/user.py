@@ -16,6 +16,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,24 @@ from pydantic import BaseModel, Field
 # The single-user mode account. Lives with the model (not the auth service)
 # so repositories can refer to it without importing a service.
 DEFAULT_USER_EMAIL = "local@thestill.me"
+
+
+class UserStatus(str, Enum):
+    """Spec #104 — account status. Anything but ``active`` blocks sign-in
+    and every request in multi-user mode."""
+
+    ACTIVE = "active"
+    # Blocked, follows kept: lifting it restores the account exactly.
+    SUSPENDED = "suspended"
+    # Blocked, and the spending it caused stops (follows moved aside).
+    BANNED = "banned"
+
+
+# Fields the API never returns to the account's own owner: operator notes
+# and revocation bookkeeping (spec #104), plus the provider id.
+PRIVATE_USER_FIELDS = frozenset(
+    {"google_id", "status_reason", "status_changed_at", "status_changed_by", "tokens_valid_after"}
+)
 
 
 class User(BaseModel):
@@ -59,6 +78,13 @@ class User(BaseModel):
             events (PostHog). Off means the browser loads no analytics code
             and the server drops every event for this user. Product tables
             still count them (Layer A).
+        status: Spec #104 — ``active``, ``suspended`` or ``banned``. Set only
+            through the account admin service, never by ``save()``.
+        status_reason: The operator's note; shown only to admins.
+        status_changed_at / status_changed_by: When and by which admin
+            (None for the CLI).
+        tokens_valid_after: JWTs issued before this instant are rejected
+            ("sign out everywhere"; also set on suspend and ban).
     """
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -73,6 +99,15 @@ class User(BaseModel):
     is_admin: bool = False
     signup_source: Optional[str] = None
     usage_analytics_enabled: bool = True
+    status: UserStatus = UserStatus.ACTIVE
+    status_reason: Optional[str] = None
+    status_changed_at: Optional[datetime] = None
+    status_changed_by: Optional[str] = None
+    tokens_valid_after: Optional[datetime] = None
+
+    @property
+    def is_active(self) -> bool:
+        return self.status == UserStatus.ACTIVE
 
 
 class TokenPayload(BaseModel):

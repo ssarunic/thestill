@@ -97,6 +97,7 @@ class CLIContext:
         legacy_claim_service=None,
         link_decision_repository=None,
         analytics_service=None,
+        abuse=None,
     ):
         self.config = config
         self.path_manager = path_manager
@@ -135,6 +136,9 @@ class CLIContext:
         self.pending_ops_repository = pending_ops_repository
         # Spec #95 — Layer A product analytics (``thestill analytics``).
         self.analytics_service = analytics_service
+        # Spec #104 — settings, follow gate and account admin
+        # (``thestill user`` / ``admin`` / ``settings``).
+        self.abuse = abuse
 
 
 def require_config(f):
@@ -203,8 +207,14 @@ def main(ctx, config, quiet):
         from .repositories.factory import make_repositories, make_search_backend
 
         repos = make_repositories(config_obj)
+        # Spec #104 — the same switches and follow gate as the web app.
+        from .services.abuse.wiring import build_abuse_services
+
+        abuse = build_abuse_services(config_obj, repos)
         repository = repos.podcast
-        podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=file_storage)
+        podcast_service = PodcastService(
+            storage_path, repository, path_manager, file_storage=file_storage, access=abuse.guard
+        )
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(
             repository,
@@ -221,7 +231,7 @@ def main(ctx, config, quiet):
 
         # Initialize auth service for default user support
         user_repository = repos.user
-        auth_service = AuthService(config_obj, user_repository)
+        auth_service = AuthService(config_obj, user_repository, signup_policy=abuse.signup)
 
         # Spec #64 — legacy local-account claim (claim-local-user command).
         from .services.legacy_claim_service import LegacyClaimService
@@ -250,7 +260,9 @@ def main(ctx, config, quiet):
         # semantics (validation + inbox seed), mirroring the web wiring.
         from .services.follower_service import FollowerService
 
-        follower_service = FollowerService(follower_repository, repository, inbox_service=inbox_service)
+        follower_service = FollowerService(
+            follower_repository, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
+        )
 
         # Spec #28 — entity-layer repository + search backend (backend-resolved).
         from .core.embedding_model import EmbeddingModel
@@ -284,6 +296,7 @@ def main(ctx, config, quiet):
             legacy_claim_service=legacy_claim_service,
             link_decision_repository=repos.link_decision,
             analytics_service=AnalyticsService(repos.analytics, enabled=config_obj.multi_user),
+            abuse=abuse,
         )
 
     except Exception as e:
@@ -298,15 +311,21 @@ def main(ctx, config, quiet):
 @log_command
 def add(ctx, rss_url):
     """Add a podcast RSS feed"""
+    from .services.abuse.errors import AbusePreventionError
     from .services.podcast_add import add_podcast_and_auto_follow
 
-    podcast = add_podcast_and_auto_follow(
-        ctx.obj.podcast_service,
-        ctx.obj.follower_service,
-        ctx.obj.auth_service,
-        ctx.obj.config,
-        rss_url,
-    )
+    try:
+        podcast = add_podcast_and_auto_follow(
+            ctx.obj.podcast_service,
+            ctx.obj.follower_service,
+            ctx.obj.auth_service,
+            ctx.obj.config,
+            rss_url,
+            new_feed_precheck=ctx.obj.abuse.new_feed_precheck if ctx.obj.abuse else None,
+        )
+    except AbusePreventionError as exc:  # spec #104: new feeds paused
+        click.echo(f"❌ {exc} (thestill settings get new_feeds_enabled)", err=True)
+        ctx.exit(1)
     if podcast:
         click.echo(f"✓ Podcast added: {podcast.title}")
     else:
@@ -2617,6 +2636,9 @@ def _build_narration_runner(ctx, *, llm_provider):
         material_max_words=config.narration_material_max_words,
         stated_target_ratio=config.narration_stated_target_ratio,
     )
+    # No spec #104 guard: the operator's own ``thestill narrate`` stays
+    # outside the runtime narration switch, as it always ignored
+    # NARRATION_ENABLED. The web route and the scheduler are gated.
     return NarrationRunner(
         generator=generator,
         briefing_repository=ctx.obj.briefing_repository,
@@ -4887,6 +4909,315 @@ def claim_local_user(ctx, to_email, discard, dry_run):
         click.echo(f"Dry run: would transfer to {to_email} ({_fmt(result.counts)}), then delete the local account.")
     else:
         click.echo(f"✓ Claimed local account into {to_email}: {_fmt(result.counts)} moved.")
+
+
+# ---------------------------------------------------------------------------
+# Spec #104 — user administration, admin role, runtime settings. These run
+# straight against the database, so they work while the web server is down
+# or being abused. Every write lands in the admin audit log as actor "cli".
+# ---------------------------------------------------------------------------
+
+
+def _account_admin(ctx):
+    """The account admin service, or exit 1 in single-user mode."""
+    if not ctx.obj.config.multi_user:
+        click.echo(
+            "❌ User administration needs multi-user mode (MULTI_USER=true). "
+            "In single-user mode the local user is the only account.",
+            err=True,
+        )
+        ctx.exit(1)
+    return ctx.obj.abuse.account_admin
+
+
+def _act_on(ctx, email_or_id, action):
+    """Resolve the target and return ``(user, action(admin, user, actor))``.
+    A refused admin action prints its reason and exits 1."""
+    from .services.abuse.actor import Actor
+    from .services.abuse.errors import AdminActionError
+
+    admin = _account_admin(ctx)
+    try:
+        user = admin.resolve_user(email_or_id)
+        return user, action(admin, user, Actor.cli())
+    except AdminActionError as exc:
+        click.echo(f"❌ {exc}", err=True)
+        ctx.exit(1)
+
+
+def _user_row(user, **counts) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "status": user.status.value,
+        "is_admin": user.is_admin,
+        "created_at": user.created_at.isoformat(),
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        **counts,
+    }
+
+
+@main.group("user")
+def user_group():
+    """Inspect and act on accounts (multi-user mode)."""
+
+
+@user_group.command("list")
+@click.option(
+    "--status", "status_filter", type=click.Choice(["active", "suspended", "banned"]), help="Only this status."
+)
+@click.option("--sort", type=click.Choice(["created", "last-login", "follows"]), default="created", show_default=True)
+@click.option("--limit", type=int, default=50, show_default=True)
+@click.option("--json", "json_output", is_flag=True, help="Print one JSON object per user.")
+@click.pass_context
+@require_config
+@log_command
+def user_list(ctx, status_filter, sort, limit, json_output):
+    """List accounts with status and follow counts."""
+    from .models.user import UserStatus
+
+    admin = _account_admin(ctx)
+    rows = admin.list_users(status=UserStatus(status_filter) if status_filter else None, sort=sort, limit=limit)
+    if json_output:
+        for summary in rows:
+            click.echo(
+                json.dumps(
+                    _user_row(summary.user, follows=summary.follows, suspended_follows=summary.suspended_follows)
+                )
+            )
+        return
+    if not rows:
+        click.echo("No users match.")
+        return
+    for summary in rows:
+        user = summary.user
+        flags = " [admin]" if user.is_admin else ""
+        last = user.last_login_at.strftime("%Y-%m-%d") if user.last_login_at else "never"
+        click.echo(
+            f"{user.status.value:<9} {user.email:<40} follows={summary.follows:<4} "
+            f"joined={user.created_at:%Y-%m-%d} last_login={last}{flags}"
+        )
+
+
+@user_group.command("show")
+@click.argument("email_or_id")
+@click.option("--json", "json_output", is_flag=True, help="Print as JSON.")
+@click.pass_context
+@require_config
+@log_command
+def user_show(ctx, email_or_id, json_output):
+    """Status, follows and the feeds this user brought in."""
+    user, footprint = _act_on(ctx, email_or_id, lambda admin, user, _actor: admin.footprint(user.id))
+    info = _user_row(
+        user,
+        status_reason=user.status_reason,
+        status_changed_at=user.status_changed_at.isoformat() if user.status_changed_at else None,
+        signup_source=user.signup_source,
+        follows=footprint.follows,
+        suspended_follows=footprint.suspended_follows,
+        feeds_brought_in=footprint.feeds_brought_in,
+    )
+    if json_output:
+        click.echo(json.dumps(info, indent=2))
+        return
+    for key, value in info.items():
+        if value is not None:
+            click.echo(f"{key:>18}: {value}")
+
+
+@user_group.command("suspend")
+@click.argument("email_or_id")
+@click.option("--reason", required=True, help="Why; kept in the audit log, shown only to admins.")
+@click.pass_context
+@require_config
+@log_command
+def user_suspend(ctx, email_or_id, reason):
+    """Block sign-in and every request. Follows are kept."""
+    user, _ = _act_on(ctx, email_or_id, lambda admin, user, actor: admin.suspend(user.id, reason=reason, actor=actor))
+    click.echo(f"✓ Suspended {user.email}. Their sessions and MCP token are revoked.")
+
+
+@user_group.command("ban")
+@click.argument("email_or_id")
+@click.option("--reason", required=True, help="Why; kept in the audit log, shown only to admins.")
+@click.option(
+    "--remove-introduced-feeds",
+    is_flag=True,
+    help="Also drop the feeds they brought in that no other active user follows.",
+)
+@click.pass_context
+@require_config
+@log_command
+def user_ban(ctx, email_or_id, reason, remove_introduced_feeds):
+    """Block the account and stop the spending it caused."""
+    user, result = _act_on(
+        ctx,
+        email_or_id,
+        lambda admin, user, actor: admin.ban(
+            user.id, reason=reason, actor=actor, remove_introduced_feeds=remove_introduced_feeds
+        ),
+    )
+    click.echo(
+        f"✓ Banned {user.email}: {result.follows_moved} follows moved aside, "
+        f"{len(result.feeds_orphaned)} feeds left without followers, "
+        f"{result.tasks_cancelled} queued tasks cancelled."
+    )
+    if remove_introduced_feeds:
+        click.echo(f"  Removed {len(result.feeds_removed)} feeds they brought in.")
+
+
+@user_group.command("reinstate")
+@click.argument("email_or_id")
+@click.option("--reason", default=None, help="Optional note for the audit log.")
+@click.pass_context
+@require_config
+@log_command
+def user_reinstate(ctx, email_or_id, reason):
+    """Lift a suspension or ban; a ban's follows come back."""
+    user, result = _act_on(
+        ctx, email_or_id, lambda admin, user, actor: admin.reinstate(user.id, reason=reason, actor=actor)
+    )
+    message = f"✓ Reinstated {user.email}."
+    if result.follows_restored:
+        message += f" {result.follows_restored} follows restored ({len(result.feeds_reactivated)} feeds reactivated)."
+    click.echo(message)
+
+
+@user_group.command("logout-everywhere")
+@click.argument("email_or_id")
+@click.pass_context
+@require_config
+@log_command
+def user_logout_everywhere(ctx, email_or_id):
+    """Revoke every session and the MCP token of this user."""
+    user, _ = _act_on(ctx, email_or_id, lambda admin, user, actor: admin.logout_everywhere(user.id, actor=actor))
+    click.echo(f"✓ Signed {user.email} out everywhere.")
+
+
+@user_group.command("remove-introduced-feeds")
+@click.argument("email_or_id")
+@click.pass_context
+@require_config
+@log_command
+def user_remove_introduced_feeds(ctx, email_or_id):
+    """Drop this user's follow of feeds they brought in that nobody else follows."""
+    user, result = _act_on(
+        ctx, email_or_id, lambda admin, user, actor: admin.remove_introduced_feeds(user.id, actor=actor)
+    )
+    click.echo(
+        f"✓ Removed {len(result.feeds_removed)} feeds {user.email} brought in; "
+        f"{result.tasks_cancelled} queued tasks cancelled. Podcast rows and processed episodes stay."
+    )
+
+
+@main.group("admin")
+def admin_group():
+    """Grant or revoke the admin role (multi-user mode)."""
+
+
+@admin_group.command("grant")
+@click.argument("email")
+@click.pass_context
+@require_config
+@log_command
+def admin_grant(ctx, email):
+    """Make a user an admin."""
+    user, _ = _act_on(ctx, email, lambda admin, user, actor: admin.grant_admin(user.id, actor=actor))
+    click.echo(f"✓ {user.email} is an admin.")
+
+
+@admin_group.command("revoke")
+@click.argument("email")
+@click.pass_context
+@require_config
+@log_command
+def admin_revoke(ctx, email):
+    """Remove a user's admin role (never the last active admin)."""
+    user, _ = _act_on(ctx, email, lambda admin, user, actor: admin.revoke_admin(user.id, actor=actor))
+    click.echo(f"✓ {user.email} is no longer an admin.")
+
+
+@main.group("settings")
+def settings_group():
+    """Runtime switches that override env defaults (spec #104)."""
+
+
+def _setting_dict(setting) -> dict:
+    return {
+        "key": setting.key,
+        "value": setting.value,
+        "source": setting.source,
+        "default": setting.default,
+        "updated_at": setting.updated_at.isoformat() if setting.updated_at else None,
+    }
+
+
+@settings_group.command("get")
+@click.argument("key", required=False)
+@click.option("--json", "json_output", is_flag=True, help="Print as JSON.")
+@click.pass_context
+@require_config
+@log_command
+def settings_get(ctx, key, json_output):
+    """Show one setting, or all of them, with where the value comes from."""
+    settings = ctx.obj.abuse.settings
+    try:
+        rows = [settings.effective(key)] if key else settings.all_effective()
+    except KeyError as exc:
+        click.echo(f"❌ {exc.args[0]}", err=True)
+        ctx.exit(1)
+    if json_output:
+        payload = _setting_dict(rows[0]) if key else [_setting_dict(r) for r in rows]
+        click.echo(json.dumps(payload, indent=2))
+        return
+    for row in rows:
+        marker = "" if row.is_default else "   ← not the default"
+        click.echo(f"{row.key:<22} {json.dumps(row.value):<12} ({row.source}){marker}")
+
+
+@settings_group.command("set")
+@click.argument("key")
+@click.argument("value")
+@click.pass_context
+@require_config
+@log_command
+def settings_set(ctx, key, value):
+    """Set a runtime switch, e.g. ``settings set signup_mode closed``.
+
+    Lists take comma-separated entries (or a JSON array). Takes effect in
+    every server process within 15 seconds.
+    """
+    from .services.abuse.actor import Actor
+    from .services.abuse.settings_registry import get_spec
+
+    try:
+        parsed = get_spec(key).parse(value)
+        result = ctx.obj.abuse.settings.set(key, parsed, actor=Actor.cli())
+    except KeyError as exc:
+        click.echo(f"❌ {exc.args[0]}", err=True)
+        ctx.exit(1)
+    except ValueError as exc:
+        click.echo(f"❌ Invalid value for {key}: {exc}", err=True)
+        ctx.exit(1)
+    click.echo(f"✓ {key} = {json.dumps(result.value)}")
+
+
+@settings_group.command("reset")
+@click.argument("key")
+@click.pass_context
+@require_config
+@log_command
+def settings_reset(ctx, key):
+    """Drop the runtime value so the env default applies again."""
+    from .services.abuse.actor import Actor
+
+    try:
+        result = ctx.obj.abuse.settings.reset(key, actor=Actor.cli())
+    except KeyError as exc:
+        click.echo(f"❌ {exc.args[0]}", err=True)
+        ctx.exit(1)
+    click.echo(f"✓ {key} = {json.dumps(result.value)} (env default)")
 
 
 # ---------------------------------------------------------------------------

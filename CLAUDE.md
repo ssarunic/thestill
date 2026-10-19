@@ -60,6 +60,14 @@ thestill narrate --briefing <briefing-id>
 # Product analytics from product tables (spec #95; multi-user + Postgres only):
 thestill analytics [--range 7d|28d|90d] [--json]
 
+# Abuse prevention (spec #104): accounts, admins, runtime switches.
+# Straight against the database, so they work when the web server doesn't.
+thestill user list [--status banned] [--sort follows] [--json]
+thestill user ban <email-or-id> --reason "..." [--remove-introduced-feeds]
+thestill user reinstate <email-or-id>        # also: show, suspend, logout-everywhere
+thestill admin grant <email>                 # replaces hand-editing is_admin
+thestill settings set signup_mode closed     # settings get / reset; read_only = panic mode
+
 # Web server
 thestill server                     # Start on localhost:8000
 ```

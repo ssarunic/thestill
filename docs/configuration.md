@@ -296,6 +296,32 @@ When `MULTI_USER=true`:
 3. Add authorized redirect URI: `http://localhost:8000/auth/google/callback`
 4. Copy Client ID and Secret to `.env`
 
+## Abuse Prevention & Runtime Switches (spec #104)
+
+The env vars below are *defaults*. An operator overrides them at runtime,
+without a redeploy, with `thestill settings set <key> <value>`; every server
+process picks the change up within 15 seconds. `thestill settings get`
+shows each value and whether it comes from `env` or `runtime`.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SIGNUP_MODE` | Who may create an account: `open`, `allowlist` or `closed`. Existing users always sign in (setting `signup_mode`) | `open` |
+| `SIGNUP_ALLOWLIST` | Comma-separated emails or `@domains` allowed to sign up in `allowlist` mode (setting `signup_allowlist`) | - |
+| `ADMIN_CONTACT_EMAIL` | Address `/login` offers when an account is disabled or signups are paused | - |
+
+Runtime-only switches (no env var; on unless noted):
+
+| Setting | Off means |
+|---------|-----------|
+| `new_feeds_enabled` | No action may take a feed from zero followers to one (add, resolve, MCP `add_podcast`, or a follow of a feed nobody follows). Following a followed feed still works |
+| `imports_enabled` | `POST /api/imports` returns 503 |
+| `translations_enabled` | Existing summary translations are served; a missing one returns 503 |
+| `narration_enabled` | Manual and scheduled briefing narration stop. Defaults to `NARRATION_ENABLED` |
+| `read_only` (default off) | Panic mode: every non-admin `POST`/`PATCH`/`PUT`/`DELETE` under `/api` returns 503, every non-admin MCP mutating tool returns an error, and all four switches above count as off |
+
+In single-user mode the switches apply; account status and the signup gate
+do not. Accounts are managed with `thestill user ...` and `thestill admin ...`.
+
 ## Deployment & Web Surface (spec #25)
 
 | Variable | Description | Default |
@@ -353,7 +379,7 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `NARRATION_ENABLED` | Enable text-to-speech narration of briefings | `false` |
+| `NARRATION_ENABLED` | Default for the runtime `narration_enabled` switch (spec #104): briefing narration from the web route and the scheduler | `false` |
 | `NARRATION_DEFAULT_DURATION_SECONDS` | Target narration length | `300` |
 | `NARRATION_ANCHOR_PROMPT` | Anchor voice file under `thestill/services/narration_prompts/` (basename): `conversational_anchor` (one narrator talking to a friend), `conversational_v2` (same narrator with a point of view, reaction blocks, one claim per show) or `newsroom_anchor` (measured news-anchor). Spec #77 | `conversational_v2` |
 | `NARRATION_STATED_TARGET_RATIO` | Share of the narration word budget the writer is told to aim for; validation keeps the full budget (+15 %). Range `0.5`–`1.0`. Spec #77 | `0.8` |
