@@ -66,12 +66,16 @@ class ChannelHit:
 
 @dataclass(frozen=True)
 class ChannelScore:
+    """How many of the show's sample episodes one result's uploads matched."""
+
     hit: ChannelHit
     matches: Optional[int]  # None: the listing failed, so the result is unverified
 
 
 @dataclass(frozen=True)
 class ChannelPick:
+    """The accepted channel, or None and why not."""
+
     channel: Optional[ChannelHit]
     # 'accepted' | 'deferred' (an unverified result) | 'too_few' | 'ambiguous' | 'no_results'
     reason: str

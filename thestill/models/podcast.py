@@ -139,6 +139,9 @@ class AlternateEnclosure(BaseModel):
 
 PLATFORM_LINK_PLATFORMS = ("apple", "spotify", "youtube")
 PLATFORM_LINK_MATCH_METHODS = ("guid", "audio_url", "title_date", "title_duration", "publisher")
+# The methods a YouTube channel listing produces (spec #87 Phase 3d): evidence
+# for the channel, and what rolling back a discovered channel deletes.
+CHANNEL_LISTING_METHODS = ("title_date", "title_duration")
 
 
 class PlatformLink(BaseModel):

@@ -55,6 +55,7 @@ import psycopg
 from structlog import get_logger
 
 from ..models.podcast import (
+    CHANNEL_LISTING_METHODS,
     AlternateEnclosure,
     Episode,
     EpisodeState,
@@ -1739,20 +1740,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 """,
                 params,
             ).fetchall()
-            return [
-                PlatformLinkCandidate(
-                    episode_id=as_str(row["id"]),
-                    external_id=row["external_id"] or "",
-                    audio_url=row["audio_url"] or "",
-                    title=row["title"] or "",
-                    pub_date=row["pub_date"],
-                    duration=row["duration"],
-                    description_html=row["description_html"] or "",
-                    website_url=row["website_url"],
-                    canonical_id=as_str(row["canonical_id"]) if row["canonical_id"] else None,
-                )
-                for row in rows
-            ]
+            return [self._row_to_candidate(row) for row in rows]
 
     def upsert_platform_links(self, links: List[PlatformLink]) -> int:
         if not links:
@@ -1797,20 +1785,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 """,
                 (podcast_id, int(limit)),
             ).fetchall()
-        return [
-            PlatformLinkCandidate(
-                episode_id=as_str(row["id"]),
-                external_id=row["external_id"] or "",
-                audio_url=row["audio_url"] or "",
-                title=row["title"] or "",
-                pub_date=row["pub_date"],
-                duration=row["duration"],
-                description_html=row["description_html"] or "",
-                website_url=row["website_url"],
-                canonical_id=as_str(row["canonical_id"]) if row["canonical_id"] else None,
-            )
-            for row in rows
-        ]
+        return [self._row_to_candidate(row) for row in rows]
 
     def count_platform_links(self, podcast_id: str, platform: str, match_methods: Sequence[str]) -> int:
         if not match_methods:
@@ -1844,24 +1819,16 @@ class EpisodesMixin(CategoryCacheMixin):
             # Rows a channel listing made, plus the not-found markers, so every
             # affected episode is a candidate again; publisher rows stay.
             link_filter = """
-                FROM episode_platform_links l
-                USING episodes e
-                WHERE l.episode_id = e.id AND e.podcast_id = ANY(%s) AND l.platform = 'youtube'
-                  AND (l.url IS NULL OR l.match_method IN ('title_date', 'title_duration'))
+                FROM episode_platform_links
+                WHERE platform = 'youtube'
+                  AND episode_id IN (SELECT id FROM episodes WHERE podcast_id = ANY(%s))
+                  AND (url IS NULL OR match_method = ANY(%s))
             """
+            link_params = (ids, list(CHANNEL_LISTING_METHODS))
             if dry_run:
-                row = conn.execute(
-                    """
-                    SELECT count(*) AS n
-                    FROM episode_platform_links l
-                    JOIN episodes e ON e.id = l.episode_id
-                    WHERE e.podcast_id = ANY(%s) AND l.platform = 'youtube'
-                      AND (l.url IS NULL OR l.match_method IN ('title_date', 'title_duration'))
-                    """,
-                    (ids,),
-                ).fetchone()
+                row = conn.execute(f"SELECT count(*) AS n {link_filter}", link_params).fetchone()
                 return len(ids), int(row["n"]) if row else 0
-            deleted = conn.execute(f"DELETE {link_filter}", (ids,)).rowcount
+            deleted = conn.execute(f"DELETE {link_filter}", link_params).rowcount
             conn.execute(
                 """
                 UPDATE podcasts
@@ -1871,6 +1838,20 @@ class EpisodesMixin(CategoryCacheMixin):
                 (ids,),
             )
         return len(ids), int(deleted or 0)
+
+    @staticmethod
+    def _row_to_candidate(row: Dict[str, Any]) -> PlatformLinkCandidate:
+        return PlatformLinkCandidate(
+            episode_id=as_str(row["id"]),
+            external_id=row["external_id"] or "",
+            audio_url=row["audio_url"] or "",
+            title=row["title"] or "",
+            pub_date=row["pub_date"],
+            duration=row["duration"],
+            description_html=row["description_html"] or "",
+            website_url=row["website_url"],
+            canonical_id=as_str(row["canonical_id"]) if row["canonical_id"] else None,
+        )
 
     def _row_to_platform_link(self, row: Dict[str, Any]) -> PlatformLink:
         return PlatformLink(

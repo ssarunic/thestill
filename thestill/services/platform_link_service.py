@@ -58,7 +58,7 @@ from ..core.publisher_links import (
 )
 from ..core.spotify_resolver import SpotifyEpisodeMetadata, default_episode_metadata, itunes_lookup, itunes_search
 from ..core.spotify_show_probe import SpotifyLatestEpisode, fetch_latest_episode, show_id_from_url
-from ..models.podcast import PlatformLink, PlatformLinkCandidate, Podcast
+from ..models.podcast import CHANNEL_LISTING_METHODS, PlatformLink, PlatformLinkCandidate, Podcast
 from ..utils.datetime_utils import now_utc
 from ..utils.url_guard import guarded_session
 
@@ -73,8 +73,6 @@ DEFAULT_WINDOW = 200
 PLATFORM_APPLE = "apple"
 PLATFORM_SPOTIFY = "spotify"
 PLATFORM_YOUTUBE = "youtube"
-# Match methods a channel listing produces (as opposed to ``publisher``).
-_CHANNEL_LISTING_METHODS = ("title_date", "title_duration")
 
 
 @dataclass(frozen=True)
@@ -209,7 +207,7 @@ class PlatformLinkService:
         if not isinstance(urls, dict):
             urls = {}
         outcomes = [self._link_apple(podcast, urls, now, recheck, dry_run=dry_run)]
-        outcomes.extend(self._link_spotify_and_youtube(podcast, urls, now, recheck, dry_run=dry_run))
+        outcomes.extend(self._link_spotify_and_youtube(podcast, urls, now, recheck, dry_run=dry_run, force=force))
         return PodcastLinkReport(podcast.id, outcomes)
 
     def link_all(
@@ -445,6 +443,7 @@ class PlatformLinkService:
         recheck: _Recheck,
         *,
         dry_run: bool,
+        force: bool = False,
     ) -> List[PodcastLinkOutcome]:
         spotify_cands = self._candidates(podcast.id, PLATFORM_SPOTIFY, recheck)
         youtube_cands = self._candidates(podcast.id, PLATFORM_YOUTUBE, recheck)
@@ -593,7 +592,6 @@ class PlatformLinkService:
         listing: Optional[List[youtube.YouTubeVideoEntry]] = None  # None: no channel listed
         listing_failed = False
         discovered = False
-        discovery_due = bool(youtube_rest) and self._discovery_due(podcast.id, now, force=recheck.before is None)
         if youtube_rest and channel_url:
             try:
                 listing = self._list_videos(channel_url, limit=self.youtube_listing_limit)
@@ -606,17 +604,19 @@ class PlatformLinkService:
                     error=str(exc),
                 )
                 listing_failed = True
-            if (
-                listing is not None
-                and discovery_due
-                and self._recorded_channel_is_wrong(podcast, listing, now, channel_source=channel_source)
-            ):
-                found_channel = self._discover_youtube_channel(podcast, now, replacing=channel_url, dry_run=dry_run)
-                if found_channel is not None:
-                    channel_url, listing = found_channel
-                    discovered = True
-        elif youtube_rest and discovery_due:
-            found_channel = self._discover_youtube_channel(podcast, now, replacing=None, dry_run=dry_run)
+        # Phase 3d: no channel, or a chart channel whose listing proves it is
+        # not the show's. A failed listing proves nothing. The weekly stamp
+        # (one read) is checked before the wrong-channel evidence (three).
+        if (
+            youtube_rest
+            and not listing_failed
+            and self._discovery_due(podcast.id, now, force=force)
+            and (
+                not channel_url
+                or self._recorded_channel_is_wrong(podcast, listing or [], now, channel_source=channel_source)
+            )
+        ):
+            found_channel = self._discover_youtube_channel(podcast, now, replacing=channel_url or None, dry_run=dry_run)
             if found_channel is not None:
                 channel_url, listing = found_channel
                 discovered = True
@@ -723,7 +723,7 @@ class PlatformLinkService:
             channel_source = sources.get(PLATFORM_YOUTUBE) if isinstance(sources, dict) else None
         if channel_source != "chart":
             return False
-        if self.repository.count_platform_links(podcast.id, PLATFORM_YOUTUBE, _CHANNEL_LISTING_METHODS):
+        if self.repository.count_platform_links(podcast.id, PLATFORM_YOUTUBE, CHANNEL_LISTING_METHODS):
             return False
         sample = self.repository.get_platform_link_sample(podcast.id, discovery.VERIFY_EPISODES)
         if len(sample) < discovery.MIN_WRONG_CHANNEL_SAMPLE:

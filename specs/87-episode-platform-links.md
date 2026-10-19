@@ -264,7 +264,9 @@ and discovery has not run for this show in the last
 `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` (7):
 
 0. **Verification sample.** The show's newest 20 episodes with a
-   `pub_date`, read regardless of link state or not-found markers. The
+   `pub_date`, read regardless of link state or not-found markers. A
+   show with fewer than 3 dated episodes cannot reach the threshold, so
+   it is stamped without a search. The
    pass's candidates only decide *whether* discovery runs: in steady
    state they are the one or two episodes whose markers just expired,
    too few to reach the threshold, and a failed attempt would then wait
@@ -290,7 +292,9 @@ and discovery has not run for this show in the last
 4. **Fallback query.** When nothing is accepted and the show has an
    `author` the title does not contain, search once more with
    "title author" ("Possible" alone finds Project Possible and Possible
-   History; "Possible Reid Hoffman" finds the right channel).
+   History; "Possible Reid Hoffman" finds the right channel). Not after a
+   deferral: the unverified result may be the real channel, and a looser
+   query must not pick a rival in its place that week.
 5. **Store** the accepted channel as `youtube_url` with source `resolver`
    and continue the pass with it: the listing and matching below run on
    the new channel in the same pass. The chart sync no longer overwrites a
@@ -356,7 +360,7 @@ Plan review (2026-10-19), folded in above:
 
 | # | File | Change |
 | --- | --- | --- |
-| A1 | `thestill/core/youtube_channel_discovery.py` (new) | `search_channels(query, limit)` (yt-dlp flat, channel filter, returns url + title); `verify_listing(...)` classifying a listing as verified count / verified 0 (no `/videos` tab) / unverified; `pick_channel(results)` (all verified, ≥ 3, runner-up ≤ a third); `search_queries(title, author)`; constants |
+| A1 | `thestill/core/youtube_channel_discovery.py` (new) | `search_channels(query, limit)` (yt-dlp flat, channel filter, returns the @handle URL plus every alias for comparing with a stored link); `is_no_uploads_error(exc)` (the verified-0 case; the service's `_score_channels` turns any other listing error into an unverified result); `pick_channel(results)` (all verified, ≥ 3, runner-up ≤ a third); `search_queries(title, author)`; constants |
 | A2 | `tests/unit/core/test_youtube_channel_discovery.py` (new) | `pick_channel` thresholds, ties and deferral on any unverified result; the no-videos-tab error is a verified 0 and other errors are unverified; query fallback; result parsing from a recorded flat payload |
 
 Gate: the new unit tests and ruff pass.

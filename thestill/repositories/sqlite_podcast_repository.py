@@ -44,6 +44,7 @@ from ..core.refresh_failure import (
     resolve_streak_state,
 )
 from ..models.podcast import (
+    CHANNEL_LISTING_METHODS,
     AlternateEnclosure,
     Episode,
     EpisodeState,
@@ -5817,20 +5818,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """,
                 params,
             )
-            return [
-                PlatformLinkCandidate(
-                    episode_id=row["id"],
-                    external_id=row["external_id"] or "",
-                    audio_url=row["audio_url"] or "",
-                    title=row["title"] or "",
-                    pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])) if row["pub_date"] else None,
-                    duration=row["duration"],
-                    description_html=row["description_html"] or "",
-                    website_url=row["website_url"],
-                    canonical_id=row["canonical_id"],
-                )
-                for row in cursor.fetchall()
-            ]
+            return [self._row_to_candidate(row) for row in cursor.fetchall()]
 
     def upsert_platform_links(self, links: List[PlatformLink]) -> int:
         if not links:
@@ -5937,20 +5925,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """,
                 (podcast_id, int(limit)),
             ).fetchall()
-        return [
-            PlatformLinkCandidate(
-                episode_id=row["id"],
-                external_id=row["external_id"] or "",
-                audio_url=row["audio_url"] or "",
-                title=row["title"] or "",
-                pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])),
-                duration=row["duration"],
-                description_html=row["description_html"] or "",
-                website_url=row["website_url"],
-                canonical_id=row["canonical_id"],
-            )
-            for row in rows
-        ]
+        return [self._row_to_candidate(row) for row in rows]
 
     def count_platform_links(self, podcast_id: str, platform: str, match_methods: Sequence[str]) -> int:
         if not match_methods:
@@ -6001,12 +5976,13 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 FROM episode_platform_links
                 WHERE platform = 'youtube'
                   AND episode_id IN (SELECT id FROM episodes WHERE podcast_id IN ({marks}))
-                  AND (url IS NULL OR match_method IN ('title_date', 'title_duration'))
+                  AND (url IS NULL OR match_method IN ({", ".join("?" for _ in CHANNEL_LISTING_METHODS)}))
             """
+            link_params = (*ids, *CHANNEL_LISTING_METHODS)
             if dry_run:
-                row = conn.execute(f"SELECT count(*) AS n {link_filter}", ids).fetchone()
+                row = conn.execute(f"SELECT count(*) AS n {link_filter}", link_params).fetchone()
                 return len(ids), int(row["n"]) if row else 0
-            deleted = conn.execute(f"DELETE {link_filter}", ids).rowcount
+            deleted = conn.execute(f"DELETE {link_filter}", link_params).rowcount
             conn.execute(
                 f"""
                 UPDATE podcasts
@@ -6016,6 +5992,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 ids,
             )
         return len(ids), int(deleted or 0)
+
+    @staticmethod
+    def _row_to_candidate(row: sqlite3.Row) -> PlatformLinkCandidate:
+        return PlatformLinkCandidate(
+            episode_id=row["id"],
+            external_id=row["external_id"] or "",
+            audio_url=row["audio_url"] or "",
+            title=row["title"] or "",
+            pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])) if row["pub_date"] else None,
+            duration=row["duration"],
+            description_html=row["description_html"] or "",
+            website_url=row["website_url"],
+            canonical_id=row["canonical_id"],
+        )
 
     def _row_to_platform_link(self, row: sqlite3.Row) -> PlatformLink:
         return PlatformLink(
