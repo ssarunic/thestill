@@ -5,9 +5,8 @@ import UserActions from '../../components/admin/UserActions'
 import { FollowsList, HistoryList, UsageTable } from '../../components/admin/UserSections'
 import { useAuth } from '../../contexts/AuthContext'
 import { useAdminUser } from '../../hooks/useAdmin'
+import { formatWhen as when } from '../../utils/adminFormat'
 import MultiUserOnly from './MultiUserOnly'
-
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—')
 
 /** Spec #104 §4.2 — one account: identity, usage, follows, actions, history. */
 export default function AdminUserDetailPage() {

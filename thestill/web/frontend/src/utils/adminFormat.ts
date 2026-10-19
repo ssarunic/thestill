@@ -1,5 +1,10 @@
 import type { AdminAuditEntry } from '../api/types'
 
+// Every timestamp on the admin pages: local date and time, minutes precision.
+export function formatWhen(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—'
+}
+
 // Spec #104 — one readable line per admin audit entry.
 export function describeAuditEntry(entry: AdminAuditEntry): string {
   const d = entry.details as Record<string, unknown>
