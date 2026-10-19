@@ -74,7 +74,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
 
       {/* Drawer */}
       <div
-        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white z-[70] transform transition-transform duration-300 ease-out ${
+        className={`fixed top-0 left-0 h-full w-72 max-w-[85vw] bg-white z-[70] flex flex-col transform transition-transform duration-300 ease-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         role="dialog"
@@ -82,7 +82,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
         aria-label="Navigation menu"
       >
         {/* Header with close button */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+        <div className="shrink-0 flex items-center justify-between p-4 border-b border-gray-200">
           <div>
             <h1 className="text-xl font-bold text-primary-900">Thestill</h1>
             <p className="text-sm text-gray-500">Podcast Intelligence</p>
@@ -100,7 +100,7 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
 
         {/* Navigation — items come from constants/navigation.tsx, shared with
             the desktop sidebar (Layout) so the two surfaces cannot drift. */}
-        <nav className="p-4 space-y-1">
+        <nav className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-1">
           {MAIN_NAV_ITEMS.map((item) => (
             <NavItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={onClose} />
           ))}
@@ -124,11 +124,6 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
             onClick={onClose}
           />
         </nav>
-
-        {/* Footer */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
-          <p className="text-xs text-gray-400 text-center">Read-only mode</p>
-        </div>
       </div>
     </>
   )

@@ -146,7 +146,7 @@ function LayoutContent() {
           }`}
         >
             {/* Logo */}
-            <div className={`border-b border-hairline ${showLabels ? 'p-6' : 'p-3'}`}>
+            <div className={`shrink-0 border-b border-hairline ${showLabels ? 'p-6' : 'p-3'}`}>
               <div className={`flex items-center ${showLabels ? '' : 'justify-center'}`}>
                 {/* Logo icon - visible on collapsed tablet */}
                 {!showLabels && (
@@ -168,7 +168,7 @@ function LayoutContent() {
             {screenSize === 'tablet' && !isSidebarExpanded && (
               <button
                 onClick={() => setIsSidebarExpanded(true)}
-                className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors"
+                className="shrink-0 p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors"
                 aria-label="Open menu"
               >
                 <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -181,7 +181,7 @@ function LayoutContent() {
             {screenSize === 'tablet' && isSidebarExpanded && (
               <button
                 onClick={() => setIsSidebarExpanded(false)}
-                className="p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors self-end"
+                className="shrink-0 p-3 mx-2 mt-2 rounded-lg hover:bg-gray-100 transition-colors self-end"
                 aria-label="Close menu"
               >
                 <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -190,8 +190,12 @@ function LayoutContent() {
               </button>
             )}
 
-            {/* Navigation */}
-            <nav className={`flex-1 space-y-1 ${showLabels ? 'p-4' : 'p-2'}`}>
+            {/* Navigation — scrolls on its own when the items outgrow the
+                window, so the logo and the user menu below stay in view. */}
+            <nav
+              className={`flex-1 min-h-0 overflow-y-auto overscroll-contain space-y-1 ${showLabels ? 'p-4' : 'p-2'}`}
+              data-testid="sidebar-nav"
+            >
               {/* Search links to the full results page; ⌘K still opens the
                   quick-jump command bar (spec #28 §4.1). */}
               <NavLink
@@ -259,7 +263,7 @@ function LayoutContent() {
             </nav>
 
             {/* Footer with user menu */}
-            <div className={`border-t border-hairline ${showLabels ? 'p-4' : 'p-2'}`}>
+            <div className={`shrink-0 border-t border-hairline ${showLabels ? 'p-4' : 'p-2'}`}>
               {showLabels ? (
                 <UserMenu />
               ) : (
