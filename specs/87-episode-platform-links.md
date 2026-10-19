@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery, curated show links and the 3f resolver follow-ups implemented; verified channel discovery (3d) in progress; edit field open
+> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery, curated show links and the 3f resolver follow-ups implemented; verified channel discovery (3d) implemented 2026-10-19, unmerged; edit field open
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -406,6 +406,42 @@ prototype shows.
   candidate selection; the refresh pass already knows which shows have
   unresolved YouTube candidates.
 
+#### Outcome (2026-10-19)
+
+Built as planned on `feat/87-youtube-channel-discovery`, in three gated
+phases plus a review pass. Deviations, each recorded above:
+
+- The wrong-channel check reads the source of the channel *used in the
+  pass*. The live dry run caught the first version replacing Prof G
+  Pod's publisher-voted `@RagingModerates`: a dry run never stores the
+  vote, so the stored row still said `chart`.
+- A deferral ends the attempt (no author query), and a show with fewer
+  than 3 dated episodes is stamped without a search.
+- `verify_listing` became `is_no_uploads_error` plus the service's
+  `_score_channels`.
+
+**Live dry run, local database** (episodes up to a month old):
+Better Offline `@BetterOfflinePod` 16 matches, Deep Questions
+`@CalNewportMedia` 7, How I AI `@howiaipodcast` 11, Latent Space
+`@LatentSpacePod` 15, Possible `@reidhoffman` 10 (author query), and
+Explora's chart `@GstaadGuyPodcast` replaced by `@ExploraHRT` (10 of
+10); every rival scored 0. The Times Tech Podcast was rejected (its
+small channel no longer lists the month-old local episodes), and
+Huberman Lab, whose chart channel matches, was never searched.
+
+**Follow-ups found on the way:**
+
+- Chart rows carry `''`, not NULL, for a missing channel; the chart sync
+  stamps `''` as `chart` and can blank a publisher-stated channel on
+  every pass (prod: Prof G Pod alternates between `@RagingModerates`
+  and empty). Treat `''` as NULL in both backfills.
+- The publisher vote can pick a sibling network show's channel (Prof G
+  Pod → Raging Moderates, whose republished episodes it carries). Its
+  episode links are right; the show-level link is not, and 3d never
+  replaces a publisher-stated channel.
+- After deploy: run `thestill link-platforms --force` once to search the
+  shows without a channel straight away instead of waiting for refresh.
+
 #### Rollback
 
 Set `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS=0` to stop searching, then
@@ -482,7 +518,7 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | 3b | Spotify latest-episode probe from the show's embed page, driven by `podcasts.spotify_url` | ✅ 2026-09-29 |
 | 3c | Show-link provenance (`chart` / `publisher` / `resolver` / `curated`) with the curated guard on both backends, website-scan discovery with the uniqueness and generic-channel guards, `thestill set-show-link` | ✅ 2026-09-29 |
 | 3c′ | An edit field on the podcast page for the curated links; the manual pass ordered by follows, not chart rank (followed shows without a channel or Spotify id first) | Open |
-| 3d | Verified YouTube channel discovery: channel search by show title (then title + author), accept a channel only when at least 3 of the show's episodes match its uploads and the runner-up has at most a third as many; also replaces a chart channel that matches nothing; weekly per-show stamp. See "YouTube channel discovery (Phase 3d)" | 🚧 In progress (2026-10-19) |
+| 3d | Verified YouTube channel discovery: channel search by show title (then title + author), accept a channel only when at least 3 of the show's episodes match its uploads and the runner-up has at most a third as many; also replaces a chart channel that matches nothing; weekly per-show stamp. See "YouTube channel discovery (Phase 3d)" | ✅ 2026-10-19 (unmerged; stacked on PR #382) |
 | 3e | Feed the #62 playback rendition from `youtube` links once they have been eyeballed in production | Open |
 | 3f | Resolver follow-ups from the a16z case: dominant-share vote for show links, young-episode recheck, publisher-stated Apple show page tried before the title search | ✅ 2026-09-29 |
 
