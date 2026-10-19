@@ -32,6 +32,7 @@ from structlog import get_logger
 from ...models.user import User, UserStatus
 from ...repositories.audit_log_repository import AuditEntry
 from ...repositories.user_directory_repository import UserSort, UserSummary
+from ...repositories.user_repository import LastActiveAdminError
 from ...utils.datetime_utils import now_utc
 from .actor import Actor
 from .errors import AdminActionError
@@ -54,6 +55,10 @@ class QueuedTaskCanceller(Protocol):
     """The slice of either queue manager this service needs."""
 
     def cancel_queued_for_podcasts(self, podcast_ids: List[str]) -> int: ...
+
+
+def _last_admin() -> AdminActionError:
+    return AdminActionError("last_admin", "This is the last active admin. Grant admin to someone else first.")
 
 
 def revocation_instant(now: datetime) -> datetime:
@@ -302,7 +307,7 @@ class AccountAdminService:
         chose it); each feed's schedule is re-armed like a follow does."""
         self._require_multi_user()
         target = self._load(user_id)
-        self._guard_target(target, actor, disabling_admin=False)
+        self._guard_target(target, actor)
         # Whatever is moved aside comes back, whatever the current status:
         # a ban followed by a suspend must not strand the follows.
         aside = self._suspended.list_podcast_ids(target.id)
@@ -357,16 +362,20 @@ class AccountAdminService:
         cleaned = (reason or "").strip()
         if not cleaned:
             raise AdminActionError("reason_required", "Give a reason; it is kept in the audit log.")
-        self._guard_target(target, actor, disabling_admin=True)
+        self._guard_target(target, actor)
         now = self._clock()
-        self._users.apply_status(
-            target.id,
-            status,
-            reason=cleaned,
-            changed_by=actor.user_id,
-            changed_at=now,
-            tokens_valid_after=revocation_instant(now),
-        )
+        try:
+            self._users.apply_status(
+                target.id,
+                status,
+                reason=cleaned,
+                changed_by=actor.user_id,
+                changed_at=now,
+                tokens_valid_after=revocation_instant(now),
+                keep_an_active_admin=True,
+            )
+        except LastActiveAdminError:
+            raise _last_admin() from None
         self._mcp_tokens.revoke(target.id, revoked_at=now)
         return target, cleaned
 
@@ -431,19 +440,28 @@ class AccountAdminService:
         if self._settings is None:
             raise AdminActionError("unavailable", "Quota overrides need the settings service.")
         target = self._load(user_id)
-        overrides = {uid: dict(limits) for uid, limits in self._settings.get("quota_overrides").items()}
-        mine = overrides.setdefault(target.id, {})
-        old = mine.get(quota)
-        if limit is None:
-            mine.pop(quota, None)
-        else:
-            mine[quota] = limit
+        seen: Dict[str, Optional[int]] = {}
+
+        def change(current: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
+            # Applied to the stored map inside a locked transaction, so an
+            # edit of another user's limits in the meantime is kept.
+            overrides = {uid: dict(limits) for uid, limits in current.items()}
+            mine = overrides.setdefault(target.id, {})
+            seen["old"] = mine.get(quota)
+            if limit is None:
+                mine.pop(quota, None)
+            else:
+                mine[quota] = limit
+            return overrides
+
         try:
-            self._settings.set("quota_overrides", overrides, actor=actor, audit=False)
+            stored = self._settings.modify("quota_overrides", change, actor=actor, audit=False)
         except ValueError as exc:
             raise AdminActionError("invalid_quota", str(exc)) from exc
-        self._audit.record(actor, "user.quota_override", target_user_id=target.id, quota=quota, old=old, new=limit)
-        return self._settings.get("quota_overrides").get(target.id, {})
+        self._audit.record(
+            actor, "user.quota_override", target_user_id=target.id, quota=quota, old=seen.get("old"), new=limit
+        )
+        return stored.get(target.id, {})
 
     def replace_quota_overrides(self, user_id: str, overrides: Dict[str, int], *, actor: Actor) -> Dict[str, int]:
         """Set all of one user's overrides at once (the console's form); an
@@ -480,8 +498,11 @@ class AccountAdminService:
         self._require_multi_user()
         target = self._load(user_id)
         if target.is_admin:
-            self._guard_target(target, actor, disabling_admin=True)
-            self._users.set_admin(target.id, False)
+            self._guard_target(target, actor)
+            try:
+                self._users.set_admin(target.id, False, keep_an_active_admin=True)
+            except LastActiveAdminError:
+                raise _last_admin() from None
             self._audit.record(actor, "admin.revoke", target_user_id=target.id)
         return self._load(target.id)
 
@@ -491,13 +512,12 @@ class AccountAdminService:
         if not self._multi_user:
             raise AdminActionError("single_user_mode", "User administration needs multi-user mode (MULTI_USER=true).")
 
-    def _guard_target(self, target: User, actor: Actor, *, disabling_admin: bool) -> None:
-        """An admin can't act on their own account, and the last active
-        admin can't be disabled or demoted — so nobody locks the console."""
+    def _guard_target(self, target: User, actor: Actor) -> None:
+        """An admin can't act on their own account. (The last active admin
+        can't be disabled or demoted either: the repository checks that in
+        the same transaction as the change.)"""
         if actor.user_id is not None and actor.user_id == target.id:
             raise AdminActionError("cannot_modify_self", "You can't change your own account status or admin role.")
-        if disabling_admin and target.is_admin and target.is_active and self._directory.count_admins() <= 1:
-            raise AdminActionError("last_admin", "This is the last active admin. Grant admin to someone else first.")
 
     def _load(self, user_id: str) -> User:
         user = self._users.get_by_id(user_id)

@@ -21,7 +21,7 @@ environment default; ``SettingsService`` owns that rule and the cache.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,20 @@ class SettingsRepository(ABC):
         ``min_interval_seconds`` ago. True when this call won the claim —
         across every worker, at most one wins per interval (spec #104 alert
         de-duplication)."""
+
+    @abstractmethod
+    def modify(
+        self,
+        key: str,
+        change: Callable[[Optional[Any]], Any],
+        *,
+        updated_by: Optional[str],
+        updated_at: datetime,
+    ) -> Any:
+        """Atomic read-modify-write of one key against the database, never a
+        cache: ``change(current)`` (``None`` when there is no row) returns
+        the value to store, inside one locked transaction. A raise from
+        ``change`` leaves the row as it was. Returns the stored value."""
 
     @abstractmethod
     def delete(self, key: str) -> bool:

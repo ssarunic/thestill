@@ -33,6 +33,8 @@ from structlog import get_logger
 from ..models.inbox import INBOX_STATES, ArrivingItem, InboxEntry, InboxItem
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_follower_repository import PodcastFollowerRepository
+from .abuse.access_guard import NULL_GUARD, AccessGuard
+from .abuse.quota_service import QuotaService, reserve_quota
 
 if TYPE_CHECKING:
     from ..core.queue_manager import QueueManager
@@ -128,6 +130,8 @@ class InboxService:
         queue_manager: Optional["QueueManager"] = None,
         podcast_repository: Optional["SqlitePodcastRepository"] = None,
         transcription_provider: str = "",
+        access: AccessGuard = NULL_GUARD,
+        quota: Optional[QuotaService] = None,
     ) -> None:
         if seed_on_follow_count < 0:
             raise ValueError("seed_on_follow_count must be non-negative")
@@ -142,6 +146,10 @@ class InboxService:
         self._queue = queue_manager
         self._podcasts = podcast_repository
         self._transcription_provider = transcription_provider
+        # Spec #104: "Send to my inbox" that starts a pipeline is an import —
+        # the imports switch and imports_per_day apply to it.
+        self._access = access
+        self._quota = quota
         logger.info(
             "InboxService initialized",
             seed_on_follow=seed_on_follow_count,
@@ -157,6 +165,8 @@ class InboxService:
         *,
         queue_manager: Optional["QueueManager"] = None,
         podcast_repository: Optional["SqlitePodcastRepository"] = None,
+        access: AccessGuard = NULL_GUARD,
+        quota: Optional[QuotaService] = None,
     ) -> "InboxService":
         """Builder that pulls ``seed_on_follow_count`` from ``Config``.
 
@@ -171,6 +181,8 @@ class InboxService:
             queue_manager=queue_manager,
             podcast_repository=podcast_repository,
             transcription_provider=getattr(config, "transcription_provider", ""),
+            access=access,
+            quota=quota,
         )
 
     # ------------------------------------------------------------------
@@ -310,14 +322,19 @@ class InboxService:
         No-op when the optional queue/podcast plumbing is absent. ``lookup`` is
         invoked only after that guard, so it may dereference those deps.
         """
+        pending = self._lookup_pending(lookup, source)
+        return self._enqueue_pipeline(pending, source=source) if pending else 0
+
+    def _lookup_pending(self, lookup: "Callable[[], List]", source: str) -> List:
+        """The orphans ``lookup`` selects, or ``[]`` without the plumbing or
+        when the lookup fails (logged)."""
         if not (self._queue and self._podcasts):
-            return 0
+            return []
         try:
-            pending = lookup()
+            return lookup()
         except Exception:
             logger.exception("inbox_pipeline_lookup_failed", source=source)
-            return 0
-        return self._enqueue_pipeline(pending, source=source)
+            return []
 
     def _enqueue_pipeline(self, pending: List, *, source: str) -> int:
         return enqueue_pipeline_for(
@@ -343,13 +360,25 @@ class InboxService:
         (spec #88). Either way the pipeline guard runs, so an unprocessed
         episode starts processing and a finished or in-flight one is a no-op.
 
+        Starting a pipeline spends like an import, so then the ``imports``
+        switch and ``imports_per_day`` apply (spec #104); delivering an
+        episode that is processed or in flight costs nothing and is free.
+
         Returns ``(entry, created)``.
+
+        Raises:
+            FeaturePausedError / QuotaExceededError: before anything is
+                written, when the delivery would start a pipeline.
         """
-        entry, created = self._repository.find_or_create(user_id=user_id, episode_id=episode_id, source=source)
-        self._ensure_pipeline(
-            lambda: self._podcasts.get_unqueued_unprocessed_episodes([episode_id]),
-            source=source,
-        )
+        pending = self._lookup_pending(lambda: self._podcasts.get_unqueued_unprocessed_episodes([episode_id]), source)
+        if pending:
+            self._access.require_feature("imports")
+        with reserve_quota(
+            self._quota if pending else None, user_id, "imports_per_day", subject_id=episode_id
+        ) as reservation:
+            entry, created = self._repository.find_or_create(user_id=user_id, episode_id=episode_id, source=source)
+            if pending and self._enqueue_pipeline(pending, source=source):
+                reservation.commit(subject_id=episode_id)
         logger.info("inbox_ad_hoc_delivery", user_id=user_id, episode_id=episode_id, created=created, source=source)
         return entry, created
 

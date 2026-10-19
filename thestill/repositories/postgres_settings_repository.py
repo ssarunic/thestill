@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from psycopg.types.json import Jsonb
 
@@ -64,6 +64,30 @@ class PostgresSettingsRepository(SettingsRepository):
                 (key, Jsonb(value), now, now - timedelta(seconds=min_interval_seconds)),
             )
             return cursor.rowcount == 1
+
+    def modify(
+        self,
+        key: str,
+        change: Callable[[Optional[Any]], Any],
+        *,
+        updated_by: Optional[str],
+        updated_at: datetime,
+    ) -> Any:
+        with connect(self.dsn) as conn:
+            # An advisory lock per key also covers the first write, when
+            # there is no row yet for SELECT ... FOR UPDATE to lock.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"app_settings:{key}",))
+            row = conn.execute("SELECT value FROM app_settings WHERE key = %s", (key,)).fetchone()
+            value = change(row["value"] if row else None)
+            conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by
+                """,
+                (key, Jsonb(value), updated_at, updated_by),
+            )
+        return value
 
     def delete(self, key: str) -> bool:
         with connect(self.dsn) as conn:

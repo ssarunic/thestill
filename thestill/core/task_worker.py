@@ -931,6 +931,11 @@ class TaskWorker:
         target_reached = target_state is not None and resulting_state == target_state
 
         successors = get_next_stages(task.stage)
+        if successors and self._unwanted(task):
+            # Spec #104: a ban (or unfollow) left nobody who wants this
+            # episode; the task that was running finishes, nothing follows.
+            logger.info("pipeline_chain_stopped_unwanted", stage=task.stage.value, episode_id=task.episode_id)
+            return
         if target_reached or not allow_user_chain:
             # Filter to entity-branch successors only. ``target_reached``
             # reflects an explicit early-stop on the user chain; the
@@ -956,6 +961,25 @@ class TaskWorker:
                 priority=task.priority,
                 metadata=task.metadata,
             )
+
+    #: Pipelines started on someone's behalf (a feed refresh, an inbox
+    #: delivery, an import). Operator runs (no tag, ``episode-retry``)
+    #: always chain to the end.
+    _ON_BEHALF = ("refresh", "refresh-feed", "import")
+
+    def _unwanted(self, task: Task) -> bool:
+        initiated_by = str(task.metadata.get("initiated_by") or "")
+        if not task.episode_id or not (initiated_by in self._ON_BEHALF or initiated_by.startswith("inbox-")):
+            return False
+        check = getattr(self.queue_manager, "episode_unwanted", None)
+        if check is None:
+            return False
+        try:
+            return check(task.episode_id) is True
+        except Exception:
+            # The guard must never break the pipeline for everyone else.
+            logger.exception("chain_unwanted_check_failed", episode_id=task.episode_id)
+            return False
 
     def _report_failure(self, task_id: str, error_msg: str) -> None:
         """Report task failure via progress store if available."""

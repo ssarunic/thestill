@@ -447,12 +447,15 @@ Where the build differs from, or adds to, the design above.
 - **Audit actors** are `web`, `cli` and `system` (`system` is for the Phase 3 breaker). The CLI also has `thestill user remove-introduced-feeds` and `thestill settings reset`.
 - **New config.** `ADMIN_CONTACT_EMAIL` is new, alongside `SIGNUP_MODE` and `SIGNUP_ALLOWLIST`.
 - **Housekeeping.** Phase 2's reservation expiry and ledger pruning need a new periodic loop: there was no housekeeping job to reuse.
+- **Running work after a ban.** Cancelling queued tasks isn't enough: a stage already running would chain the next paid one. So a pipeline started on someone's behalf (`initiated_by` `refresh`, `refresh-feed`, `import` or `inbox-*`) stops chaining once nobody wants the episode: its feed has no live follower, and no active user imported or sent it. Operator runs always chain to the end.
+- **Last active admin.** The guard is atomic. Counting the other active admins and the status or role change happen in one transaction under a lock (Postgres advisory lock, SQLite `BEGIN IMMEDIATE`), so two concurrent demotions can't both pass.
 
 **Phase 2** (branch `feat/104-p2-quotas`, stacked on Phase 1):
 
 - **Ledger.** `usage_events` (alembic 0022) has its own repository. `reserve` takes a per-(user, lock group) Postgres advisory lock, or SQLite `BEGIN IMMEDIATE`, then counts reserved and committed rows and inserts. Follow quotas share the `follow` group, so a follow takes one user lock, always before the podcast lock.
 - **Follows don't reserve.** `follow_with_gate` counts the user's `follow` and `feed_introduced` rows under the same locks, and writes the new rows, or the `quota_exceeded` row, in the follow's own transaction. The follow and its rows carry the instant the limits were measured at.
-- **Imports** reserve only when the episode is new, and commit once it is created. Re-importing an existing episode is free even at the limit. The old inbox-based import counter in the log now reads the ledger.
+- **Imports** reserve only when they start a pipeline: the episode is new, or it exists but was never processed or queued (a feed-discovered orphan). They commit once the episode is created or the orphan is enqueued. Re-importing an episode that is processed, in flight or failed is free even at the limit. The old inbox-based import counter in the log now reads the ledger.
+- **"Send to my inbox"** counts as an import when it starts a pipeline: the `imports` switch and `imports_per_day` apply, and a refusal writes no inbox row. Sending an episode that is processed or in flight is free. The CLI wires the switch but not quotas, like every other operator path.
 - **Add-feed and remote MCP `add_podcast`** also run a read-only follow-quota precheck before any podcast row is written. The follow's own check stays authoritative and records the refusal.
 - **`Retry-After`** for a reserved quota comes from the row whose expiry brings the count back under the limit, which stays right after an override lowers a limit below current use. For follows it is the oldest row in the window, a lower bound in that case.
 - **The quota table** (`services/abuse/quotas.py`) holds each quota's kind, window, lock group, env field and refusal text once.
@@ -462,6 +465,7 @@ Where the build differs from, or adds to, the design above.
 - **The per-user rate limit** uses the existing `RATE_LIMIT_*` naming: `RATE_LIMIT_USER_MAX` / `_WINDOW_SECONDS` and `RATE_LIMIT_USER_SEARCH_MAX` / `_WINDOW_SECONDS`, not `USER_API_LIMIT` / `USER_SEARCH_LIMIT`. Hits are kept per process, trimmed to an hour on every record, ready for Phase 3's `rate_limit_pressure` (nothing reads them until then), so they are not parsed from logs.
 - **`QUOTA_ENFORCE`** defaults to `true`. With `false`, usage is recorded and refusals are only logged (`quota_would_refuse`), which answers open question 3.
 - **Housekeeping** is a new `core/periodic_runner.py` loop started in the app lifespan. It releases expired reservations every minute and prunes the ledger every 6 hours.
+- **Override edits are atomic.** `SettingsRepository.modify` reads, changes and writes one key under a lock (Postgres advisory lock, SQLite `BEGIN IMMEDIATE`), so two admins editing different users' overrides keep both changes. Overrides are never written from the cached snapshot.
 - **CLI.** `thestill user quota <email> <quota> <limit|default>` audits `user.quota_override` with only that user's limit, not the whole overrides map. `thestill user show` lists the last 24 hours of usage.
 
 **Phase 3** (branch `feat/104-p3-alerts`, stacked on Phase 2):
