@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext'
 import { useAdminUsers } from '../../hooks/useAdmin'
 import { useDebouncedSearchParam } from '../../hooks/useDebouncedSearchParam'
 import { useUrlParams } from '../../hooks/useUrlParams'
+import { formatWhen } from '../../utils/adminFormat'
 import MultiUserOnly from './MultiUserOnly'
 
 const PAGE_SIZE = 50
@@ -18,10 +19,6 @@ const SORTS: { value: AdminUserSort; label: string }[] = [
   { value: 'follows', label: 'Most follows' },
   { value: 'email', label: 'Email' },
 ]
-
-function formatDate(iso: string | null) {
-  return iso ? new Date(iso).toLocaleDateString() : '—'
-}
 
 /**
  * Spec #104 §4.1 — every account with its activity. Filters, sort and page
@@ -129,8 +126,8 @@ export default function AdminUsers() {
                   <td className="px-3 py-2">
                     <StatusBadge status={user.status} />
                   </td>
-                  <td className="px-3 py-2 text-muted">{formatDate(user.created_at)}</td>
-                  <td className="px-3 py-2 text-muted">{formatDate(user.last_login_at)}</td>
+                  <td className="px-3 py-2 text-muted whitespace-nowrap tabular-nums">{formatWhen(user.created_at)}</td>
+                  <td className="px-3 py-2 text-muted whitespace-nowrap tabular-nums">{formatWhen(user.last_login_at)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{user.follows}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {user.feeds_brought_in_24h} / {user.feeds_brought_in_total}

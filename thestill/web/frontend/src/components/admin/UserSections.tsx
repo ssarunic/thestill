@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { AdminAuditEntry, AdminFollow } from '../../api/types'
-import { describeAuditEntry } from '../../utils/adminFormat'
+import { describeAuditEntry, formatWhen as when } from '../../utils/adminFormat'
 import Sparkline from './Sparkline'
 
 // Display names for the usage ledger's kinds (services/abuse ledger).
@@ -13,7 +13,6 @@ const USAGE_KINDS: { kind: string; label: string }[] = [
   { kind: 'quota_exceeded', label: 'Quota hits' },
 ]
 
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—')
 
 export function UsageTable({
   usage24h,

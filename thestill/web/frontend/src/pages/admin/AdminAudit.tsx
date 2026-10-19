@@ -3,7 +3,7 @@ import Pager from '../../components/admin/Pager'
 import { useAuth } from '../../contexts/AuthContext'
 import { useAdminAudit } from '../../hooks/useAdmin'
 import { useUrlParams } from '../../hooks/useUrlParams'
-import { describeAuditEntry } from '../../utils/adminFormat'
+import { describeAuditEntry, formatWhen } from '../../utils/adminFormat'
 import MultiUserOnly from './MultiUserOnly'
 
 const PAGE_SIZE = 50
@@ -59,7 +59,7 @@ export default function AdminAudit() {
           {data.entries.map((entry) => (
             <li key={entry.id} className="px-4 py-2">
               <div className="flex flex-wrap gap-x-3 gap-y-1">
-                <span className="text-muted tabular-nums">{new Date(entry.created_at).toLocaleString()}</span>
+                <span className="text-muted tabular-nums">{formatWhen(entry.created_at)}</span>
                 <span className="font-medium text-ink">{entry.action}</span>
                 {entry.target_user_id && (
                   <Link to={`/admin/users/${entry.target_user_id}`} className="text-accent hover:underline">
