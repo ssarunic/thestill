@@ -107,15 +107,19 @@ FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
         1: SlotSpec(
             "🎙️",
             "The Gist",
-            # Spec #98 Phase 2: one line on who is speaking and in what
-            # format, not an assumed interview. No topic here: a topic in this
-            # line turned it into a listings blurb and left the summary below
-            # without a hook. The preview drops this line.
-            'One short line with just who is speaking and how, e.g. "[host name] interviews [guest name, role]",'
-            ' "Co-hosts [names]", "[host name] with a panel: [names]", "[host name], solo", "Narrated by [host name]"'
-            ' or "A full-cast audio drama, introduced by [name]". Leave the topic for the summary below. Replace'
-            " every bracketed part with the real names; never leave brackets in. Only call it an interview when"
-            " someone is being interviewed, and use only names and roles the episode gives.\n\n"
+            # Spec #98 Phase 2: one line on who is speaking and how, chosen from
+            # explicit cases. A topic in this line turned it into a listings
+            # blurb; a blended list of examples produced "X and Y with guest Z".
+            # The preview drops this line.
+            "One short line with just who is speaking and how. Pick the case that fits:\n"
+            '* A guest is being questioned: "[host names] interview [guest name, role]"'
+            ' (one host: "[host name] interviews [guest name, role]").\n'
+            '* The host or hosts on their own, no guest: "[host names] chat" (one host: "[host name] talks it through").\n'
+            '* An anchor with a panel of pundits: "[host name] with a panel: [names]".\n'
+            '* A narrated story: "Narrated by [host name]".\n'
+            '* An audio drama: "A full-cast audio drama, introduced by [name]".\n'
+            "Leave the topic for the summary below. Replace every bracketed part with the real names; never leave"
+            " brackets in. Use only names and roles the episode gives.\n\n"
             "A 2-sentence summary of the episode. Do NOT include the episode title, date, or duration"
             " - these are displayed elsewhere.",
         ),
@@ -156,7 +160,7 @@ EXAMPLE_HEADER = "## Example Output (follow this formatting exactly)"
 
 GENERAL = SummaryProfile(
     key="general",
-    version=2,  # v2: shared rules + format-aware Gist line (spec #98 Phase 2)
+    version=3,  # v2: shared rules + format-aware Gist line; v3: explicit interview / no-guest cases (spec #98)
     slots=MappingProxyType(
         {
             3: SlotSpec(
@@ -303,7 +307,7 @@ NEWS = SummaryProfile(
         }
     ),
     example="""## 1. 🎙️ The Gist
-Co-hosts Priya Shah and Tom Ellis, with reporter Dan Moore
+Priya Shah and Tom Ellis interview reporter Dan Moore
 
 Northfield council's budget hole turns out to be twice what it told everyone in March, and Dan has the papers to prove it. Plus the tram strike that's back on, which is bad news if you were planning to get anywhere on Thursday.
 
@@ -464,7 +468,7 @@ HISTORY = SummaryProfile(
         }
     ),
     example="""## 1. 🎙️ The Gist
-Co-hosts Anna Clarke and Mark Webb
+Anna Clarke and Mark Webb chat
 
 Part two of the siege of Harrowby, and the town is starving while General Ross waits for a relief army that never turns up. Mark makes a good case that the famous surrender speech was cooked up decades later.
 
@@ -627,7 +631,7 @@ COMEDY = SummaryProfile(
         }
     ),
     example="""## 1. 🎙️ The Gist
-Co-hosts Jess Harper and Dan Kerr, with guest Priya Nair
+Jess Harper and Dan Kerr interview comedian Priya Nair
 
 Priya arrives with a list of every hotel she's ever been thrown out of, and Dan is horrified to learn he's on it. Jess spends most of the episode trying, and failing, to get anyone back on topic.
 
