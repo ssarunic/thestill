@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime` implemented and evaluated (off by default); `investing`, `comedy`, `health` and Phase 4 open
+> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime`, `comedy` implemented and evaluated (off by default); `investing`, `health` and Phase 4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -317,7 +317,7 @@ Never frame anything as advice to the reader.
 | 4 | 🌶️ Banter & Roasts | Who got roasted, by whom, and whether it landed. "Friendly all round" is fine |
 | 6 | 🔁 Running Jokes & Segments | Callbacks, recurring segments (listener mail, games), what they are for a new listener |
 | 7 | 🎧 Worth a Full Listen? | Energy, guest chemistry, which part to skip to, who will enjoy it |
-| 9 | 🙃 What Fell Flat | Bits that dragged or did not land; "nothing" is a valid answer |
+| 9 | 🙃 What Fell Flat | Only bits the people in the room treat as not landing (a groan, moving swiftly on); "Everything landed" otherwise. Judging humour itself invented flops in a third of first-round summaries |
 
 Rules: playful tone allowed. Quotes need enough setup to work out of
 context.
@@ -553,8 +553,8 @@ chooses to run it.
    rubric criteria, run the evaluation, enable it. Suggested order by
    corpus size and risk: `news`, `investing`, `sports`, `comedy`,
    `true_crime`, `history`, `health`. True crime goes after the corpus
-   has more than one show. **`news`, `sports`, `history` and
-   `true_crime` done 2026-10-19**, all off until listed in
+   has more than one show. **`news`, `sports`, `history`,
+   `true_crime` and `comedy` done 2026-10-19**, all off until listed in
    `SUMMARY_PROFILES_ENABLED` (see the Phase 3 evaluation). Notes:
    - Every genre profile's rules start with "the example is made up:
      never reuse its names, quotes, scores, numbers or facts", and the
@@ -657,13 +657,13 @@ the 12 newest episodes of Casefile, Morbid and The Last 12 Weeks
 
 Final wording, profile vs general:
 
-| | News | Sports | History | True crime |
-| --- | --- | --- | --- | --- |
-| Preferred overall | 18–2 | 15–5 | 19–1 | 19–1 |
-| Better genre fit | 19–1 | 20–0 | 20–0 | 20–0 |
-| More faithful | 9–4 (7 ties) | 6–7 (7 ties) | 13–1 (6 ties) | 14–1 (5 ties) |
-| Better voice | 7–4 (9 ties) | 10–8 (2 ties) | 2–11 (7 ties) | 19–1 |
-| Genre-specific errors found | 71 vs 85 | 62 vs 56 | 67 vs 88 | 67 vs 113 |
+| | News | Sports | History | True crime | Comedy |
+| --- | --- | --- | --- | --- | --- |
+| Preferred overall | 18–2 | 15–5 | 19–1 | 19–1 | 17–3 |
+| Better genre fit | 19–1 | 20–0 | 20–0 | 20–0 | 20–0 |
+| More faithful | 9–4 (7 ties) | 6–7 (7 ties) | 13–1 (6 ties) | 14–1 (5 ties) | 11–5 (4 ties) |
+| Better voice | 7–4 (9 ties) | 10–8 (2 ties) | 2–11 (7 ties) | 19–1 | 20–0 |
+| Genre-specific errors found | 71 vs 85 | 62 vs 56 | 67 vs 88 | 67 vs 113 | 69 vs 84 |
 
 Deterministic, over the four runs: the profiles drop no sections on
 English summaries (general drops §7 in about one in ten), every sports
@@ -674,6 +674,12 @@ Profile summaries run about 25–35% shorter.
 
 How the profiles got here:
 
+- **Comedy** (six shows, 20 episodes; Joe Rogan, also filed under
+  Comedy, is over the two-hour cap and not sampled). Two of its three
+  round-2 losses were the example quote ("I got invited to leave, with
+  luggage") reappearing in 8 of 80 summaries. Funny example lines are
+  what gets copied; the replacement is deliberately mundane and leaked
+  in 0 of 80.
 - **Example leakage.** The first sports example's quote ("You don't win
   titles with spreadsheets…") appeared, credited to real pundits, in 23
   of 80 sports summaries, and its "2-1" became an invented scoreline.
