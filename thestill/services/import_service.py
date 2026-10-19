@@ -901,27 +901,30 @@ class ImportService:
         """
         self._access.require_feature("imports")
         canonical = self._resolve(url)
-        # Only an import that creates the episode spends (a pipeline run), so
-        # only that one is charged; re-importing one that exists is free, even
-        # at the limit.
-        known = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id) is not None
+        # Only an import that starts a pipeline spends, so only that one is
+        # charged: creating the episode, or re-importing an untouched
+        # DISCOVERED orphan (spec #88 guard below). Re-importing one that is
+        # processed, in flight or failed is free, even at the limit.
+        known_id = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id)
+        pending = self._pending_for_existing(known_id) if known_id else []
+        charge = known_id is None or bool(pending)
         with reserve_quota(
-            None if known else self._quota, user_id, "imports_per_day", subject_id=canonical.canonical_id
+            self._quota if charge else None, user_id, "imports_per_day", subject_id=canonical.canonical_id
         ) as reservation:
             episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
             if episode_created:
                 reservation.commit(subject_id=episode_id)
-        inbox_entry, inbox_created = self._inbox_repo.find_or_create(
-            user_id=user_id,
-            episode_id=episode_id,
-            source="import",
-        )
-        if not episode_created:
+            inbox_entry, inbox_created = self._inbox_repo.find_or_create(
+                user_id=user_id,
+                episode_id=episode_id,
+                source="import",
+            )
             # Spec #88: the episode existed, so nothing above started it. Run
             # the same guard publish fan-out uses — an untouched DISCOVERED
             # orphan (feed-discovered, never processed) gets the pipeline;
             # anything processed, in flight or failed is left alone.
-            self._ensure_pipeline_for_existing(episode_id)
+            if not episode_created and pending and self._enqueue_existing(pending):
+                reservation.commit(subject_id=episode_id)
         if episode_created:
             # The shared entry-stage rule, not a hard-coded TRANSCRIBE. Imports
             # used to assume the transcriber could always fetch `audio_url`
@@ -977,13 +980,18 @@ class ImportService:
     # Internals
     # ------------------------------------------------------------------
 
-    def _ensure_pipeline_for_existing(self, episode_id: str) -> None:
+    def _pending_for_existing(self, episode_id: str) -> List:
+        """``[(episode_id, audio_url)]`` when the existing episode is an
+        untouched orphan an import would start, else ``[]`` (also on a failed
+        lookup, logged)."""
         try:
-            pending = self._repository.get_unqueued_unprocessed_episodes([episode_id])
+            return self._repository.get_unqueued_unprocessed_episodes([episode_id])
         except Exception:
             logger.exception("import_pipeline_lookup_failed", episode_id=episode_id)
-            return
-        enqueue_pipeline_for(
+            return []
+
+    def _enqueue_existing(self, pending: List) -> int:
+        return enqueue_pipeline_for(
             self._queue, pending, transcription_provider=self._transcription_provider or "", source="import"
         )
 

@@ -305,6 +305,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_repository,
         queue_manager=queue_manager,
         podcast_repository=repository,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
     follower_service = FollowerService(
         follower_repository, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy

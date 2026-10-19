@@ -186,6 +186,26 @@ class SettingsService:
         logger.info("setting_changed", key=key, actor=actor.kind)
         return self.effective(key)
 
+    def modify(self, key: str, change: Callable[[Any], Any], *, actor: Actor, audit: bool = True) -> Any:
+        """Atomic read-modify-write against the database, not this cache:
+        ``change(current)`` gets the stored value (or the env default) and
+        returns the new one, which is validated before it is written. For a
+        shared map (``quota_overrides``) edited from several processes, so
+        one edit can't overwrite another made in the last 15 seconds."""
+        spec = get_spec(key)
+        before: Dict[str, Any] = {}
+
+        def validated(current: Any) -> Any:
+            before["value"] = spec.validate(current) if current is not None else spec.env_default(self._config)
+            return spec.validate(change(before["value"]))
+
+        new = self._repo.modify(key, validated, updated_by=actor.user_id, updated_at=now_utc())
+        self.invalidate()
+        if audit and self._audit is not None:
+            self._audit.record(actor, "setting.set", key=key, old=before["value"], new=new)
+        logger.info("setting_changed", key=key, actor=actor.kind)
+        return new
+
     def reset(self, key: str, *, actor: Actor) -> EffectiveSetting:
         """Delete the runtime row so ``key`` reverts to its env default."""
         old = self.effective(key)  # also rejects an unknown key

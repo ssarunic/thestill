@@ -334,19 +334,28 @@ class AccountAdminService:
         if self._settings is None:
             raise AdminActionError("unavailable", "Quota overrides need the settings service.")
         target = self._load(user_id)
-        overrides = {uid: dict(limits) for uid, limits in self._settings.get("quota_overrides").items()}
-        mine = overrides.setdefault(target.id, {})
-        old = mine.get(quota)
-        if limit is None:
-            mine.pop(quota, None)
-        else:
-            mine[quota] = limit
+        seen: Dict[str, Optional[int]] = {}
+
+        def change(current: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
+            # Applied to the stored map inside a locked transaction, so an
+            # edit of another user's limits in the meantime is kept.
+            overrides = {uid: dict(limits) for uid, limits in current.items()}
+            mine = overrides.setdefault(target.id, {})
+            seen["old"] = mine.get(quota)
+            if limit is None:
+                mine.pop(quota, None)
+            else:
+                mine[quota] = limit
+            return overrides
+
         try:
-            self._settings.set("quota_overrides", overrides, actor=actor, audit=False)
+            stored = self._settings.modify("quota_overrides", change, actor=actor, audit=False)
         except ValueError as exc:
             raise AdminActionError("invalid_quota", str(exc)) from exc
-        self._audit.record(actor, "user.quota_override", target_user_id=target.id, quota=quota, old=old, new=limit)
-        return self._settings.get("quota_overrides").get(target.id, {})
+        self._audit.record(
+            actor, "user.quota_override", target_user_id=target.id, quota=quota, old=seen.get("old"), new=limit
+        )
+        return stored.get(target.id, {})
 
     # ----- admin role -----
 

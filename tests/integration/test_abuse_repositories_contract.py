@@ -463,6 +463,33 @@ def test_cancel_queued_for_podcasts_leaves_running_and_other_feeds(env):
 # ---------------------------------------------------------------------------
 # Review fixes: the last-admin guard is atomic; unwanted episodes stop chaining
 # ---------------------------------------------------------------------------
+def test_concurrent_modifies_keep_every_change(env):
+    """Two workers editing different users' quota overrides: each change is
+    read-modify-written under a lock, so neither erases the other."""
+    import time
+
+    make_repo = lambda: type(env.settings)(env.podcasts.db_path if env.backend == "sqlite" else env.dsn)  # noqa: E731
+    env.settings.upsert("quota_overrides", {"seed": {"imports_per_day": 1}}, updated_by=None, updated_at=NOW)
+    barrier = threading.Barrier(4)
+
+    def edit(user_id):
+        repo = make_repo()
+        barrier.wait()
+
+        def change(current):
+            time.sleep(0.05)  # widen the read → write window
+            return {**(current or {}), user_id: {"imports_per_day": 9}}
+
+        repo.modify("quota_overrides", change, updated_by=None, updated_at=NOW)
+
+    threads = [threading.Thread(target=edit, args=(f"user-{i}",)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert set(env.settings.get_all()["quota_overrides"].value) == {"seed", "user-0", "user-1", "user-2", "user-3"}
+
+
 def test_concurrent_demotions_keep_one_active_admin(env):
     from thestill.repositories.user_repository import LastActiveAdminError
 

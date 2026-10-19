@@ -24,7 +24,7 @@ import pytest
 from thestill.core.periodic_runner import PeriodicRunner
 from thestill.models.briefing import Briefing
 from thestill.services.abuse.actor import Actor
-from thestill.services.abuse.errors import QuotaExceededError
+from thestill.services.abuse.errors import FeaturePausedError, QuotaExceededError
 from thestill.services.abuse.housekeeping import usage_housekeeping_jobs
 from thestill.services.abuse.quota_service import reserve_quota
 from thestill.services.narration import NarrationRunner
@@ -352,9 +352,99 @@ def test_re_importing_an_existing_episode_is_free_at_the_limit(tmp_path):
     )
     service._resolve = lambda url: SimpleNamespace(canonical_id="c-1", kind="audio", title="t", source_handle=None)
     service._find_or_create_episode = lambda canonical: ("ep-1", False, None)
-    service._ensure_pipeline_for_existing = lambda episode_id: None
+    service._pending_for_existing = lambda episode_id: []  # processed or in flight
     service._describe_episode = lambda user_id, episode_id: (None, None, None, False)
 
     result = service.import_url(user_id=user.id, url="https://example.com/ep.mp3")
     assert result.episode_id == "ep-1" and not result.episode_created
     assert _count(world, user.id, "import") == 1
+
+
+def _orphan_import_service(world, enqueued):
+    from thestill.services.import_service import ImportService
+
+    service = ImportService(
+        repository=SimpleNamespace(find_episode_id_by_canonical_id=lambda _cid: "ep-1"),
+        inbox_repository=SimpleNamespace(find_or_create=lambda **_: (SimpleNamespace(), False)),
+        queue_manager=None,
+        quota=world.quota,
+    )
+    service._resolve = lambda url: SimpleNamespace(canonical_id="c-1", kind="audio", title="t", source_handle=None)
+    service._find_or_create_episode = lambda canonical: ("ep-1", False, None)
+    service._pending_for_existing = lambda episode_id: [(episode_id, "https://example.com/ep.mp3")]
+    service._enqueue_existing = lambda pending: enqueued.extend(pending) or len(pending)
+    service._describe_episode = lambda user_id, episode_id: (None, None, None, False)
+    return service
+
+
+def test_reimport_that_starts_an_orphan_pipeline_is_charged(tmp_path):
+    """An existing but never-processed episode costs a pipeline run when an
+    import starts it, so it counts — and is refused at the limit."""
+    world = _world(tmp_path, quota_imports_per_day=1)
+    user = world.add_user("u@example.com")
+    enqueued: list = []
+    service = _orphan_import_service(world, enqueued)
+
+    service.import_url(user_id=user.id, url="https://example.com/ep.mp3")
+    assert _count(world, user.id, "import") == 1 and len(enqueued) == 1
+
+    with pytest.raises(QuotaExceededError):
+        service.import_url(user_id=user.id, url="https://example.com/ep.mp3")
+    assert len(enqueued) == 1
+
+
+def _inbox_service(world):
+    from thestill.services.inbox_service import InboxService
+
+    return InboxService(
+        world.repos.inbox,
+        world.repos.follower,
+        queue_manager=world.repos.queue_manager,
+        podcast_repository=world.repos.podcast,
+        transcription_provider="dalston",
+        access=world.abuse.guard,
+        quota=world.quota,
+    )
+
+
+def test_send_to_inbox_that_starts_a_pipeline_counts_as_an_import(tmp_path):
+    world = _world(tmp_path, quota_imports_per_day=1)
+    user = world.add_user("u@example.com")
+    _, (first, second) = world.add_podcast("p", episodes=2)
+    service = _inbox_service(world)
+
+    service.deliver_to_user(user.id, first)
+    assert _count(world, user.id, "import") == 1
+    assert world.repos.queue_manager.get_tasks_for_episode(first)
+
+    with pytest.raises(QuotaExceededError):
+        service.deliver_to_user(user.id, second)
+    assert world.repos.inbox.get(user.id, second) is None
+    assert world.repos.queue_manager.get_tasks_for_episode(second) == []
+
+
+def test_send_to_inbox_of_an_in_flight_episode_is_free_at_the_limit(tmp_path):
+    world = _world(tmp_path, quota_imports_per_day=1)
+    alice = world.add_user("a@example.com")
+    bob = world.add_user("b@example.com")
+    _, (episode,) = world.add_podcast("p", episodes=1)
+    service = _inbox_service(world)
+    with world.quota.reserve(bob.id, "imports_per_day") as reservation:
+        reservation.commit()  # bob's one import today
+
+    service.deliver_to_user(alice.id, episode)  # starts the pipeline
+    _, created = service.deliver_to_user(bob.id, episode)
+
+    assert created is True
+    assert _count(world, bob.id, "import") == 1
+
+
+def test_send_to_inbox_respects_the_imports_switch(tmp_path):
+    world = _world(tmp_path)
+    user = world.add_user("u@example.com")
+    _, (episode,) = world.add_podcast("p", episodes=1)
+    world.abuse.settings.set("imports_enabled", False, actor=Actor.cli())
+
+    with pytest.raises(FeaturePausedError):
+        _inbox_service(world).deliver_to_user(user.id, episode)
+    assert world.repos.inbox.get(user.id, episode) is None
