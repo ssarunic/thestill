@@ -413,6 +413,53 @@ def set_show_link(ctx, podcast_id, platform, url, clear):
         click.echo(f"✓ {podcast.title}: {platform} → {url} (curated; survives chart syncs and resolvers).")
 
 
+@main.command("set-summary-profile")
+@click.option("--podcast-id", required=True, help="Podcast (index, slug, RSS URL or UUID)")
+@click.option("--profile", required=True, help="A profile key (see `thestill summary-profiles`) or 'auto'")
+@click.pass_context
+@require_config
+@log_command
+def set_summary_profile(ctx, podcast_id, profile):
+    """Pin a podcast's summary genre profile, or 'auto' to clear (spec #98).
+
+    'auto' resolves the profile from the show's Apple categories. A
+    pinned profile that is not in SUMMARY_PROFILES_ENABLED still falls
+    back to general. Applies to summaries generated from now on.
+    """
+    from .core.summary_profiles import PROFILES, resolve_summary_profile
+
+    if profile != "auto" and profile not in PROFILES:
+        click.echo(f"❌ Unknown profile {profile!r}. Choose one of: {', '.join(sorted(PROFILES))}, auto.", err=True)
+        ctx.exit(2)
+    podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+    if not podcast:
+        click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+        ctx.exit(1)
+    override = None if profile == "auto" else profile
+    ctx.obj.repository.set_podcast_summary_profile(str(podcast.id), override)
+    podcast.summary_profile = override
+    click.echo(f"✓ {podcast.title}: summary profile {resolve_summary_profile(podcast).describe()}.")
+
+
+@main.command("summary-profiles")
+@click.pass_context
+@require_config
+@log_command
+def summary_profiles(ctx):
+    """Show each podcast's effective summary profile and why (spec #98)."""
+    from .core.summary_profiles import available_profile_keys, resolve_summary_profile
+    from .utils.config import get_summary_profiles_enabled
+
+    enabled = get_summary_profiles_enabled()
+    podcasts = sorted(ctx.obj.repository.get_all(), key=lambda p: p.title.lower())
+    if not podcasts:
+        click.echo("No podcasts.")
+        return
+    click.echo(f"Available profiles: {', '.join(sorted(available_profile_keys(enabled)))}")
+    for podcast in podcasts:
+        click.echo(f"   {podcast.title}: {resolve_summary_profile(podcast, enabled).describe()}")
+
+
 @main.command("set-podcast-visibility")
 @click.option("--podcast-id", required=True, help="Podcast (index, slug, RSS URL or UUID)")
 @click.option("--public/--private", "public", required=True, help="Show or hide the podcast on signed-out pages")
@@ -2330,6 +2377,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
     summarizer = TranscriptSummarizer(llm_provider, console=ctx.obj.console)
     from .core.summary_artifacts import write_summary_manifest
     from .core.summary_citations import resolve_and_persist_summary_citations
+    from .core.summary_profiles import GENERAL, resolve_summary_profile
 
     # If transcript_path provided, summarize that specific file
     if transcript_path:
@@ -2341,6 +2389,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
         metadata = None
         podcast_slug = None
         matched_episode = None
+        profile = GENERAL  # spec #98 — files outside the managed tree have no podcast
         clean_transcripts_dir = path_manager.clean_transcripts_dir().resolve()
         try:
             relative_path = transcript_path_obj.relative_to(clean_transcripts_dir)
@@ -2369,7 +2418,9 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                                     duration_seconds=episode.duration,
                                     podcast_title=podcast.title,
                                     language=podcast.language,
+                                    episode_id=episode.id,
                                 )
+                                profile = resolve_summary_profile(podcast).profile
                                 break
                         break
         except ValueError:
@@ -2388,7 +2439,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
 
         click.echo(f"Summarizing transcript with {llm_provider.get_model_name()}...")
         try:
-            summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+            summary_text = summarizer.summarize(transcript_text, metadata=metadata, profile=profile)
             if matched_episode is not None:
                 persisted_summary = resolve_and_persist_summary_citations(
                     summary_markdown=summary_text,
@@ -2410,6 +2461,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 summary_key=path_manager.to_relative(output_path),
                 summary_content=persisted_summary.markdown if persisted_summary else summary_text,
                 canonical_language=metadata.language if metadata else "en",
+                profile=profile,
             )
             click.echo("Summarization complete!")
             click.echo(f"Output saved to: {output_path}")
@@ -2502,10 +2554,12 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 duration_seconds=episode.duration,
                 podcast_title=podcast.title,
                 language=podcast.language,
+                episode_id=episode.id,
             )
+            profile = resolve_summary_profile(podcast).profile
 
             click.echo(f"Summarizing with {llm_provider.get_model_name()}...")
-            summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+            summary_text = summarizer.summarize(transcript_text, metadata=metadata, profile=profile)
             persisted_summary = resolve_and_persist_summary_citations(
                 summary_markdown=summary_text,
                 episode=episode,
@@ -2518,6 +2572,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 summary_key=path_manager.to_relative(output_path),
                 summary_content=persisted_summary.markdown,
                 canonical_language=podcast.language,
+                profile=profile,
             )
 
             # Update feed manager

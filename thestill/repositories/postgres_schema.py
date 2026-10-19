@@ -190,7 +190,9 @@ CREATE TABLE IF NOT EXISTS podcasts (
     refresh_disabled_reason text NULL,
     refresh_retry_after_at timestamptz NULL,
     -- Spec #94: false hides the show from every signed-out surface (migration 0015).
-    public_pages boolean NOT NULL DEFAULT true
+    public_pages boolean NOT NULL DEFAULT true,
+    -- Spec #98: operator override of the summary genre profile (migration 0023).
+    summary_profile text NULL
 );
 CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
 CREATE INDEX IF NOT EXISTS idx_podcasts_next_refresh ON podcasts(next_refresh_at) WHERE next_refresh_at IS NOT NULL;
@@ -205,6 +207,7 @@ ALTER TABLE podcasts
     ADD COLUMN IF NOT EXISTS refresh_disabled_reason text NULL,
     ADD COLUMN IF NOT EXISTS refresh_retry_after_at timestamptz NULL;
 ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS public_pages boolean NOT NULL DEFAULT true;
+ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS summary_profile text NULL;
 CREATE INDEX IF NOT EXISTS idx_podcasts_quarantine ON podcasts(refresh_disabled_reason, last_refresh_at) WHERE refresh_disabled_reason IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS episodes (

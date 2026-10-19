@@ -90,14 +90,14 @@ _MTIME_EPSILON = 1e-6
 _PODCAST_COLS = """id, created_at, rss_url, title, slug, description, image_url, language,
        primary_category_id, secondary_category_id,
        author, explicit, show_type, website_url, is_complete, copyright,
-       apple_url, youtube_url, spotify_url,
+       apple_url, youtube_url, spotify_url, summary_profile,
        last_processed, last_processed_at, etag, last_modified, updated_at"""
 
 # Same projection with a ``p.`` table alias for JOIN queries.
 _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.description, p.image_url, p.language,
        p.primary_category_id, p.secondary_category_id,
        p.author, p.explicit, p.show_type, p.website_url, p.is_complete, p.copyright,
-       p.apple_url, p.youtube_url, p.spotify_url,
+       p.apple_url, p.youtube_url, p.spotify_url, p.summary_profile,
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
@@ -528,6 +528,7 @@ class PodcastsMixin(CategoryCacheMixin):
             explicit=_opt_bool(row["explicit"]),
             show_type=row["show_type"],
             website_url=row["website_url"],
+            summary_profile=row["summary_profile"],
             is_complete=bool(row["is_complete"]) if row["is_complete"] is not None else False,
             copyright=row["copyright"],
             last_processed=row["last_processed"],
@@ -645,6 +646,11 @@ class PodcastsMixin(CategoryCacheMixin):
     def set_podcast_public_pages(self, podcast_id: str, public: bool) -> bool:
         with self._get_connection() as conn:
             cursor = conn.execute("UPDATE podcasts SET public_pages = %s WHERE id = %s", (public, podcast_id))
+            return cursor.rowcount > 0
+
+    def set_podcast_summary_profile(self, podcast_id: str, profile: Optional[str]) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute("UPDATE podcasts SET summary_profile = %s WHERE id = %s", (profile, podcast_id))
             return cursor.rowcount > 0
 
     def is_podcast_public(self, podcast_id: str) -> bool:
@@ -1617,6 +1623,7 @@ class PodcastsMixin(CategoryCacheMixin):
                 apple_url=row["apple_url"],
                 youtube_url=row["youtube_url"],
                 spotify_url=row["spotify_url"],
+                summary_profile=row["summary_profile"],
                 is_complete=bool(row["is_complete"]) if row["is_complete"] is not None else False,
                 copyright=row["copyright"],
                 last_processed=row["last_processed"],

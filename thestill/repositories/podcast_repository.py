@@ -408,6 +408,14 @@ class PodcastRepository(ABC):
         whether a row was updated."""
         pass
 
+    @abstractmethod
+    def set_podcast_summary_profile(self, podcast_id: str, profile: Optional[str]) -> bool:
+        """Spec #98 operator override of the summary genre profile; ``None``
+        clears it so the profile resolves from the categories again. The
+        only writer of ``podcasts.summary_profile``. Returns whether a row
+        was updated."""
+        pass
+
     def is_podcast_public(self, podcast_id: str) -> bool:
         """True when the podcast may appear on signed-out pages (spec #94):
         ``public_pages`` on and not a synthetic import container. Default

@@ -702,6 +702,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             duration_seconds=episode.duration,
             podcast_title=podcast.title,
             language=podcast.language,
+            episode_id=episode.id,
         )
 
         # Determine output path - preserve podcast subfolder structure
@@ -731,8 +732,11 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         # sidecar through the same helper the CLI uses.
         from .summary_artifacts import write_summary_manifest
         from .summary_citations import resolve_and_persist_summary_citations
+        from .summary_profiles import resolve_summary_profile
 
-        summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+        # Spec #98 — the podcast's genre profile fills the summary's slots.
+        profile = resolve_summary_profile(podcast).profile
+        summary_text = summarizer.summarize(transcript_text, metadata=metadata, profile=profile)
         persisted_summary = resolve_and_persist_summary_citations(
             summary_markdown=summary_text,
             episode=episode,
@@ -745,6 +749,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             summary_key=path_manager.to_relative(output_path),
             summary_content=persisted_summary.markdown,
             canonical_language=podcast.language,
+            profile=profile,
         )
 
         # Update episode state

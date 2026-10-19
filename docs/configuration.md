@@ -194,6 +194,17 @@ the scheduler are off by default.
 | `PLATFORM_LINKS_YOUNG_RECHECK_HOURS` | The shorter suppression for an episode published within the last `PLATFORM_LINKS_YOUNG_AGE_HOURS`: platforms index a fresh episode with a lag, and Spotify's probe only sees the show's newest | `2` |
 | `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables it | `48` |
 
+## Summary Profiles (spec #98)
+
+Each podcast's summaries use a genre profile, chosen by the operator
+override (`thestill set-summary-profile`), then the feed's Apple
+category, then `general`. Run `thestill summary-profiles` to see each
+podcast's effective profile and why.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SUMMARY_PROFILES_ENABLED` | Comma-separated genre profiles that may be chosen (e.g. `news,sports`). `general` is always on; a podcast whose category maps to a profile not listed here gets `general` | - (empty) |
+
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 
 The task worker auto-requeues infra-class failures once the dependency

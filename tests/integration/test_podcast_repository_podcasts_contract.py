@@ -1191,3 +1191,28 @@ def test_sync_podcast_chart_urls(repo):
     synced = repo.sync_podcast_chart_urls(on_chart.id)
     assert (synced["apple_url"], synced["youtube_url"]) == (apple, curated)
     assert repo.get_podcast_platform_url_sources(on_chart.id)["youtube"] == "curated"
+
+
+def test_summary_profile_override_round_trips_and_survives_feed_writes(repo):
+    """Spec #98: ``set_podcast_summary_profile`` is the only writer of the
+    override. The podcast read paths carry it (the episode-join path the
+    summarize worker uses is covered in the episodes contract), and
+    feed-driven ``save``/``save_podcast`` never clear it."""
+    podcast = _mk_podcast()
+    repo.save(podcast)
+    assert repo.get_by_id(podcast.id).summary_profile is None
+
+    assert repo.set_podcast_summary_profile(podcast.id, "general") is True
+    assert repo.set_podcast_summary_profile(str(uuid.uuid4()), "general") is False
+
+    assert repo.get_by_id(podcast.id).summary_profile == "general"
+    assert repo.get_by_url(str(podcast.rss_url)).summary_profile == "general"
+    assert {p.id: p.summary_profile for p in repo.get_all()}[podcast.id] == "general"
+
+    hydrated = repo.get_by_id(podcast.id)
+    repo.save_podcast(hydrated.model_copy(update={"title": "Renamed", "summary_profile": None}))
+    repo.save(hydrated.model_copy(update={"description": "resaved", "summary_profile": None}))
+    assert repo.get_by_id(podcast.id).summary_profile == "general"
+
+    assert repo.set_podcast_summary_profile(podcast.id, None) is True
+    assert repo.get_by_id(podcast.id).summary_profile is None
