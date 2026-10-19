@@ -704,6 +704,23 @@ class PostgresQueueManager:
             logger.info("queued_tasks_cancelled_for_podcasts", podcasts=len(podcast_ids), count=count)
         return count
 
+    def episode_unwanted(self, episode_id: str) -> bool:
+        """Spec #104 — see ``QueueManager.episode_unwanted``."""
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM episodes e
+                WHERE e.id = %s
+                  AND NOT EXISTS (SELECT 1 FROM podcast_followers f WHERE f.podcast_id = e.podcast_id)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM user_episode_inbox i JOIN users u ON u.id = i.user_id
+                      WHERE i.episode_id = e.id AND u.status = 'active' AND i.source IN ('import', 'ad_hoc')
+                  )
+                """,
+                (episode_id,),
+            ).fetchone()
+        return row is not None
+
     def fail_task(self, task_id: str, error_message: str) -> None:
         """
         Mark a task as failed (explicit/manual terminal fail, e.g. user cancel).

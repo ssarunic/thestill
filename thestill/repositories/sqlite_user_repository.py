@@ -31,7 +31,7 @@ from structlog import get_logger
 
 from ..models.user import User, UserStatus
 from ..utils.sqlite_ext import connect
-from .user_repository import UserRepository
+from .user_repository import LastActiveAdminError, UserRepository
 
 logger = get_logger(__name__)
 
@@ -224,8 +224,12 @@ class SqliteUserRepository(UserRepository):
         changed_by: Optional[str],
         changed_at: datetime,
         tokens_valid_after: Optional[datetime] = None,
+        keep_an_active_admin: bool = False,
     ) -> bool:
         with self._get_connection() as conn:
+            if keep_an_active_admin and status != UserStatus.ACTIVE:
+                conn.execute("BEGIN IMMEDIATE")  # serialises every admin-guarded change
+                self._keep_an_active_admin(conn, user_id)
             cursor = conn.execute(
                 """
                 UPDATE users
@@ -242,10 +246,26 @@ class SqliteUserRepository(UserRepository):
             cursor = conn.execute("UPDATE users SET tokens_valid_after = ? WHERE id = ?", (_iso(when), user_id))
             return cursor.rowcount > 0
 
-    def set_admin(self, user_id: str, is_admin: bool) -> bool:
+    def set_admin(self, user_id: str, is_admin: bool, *, keep_an_active_admin: bool = False) -> bool:
         with self._get_connection() as conn:
+            if keep_an_active_admin and not is_admin:
+                conn.execute("BEGIN IMMEDIATE")
+                self._keep_an_active_admin(conn, user_id)
             cursor = conn.execute("UPDATE users SET is_admin = ? WHERE id = ?", (1 if is_admin else 0, user_id))
             return cursor.rowcount > 0
+
+    @staticmethod
+    def _keep_an_active_admin(conn: sqlite3.Connection, user_id: str) -> None:
+        """Inside the caller's ``BEGIN IMMEDIATE``: refuse to disable or
+        demote the only active admin."""
+        row = conn.execute("SELECT is_admin, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None or not row["is_admin"] or row["status"] != UserStatus.ACTIVE.value:
+            return
+        others = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE is_admin = 1 AND status = 'active' AND id != ?", (user_id,)
+        ).fetchone()[0]
+        if others == 0:
+            raise LastActiveAdminError(user_id)
 
     # ----- JWT revocation deny-list (spec #25 item 4.2) -----
 

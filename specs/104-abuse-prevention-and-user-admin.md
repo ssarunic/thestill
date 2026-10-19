@@ -447,6 +447,8 @@ Where the build differs from, or adds to, the design above.
 - **Audit actors** are `web`, `cli` and `system` (`system` is for the Phase 3 breaker). The CLI also has `thestill user remove-introduced-feeds` and `thestill settings reset`.
 - **New config.** `ADMIN_CONTACT_EMAIL` is new, alongside `SIGNUP_MODE` and `SIGNUP_ALLOWLIST`.
 - **Housekeeping.** Phase 2's reservation expiry and ledger pruning need a new periodic loop: there was no housekeeping job to reuse.
+- **Running work after a ban.** Cancelling queued tasks isn't enough: a stage already running would chain the next paid one. So a pipeline started on someone's behalf (`initiated_by` `refresh`, `refresh-feed`, `import` or `inbox-*`) stops chaining once nobody wants the episode: its feed has no live follower, and no active user imported or sent it. Operator runs always chain to the end.
+- **Last active admin.** The guard is atomic. Counting the other active admins and the status or role change happen in one transaction under a lock (Postgres advisory lock, SQLite `BEGIN IMMEDIATE`), so two concurrent demotions can't both pass.
 
 ## Testing
 

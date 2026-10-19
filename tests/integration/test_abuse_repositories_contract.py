@@ -458,3 +458,78 @@ def test_cancel_queued_for_podcasts_leaves_running_and_other_feeds(env):
     assert env.queue.get_task(running.id).status == TaskStatus.PROCESSING
     assert {env.queue.get_task(t.id).status for t in queued} == {TaskStatus.SUPERSEDED}
     assert env.queue.get_task(untouched.id).status == TaskStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: the last-admin guard is atomic; unwanted episodes stop chaining
+# ---------------------------------------------------------------------------
+def test_concurrent_demotions_keep_one_active_admin(env):
+    from thestill.repositories.user_repository import LastActiveAdminError
+
+    a, b = env.add_user("a@example.com", is_admin=True), env.add_user("b@example.com", is_admin=True)
+    make_repo = (
+        (lambda: type(env.users)(env.podcasts.db_path))
+        if env.backend == "sqlite"
+        else (lambda: type(env.users)(env.dsn))
+    )
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def demote(user, how):
+        repo = make_repo()
+        barrier.wait()
+        try:
+            if how == "revoke":
+                repo.set_admin(user.id, False, keep_an_active_admin=True)
+            else:
+                repo.apply_status(
+                    user.id, UserStatus.BANNED, reason="x", changed_by=None, changed_at=NOW, keep_an_active_admin=True
+                )
+            outcomes.append("ok")
+        except LastActiveAdminError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=demote, args=(a, "revoke")), threading.Thread(target=demote, args=(b, "ban"))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert sorted(outcomes) == ["ok", "refused"]
+    assert env.directory.count_admins() == 1
+
+
+def test_reinstating_needs_no_admin_guard(env):
+    a = env.add_user("a@example.com", is_admin=True)
+    env.users.apply_status(
+        a.id, UserStatus.ACTIVE, reason=None, changed_by=None, changed_at=NOW, keep_an_active_admin=True
+    )
+    assert env.directory.count_admins() == 1
+
+
+def _inbox(env, user_id, episode_id, source):
+    from thestill.models.inbox import InboxEntry
+
+    if env.backend == "sqlite":
+        from thestill.repositories.sqlite_inbox_repository import SqliteInboxRepository
+
+        repo = SqliteInboxRepository(env.podcasts.db_path)
+    else:
+        from thestill.repositories.postgres_inbox_repository import PostgresInboxRepository
+
+        repo = PostgresInboxRepository(env.dsn)
+    repo.insert_many([InboxEntry(user_id=user_id, episode_id=episode_id, source=source)])
+
+
+def test_episode_unwanted_once_nobody_follows_or_asked_for_it(env):
+    banned, reader = env.add_user("banned@example.com"), env.add_user("reader@example.com")
+    pid, [episode] = env.add_podcast("show", episodes=1)
+    env.follow(banned.id, pid)
+    assert env.queue.episode_unwanted(episode) is False  # followed
+
+    env.users.apply_status(banned.id, UserStatus.BANNED, reason="x", changed_by=None, changed_at=NOW)
+    env.suspended.move_follows_aside(banned.id, now=NOW)
+    _inbox(env, banned.id, episode, "import")  # a banned user's own import doesn't count
+    assert env.queue.episode_unwanted(episode) is True
+
+    _inbox(env, reader.id, episode, "ad_hoc")  # an active user sent it to their inbox
+    assert env.queue.episode_unwanted(episode) is False
