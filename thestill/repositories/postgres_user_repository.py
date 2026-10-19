@@ -40,7 +40,7 @@ from structlog import get_logger
 
 from ..models.user import User, UserStatus
 from ..utils.postgres_ext import as_str, connect
-from .user_repository import UserRepository
+from .user_repository import LastActiveAdminError, UserRepository
 
 logger = get_logger(__name__)
 
@@ -214,8 +214,11 @@ class PostgresUserRepository(UserRepository):
         changed_by: Optional[str],
         changed_at: datetime,
         tokens_valid_after: Optional[datetime] = None,
+        keep_an_active_admin: bool = False,
     ) -> bool:
         with connect(self.dsn) as conn:
+            if keep_an_active_admin and status != UserStatus.ACTIVE:
+                self._keep_an_active_admin(conn, user_id)
             cursor = conn.execute(
                 """
                 UPDATE users
@@ -232,10 +235,26 @@ class PostgresUserRepository(UserRepository):
             cursor = conn.execute("UPDATE users SET tokens_valid_after = %s WHERE id = %s", (when, user_id))
             return cursor.rowcount > 0
 
-    def set_admin(self, user_id: str, is_admin: bool) -> bool:
+    def set_admin(self, user_id: str, is_admin: bool, *, keep_an_active_admin: bool = False) -> bool:
         with connect(self.dsn) as conn:
+            if keep_an_active_admin and not is_admin:
+                self._keep_an_active_admin(conn, user_id)
             cursor = conn.execute("UPDATE users SET is_admin = %s WHERE id = %s", (is_admin, user_id))
             return cursor.rowcount > 0
+
+    @staticmethod
+    def _keep_an_active_admin(conn, user_id: str) -> None:
+        """Serialise every admin-guarded change on one advisory lock, then
+        refuse to disable or demote the only active admin."""
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended('thestill:active-admins', 0))")
+        row = conn.execute("SELECT is_admin, status FROM users WHERE id = %s", (user_id,)).fetchone()
+        if row is None or not row["is_admin"] or row["status"] != UserStatus.ACTIVE.value:
+            return
+        others = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE is_admin AND status = 'active' AND id != %s", (user_id,)
+        ).fetchone()["n"]
+        if others == 0:
+            raise LastActiveAdminError(user_id)
 
     # ----- JWT revocation deny-list (spec #25 item 4.2) -----
 
