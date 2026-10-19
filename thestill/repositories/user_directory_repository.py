@@ -19,6 +19,7 @@ the admin console). Cross-table aggregates live here, not in the core
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Literal, Optional
 
 from ..models.user import User, UserStatus
@@ -66,6 +67,10 @@ class UserDirectoryRepository(ABC):
     @abstractmethod
     def count_users(self, *, status: Optional[UserStatus] = None, q: Optional[str] = None) -> int:
         """How many users match (for pagination)."""
+
+    @abstractmethod
+    def created_since(self, since: datetime) -> List[User]:
+        """Accounts created since ``since``, newest first (alerts, digest)."""
 
     @abstractmethod
     def count_admins(self) -> int:

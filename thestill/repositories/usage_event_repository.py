@@ -104,6 +104,10 @@ class UsageEventRepository(ABC):
         """Counted rows per kind since ``since`` (kinds with none omitted)."""
 
     @abstractmethod
+    def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
+        """Counted rows of ``kind`` per user since ``since`` (alerts, digest)."""
+
+    @abstractmethod
     def release_stale(self, older_than: datetime, *, now: datetime) -> int:
         """Release ``reserved`` rows created before ``older_than`` — a
         process died between reserve and settle. Returns how many."""

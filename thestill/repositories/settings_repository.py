@@ -42,6 +42,13 @@ class SettingsRepository(ABC):
         """Insert or replace one setting. ``value`` must be JSON-serialisable."""
 
     @abstractmethod
+    def claim(self, key: str, value: Any, *, now: datetime, min_interval_seconds: int) -> bool:
+        """Atomically write ``key`` unless it was written less than
+        ``min_interval_seconds`` ago. True when this call won the claim —
+        across every worker, at most one wins per interval (spec #104 alert
+        de-duplication)."""
+
+    @abstractmethod
     def modify(
         self,
         key: str,

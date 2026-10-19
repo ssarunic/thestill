@@ -1,6 +1,6 @@
 # Abuse Prevention and User Administration
 
-> **Status:** 🚧 In progress. Phases 1–2 implemented (see [Implementation notes](#implementation-notes)); Phases 3–4 open
+> **Status:** 🚧 In progress. Phases 1–3 implemented (see [Implementation notes](#implementation-notes)); Phase 4 open
 > **Created:** 2026-10-17
 > **Updated:** 2026-10-18
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
@@ -467,6 +467,18 @@ Where the build differs from, or adds to, the design above.
 - **Housekeeping** is a new `core/periodic_runner.py` loop started in the app lifespan. It releases expired reservations every minute and prunes the ledger every 6 hours.
 - **Override edits are atomic.** `SettingsRepository.modify` reads, changes and writes one key under a lock (Postgres advisory lock, SQLite `BEGIN IMMEDIATE`), so two admins editing different users' overrides keep both changes. Overrides are never written from the cached snapshot.
 - **CLI.** `thestill user quota <email> <quota> <limit|default>` audits `user.quota_override` with only that user's limit, not the whole overrides map. `thestill user show` lists the last 24 hours of usage.
+
+**Phase 3** (branch `feat/104-p3-alerts`, stacked on Phase 2):
+
+- **Jobs.** `AlertService.tick` and `maybe_send_digest` run on the Phase 2 periodic runner, every 5 minutes and every minute.
+- **De-duplication** is one `app_settings` row per key: `alerts.last_sent.<kind>[.<user_id>]` and `alerts.digest`. Each is claimed with an atomic conditional upsert, so several workers send an alert or the digest once. The "alerts sent in the last 24h" in the digest come from those rows.
+- **Thresholds.** The `alerts` setting holds runtime overrides, merged over the `ALERT_*` env defaults. A threshold trips when the reading reaches it (`>=`), and `0` turns that alert off. A rule that fails is logged and skipped, and the other rules still run.
+- **Webhook.** The webhook gets `{"text", "content", "title", "alert", "details"}`. Slack reads `text` and Discord reads `content`. The URL is treated as a secret, so delivery errors log only the HTTP status. Delivery is not retried, and an alert every channel failed logs `admin_alert_undelivered`.
+- **Rate-limit hit log.** It lives in `services/abuse/rate_limit_hits.py`. The web limiter records into it, so services don't import the web layer.
+- **The spend breaker** sums the feed-reported durations of every episode that got a download, downsample or transcribe task in the last 24 hours. It pauses new feeds as actor `system` (`spend_breaker`), which the audit log shows.
+- **Requests per user** aren't counted anywhere. So the digest's "top 5 by requests" is the top 5 rate-limited users on the worker that sends it.
+- **PII.** An alert's machine-facing `details`, which go to the log and the webhook, carry user ids and numbers only. The email names the user.
+- **CLI.** `thestill alerts test` checks the channels, and `thestill alerts digest [--send]` previews or sends the digest. `thestill status` shows where alerts go.
 
 ## Testing
 

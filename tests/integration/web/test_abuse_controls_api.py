@@ -229,8 +229,9 @@ def test_follow_quota_answers_429_with_retry_after(client, app_state, app_config
 
 
 def test_per_user_rate_limit(client, app_state, monkeypatch):
+    from thestill.services.abuse.rate_limit_hits import user_rate_limit_hits
     from thestill.web import dependencies
-    from thestill.web.middleware.rate_limit import RateLimit, user_rate_limit_hits
+    from thestill.web.middleware.rate_limit import RateLimit
 
     monkeypatch.setattr(dependencies, "USER_API_LIMIT", RateLimit(max_events=3, window_seconds=60))
     alice, bob = _user(app_state, "alice@example.com"), _user(app_state, "bob@example.com")

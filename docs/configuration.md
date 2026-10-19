@@ -342,6 +342,31 @@ is a 429 with `Retry-After` and a `quota_exceeded` body.
 | `QUOTA_ENFORCE` | `false` records usage and logs `quota_would_refuse` without refusing — run this way first and compare real usage to the defaults | `true` |
 | `QUOTA_RESERVATION_TTL_SECONDS` | A reservation left unsettled this long (a process died mid-action) is released by housekeeping | `900` |
 
+### Operator alerts (spec #104 Phase 3)
+
+Every 5 minutes the server checks six conditions and alerts the operator.
+Each kind is sent at most once an hour (per user, where it names one),
+across all workers. Every alert is also logged as `admin_alert`. Email goes
+through `EMAIL_PROVIDER`; with `EMAIL_PROVIDER=none` alerts are log-only and
+`thestill status` says so. A threshold trips when the reading reaches it;
+`0` turns that alert off. Check delivery with `thestill alerts test`; preview
+the digest with `thestill alerts digest`. Thresholds can be changed at
+runtime: `thestill settings set alerts '{"queue_backlog": 1000}'`.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ADMIN_ALERT_EMAIL` | Comma-separated addresses that get alerts and the daily digest | - |
+| `ALERT_WEBHOOK_URL` | Optional webhook that gets `{"text", "content", "title", "alert", "details"}`: Slack shows `text`, Discord `content`; use ntfy's JSON publishing URL. The text names the user an alert is about (their email). 5 s timeout, no retry; the URL is treated as a secret and never logged | - |
+| `ADMIN_DIGEST_HOUR` | Server-local hour of the daily digest (0–23) | `8` |
+| `ADMIN_DIGEST_ALWAYS` | Send the digest even on a day with no signups, quota hits or alerts | `false` |
+| `ALERT_QUOTA_PRESSURE` | Quota refusals by one user in an hour | `5` |
+| `ALERT_RATE_LIMIT_PRESSURE` | Rate-limit hits by one user in an hour, counted per worker | `50` |
+| `ALERT_SIGNUP_SPIKE` | New accounts in an hour | `10` |
+| `ALERT_FEED_SPIKE` | Feeds brought in (zero followers to one), all users, in an hour | `30` |
+| `ALERT_QUEUE_BACKLOG` | Pending pipeline tasks | `500` |
+| `ALERT_SPEND_BREAKER_MINUTES` | Audio minutes queued for transcription in 24 hours; `0` turns the breaker off | `0` |
+| `ALERT_SPEND_BREAKER_ACTION` | `pause_new_feeds` also switches `new_feeds_enabled` off when the breaker trips; `none` only alerts | `none` |
+
 ## Deployment & Web Surface (spec #25)
 
 | Variable | Description | Default |

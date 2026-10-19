@@ -16,9 +16,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List, Optional, Tuple
 
-from ..models.user import UserStatus
+from ..models.user import User, UserStatus
 from ..utils.postgres_ext import connect
 from .postgres_user_repository import SELECT_COLS, row_to_user
 from .user_directory_repository import USER_SORT_ORDER, UserDirectoryRepository, UserSort, UserSummary, search_pattern
@@ -68,6 +69,13 @@ class PostgresUserDirectoryRepository(UserDirectoryRepository):
         where, params = _where(status, q)
         with connect(self.dsn) as conn:
             return conn.execute(f"SELECT COUNT(*) AS n FROM users u {where}", params).fetchone()["n"]
+
+    def created_since(self, since: datetime) -> List[User]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                f"SELECT {SELECT_COLS} FROM users WHERE created_at >= %s ORDER BY created_at DESC", (since,)
+            ).fetchall()
+        return [row_to_user(row) for row in rows]
 
     def count_admins(self) -> int:
         with connect(self.dsn) as conn:

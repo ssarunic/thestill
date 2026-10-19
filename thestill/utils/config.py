@@ -544,6 +544,21 @@ class Config(BaseModel):
     # A reservation older than this is released by housekeeping (a process
     # died between reserve and settle); longer than any paid call.
     quota_reservation_ttl_seconds: int = 900
+    # Spec #104 Phase 3 — operator alerts. Email goes through EMAIL_PROVIDER
+    # (log only when that is "none"); the webhook accepts ntfy / Slack /
+    # Discord incoming-webhook URLs. Thresholds are the env defaults of the
+    # ``alerts`` runtime setting.
+    admin_alert_email: list[str] = Field(default_factory=list)
+    alert_webhook_url: str = ""
+    admin_digest_hour: int = 8  # server-local hour of the daily digest
+    admin_digest_always: bool = False  # send even on a quiet day
+    alert_quota_pressure: int = 5  # quota refusals by one user in an hour
+    alert_rate_limit_pressure: int = 50  # rate-limit hits by one user in an hour (per worker)
+    alert_signup_spike: int = 10  # new accounts in an hour
+    alert_feed_spike: int = 30  # feeds brought in, all users, in an hour
+    alert_queue_backlog: int = 500  # pending pipeline tasks
+    alert_spend_breaker_minutes: int = 0  # audio minutes queued in 24h; 0 = off
+    alert_spend_breaker_action: str = "none"  # none | pause_new_feeds
 
     # Deployment / Web Surface Configuration
     # "production" locks down cookies, docs endpoints, CORS and verbose errors.
@@ -931,6 +946,17 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "quota_narrations_per_day": _env_int("QUOTA_NARRATIONS_PER_DAY", 3),
         "quota_enforce": _env_bool("QUOTA_ENFORCE", True),
         "quota_reservation_ttl_seconds": _env_int("QUOTA_RESERVATION_TTL_SECONDS", 900),
+        "admin_alert_email": [e.strip() for e in os.getenv("ADMIN_ALERT_EMAIL", "").split(",") if e.strip()],
+        "alert_webhook_url": os.getenv("ALERT_WEBHOOK_URL", "").strip(),
+        "admin_digest_hour": _env_int("ADMIN_DIGEST_HOUR", 8),
+        "admin_digest_always": _env_bool("ADMIN_DIGEST_ALWAYS", False),
+        "alert_quota_pressure": _env_int("ALERT_QUOTA_PRESSURE", 5),
+        "alert_rate_limit_pressure": _env_int("ALERT_RATE_LIMIT_PRESSURE", 50),
+        "alert_signup_spike": _env_int("ALERT_SIGNUP_SPIKE", 10),
+        "alert_feed_spike": _env_int("ALERT_FEED_SPIKE", 30),
+        "alert_queue_backlog": _env_int("ALERT_QUEUE_BACKLOG", 500),
+        "alert_spend_breaker_minutes": _env_int("ALERT_SPEND_BREAKER_MINUTES", 0),
+        "alert_spend_breaker_action": os.getenv("ALERT_SPEND_BREAKER_ACTION", "none").strip().lower(),
         # Deployment / Web Surface
         "environment": os.getenv("ENVIRONMENT", "production").lower(),
         "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",
@@ -1009,7 +1035,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(f"WIKIDATA_MAX_RPS must be > 0; got {config_data['wikidata_max_rps']}")
     # Spec #104 — these are the env defaults of runtime switches every
     # costly path reads; a typo must stop the boot, not each request.
-    from ..services.abuse.settings_registry import SIGNUP_MODES, normalize_allowlist_entry
+    from ..services.abuse.settings_registry import SIGNUP_MODES, SPEND_BREAKER_ACTIONS, normalize_allowlist_entry
 
     if config_data["signup_mode"] not in SIGNUP_MODES:
         raise ValueError(f"SIGNUP_MODE must be one of {', '.join(SIGNUP_MODES)}; got {config_data['signup_mode']!r}")
@@ -1017,6 +1043,13 @@ def load_config(env_file: Optional[str] = None) -> Config:
         config_data["signup_allowlist"] = [normalize_allowlist_entry(e) for e in config_data["signup_allowlist"]]
     except ValueError as exc:
         raise ValueError(f"SIGNUP_ALLOWLIST: {exc}") from exc
+    if config_data["alert_spend_breaker_action"] not in SPEND_BREAKER_ACTIONS:
+        raise ValueError(
+            f"ALERT_SPEND_BREAKER_ACTION must be one of {', '.join(SPEND_BREAKER_ACTIONS)}; "
+            f"got {config_data['alert_spend_breaker_action']!r}"
+        )
+    if not 0 <= config_data["admin_digest_hour"] <= 23:
+        raise ValueError(f"ADMIN_DIGEST_HOUR must be 0-23; got {config_data['admin_digest_hour']}")
     # Spec #78 Phase 2 — token policy knobs. Docs reserve "never expires"
     # for exactly 0; a negative TTL would silently mean the same thing,
     # and a non-positive request limit would refuse every request.

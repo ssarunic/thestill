@@ -238,8 +238,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # persistence resolves through the backend factory: SQLite by default,
     # Postgres when DATABASE_URL is set.
     repos = make_repositories(config)
-    # Spec #104 — kill switches, follow gate, audit log, account admin.
-    abuse = build_abuse_services(config, repos)
+    # Spec #51 — briefing email delivery and spec #104 operator alerts.
+    # ``make_email_sender`` returns ``None`` for EMAIL_PROVIDER=none (the
+    # default), which switches the briefing delivery stack off and leaves
+    # alerts log-only. Misconfigured providers fail here, at boot, not
+    # silently at 8am.
+    from ..services.email_sender import make_email_sender
+
+    email_sender = make_email_sender(config)
+    # Spec #104 — kill switches, follow gate, quotas, audit log, alerts.
+    abuse = build_abuse_services(config, repos, email_sender=email_sender)
     path_manager = PathManager(str(config.storage_path))
     repository = repos.podcast
     feed_manager = PodcastFeedManager(
@@ -343,18 +351,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         access=abuse.guard,
     )
 
-    # Spec #51 — briefing email delivery. ``make_email_sender`` returns
-    # ``None`` for EMAIL_PROVIDER=none (the default), which switches the
-    # whole delivery stack off: no service, no delivery pass, checkbox
-    # hidden in the UI via the capability flag. Misconfigured providers
-    # fail here, at boot, not silently at 8am.
+    # Spec #51 — briefing email delivery: off (no service, no delivery
+    # pass, checkbox hidden via the capability flag) without a sender.
     from ..services.briefing_delivery_service import BriefingDeliveryService
     from ..services.briefing_email_renderer import BriefingEmailRenderer
-    from ..services.email_sender import make_email_sender
 
     briefing_delivery_repository = repos.briefing_delivery
     briefing_delivery_service = None
-    email_sender = make_email_sender(config)
     if email_sender is not None:
         briefing_delivery_service = BriefingDeliveryService(
             briefing_delivery_repository,
@@ -626,15 +629,21 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             email_delivery=briefing_delivery_service is not None,
         )
 
-        # Spec #104 — housekeeping for the quota ledger (and, from Phase 3,
-        # the alert tick). Idempotent jobs, so every worker may run them.
-        from ..core.periodic_runner import PeriodicRunner
+        # Spec #104 — quota-ledger housekeeping and operator alerts.
+        # Idempotent jobs (alerts de-duplicate through an atomic claim), so
+        # every worker may run them.
+        from ..core.periodic_runner import PeriodicJob, PeriodicRunner
         from ..services.abuse.housekeeping import usage_housekeeping_jobs
 
         periodic_runner = PeriodicRunner(
-            usage_housekeeping_jobs(repos.usage, reservation_ttl_seconds=config.quota_reservation_ttl_seconds)
+            [
+                *usage_housekeeping_jobs(repos.usage, reservation_ttl_seconds=config.quota_reservation_ttl_seconds),
+                PeriodicJob("admin_alerts", 300, abuse.alerts.tick),
+                PeriodicJob("admin_digest", 60, abuse.alerts.maybe_send_digest),
+            ]
         )
         periodic_runner.start()
+        logger.info("admin_alert_channels", channels=abuse.alerts.channel_names)
 
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s
