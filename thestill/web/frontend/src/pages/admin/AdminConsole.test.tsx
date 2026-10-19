@@ -133,6 +133,20 @@ describe('AdminUserDetail', () => {
     )
   })
 
+  it('can ban a suspended account, and offers only Reinstate once banned', async () => {
+    mocked.getAdminUser.mockResolvedValue(detail({ status: 'suspended' }))
+    const { unmount } = renderAt('/admin/users/u-1', <AdminUserDetail />, '/admin/users/:userId')
+    expect(await screen.findByRole('button', { name: 'Reinstate' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ban' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Suspend' })).not.toBeInTheDocument()
+    unmount()
+
+    mocked.getAdminUser.mockResolvedValue(detail({ status: 'banned' }))
+    renderAt('/admin/users/u-2', <AdminUserDetail />, '/admin/users/:userId')
+    expect(await screen.findByRole('button', { name: 'Reinstate' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ban' })).not.toBeInTheDocument()
+  })
+
   it("won't let an admin disable or demote themselves", async () => {
     auth.user = { id: 'u-1' }
     mocked.getAdminUser.mockResolvedValue(detail({ is_admin: true }))

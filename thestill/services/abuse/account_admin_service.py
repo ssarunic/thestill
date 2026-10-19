@@ -436,50 +436,56 @@ class AccountAdminService:
     def set_quota_override(self, user_id: str, quota: str, limit: Optional[int], *, actor: Actor) -> Dict[str, int]:
         """Raise or lower one user's ``quota`` (``None`` reverts to the env
         default; 0 means unlimited). Returns the user's overrides."""
-        self._require_multi_user()
-        if self._settings is None:
-            raise AdminActionError("unavailable", "Quota overrides need the settings service.")
-        target = self._load(user_id)
-        seen: Dict[str, Optional[int]] = {}
+        target = self._load_for_overrides(user_id)
 
-        def change(current: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
-            # Applied to the stored map inside a locked transaction, so an
-            # edit of another user's limits in the meantime is kept.
-            overrides = {uid: dict(limits) for uid, limits in current.items()}
-            mine = overrides.setdefault(target.id, {})
-            seen["old"] = mine.get(quota)
+        def edit(mine: Dict[str, int]) -> Dict[str, int]:
             if limit is None:
                 mine.pop(quota, None)
             else:
                 mine[quota] = limit
-            return overrides
+            return mine
+
+        old, stored = self._edit_overrides(target.id, edit, actor)
+        self._audit.record(
+            actor, "user.quota_override", target_user_id=target.id, quota=quota, old=old.get(quota), new=limit
+        )
+        return stored
+
+    def replace_quota_overrides(self, user_id: str, overrides: Dict[str, int], *, actor: Actor) -> Dict[str, int]:
+        """Set all of one user's overrides at once (the console's form); an
+        empty map clears them."""
+        target = self._load_for_overrides(user_id)
+        old, stored = self._edit_overrides(target.id, lambda _mine: dict(overrides), actor)
+        self._audit.record(actor, "user.quota_override", target_user_id=target.id, old=old, new=dict(overrides))
+        return stored
+
+    def _load_for_overrides(self, user_id: str) -> User:
+        self._require_multi_user()
+        if self._settings is None:
+            raise AdminActionError("unavailable", "Quota overrides need the settings service.")
+        return self._load(user_id)
+
+    def _edit_overrides(
+        self, user_id: str, edit: Callable[[Dict[str, int]], Dict[str, int]], actor: Actor
+    ) -> Tuple[Dict[str, int], Dict[str, int]]:
+        """Apply ``edit`` to one user's limits inside a locked read-modify-
+        write of the stored map, never the cached one, so a concurrent edit
+        of another user's limits is kept. Returns ``(old, new)`` limits."""
+        seen: Dict[str, Dict[str, int]] = {}
+
+        def change(current: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
+            everyone = {uid: dict(limits) for uid, limits in current.items()}
+            seen["old"] = everyone.pop(user_id, {})
+            mine = edit(dict(seen["old"]))
+            if mine:
+                everyone[user_id] = mine
+            return everyone
 
         try:
             stored = self._settings.modify("quota_overrides", change, actor=actor, audit=False)
         except ValueError as exc:
             raise AdminActionError("invalid_quota", str(exc)) from exc
-        self._audit.record(
-            actor, "user.quota_override", target_user_id=target.id, quota=quota, old=seen.get("old"), new=limit
-        )
-        return stored.get(target.id, {})
-
-    def replace_quota_overrides(self, user_id: str, overrides: Dict[str, int], *, actor: Actor) -> Dict[str, int]:
-        """Set all of one user's overrides at once (the console's form); an
-        empty map clears them."""
-        self._require_multi_user()
-        if self._settings is None:
-            raise AdminActionError("unavailable", "Quota overrides need the settings service.")
-        target = self._load(user_id)
-        everyone = {uid: dict(limits) for uid, limits in self._settings.get("quota_overrides").items()}
-        old = everyone.pop(target.id, {})
-        if overrides:
-            everyone[target.id] = dict(overrides)
-        try:
-            self._settings.set("quota_overrides", everyone, actor=actor, audit=False)
-        except ValueError as exc:
-            raise AdminActionError("invalid_quota", str(exc)) from exc
-        self._audit.record(actor, "user.quota_override", target_user_id=target.id, old=old, new=dict(overrides))
-        return self._settings.get("quota_overrides").get(target.id, {})
+        return seen["old"], stored.get(user_id, {})
 
     # ----- admin role -----
 

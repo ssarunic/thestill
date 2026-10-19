@@ -95,6 +95,21 @@ def test_user_detail_and_status_actions_are_audited(client, app_state):
     assert removed["feeds_removed"] == []  # the ban already dropped it
 
 
+def test_a_suspended_account_can_be_banned(client, app_state):
+    _admin(client, app_state)
+    target = _user(app_state, "spam@example.com")
+    podcast = _podcast(app_state, "show")
+    app_state.follower_service.follow(target.id, podcast.id)
+
+    status = f"/api/admin/users/{target.id}/status"
+    assert client.post(status, json={"status": "suspended", "reason": "looking"}).status_code == 200
+    banned = client.post(status, json={"status": "banned", "reason": "confirmed script"})
+
+    assert banned.status_code == 200 and banned.json()["user"]["status"] == "banned"
+    # The ban moved the follow aside that the suspension had kept.
+    assert app_state.follower_repository.count_by_podcast(podcast.id) == 0
+
+
 def test_an_admin_cannot_disable_or_demote_themselves(client, app_state):
     admin = _admin(client, app_state)
     _user(app_state, "other-admin@example.com", is_admin=True)

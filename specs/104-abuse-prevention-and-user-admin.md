@@ -484,6 +484,8 @@ Where the build differs from, or adds to, the design above.
 
 - **API.** `web/routes/api_admin.py` is mounted at `/api/admin` behind `require_admin`. Its writes go through `AccountAdminService` / `SettingsService`, like the CLI. Admin routes aren't on the session routers, so `read_only` never blocks the operator's own console.
 - **"Feeds brought in, all time"** in the list counts the ledger's committed `feed_introduced` rows, so follows older than Phase 2 aren't in it. The detail page uses the full §1.5 rule.
+- **Actions by status.** An active account shows Suspend and Ban; a suspended one shows Reinstate and Ban, so a suspension can escalate to a ban; a banned one shows only Reinstate.
+- **The quota form** saves through the same locked read-modify-write as the CLI (`SettingsRepository.modify`), so it never rewrites other users' overrides from a stale cache.
 - **Sorts.** The list sorts by `attention` (the default), `created`, `last-login`, `follows` or `email`.
 - **Pages.** The four pages live under `pages/admin/` and their nav entries in `constants/navigation.tsx`. Users and Audit Log are multi-user only; Admin Settings shows in both modes.
 - **Banner.** `AdminRoute` renders the "not at its default" banner on every admin page, so Status, Queue and Analytics get it too.

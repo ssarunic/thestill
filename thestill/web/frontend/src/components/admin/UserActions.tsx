@@ -40,17 +40,19 @@ export default function UserActions({ user, isSelf }: { user: AdminUser; isSelf:
       {isSelf && <p className="text-sm text-muted mb-3">You can't change your own status or admin role.</p>}
       <div className="flex flex-wrap gap-2">
         {user.status === 'active' ? (
-          <>
-            <Button size="sm" variant="secondary" disabled={isSelf} onClick={() => setDialog('suspend')}>
-              Suspend
-            </Button>
-            <Button size="sm" variant="danger" disabled={isSelf} onClick={() => setDialog('ban')}>
-              Ban
-            </Button>
-          </>
+          <Button size="sm" variant="secondary" disabled={isSelf} onClick={() => setDialog('suspend')}>
+            Suspend
+          </Button>
         ) : (
           <Button size="sm" variant="primary" onClick={() => setDialog('reinstate')}>
             Reinstate
+          </Button>
+        )}
+        {/* A suspension can escalate to a ban, which also moves follows
+            aside and stops the spending a suspension leaves running. */}
+        {user.status !== 'banned' && (
+          <Button size="sm" variant="danger" disabled={isSelf} onClick={() => setDialog('ban')}>
+            Ban
           </Button>
         )}
         <Button size="sm" variant="secondary" onClick={() => setDialog('logout')}>
