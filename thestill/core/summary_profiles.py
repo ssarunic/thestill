@@ -251,8 +251,8 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 )
 
 # Spec #98 Phase 3 genre profiles. Instructions and examples are written in
-# the style guide's voice, and each profile keeps one chatty slot (Talking
-# Points, Dinner-Party Facts): list-shaped sections alone lost every voice
+# the style guide's voice, and each profile keeps one slot with personality
+# (Talking Points, Who's Who): list-shaped sections alone lost every voice
 # comparison. Each example shows all nine sections (a slot the example skips
 # is a slot the model drops) and is tied to made-up names, because the model
 # copied a generic example quote into real episodes.
@@ -427,14 +427,15 @@ HISTORY = SummaryProfile(
     version=1,
     rules=f"""**History rules:**
 {_MADE_UP_EXAMPLE}
-* Keep to the history the episode tells, and only the dates it actually gives. Where the hosts say historians disagree or the record is thin, say so rather than picking a side.""",
+* Keep to the history the episode tells. Use only the dates, numbers and names the hosts actually say: if you know a date they don't give, leave it out.
+* Where the hosts say historians disagree or the record is thin, say so rather than picking a side.""",
     resource_hint="* For history, the people, places, events and books the episode leans on matter most.",
     slots=MappingProxyType(
         {
             3: SlotSpec(
                 "📜",
                 "Story Arc",
-                """* Tell the story in three to six bullets, in order, the way you'd retell it to a friend: where we are, who matters, what turns, how it ends [timestamp].
+                """* Tell the story in four to six bullets, in order, each one a vivid sentence you'd say out loud to a friend: where we are, what's at stake, what turns, how it ends [timestamp].
 * Finish with where this part leaves off and what's next, if it's part of a series.""",
             ),
             4: SlotSpec(
@@ -446,12 +447,13 @@ HISTORY = SummaryProfile(
             6: SlotSpec(
                 "🗓️",
                 "Key Dates & Places",
-                """* A short chronology, using only the dates and places the episode actually says [timestamp].""",
+                """* A short chronology, using only the dates and places the hosts actually say out loud [timestamp].""",
             ),
             7: SlotSpec(
-                "🍷",
-                "Dinner-Party Facts",
-                """* The three or four most surprising, retellable things from the episode, a line each, in your own words [timestamp].""",
+                "🎭",
+                "Who's Who",
+                """* The central figures, a line each, as the hosts portray them: what they wanted, what they did, and what the hosts make of them [timestamp].
+* Only people the episode actually talks about.""",
             ),
             9: SlotSpec(
                 "🔍",
@@ -472,9 +474,10 @@ Part two of the siege of Harrowby, and the town is starving while General Ross w
 * [35:15 - End] **The Surrender:** The terms, and the myth that grew up around them.
 
 ## 3. 📜 Story Arc
-* Harrowby's walls have held since the autumn, but by midwinter the garrison is eating its horses [03:20]
-* Ross gambles everything on a night raid on the siege guns, and loses a third of his men [21:45]
-* In March he gives up the town, on far better terms than anyone expected [38:10]
+* Harrowby's walls have held since the autumn, but by midwinter the garrison is eating its horses, then its boots [03:20]
+* Ross is out of options and bets everything on a night raid on the siege guns [18:40]
+* It's a disaster: a third of his men never come back, and the town knows it's finished [21:45]
+* In March he hands Harrowby over, on terms so generous his own officers smell a bribe [38:10]
 * That's the end of part two; part three follows Ross to his trial [47:50]
 
 ## 4. 🏛️ Myth vs Record
@@ -488,9 +491,9 @@ Part two of the siege of Harrowby, and the town is starving while General Ross w
 * Midwinter: the night raid on the siege guns [21:45]
 * March: the surrender [38:10]
 
-## 7. 🍷 Dinner-Party Facts
-* By midwinter the garrison was eating its horses, and then its boots [12:55]
-* Ross's terms were so good his own officers suspected a bribe [39:30]
+## 7. 🎭 Who's Who
+* **General Ross:** Stubborn, proud and, by Anna's reading, far better at surrendering than fighting [36:20]
+* **The mayor of Harrowby:** Played both sides all winter; Mark calls him "the only real winner of the siege" [27:15]
 
 ## 8. 📚 Resource List
 * **The Harrowby Winter** (book): The modern history Anna recommends on the siege [46:20]
