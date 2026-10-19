@@ -113,6 +113,18 @@ class SqliteUsageEventRepository(UsageEventRepository):
             ).fetchall()
         return {row[0]: row[1] for row in rows}
 
+    def daily_counts(self, user_id: str, since: datetime) -> Dict[str, Dict[str, int]]:
+        with connect(self.db_path) as conn:
+            rows = conn.execute(
+                f"SELECT kind, substr(created_at, 1, 10) AS day, COUNT(*) FROM usage_events"
+                f" WHERE user_id = ? AND {COUNTED_SQL} AND created_at >= ? GROUP BY kind, day",
+                (user_id, since.isoformat()),
+            ).fetchall()
+        result: Dict[str, Dict[str, int]] = {}
+        for kind, day, n in rows:
+            result.setdefault(kind, {})[day] = n
+        return result
+
     def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
         with connect(self.db_path) as conn:
             rows = conn.execute(

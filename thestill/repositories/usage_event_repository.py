@@ -104,6 +104,11 @@ class UsageEventRepository(ABC):
         """Counted rows per kind since ``since`` (kinds with none omitted)."""
 
     @abstractmethod
+    def daily_counts(self, user_id: str, since: datetime) -> Dict[str, Dict[str, int]]:
+        """Counted rows per kind per UTC day (``YYYY-MM-DD``) since ``since``,
+        for the console's sparklines."""
+
+    @abstractmethod
     def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
         """Counted rows of ``kind`` per user since ``since`` (alerts, digest)."""
 

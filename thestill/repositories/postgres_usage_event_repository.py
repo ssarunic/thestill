@@ -120,6 +120,18 @@ class PostgresUsageEventRepository(UsageEventRepository):
             ).fetchall()
         return {row["kind"]: row["n"] for row in rows}
 
+    def daily_counts(self, user_id: str, since: datetime) -> Dict[str, Dict[str, int]]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT kind, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day, COUNT(*) AS n"
+                f" FROM usage_events WHERE user_id = %s AND {COUNTED_SQL} AND created_at >= %s GROUP BY kind, day",
+                (user_id, since),
+            ).fetchall()
+        result: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            result.setdefault(row["kind"], {})[row["day"]] = row["n"]
+        return result
+
     def counts_by_user(self, kind: str, since: datetime) -> Dict[str, int]:
         with connect(self.dsn) as conn:
             rows = conn.execute(

@@ -1,6 +1,6 @@
 # Abuse Prevention and User Administration
 
-> **Status:** 🚧 In progress. Phases 1–3 implemented (see [Implementation notes](#implementation-notes)); Phase 4 open
+> **Status:** 🚧 Implemented in four stacked PRs (see [Implementation notes](#implementation-notes)), awaiting merge
 > **Created:** 2026-10-17
 > **Updated:** 2026-10-18
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
@@ -479,6 +479,21 @@ Where the build differs from, or adds to, the design above.
 - **Requests per user** aren't counted anywhere. So the digest's "top 5 by requests" is the top 5 rate-limited users on the worker that sends it.
 - **PII.** An alert's machine-facing `details`, which go to the log and the webhook, carry user ids and numbers only. The email names the user.
 - **CLI.** `thestill alerts test` checks the channels, and `thestill alerts digest [--send]` previews or sends the digest. `thestill status` shows where alerts go.
+
+**Phase 4** (branch `feat/104-p4-admin-console`, stacked on Phase 3):
+
+- **API.** `web/routes/api_admin.py` is mounted at `/api/admin` behind `require_admin`. Its writes go through `AccountAdminService` / `SettingsService`, like the CLI. Admin routes aren't on the session routers, so `read_only` never blocks the operator's own console.
+- **"Feeds brought in, all time"** in the list counts the ledger's committed `feed_introduced` rows, so follows older than Phase 2 aren't in it. The detail page uses the full §1.5 rule.
+- **Actions by status.** An active account shows Suspend and Ban; a suspended one shows Reinstate and Ban, so a suspension can escalate to a ban; a banned one shows only Reinstate.
+- **The quota form** saves through the same locked read-modify-write as the CLI (`SettingsRepository.modify`), so it never rewrites other users' overrides from a stale cache.
+- **Sorts.** The list sorts by `attention` (the default), `created`, `last-login`, `follows` or `email`.
+- **Pages.** The four pages live under `pages/admin/` and their nav entries in `constants/navigation.tsx`. Users and Audit Log are multi-user only; Admin Settings shows in both modes.
+- **Banner.** `AdminRoute` renders the "not at its default" banner on every admin page, so Status, Queue and Analytics get it too.
+- **Filters** live in the URL, and the app-wide scroll restoration brings the list back on Back.
+- **Alert thresholds** are edited as a JSON object of overrides: the env defaults aren't sent to the browser.
+- **Remove-introduced-feeds** only removes feeds the user still follows or has moved aside, since the ledger remembers feeds they later dropped.
+- **Server-driven lists.** The audit response lists its `actions`, and the user page offers every quota in `quota_limits`. A new quota or audit action needs no frontend change.
+- **Navigation.** "← Users" goes back in history, restoring the list's filters and scroll, and a new search resets the page. `tests/navigation-contract.spec.ts` has an admin-users row.
 
 ## Testing
 

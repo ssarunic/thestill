@@ -1,0 +1,34 @@
+import type { AdminAuditEntry } from '../api/types'
+
+// Spec #104 — one readable line per admin audit entry.
+export function describeAuditEntry(entry: AdminAuditEntry): string {
+  const d = entry.details as Record<string, unknown>
+  const reason = typeof d.reason === 'string' && d.reason ? ` — “${d.reason}”` : ''
+  switch (entry.action) {
+    case 'user.ban':
+      return `Banned${reason} (${d.follows_moved ?? 0} follows moved aside${
+        d.introduced_feeds_removed ? `, ${d.introduced_feeds_removed} feeds they brought in removed` : ''
+      }, ${d.tasks_cancelled ?? 0} tasks cancelled)`
+    case 'user.suspend':
+      return `Suspended${reason}`
+    case 'user.reinstate':
+      return `Reinstated${reason} (${d.follows_restored ?? 0} follows restored)`
+    case 'user.logout_everywhere':
+      return 'Signed out everywhere'
+    case 'user.remove_introduced_feeds':
+      return `Removed ${d.feeds_removed ?? 0} feeds they brought in`
+    case 'user.quota_override':
+      // The CLI records one quota; the console records the whole map.
+      return typeof d.quota === 'string'
+        ? `${d.quota}: ${JSON.stringify(d.old ?? 'default')} → ${JSON.stringify(d.new ?? 'default')}`
+        : `Quota overrides: ${JSON.stringify(d.old ?? {})} → ${JSON.stringify(d.new ?? {})}`
+    case 'admin.grant':
+      return 'Made an admin'
+    case 'admin.revoke':
+      return 'Admin role removed'
+    case 'setting.set':
+      return `${String(d.key)}: ${JSON.stringify(d.old)} → ${JSON.stringify(d.new)}`
+    default:
+      return entry.action
+  }
+}

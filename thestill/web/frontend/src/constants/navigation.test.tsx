@@ -7,7 +7,15 @@ describe('admin navigation (spec #95)', () => {
     const single = visibleNavItems(ADMIN_NAV_ITEMS, false).map((item) => item.to)
     expect(multi).toContain('/analytics')
     expect(single).not.toContain('/analytics')
-    expect(single).toEqual(['/episodes', '/status', '/queue', '/failed'])
+    expect(single).toEqual(['/episodes', '/status', '/queue', '/failed', '/admin/settings'])
+  })
+
+  it('shows the account pages of the admin console only in multi-user mode (spec #104)', () => {
+    const multi = visibleNavItems(ADMIN_NAV_ITEMS, true).map((item) => item.to)
+    const single = visibleNavItems(ADMIN_NAV_ITEMS, false).map((item) => item.to)
+    expect(multi).toEqual(expect.arrayContaining(['/admin/users', '/admin/settings', '/admin/audit']))
+    expect(single).not.toContain('/admin/users')
+    expect(single).not.toContain('/admin/audit')
   })
 
   it('keeps the corpus-wide Episodes browser out of the main nav', () => {

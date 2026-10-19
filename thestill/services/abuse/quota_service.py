@@ -32,8 +32,8 @@ still recorded, so the console shows it).
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Callable, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 from structlog import get_logger
 
@@ -262,7 +262,25 @@ class QuotaService:
 
     def usage_last_day(self, user_id: str) -> Dict[str, int]:
         """Counted ledger rows per kind in the last 24h (CLI, console)."""
-        return self._usage.counts_by_kind(user_id, self._clock() - DAY)
+        return self.usage_since(user_id, self._clock() - DAY)
+
+    def usage_since(self, user_id: str, since: datetime) -> Dict[str, int]:
+        return self._usage.counts_by_kind(user_id, since)
+
+    def daily_usage(self, user_id: str, days: int) -> Dict[str, List[int]]:
+        """Per kind, one count per UTC day for the last ``days`` days,
+        oldest first (the console's sparklines)."""
+        today = self._clock().astimezone(timezone.utc).date()
+        dates = [(today - timedelta(days=offset)).isoformat() for offset in range(days - 1, -1, -1)]
+        start = datetime.combine(today - timedelta(days=days - 1), datetime.min.time(), tzinfo=timezone.utc)
+        by_kind = self._usage.daily_counts(user_id, start)
+        return {kind: [counts.get(day, 0) for day in dates] for kind, counts in by_kind.items()}
+
+    def overrides_for(self, user_id: str) -> Dict[str, int]:
+        return dict(self._settings.get("quota_overrides").get(user_id, {}))
+
+    def effective_limits(self, user_id: str) -> Dict[str, int]:
+        return {name: self.limit_for(user_id, name) for name in QUOTAS}
 
 
 def reserve_quota(

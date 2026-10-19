@@ -1729,3 +1729,104 @@ export interface McpTokenMintResponse {
   scopes: McpTokenScope[]
   expires_at: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Spec #104 Phase 4 — the admin console (/api/admin).
+// ---------------------------------------------------------------------------
+
+export type AccountStatus = 'active' | 'suspended' | 'banned'
+export type AdminUserSort = 'attention' | 'created' | 'last-login' | 'follows' | 'email'
+
+export interface AdminUser {
+  id: string
+  email: string
+  name: string | null
+  picture: string | null
+  created_at: string
+  last_login_at: string | null
+  signup_source: string | null
+  is_admin: boolean
+  status: AccountStatus
+  status_reason: string | null
+  status_changed_at: string | null
+  status_changed_by: string | null
+}
+
+export interface AdminUserRow extends AdminUser {
+  follows: number
+  suspended_follows: number
+  feeds_brought_in_24h: number
+  feeds_brought_in_total: number
+  follows_24h: number
+  imports_24h: number
+  translations_24h: number
+  quota_hits_24h: number
+}
+
+export interface AdminUsersResponse {
+  users: AdminUserRow[]
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+}
+
+export interface AdminFollow {
+  podcast_id: string
+  title: string
+  slug: string
+  image_url: string | null
+  introduced: boolean
+  suspended: boolean
+  other_followers: number
+}
+
+export interface AdminAuditEntry {
+  id: number
+  created_at: string
+  actor: 'web' | 'cli' | 'system'
+  actor_user_id: string | null
+  actor_email?: string | null
+  action: string
+  target_user_id: string | null
+  target_email?: string | null
+  details: Record<string, unknown>
+}
+
+export interface AdminUserDetail {
+  user: AdminUser
+  usage_24h: Record<string, number>
+  usage_7d: Record<string, number>
+  daily_7d: Record<string, number[]>
+  follows: AdminFollow[]
+  quota_limits: Record<string, number>
+  quota_overrides: Record<string, number>
+  history: AdminAuditEntry[]
+}
+
+export interface AdminAuditResponse {
+  entries: AdminAuditEntry[]
+  /** Every action the log records (the filter's options). */
+  actions: string[]
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+}
+
+export interface AdminSetting {
+  key: string
+  value: unknown
+  source: 'runtime' | 'env'
+  default: unknown
+  is_default: boolean
+  description: string
+  updated_at: string | null
+  updated_by: string | null
+}
+
+export interface AdminSettingsResponse {
+  settings: AdminSetting[]
+  non_default: Record<string, unknown>
+  alert_channels: string[]
+}

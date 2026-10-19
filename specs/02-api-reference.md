@@ -431,6 +431,25 @@ In single-user mode or on the SQLite backend the response is
 
 ---
 
+## Admin console (spec #104)
+
+Admin only. Every write goes through the same services as `thestill user` / `admin` / `settings` and lands in the audit log as actor `web`. A refused action (acting on yourself, demoting the last admin, a missing reason) is a 409 `{"detail": {"error", "message"}}`. The user and audit endpoints are 409 `single_user_mode` in single-user mode; settings and alerts work in both.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/admin/users` | GET | 409 `single_user_mode` in single-user mode, like every `users` endpoint. Accounts with follows, feeds brought in (24h / all time), imports, translations and quota hits (24h). Query: `q` (email or name), `status`, `sort` = `attention` (default: quota hits, then feeds brought in, 24h) / `created` / `last-login` / `follows` / `email`, `limit`, `offset` |
+| `/api/admin/users/{user_id}` | GET | One account: identity and status (with reason), 24h and 7-day usage per kind with daily counts, follows (brought in, moved aside, other followers), quota limits and overrides, audit history |
+| `/api/admin/users/{user_id}/status` | POST | `{status: active / suspended / banned, reason, remove_introduced_feeds?}`; suspend and ban need a reason |
+| `/api/admin/users/{user_id}/logout-everywhere` | POST | Revoke every session and the MCP token |
+| `/api/admin/users/{user_id}/remove-introduced-feeds` | POST | Drop the user's follow of feeds they brought in that no other active user follows; returns `feeds_removed`, `tasks_cancelled` |
+| `/api/admin/users/{user_id}/quotas` | PUT | `{quota: limit}` replaces the user's overrides (0 = unlimited); `{}` clears them |
+| `/api/admin/users/{user_id}/admin` | POST | `{is_admin}` grants or revokes the admin role |
+| `/api/admin/settings` | GET | Each runtime setting's effective value, `source` (`runtime` / `env`) and default; `non_default`; `alert_channels` |
+| `/api/admin/settings/{key}` | PUT | `{value}`, validated per key (422 `invalid_setting`, 404 `unknown_setting`) |
+| `/api/admin/settings/{key}` | DELETE | Revert to the env default |
+| `/api/admin/alerts/test` | POST | Send a test alert to every channel; per-channel `results` |
+| `/api/admin/audit` | GET | The audit log, newest first, with emails for the users it names and the `actions` it can filter by. Query: `action` (422 `unknown_action` for anything else), `target_user_id`, `limit`, `offset`. 409 `single_user_mode` in single-user mode |
+
 ## Podcasts
 
 ### GET /api/podcasts

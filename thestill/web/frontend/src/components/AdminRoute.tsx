@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import NonDefaultSettingsBanner from './admin/NonDefaultSettingsBanner'
 
 interface AdminRouteProps {
   children: React.ReactNode
@@ -33,5 +34,12 @@ export default function AdminRoute({ children }: AdminRouteProps) {
     return <Navigate to="/" replace />
   }
 
-  return <>{children}</>
+  // Spec #104: every admin page shows a runtime switch that is off its
+  // default, so a forgotten read_only or closed signup gets noticed.
+  return (
+    <>
+      <NonDefaultSettingsBanner />
+      {children}
+    </>
+  )
 }
