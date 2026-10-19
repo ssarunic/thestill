@@ -586,8 +586,83 @@ How Ellen Price's disappearance went cold for eleven years, and why one witness 
 * The guest's theory about the car is presented with more confidence than one withdrawn statement can carry [41:05]""",
 )
 
+COMEDY = SummaryProfile(
+    key="comedy",
+    version=1,
+    rules=f"""**Comedy rules:**
+{_MADE_UP_EXAMPLE}
+* Playful is good: this is a comedy show, so have fun with it. But only report jokes and bits that actually happen, and credit each line to whoever said it.
+* Give a bit enough setup to work out of context, then get out of the way. Don't explain the joke.""",
+    quote_guidance="* Pick the lines that are funniest out of context, with a few words of setup where they need it.",
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "😂",
+                "Best Bits",
+                """* The funniest moments, a line of setup each, so this works as a way into the audio [timestamp].""",
+            ),
+            4: SlotSpec(
+                "🌶️",
+                "Banter & Roasts",
+                """* Who got roasted, by whom, and whether it landed [timestamp].
+* "Friendly all round" is a fine answer.""",
+            ),
+            6: SlotSpec(
+                "🔁",
+                "Running Jokes & Segments",
+                """* Callbacks and recurring segments (listener mail, games, regular bits), and what they are for someone new to the show [timestamp].
+* None? Say so in one line.""",
+            ),
+            7: SlotSpec(
+                "🎧",
+                "Worth a Full Listen?",
+                """* The energy, the chemistry with any guest, which part to skip to, and who'll enjoy it, in two or three lines.""",
+            ),
+            9: SlotSpec(
+                "🙃",
+                "What Fell Flat",
+                """* Only bits the people in the room treat as not landing: a groan, "that didn't work", someone moving swiftly on [timestamp]. Don't judge what's funny yourself, and a deliberate or self-deprecating bit isn't a flop.
+* If nothing like that happens, say "Everything landed".""",
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Co-hosts Jess Harper and Dan Kerr, with guest Priya Nair
+
+Priya arrives with a list of every hotel she's ever been thrown out of, and Dan is horrified to learn he's on it. Jess spends most of the episode trying, and failing, to get anyone back on topic.
+
+## 2. ⏱️ Timeline
+* [00:00 - 09:40] **Warm-Up:** Dan's disastrous new haircut gets the full treatment.
+* [09:40 - 31:20] **Priya's Hotel List:** Five hotels, five ejections, one fire alarm.
+* [31:20 - End] **Listener Mail:** A question about Dan's haircut, inevitably.
+
+## 3. 😂 Best Bits
+* Priya explains the Brighton fire alarm was "technically the toaster's idea" [14:05]
+* Dan realises halfway through Priya's story that he was the one who called reception [22:40]
+* Jess reads out a listener email that is just a drawing of Dan's haircut, described in words [33:15]
+
+## 4. 🌶️ Banter & Roasts
+* Jess and Priya team up on Dan's haircut for a solid five minutes; he takes it well, then badly [04:30]
+
+## 5. 💬 Best Quotes
+* "It was the Seaview in Hove, room two-one-four, and yes, the toaster was in the wardrobe." - Priya Nair [16:20]
+
+## 6. 🔁 Running Jokes & Segments
+* **The Haircut:** Dan's haircut keeps coming back, and every callback is worse for him [04:30, 28:10, 33:15]
+* **Listener Mail:** The last ten minutes, where listeners ask the questions nobody should answer [31:20]
+
+## 7. 🎧 Worth a Full Listen?
+* High energy and Priya fits right in. If you only have ten minutes, skip to the hotel list at 9:40.
+
+## 8. 📚 Resource List
+* **Priya Nair** (person): Stand-up comedian, here plugging her autumn tour [00:40]
+
+## 9. 🙃 What Fell Flat
+* Dan's airport-lounge bit gets a groan from both of them, and Jess moves swiftly on [24:50]""",
+)
+
 PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
-    {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME)}
+    {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY)}
 )
 
 
