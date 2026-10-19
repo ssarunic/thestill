@@ -124,11 +124,6 @@ export default function NavigationDrawer({ isOpen, onClose }: NavigationDrawerPr
             onClick={onClose}
           />
         </nav>
-
-        {/* Footer */}
-        <div className="shrink-0 p-4 border-t border-gray-200">
-          <p className="text-xs text-gray-400 text-center">Read-only mode</p>
-        </div>
       </div>
     </>
   )
