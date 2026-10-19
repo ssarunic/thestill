@@ -1941,6 +1941,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                     """
                 )
             conn.execute("UPDATE podcasts SET spotify_url_source = 'publisher' WHERE spotify_url IS NOT NULL")
+        # Spec #87 Phase 3d — last YouTube channel discovery attempt (Postgres migration 0023).
+        if "youtube_discovery_checked_at" not in podcast_columns_now:
+            conn.execute("ALTER TABLE podcasts ADD COLUMN youtube_discovery_checked_at TIMESTAMP NULL")
         if chart_columns_added:
             self._backfill_chart_urls(conn)
 
@@ -2452,6 +2455,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 apple_url_source TEXT NULL,
                 youtube_url_source TEXT NULL,
                 spotify_url_source TEXT NULL,
+                -- Spec #87 Phase 3d: when YouTube channel discovery last ran.
+                youtube_discovery_checked_at TIMESTAMP NULL,
                 -- THES-145: Feed management
                 is_complete INTEGER NOT NULL DEFAULT 0,  -- Boolean: 0=ongoing, 1=complete
                 copyright TEXT NULL,
@@ -5360,6 +5365,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             params = (podcast_id,)
         # Spec #87 Phase 3c: a curated link (and its source) is left alone;
         # otherwise the chart wins when it has a value and stamps 'chart'.
+        # Phase 3d: so is a verified, discovered ('resolver') YouTube channel,
+        # which may have replaced a wrong chart channel.
         conn.execute(
             f"""
             UPDATE podcasts
@@ -5370,10 +5377,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                        WHEN (SELECT t.apple_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url) IS NOT NULL
                            THEN 'chart'
                        ELSE apple_url_source END,
-                   youtube_url = CASE WHEN youtube_url_source = 'curated' THEN youtube_url ELSE COALESCE(
+                   youtube_url = CASE WHEN youtube_url_source IN ('curated', 'resolver') THEN youtube_url ELSE COALESCE(
                        (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url), youtube_url) END,
                    youtube_url_source = CASE
-                       WHEN youtube_url_source = 'curated' THEN 'curated'
+                       WHEN youtube_url_source IN ('curated', 'resolver') THEN youtube_url_source
                        WHEN (SELECT t.youtube_url FROM top_podcasts t WHERE t.rss_url = podcasts.rss_url) IS NOT NULL
                            THEN 'chart'
                        ELSE youtube_url_source END
@@ -5916,6 +5923,99 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             "youtube": row["youtube_url_source"],
             "spotify": row["spotify_url_source"],
         }
+
+    def get_platform_link_sample(self, podcast_id: str, limit: int) -> List[PlatformLinkCandidate]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, external_id, audio_url, title, pub_date, duration,
+                       description_html, website_url, canonical_id
+                FROM episodes
+                WHERE podcast_id = ? AND pub_date IS NOT NULL
+                ORDER BY pub_date DESC, created_at DESC
+                LIMIT ?
+                """,
+                (podcast_id, int(limit)),
+            ).fetchall()
+        return [
+            PlatformLinkCandidate(
+                episode_id=row["id"],
+                external_id=row["external_id"] or "",
+                audio_url=row["audio_url"] or "",
+                title=row["title"] or "",
+                pub_date=ensure_utc(datetime.fromisoformat(row["pub_date"])),
+                duration=row["duration"],
+                description_html=row["description_html"] or "",
+                website_url=row["website_url"],
+                canonical_id=row["canonical_id"],
+            )
+            for row in rows
+        ]
+
+    def count_platform_links(self, podcast_id: str, platform: str, match_methods: Sequence[str]) -> int:
+        if not match_methods:
+            return 0
+        marks = ", ".join("?" for _ in match_methods)
+        with self._get_connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT count(*) AS n
+                FROM episode_platform_links l
+                JOIN episodes e ON e.id = l.episode_id
+                WHERE e.podcast_id = ? AND l.platform = ? AND l.url IS NOT NULL AND l.match_method IN ({marks})
+                """,
+                (podcast_id, platform, *match_methods),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def get_youtube_discovery_checked_at(self, podcast_id: str) -> Optional[datetime]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT youtube_discovery_checked_at FROM podcasts WHERE id = ?", (podcast_id,)
+            ).fetchone()
+        value = row["youtube_discovery_checked_at"] if row else None
+        return ensure_utc(datetime.fromisoformat(value)) if value else None
+
+    def set_youtube_discovery_checked_at(self, podcast_id: str, checked_at: Optional[datetime]) -> None:
+        value = ensure_utc(checked_at).isoformat() if checked_at else None
+        with self._get_connection() as conn:
+            conn.execute("UPDATE podcasts SET youtube_discovery_checked_at = ? WHERE id = ?", (value, podcast_id))
+
+    def forget_discovered_youtube_channels(
+        self, podcast_id: Optional[str] = None, *, dry_run: bool = False
+    ) -> Tuple[int, int]:
+        scope, params = ("AND id = ?", (podcast_id,)) if podcast_id else ("", ())
+        with self._get_connection() as conn:
+            ids = [
+                row["id"]
+                for row in conn.execute(
+                    f"SELECT id FROM podcasts WHERE youtube_url_source = 'resolver' {scope}", params
+                ).fetchall()
+            ]
+            if not ids:
+                return 0, 0
+            marks = ", ".join("?" for _ in ids)
+            # Rows a channel listing made, plus the not-found markers, so every
+            # affected episode is a candidate again; publisher rows stay.
+            link_filter = f"""
+                FROM episode_platform_links
+                WHERE platform = 'youtube'
+                  AND episode_id IN (SELECT id FROM episodes WHERE podcast_id IN ({marks}))
+                  AND (url IS NULL OR match_method IN ('title_date', 'title_duration'))
+            """
+            if dry_run:
+                row = conn.execute(f"SELECT count(*) AS n {link_filter}", ids).fetchone()
+                return len(ids), int(row["n"]) if row else 0
+            deleted = conn.execute(f"DELETE {link_filter}", ids).rowcount
+            conn.execute(
+                f"""
+                UPDATE podcasts
+                   SET youtube_url = NULL, youtube_url_source = NULL, youtube_discovery_checked_at = NULL
+                 WHERE id IN ({marks})
+                """,
+                ids,
+            )
+        return len(ids), int(deleted or 0)
 
     def _row_to_platform_link(self, row: sqlite3.Row) -> PlatformLink:
         return PlatformLink(
