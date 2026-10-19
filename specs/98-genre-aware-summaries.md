@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 🚧 In progress — Phase 1 (refactor) and Phase 2 (shared rules, `general` v2) implemented 2026-10-19; Phases 3–4 open
+> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime` implemented and evaluated (off by default); `investing`, `comedy`, `health` and Phase 4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -286,10 +286,10 @@ knowledge. If the episode is unsure, say so.
 
 | Slot | Title | Content |
 | --- | --- | --- |
-| 3 | 📰 The Stories | One bullet per story, with nested **What happened**, **Why it matters**, **What's next** |
+| 3 | 📰 The Stories | One bullet per story, told in two or three plain sentences: what happened, why it matters, what's next, and who says so |
 | 4 | ⚔️ Contested | Where sides or sources disagree, and what each says. "Nothing contested" when the episode is one-sided |
 | 6 | 📅 Watch List | Upcoming votes, deadlines, court dates, releases the episode mentions, with dates |
-| 7 | 🔗 Who Said It | The sources the episode leans on (agencies, officials, outlets, documents) per story |
+| 7 | 🗣️ Talking Points | Three or four things worth bringing up over dinner (was Who Said It; sourcing now lives in The Stories and Spin Check, see the Phase 3 evaluation) |
 | 9 | 🌀 Spin Check | Loaded framing, unchallenged talking points, missing counter-arguments; name the show's slant where it is obvious |
 
 Rules: attribute every claim ("according to…", "the minister said").
@@ -326,10 +326,10 @@ context.
 
 | Slot | Title | Content |
 | --- | --- | --- |
-| 3 | 📜 Story Arc | Setting, central figures, turning points, outcome |
+| 3 | 📜 Story Arc | The story in order, one vivid sentence per beat, ending with where this part leaves off and what's next |
 | 4 | 🏛️ Myth vs Record | Popular beliefs the episode corrects; where historians disagree |
-| 6 | 🗓️ Key Dates & Places | A short chronology |
-| 7 | 🧩 Where This Episode Fits | Series position, what came before, what is next |
+| 6 | 🗓️ Key Dates & Places | A short chronology, only dates the hosts say |
+| 7 | 🎭 Who's Who | The central figures as the hosts portray them (was Where This Episode Fits; series position moved into Story Arc) |
 | 9 | 🔍 Source Check | Unsourced claims, dramatised dialogue presented as fact, presentism |
 
 Resource hint: people, places, events, books.
@@ -553,7 +553,19 @@ chooses to run it.
    rubric criteria, run the evaluation, enable it. Suggested order by
    corpus size and risk: `news`, `investing`, `sports`, `comedy`,
    `true_crime`, `history`, `health`. True crime goes after the corpus
-   has more than one show.
+   has more than one show. **`news`, `sports`, `history` and
+   `true_crime` done 2026-10-19**, all off until listed in
+   `SUMMARY_PROFILES_ENABLED` (see the Phase 3 evaluation). Notes:
+   - Every genre profile's rules start with "the example is made up:
+     never reuse its names, quotes, scores, numbers or facts", and the
+     examples use invented names and situational quotes. `general` is
+     unchanged.
+   - Each profile keeps one slot with personality (news and sports
+     Talking Points, history Who's Who), and the instructions and
+     examples are written in the style guide's voice.
+   - `summary_checks` accepts any defined profile's title for a slot
+     (pulled forward from Phase 4), so genre summaries pass the
+     structural check.
 4. **Consumers and UI.** `summary_checks` per profile, the admin
    override field on the podcast settings page, a mixed-profile
    briefing narration check, and an optional backfill of each enabled
@@ -632,6 +644,67 @@ Open after Phase 2, none caused by it:
   company's founder) by design (#92). Judges count it as outside
   knowledge, so per-profile rubrics should exclude section 8 from that
   count.
+
+## Phase 3 evaluation (2026-10-19)
+
+Each genre profile against `general` v2 on 20 local episodes of its
+genre, same model (`gemini-3-flash-preview`), same clean transcripts,
+four runs per version. Blind pairwise judging by Claude, A/B order
+randomised, reading the full transcript; judges see which summary has
+genre sections, so blinding is weaker than in Phase 2. True crime has
+the 12 newest episodes of Casefile, Morbid and The Last 12 Weeks
+(added to the local corpus for this) plus 8 of Mjesto Zločina.
+
+Final wording, profile vs general:
+
+| | News | Sports | History | True crime |
+| --- | --- | --- | --- | --- |
+| Preferred overall | 18–2 | 15–5 | 19–1 | 19–1 |
+| Better genre fit | 19–1 | 20–0 | 20–0 | 20–0 |
+| More faithful | 9–4 (7 ties) | 6–7 (7 ties) | 13–1 (6 ties) | 14–1 (5 ties) |
+| Better voice | 7–4 (9 ties) | 10–8 (2 ties) | 2–11 (7 ties) | 19–1 |
+| Genre-specific errors found | 71 vs 85 | 62 vs 56 | 67 vs 88 | 67 vs 113 |
+
+Deterministic, over the four runs: the profiles drop no sections on
+English summaries (general drops §7 in about one in ten), every sports
+summary opens with its spoiler line, and every true-crime summary has a
+case status, no "temperature" ratings and no emoji outside headings
+(general: 48 of 80 summaries rate the "temperature" of real crimes).
+Profile summaries run about 25–35% shorter.
+
+How the profiles got here:
+
+- **Example leakage.** The first sports example's quote ("You don't win
+  titles with spreadsheets…") appeared, credited to real pundits, in 23
+  of 80 sports summaries, and its "2-1" became an invented scoreline.
+  Made-up names, situational quotes and the "example is made up" rule
+  brought copied example text to 0 in every genre.
+- **Voice.** First-round news and history lost voice 0–20 and 0–18:
+  their sections were list-shaped (labelled fields, a sources slot, a
+  series-position slot) and replaced general's chatty slots. Sports,
+  with Talking Points and argument rounds, tied. Adding a slot with
+  personality and writing in the style guide's voice fixed news;
+  history took a third pass (Story Arc as vivid sentences, Who's Who
+  instead of Dinner-Party Facts, which pulled in outside trivia).
+- **Where general reads livelier**, the judges note it is mostly
+  The Drama and BS Test, which are also where it invents feuds,
+  "temperature", cover-up theories and inflated details.
+
+Open after Phase 3:
+
+- **Sports accuracy is level, not better.** More scores, results and
+  predictions means more chances to slip: a wrong scorer tally, a take
+  credited to the wrong pundit, one invented scoreline in 80.
+- **True crime guilt discipline is not perfect.** Two summaries treated
+  someone as convicted where the transcript gives no conviction. A
+  per-case "convicted of what" check belongs in the true-crime rubric.
+- **History's Myth vs Record** occasionally sets up a myth the episode
+  never states. History voice still leans to general.
+- **Category mapping sends some shows to the wrong profile**: *Uncanny*
+  (paranormal) to history, *News in Slow Spanish*, *What's Cooking?*
+  and *The Rest Is Entertainment* to news, a New Year Q&A of a
+  true-crime show to true crime. They mostly still won, but an operator
+  override or a per-episode check is worth having before rollout.
 
 ## Alternatives considered
 
