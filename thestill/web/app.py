@@ -49,6 +49,7 @@ from ..repositories.inbox_repository import InboxRepository
 from ..repositories.podcast_repository import PodcastRepository
 from ..services import FollowerService, PodcastService, RefreshService, StatsService
 from ..services.abuse.access_guard import AccessGuard
+from ..services.abuse.quota_service import QuotaService
 from ..services.abuse.wiring import build_abuse_services
 from ..services.analytics_service import AnalyticsService
 from ..services.analytics_sink import make_analytics_sink
@@ -76,7 +77,14 @@ from ..utils.config import (
 )
 from ..utils.log_safety import redact_capability_path
 from ..utils.path_manager import PathManager
-from .dependencies import AppState, enforce_read_only, require_admin, require_auth
+from .dependencies import (
+    AppState,
+    enforce_read_only,
+    require_admin,
+    require_auth,
+    user_rate_limit,
+    user_search_rate_limit,
+)
 from .error_handlers import register_abuse_handlers
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .public_shell import (
@@ -144,6 +152,7 @@ def _build_narration_runner(
     briefing_repository: BriefingRepository,
     inbox_repository: InboxRepository,
     access: AccessGuard,
+    quota: QuotaService,
 ) -> Optional[NarrationRunner]:
     """Construct the ``NarrationRunner`` (spec #33).
 
@@ -178,6 +187,7 @@ def _build_narration_runner(
         inbox_repository=inbox_repository,
         podcast_repository=podcast_repository,
         access=access,
+        quota=quota,
     )
 
 
@@ -239,7 +249,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         max_per_host=config.refresh_max_per_host,
     )
     podcast_service = PodcastService(
-        config.storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard
+        config.storage_path,
+        repository,
+        path_manager,
+        file_storage=config.file_storage,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
     stats_service = StatsService(config.storage_path, repository, path_manager)
     task_manager = get_task_manager()
@@ -290,6 +305,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         follower_repository,
         queue_manager=queue_manager,
         podcast_repository=repository,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
     follower_service = FollowerService(
         follower_repository, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
@@ -302,6 +319,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         feed_manager=feed_manager,
         transcription_provider=config.transcription_provider,
         access=abuse.guard,
+        quota=abuse.quota,
     )
 
     # Spec #40 — pending transcription operations (backend-resolved).
@@ -414,7 +432,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         search_backend=search_backend,
         embedding_model=embedding_model,
         narration_runner=_build_narration_runner(
-            config, path_manager, repository, briefing_repository, inbox_repository, abuse.guard
+            config, path_manager, repository, briefing_repository, inbox_repository, abuse.guard, abuse.quota
         ),
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
@@ -608,6 +626,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             email_delivery=briefing_delivery_service is not None,
         )
 
+        # Spec #104 — housekeeping for the quota ledger (and, from Phase 3,
+        # the alert tick). Idempotent jobs, so every worker may run them.
+        from ..core.periodic_runner import PeriodicRunner
+        from ..services.abuse.housekeeping import usage_housekeeping_jobs
+
+        periodic_runner = PeriodicRunner(
+            usage_housekeeping_jobs(repos.usage, reservation_ttl_seconds=config.quota_reservation_ttl_seconds)
+        )
+        periodic_runner.start()
+
         # Warm the embedding model in the background. The first
         # semantic/hybrid search request would otherwise pay a 5-30s
         # cold-load (model deserialization, plus the HuggingFace
@@ -647,6 +675,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         logger.info("shutting_down_web_server")
 
         # Stop the schedulers (if running) before the worker.
+        periodic_runner.stop()
         if briefing_scheduler is not None:
             briefing_scheduler.stop()
         if refresh_scheduler is not None:
@@ -774,7 +803,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # dependencies. In single-user mode both checks always pass.
     # Spec #104: read_only's blunt method filter rides on every session
     # router (admins and reads pass; the costly paths check in services).
-    require_session = [Depends(require_auth), Depends(enforce_read_only)]
+    require_session = [Depends(require_auth), Depends(enforce_read_only), Depends(user_rate_limit)]
     # Operator dashboards: system-wide pipeline activity, storage paths and
     # provider configuration. The frontend already gates the /status page
     # behind AdminRoute — the API matches.
@@ -807,7 +836,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # and mounts under the bare /api prefix.
     app.include_router(api_entities.router, prefix="/api", tags=["entities"], dependencies=require_session)
     # Spec #28 §2.10 — corpus search (REST mirror of search_corpus MCP tool).
-    app.include_router(api_search.router, prefix="/api/search", tags=["search"], dependencies=require_session)
+    app.include_router(
+        api_search.router,
+        prefix="/api/search",
+        tags=["search"],
+        dependencies=[*require_session, Depends(user_search_rate_limit)],
+    )
     app.include_router(api_inbox.router, prefix="/api/inbox", tags=["inbox"], dependencies=require_session)
     app.include_router(api_briefings.router, prefix="/api/briefings", tags=["briefings"], dependencies=require_session)
     app.include_router(

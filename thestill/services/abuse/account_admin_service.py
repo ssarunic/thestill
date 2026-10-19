@@ -23,9 +23,9 @@ next request is refused at once) and derives what to cancel from the
 durable ``suspended_follows`` rows; a reinstate sets the status last.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Callable, List, Optional, Protocol, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Protocol, Tuple
 
 from structlog import get_logger
 
@@ -44,6 +44,8 @@ if TYPE_CHECKING:
     from ...repositories.user_directory_repository import UserDirectoryRepository
     from ...repositories.user_repository import UserRepository
     from .audit_service import AuditLog
+    from .quota_service import QuotaService
+    from .settings_service import SettingsService
 
 logger = get_logger(__name__)
 
@@ -75,6 +77,8 @@ class UserFootprint:
     suspended_follows: int
     #: Feeds this user brought in (spec #104 §1.5).
     feeds_brought_in: int
+    #: Counted ledger rows per kind in the last 24h (Phase 2).
+    usage_24h: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,8 @@ class AccountAdminService:
         queue: QueuedTaskCanceller,
         audit: "AuditLog",
         multi_user: bool,
+        settings: Optional["SettingsService"] = None,
+        quota: Optional["QuotaService"] = None,
         clock: Callable[[], datetime] = now_utc,
     ) -> None:
         self._users = users
@@ -127,6 +133,8 @@ class AccountAdminService:
         self._queue = queue
         self._audit = audit
         self._multi_user = multi_user
+        self._settings = settings
+        self._quota = quota
         self._clock = clock
 
     # ----- reads -----
@@ -151,6 +159,7 @@ class AccountAdminService:
             follows=len(self._followers.get_followed_podcast_ids(user_id)),
             suspended_follows=len(self._suspended.list_podcast_ids(user_id)),
             feeds_brought_in=len(self._followers.introduced_podcast_ids(user_id)),
+            usage_24h=self._quota.usage_last_day(user_id) if self._quota is not None else {},
         )
 
     def resolve_user(self, email_or_id: str) -> User:
@@ -315,6 +324,38 @@ class AccountAdminService:
             if other is not None and other.is_active:
                 return True
         return False
+
+    # ----- quotas -----
+
+    def set_quota_override(self, user_id: str, quota: str, limit: Optional[int], *, actor: Actor) -> Dict[str, int]:
+        """Raise or lower one user's ``quota`` (``None`` reverts to the env
+        default; 0 means unlimited). Returns the user's overrides."""
+        self._require_multi_user()
+        if self._settings is None:
+            raise AdminActionError("unavailable", "Quota overrides need the settings service.")
+        target = self._load(user_id)
+        seen: Dict[str, Optional[int]] = {}
+
+        def change(current: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, int]]:
+            # Applied to the stored map inside a locked transaction, so an
+            # edit of another user's limits in the meantime is kept.
+            overrides = {uid: dict(limits) for uid, limits in current.items()}
+            mine = overrides.setdefault(target.id, {})
+            seen["old"] = mine.get(quota)
+            if limit is None:
+                mine.pop(quota, None)
+            else:
+                mine[quota] = limit
+            return overrides
+
+        try:
+            stored = self._settings.modify("quota_overrides", change, actor=actor, audit=False)
+        except ValueError as exc:
+            raise AdminActionError("invalid_quota", str(exc)) from exc
+        self._audit.record(
+            actor, "user.quota_override", target_user_id=target.id, quota=quota, old=seen.get("old"), new=limit
+        )
+        return stored.get(target.id, {})
 
     # ----- admin role -----
 

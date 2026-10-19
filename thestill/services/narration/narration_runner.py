@@ -38,6 +38,7 @@ from ...repositories.briefing_repository import BriefingRepository
 from ...repositories.inbox_repository import InboxRepository
 from ...repositories.podcast_repository import PodcastRepository
 from ..abuse.access_guard import NULL_GUARD, AccessGuard
+from ..abuse.quota_service import QuotaService, reserve_quota
 from .models import NarrationContent
 from .narration_generator import NarrationConfig, NarrationGenerator
 
@@ -90,6 +91,7 @@ class NarrationRunner:
         inbox_repository: InboxRepository,
         podcast_repository: PodcastRepository,
         access: AccessGuard = NULL_GUARD,
+        quota: Optional[QuotaService] = None,
     ):
         self.generator = generator
         self.briefing_repository = briefing_repository
@@ -99,6 +101,9 @@ class NarrationRunner:
         # checked here so the manual route and the scheduler's chain both
         # stop before any LLM call.
         self._access = access
+        # Spec #104 Phase 2: charged to the owner's narrations_per_day,
+        # scheduled or manual alike.
+        self._quota = quota
 
     def artifact_exists(self, *, briefing_id: str, slug: str) -> bool:
         """True when a narration artefact for ``(briefing, slug)`` is on disk.
@@ -125,6 +130,7 @@ class NarrationRunner:
             NarrationRunnerError: unknown briefing, no episodes, bad slug.
             AccountDisabledError: the briefing's owner is suspended or banned.
             FeaturePausedError: ``narration_enabled`` is off or ``read_only`` on.
+            QuotaExceededError: the owner's ``narrations_per_day`` is used up.
         """
         briefing = self._resolve_briefing(briefing_id)
         self._access.ensure_user_active(briefing.user_id)
@@ -150,8 +156,10 @@ class NarrationRunner:
         started = time.perf_counter()
         # Tags the generator's llm_usage events, which run outside the
         # task worker and so carry no stage of their own.
-        with bound_contextvars(stage="narration", briefing_id=briefing.id):
-            content = self.generator.generate(episodes, cfg)
+        with reserve_quota(self._quota, briefing.user_id, "narrations_per_day", subject_id=briefing.id) as reservation:
+            with bound_contextvars(stage="narration", briefing_id=briefing.id):
+                content = self.generator.generate(episodes, cfg)
+            reservation.commit()  # the LLM has charged
         content.latency_ms = int((time.perf_counter() - started) * 1000)
         self.generator.write_json_script(content, cfg)
         self.generator.write_markdown(content, cfg)

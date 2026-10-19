@@ -209,6 +209,8 @@ reader.
 | 403 | `account_disabled` | The session belongs to a suspended or banned account |
 | 503 | `feature_paused` (with `feature`) | A runtime switch is off: `new_feeds`, `imports`, `translations`, `narration` |
 | 503 | `read_only` | Panic mode: a non-admin write, or any paused feature while `read_only` is on |
+| 429 | `quota_exceeded` (with `quota`, `limit`, `retry_after`) | A per-user daily quota is used up; `Retry-After` is set unless no wait lifts it (`follows_total`) |
+| 429 | `rate_limited` | The per-user request budget (`RATE_LIMIT_USER_*`) is spent; `Retry-After` is the window |
 
 ```json
 {"detail": {"error": "feature_paused", "feature": "new_feeds", "message": "Adding new podcasts is paused right now."}}

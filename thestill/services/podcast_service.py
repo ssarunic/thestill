@@ -43,11 +43,13 @@ from ..utils.file_storage import FileStorage
 from ..utils.language_config import normalize_language_code
 from ..utils.path_manager import PathManager
 from .abuse.access_guard import NULL_GUARD, AccessGuard
+from .abuse.quota_service import reserve_quota
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from ..core.llm_provider import LLMProvider
+    from .abuse.quota_service import QuotaService
 
 # Type alias for transcript type
 TranscriptType = Literal["cleaned", "raw"]
@@ -302,6 +304,7 @@ class PodcastService:
         path_manager: PathManager,
         file_storage: FileStorage,
         access: AccessGuard = NULL_GUARD,
+        quota: Optional["QuotaService"] = None,
     ) -> None:
         """
         Initialize podcast service.
@@ -312,8 +315,11 @@ class PodcastService:
             path_manager: Path manager for file path operations.
             file_storage: Spec #35 backend for transcript / summary reads.
             access: Spec #104 guard; gates generating a summary translation.
+            quota: Spec #104 Phase 2; charges a generated translation to the
+                requesting user's ``translations_per_day``.
         """
         self._access = access
+        self._quota = quota
         self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
         self.path_manager: PathManager = path_manager
         self.repository: PodcastRepository = podcast_repository
@@ -1051,8 +1057,13 @@ class PodcastService:
         source_language: str,
         target_language: str,
         provider: "LLMProvider",
+        user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Return a cached translation, creating and citation-resolving it once."""
+        """Return a cached translation, creating and citation-resolving it once.
+
+        Generating one (never serving a cached one) is gated by the
+        ``translations`` switch and charged to ``user_id``'s quota.
+        """
 
         source = normalize_language_code(source_language)
         target = normalize_language_code(target_language, default=source)
@@ -1090,11 +1101,12 @@ class PodcastService:
             from ..core.summary_citations import resolve_and_persist_summary_citations
             from ..core.summary_translation import SummaryTranslator
 
-            translated = SummaryTranslator(provider).translate(
-                original,
-                target_language=target,
-                source_language=source,
-            )
+            with reserve_quota(self._quota, user_id, "translations_per_day", subject_id=episode.id) as reservation:
+                translated = SummaryTranslator(provider).translate(
+                    original, target_language=target, source_language=source
+                )
+                # The provider has charged: count it even if storing fails.
+                reservation.commit()
             persisted = resolve_and_persist_summary_citations(
                 summary_markdown=translated,
                 episode=episode,

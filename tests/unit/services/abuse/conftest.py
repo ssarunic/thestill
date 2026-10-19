@@ -33,7 +33,7 @@ from thestill.utils.config import Config
 NOW = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc)
 
 
-def make_world(tmp_path, *, multi_user: bool = True, **config_overrides) -> SimpleNamespace:
+def make_world(tmp_path, *, multi_user: bool = True, clock=None, **config_overrides) -> SimpleNamespace:
     config = Config(
         storage_path=tmp_path,
         multi_user=multi_user,
@@ -42,8 +42,8 @@ def make_world(tmp_path, *, multi_user: bool = True, **config_overrides) -> Simp
         **config_overrides,
     )
     repos = make_repositories(config)
-    abuse = build_abuse_services(config, repos)
-    world = SimpleNamespace(config=config, repos=repos, abuse=abuse)
+    abuse = build_abuse_services(config, repos, **({"clock": clock} if clock else {}))
+    world = SimpleNamespace(config=config, repos=repos, abuse=abuse, clock=clock)
 
     def add_user(email: str, *, is_admin: bool = False) -> User:
         repos.user.save(User(email=email, is_admin=is_admin, created_at=NOW))

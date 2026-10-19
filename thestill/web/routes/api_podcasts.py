@@ -475,6 +475,7 @@ def get_episode_summary_by_slugs(
     request: Request,
     lang: Optional[str] = Query(None, pattern=r"^[A-Za-z]{2,3}$"),
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> Response:
     """
     Get the summary for an episode by slugs.
@@ -533,6 +534,7 @@ def get_episode_summary_by_slugs(
             source_language=canonical_language,
             target_language=requested_language,
             provider=provider,
+            user_id=user.id,
         )
 
     if summary is None:

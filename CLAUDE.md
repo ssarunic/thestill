@@ -67,6 +67,7 @@ thestill user ban <email-or-id> --reason "..." [--remove-introduced-feeds]
 thestill user reinstate <email-or-id>        # also: show, suspend, logout-everywhere
 thestill admin grant <email>                 # replaces hand-editing is_admin
 thestill settings set signup_mode closed     # settings get / reset; read_only = panic mode
+thestill user quota <email> imports_per_day 20   # per-user quota override; "default" reverts
 
 # Web server
 thestill server                     # Start on localhost:8000

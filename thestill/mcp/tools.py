@@ -122,7 +122,7 @@ def setup_tools(
     embedding_model = EmbeddingModel(config.embedding_model)
     search_backend = make_search_backend(config, embedding_model)
     podcast_service = PodcastService(
-        storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard
+        storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard, quota=abuse.quota
     )
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(
@@ -169,6 +169,8 @@ def setup_tools(
         repos.follower,
         queue_manager=repos.queue_manager,
         podcast_repository=repository,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
     follower_service = FollowerService(
         repos.follower, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
@@ -515,7 +517,8 @@ def setup_tools(
                     # ``add_podcast_and_auto_follow`` only follows in
                     # single-user mode, so the remote branch follows directly.
                     podcast = podcast_service.add_podcast(
-                        url, precheck=partial(abuse.new_feed_precheck.check, will_follow=True)
+                        url,
+                        precheck=partial(abuse.new_feed_precheck.check, will_follow=True, user_id=identity.user.id),
                     )
                     if podcast:
                         follower_service.follow_best_effort(identity.user.id, podcast.id)

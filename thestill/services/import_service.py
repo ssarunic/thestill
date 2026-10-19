@@ -53,6 +53,7 @@ from ..utils.url_patterns import (
 )
 from ..utils.youtube_errors import describe_youtube_failure
 from .abuse.access_guard import NULL_GUARD, AccessGuard
+from .abuse.quota_service import QuotaService, reserve_quota
 from .inbox_service import enqueue_pipeline_for
 
 logger = get_logger(__name__)
@@ -849,11 +850,6 @@ class ImportService:
       row pointing at the shared episode (no second Whisper run).
     """
 
-    # Rolling window for the per-user import counter logged on each
-    # ``import_completed`` event. Future quota enforcement should read
-    # the same window so dashboard and limits stay in sync.
-    QUOTA_WINDOW = timedelta(hours=24)
-
     def __init__(
         self,
         repository: SqlitePodcastRepository,
@@ -863,10 +859,13 @@ class ImportService:
         feed_manager: Optional[Any] = None,
         transcription_provider: Optional[str] = None,
         access: AccessGuard = NULL_GUARD,
+        quota: Optional[QuotaService] = None,
     ) -> None:
         self._repository = repository
-        # Spec #104: refuses every import while imports are paused.
+        # Spec #104: refuses every import while imports are paused, and
+        # charges a new episode to the user's imports_per_day.
         self._access = access
+        self._quota = quota
         self._inbox_repo = inbox_repository
         self._queue = queue_manager
         # Optional. When set, imports that auto-create a parent podcast also
@@ -902,18 +901,30 @@ class ImportService:
         """
         self._access.require_feature("imports")
         canonical = self._resolve(url)
-        episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
-        inbox_entry, inbox_created = self._inbox_repo.find_or_create(
-            user_id=user_id,
-            episode_id=episode_id,
-            source="import",
-        )
-        if not episode_created:
+        # Only an import that starts a pipeline spends, so only that one is
+        # charged: creating the episode, or re-importing an untouched
+        # DISCOVERED orphan (spec #88 guard below). Re-importing one that is
+        # processed, in flight or failed is free, even at the limit.
+        known_id = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id)
+        pending = self._pending_for_existing(known_id) if known_id else []
+        charge = known_id is None or bool(pending)
+        with reserve_quota(
+            self._quota if charge else None, user_id, "imports_per_day", subject_id=canonical.canonical_id
+        ) as reservation:
+            episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
+            if episode_created:
+                reservation.commit(subject_id=episode_id)
+            inbox_entry, inbox_created = self._inbox_repo.find_or_create(
+                user_id=user_id,
+                episode_id=episode_id,
+                source="import",
+            )
             # Spec #88: the episode existed, so nothing above started it. Run
             # the same guard publish fan-out uses — an untouched DISCOVERED
             # orphan (feed-discovered, never processed) gets the pipeline;
             # anything processed, in flight or failed is left alone.
-            self._ensure_pipeline_for_existing(episode_id)
+            if not episode_created and pending and self._enqueue_existing(pending):
+                reservation.commit(subject_id=episode_id)
         if episode_created:
             # The shared entry-stage rule, not a hard-coded TRANSCRIBE. Imports
             # used to assume the transcriber could always fetch `audio_url`
@@ -934,11 +945,6 @@ class ImportService:
                 canonical_id=canonical.canonical_id,
                 kind=canonical.kind,
             )
-        # Quota plumbing — counted but not enforced. The count includes
-        # the row we just inserted so logs reflect post-import state.
-        imports_in_window = self._inbox_repo.count_imports_for_user_since(
-            user_id, datetime.now(timezone.utc) - self.QUOTA_WINDOW
-        )
         logger.info(
             "import_completed",
             episode_id=episode_id,
@@ -947,7 +953,8 @@ class ImportService:
             episode_created=episode_created,
             inbox_created=inbox_created,
             user_id=user_id,
-            imports_in_24h=imports_in_window,
+            # Spec #104: the same ledger count the imports_per_day quota reads.
+            imports_in_24h=self._quota.usage_last_day(user_id).get("import", 0) if self._quota else None,
         )
         parent_id, parent_title, parent_slug = parent_summary if parent_summary else (None, None, None)
         episode_slug, podcast_slug, episode_state, episode_failed = self._describe_episode(user_id, episode_id)
@@ -973,13 +980,18 @@ class ImportService:
     # Internals
     # ------------------------------------------------------------------
 
-    def _ensure_pipeline_for_existing(self, episode_id: str) -> None:
+    def _pending_for_existing(self, episode_id: str) -> List:
+        """``[(episode_id, audio_url)]`` when the existing episode is an
+        untouched orphan an import would start, else ``[]`` (also on a failed
+        lookup, logged)."""
         try:
-            pending = self._repository.get_unqueued_unprocessed_episodes([episode_id])
+            return self._repository.get_unqueued_unprocessed_episodes([episode_id])
         except Exception:
             logger.exception("import_pipeline_lookup_failed", episode_id=episode_id)
-            return
-        enqueue_pipeline_for(
+            return []
+
+    def _enqueue_existing(self, pending: List) -> int:
+        return enqueue_pipeline_for(
             self._queue, pending, transcription_provider=self._transcription_provider or "", source="import"
         )
 

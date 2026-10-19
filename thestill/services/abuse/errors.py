@@ -40,6 +40,10 @@ class AbusePreventionError(Exception):
     def detail(self) -> Dict[str, Any]:
         return {"error": "refused", "message": str(self)}
 
+    def headers(self) -> Dict[str, str]:
+        """Extra HTTP response headers (``Retry-After`` for a quota)."""
+        return {}
+
 
 class AccountDisabledError(AbusePreventionError):
     """The account is suspended or banned. The operator's reason is never
@@ -78,6 +82,44 @@ class ReadOnlyError(FeaturePausedError):
 
     def detail(self) -> Dict[str, Any]:
         return {"error": "read_only", "message": str(self)}
+
+
+def _humanize_wait(seconds: int) -> str:
+    if seconds >= 5400:
+        hours = round(seconds / 3600)
+        return f"{hours} hours"
+    if seconds >= 3600:
+        return "1 hour"
+    minutes = max(1, round(seconds / 60))
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
+class QuotaExceededError(AbusePreventionError):
+    """A per-user daily limit (spec #104 Phase 2). ``retry_after_seconds`` is
+    None for a limit that no wait lifts (``follows_total``)."""
+
+    status_code = 429
+
+    def __init__(self, quota: str, limit: int, retry_after_seconds: Optional[int]):
+        from .quotas import QUOTAS  # errors stays import-light; see the package docstring
+
+        self.quota = quota
+        self.limit = limit
+        self.retry_after_seconds = retry_after_seconds
+        wait = _humanize_wait(retry_after_seconds) if retry_after_seconds else ""
+        super().__init__(QUOTAS[quota].message.format(limit=limit, wait=wait))
+
+    def detail(self) -> Dict[str, Any]:
+        return {
+            "error": "quota_exceeded",
+            "quota": self.quota,
+            "limit": self.limit,
+            "retry_after": self.retry_after_seconds,
+            "message": str(self),
+        }
+
+    def headers(self) -> Dict[str, str]:
+        return {"Retry-After": str(self.retry_after_seconds)} if self.retry_after_seconds else {}
 
 
 class SignupRefusedError(AbusePreventionError):

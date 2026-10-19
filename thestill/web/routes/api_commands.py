@@ -138,7 +138,9 @@ def run_add_podcast_task(
         # Execute the add podcast (returns existing if already exists).
         # Spec #104: refused before any row is written when new feeds are
         # paused and nobody follows this one yet.
-        precheck = partial(state.abuse.new_feed_precheck.check, will_follow=True) if state.abuse else None
+        precheck = (
+            partial(state.abuse.new_feed_precheck.check, will_follow=True, user_id=user_id) if state.abuse else None
+        )
         podcast = state.podcast_service.add_podcast(url, precheck=precheck)
 
         if podcast is None:

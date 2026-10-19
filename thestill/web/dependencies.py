@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, Request
 
 from ..services.abuse.errors import ReadOnlyError
+from .middleware.rate_limit import USER_API_LIMIT, USER_SEARCH_LIMIT, enforce_user_rate_limit
 
 if TYPE_CHECKING:
     from ..core.briefing_scheduler import BriefingScheduler
@@ -365,6 +366,19 @@ def is_effective_admin(user: "User", config: "Config") -> bool:
     if not config.multi_user:
         return True
     return bool(user.is_admin)
+
+
+def user_rate_limit(state: AppState = Depends(get_app_state), user: "User" = Depends(require_auth)) -> None:
+    """Spec #104 — per-user request budget on every session router. A
+    no-op in single-user mode (the operator is the only user)."""
+    if state.config.multi_user:
+        enforce_user_rate_limit(user.id, USER_API_LIMIT)
+
+
+def user_search_rate_limit(state: AppState = Depends(get_app_state), user: "User" = Depends(require_auth)) -> None:
+    """Spec #104 — the tighter per-user budget for corpus search."""
+    if state.config.multi_user:
+        enforce_user_rate_limit(user.id, USER_SEARCH_LIMIT, "user_search")
 
 
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})

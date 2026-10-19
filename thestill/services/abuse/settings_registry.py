@@ -23,10 +23,13 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
+from .quotas import QUOTA_NAMES
+
 if TYPE_CHECKING:
     from ...utils.config import Config
 
 SIGNUP_MODES = ("open", "allowlist", "closed")
+
 
 #: Costly paths a switch can pause. ``read_only`` pauses all of them.
 FEATURES = ("new_feeds", "imports", "translations", "narration")
@@ -85,6 +88,24 @@ def _parse_allowlist(raw: str) -> List[str]:
     return [part for part in raw.replace("\n", ",").split(",") if part.strip()]
 
 
+def _validate_quota_overrides(value: Any) -> Dict[str, Dict[str, int]]:
+    """``{user_id: {quota: limit}}``; 0 means unlimited. Empty maps drop out."""
+    if not isinstance(value, dict):
+        raise ValueError("expected {user_id: {quota: limit}}")
+    normalised: Dict[str, Dict[str, int]] = {}
+    for user_id, limits in value.items():
+        if not isinstance(user_id, str) or not isinstance(limits, dict):
+            raise ValueError("expected {user_id: {quota: limit}}")
+        for quota, limit in limits.items():
+            if quota not in QUOTA_NAMES:
+                raise ValueError(f"unknown quota {quota!r}; known: {', '.join(QUOTA_NAMES)}")
+            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+                raise ValueError(f"limit for {quota} must be a whole number >= 0")
+        if limits:
+            normalised[user_id] = dict(limits)
+    return normalised
+
+
 @dataclass(frozen=True)
 class SettingSpec:
     key: str
@@ -135,6 +156,15 @@ SETTINGS: Dict[str, SettingSpec] = {
             "read_only",
             "Panic mode: non-admin writes return 503 and every feature above is paused.",
             lambda _c: False,
+        ),
+        SettingSpec(
+            "quota_overrides",
+            "Per-user quota limits that replace the env defaults: {user_id: {quota: limit}}. Edit with "
+            "`thestill user quota`.",
+            lambda _c: {},
+            _validate_quota_overrides,
+            json.loads,
+            failsafe={},
         ),
     )
 }

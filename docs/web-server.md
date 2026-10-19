@@ -233,8 +233,10 @@ public page calls any `/api` endpoint outside `/api/public` and
 **Refusals (spec #104).** Any route may answer with
 `{"detail": {"error": <code>, "message": <text>}}`: 403 `account_disabled`
 for a suspended or banned session, 503 `feature_paused` (plus `feature`) when
-a runtime switch is off, and 503 `read_only` for a non-admin write in panic
-mode. The switches are managed with `thestill settings` (see
+a runtime switch is off, 503 `read_only` for a non-admin write in panic
+mode, 429 `quota_exceeded` (with `quota`, `limit`, `retry_after` and a
+`Retry-After` header) when a per-user quota is used up, and 429
+`rate_limited` when the per-user request budget is spent. The switches are managed with `thestill settings` (see
 [configuration.md](configuration.md#abuse-prevention--runtime-switches-spec-104)).
 
 ### Webhooks

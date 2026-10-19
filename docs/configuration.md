@@ -322,6 +322,26 @@ Runtime-only switches (no env var; on unless noted):
 In single-user mode the switches apply; account status and the signup gate
 do not. Accounts are managed with `thestill user ...` and `thestill admin ...`.
 
+### Quotas (spec #104 Phase 2)
+
+Per-user limits on the actions that cost money, over a rolling 24 hours,
+counted in the `usage_events` ledger. `0` means unlimited. Admins are
+exempt (their usage is still recorded), and quotas don't apply in
+single-user mode. `thestill user quota <email> <quota> <limit|default>`
+overrides one limit for one user (the `quota_overrides` setting). A refusal
+is a 429 with `Retry-After` and a `quota_exceeded` body.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `QUOTA_FEEDS_INTRODUCED_PER_DAY` | Feeds a user may bring in (take from zero followers to one) per day — the expensive action | `10` |
+| `QUOTA_FOLLOWS_TOTAL` | Follows a user may hold at once | `200` |
+| `QUOTA_FOLLOWS_PER_DAY` | Follows per day, of any feed | `50` |
+| `QUOTA_IMPORTS_PER_DAY` | Imports that create a new episode, per day | `5` |
+| `QUOTA_TRANSLATIONS_PER_DAY` | Summary translations generated per day (serving an existing one is free) | `20` |
+| `QUOTA_NARRATIONS_PER_DAY` | Briefing narrations per day, manual and scheduled | `3` |
+| `QUOTA_ENFORCE` | `false` records usage and logs `quota_would_refuse` without refusing — run this way first and compare real usage to the defaults | `true` |
+| `QUOTA_RESERVATION_TTL_SECONDS` | A reservation left unsettled this long (a process died mid-action) is released by housekeeping | `900` |
+
 ## Deployment & Web Surface (spec #25)
 
 | Variable | Description | Default |
@@ -374,6 +394,10 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 | `RATE_LIMIT_WEBHOOK_WINDOW_SECONDS` | Webhook window length | `60` |
 | `RATE_LIMIT_MCP_MUTATION_MAX` | MCP mutating tool calls per window | `30` |
 | `RATE_LIMIT_MCP_MUTATION_WINDOW_SECONDS` | MCP mutation window length | `60` |
+| `RATE_LIMIT_USER_MAX` | Requests per signed-in user per window on every `/api` session route, multi-user mode only (spec #104) | `300` |
+| `RATE_LIMIT_USER_WINDOW_SECONDS` | Per-user window length | `60` |
+| `RATE_LIMIT_USER_SEARCH_MAX` | Per-user `/api/search` requests per window, on top of the general budget | `30` |
+| `RATE_LIMIT_USER_SEARCH_WINDOW_SECONDS` | Per-user search window length | `60` |
 
 ## Briefings & Inbox
 

@@ -531,6 +531,19 @@ class Config(BaseModel):
     signup_allowlist: list[str] = Field(default_factory=list)  # "a@x.com" or "@x.com"
     # Shown on /login when an account is disabled or signups are paused.
     admin_contact_email: str = ""
+    # Spec #104 Phase 2 — per-user daily limits (rolling 24h; 0 = unlimited;
+    # admins exempt). ``quota_overrides`` in app_settings raises or lowers
+    # them per user. With quota_enforce off, refusals are only logged.
+    quota_feeds_introduced_per_day: int = 10
+    quota_follows_total: int = 200
+    quota_follows_per_day: int = 50
+    quota_imports_per_day: int = 5
+    quota_translations_per_day: int = 20
+    quota_narrations_per_day: int = 3
+    quota_enforce: bool = True
+    # A reservation older than this is released by housekeeping (a process
+    # died between reserve and settle); longer than any paid call.
+    quota_reservation_ttl_seconds: int = 900
 
     # Deployment / Web Surface Configuration
     # "production" locks down cookies, docs endpoints, CORS and verbose errors.
@@ -910,6 +923,14 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "signup_mode": os.getenv("SIGNUP_MODE", "open").strip().lower(),
         "signup_allowlist": [e.strip() for e in os.getenv("SIGNUP_ALLOWLIST", "").split(",") if e.strip()],
         "admin_contact_email": os.getenv("ADMIN_CONTACT_EMAIL", "").strip(),
+        "quota_feeds_introduced_per_day": _env_int("QUOTA_FEEDS_INTRODUCED_PER_DAY", 10),
+        "quota_follows_total": _env_int("QUOTA_FOLLOWS_TOTAL", 200),
+        "quota_follows_per_day": _env_int("QUOTA_FOLLOWS_PER_DAY", 50),
+        "quota_imports_per_day": _env_int("QUOTA_IMPORTS_PER_DAY", 5),
+        "quota_translations_per_day": _env_int("QUOTA_TRANSLATIONS_PER_DAY", 20),
+        "quota_narrations_per_day": _env_int("QUOTA_NARRATIONS_PER_DAY", 3),
+        "quota_enforce": _env_bool("QUOTA_ENFORCE", True),
+        "quota_reservation_ttl_seconds": _env_int("QUOTA_RESERVATION_TTL_SECONDS", 900),
         # Deployment / Web Surface
         "environment": os.getenv("ENVIRONMENT", "production").lower(),
         "cookie_secure": os.getenv("COOKIE_SECURE", "true").lower() == "true",

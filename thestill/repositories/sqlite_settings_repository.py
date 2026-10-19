@@ -17,7 +17,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from ..utils.sqlite_ext import connect
 from .settings_repository import SettingsRepository, StoredSetting
@@ -50,6 +50,28 @@ class SqliteSettingsRepository(SettingsRepository):
                 """,
                 (key, json.dumps(value), updated_at.isoformat(), updated_by),
             )
+
+    def modify(
+        self,
+        key: str,
+        change: Callable[[Optional[Any]], Any],
+        *,
+        updated_by: Optional[str],
+        updated_at: datetime,
+    ) -> Any:
+        with connect(self.db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")  # serialises the read and the write
+            row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+            value = change(json.loads(row["value"]) if row else None)
+            conn.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by
+                """,
+                (key, json.dumps(value), updated_at.isoformat(), updated_by),
+            )
+        return value
 
     def delete(self, key: str) -> bool:
         with connect(self.db_path) as conn:

@@ -206,3 +206,52 @@ def test_callback_redirects_a_refused_signup_to_login(client, app_state, monkeyp
     assert response.status_code == 302
     assert response.headers["location"] == "/login?error=signups_closed"
     assert app_state.user_repository.get_by_email("u@example.com") is None
+
+
+# -- quotas and per-user rate limits (Phase 2) ---------------------------------
+
+
+def test_follow_quota_answers_429_with_retry_after(client, app_state, app_config):
+    app_config.quota_feeds_introduced_per_day = 1
+    user = _user(app_state, "u@example.com")
+    _podcast(app_state, "first")
+    _podcast(app_state, "second")
+    _sign_in(client, app_state, user)
+
+    assert client.post("/api/podcasts/first/follow").status_code == 201
+    refused = client.post("/api/podcasts/second/follow")
+    assert refused.status_code == 429
+    detail = refused.json()["detail"]
+    assert detail["error"] == "quota_exceeded" and detail["quota"] == "feeds_introduced_per_day"
+    assert detail["limit"] == 1 and detail["retry_after"] > 0
+    assert refused.headers["Retry-After"] == str(detail["retry_after"])
+    assert detail["message"].startswith("You've added 1 new podcasts today.")
+
+
+def test_per_user_rate_limit(client, app_state, monkeypatch):
+    from thestill.web import dependencies
+    from thestill.web.middleware.rate_limit import RateLimit, user_rate_limit_hits
+
+    monkeypatch.setattr(dependencies, "USER_API_LIMIT", RateLimit(max_events=3, window_seconds=60))
+    alice, bob = _user(app_state, "alice@example.com"), _user(app_state, "bob@example.com")
+    _sign_in(client, app_state, alice)
+    assert [client.get("/api/podcasts").status_code for _ in range(4)] == [200, 200, 200, 429]
+    limited = client.get("/api/podcasts")
+    assert limited.json()["detail"]["error"] == "rate_limited"
+    assert limited.headers["Retry-After"] == "60"
+    assert user_rate_limit_hits()[alice.id] == 2
+
+    _sign_in(client, app_state, bob)  # another user's budget is untouched
+    assert client.get("/api/podcasts").status_code == 200
+
+
+def test_search_has_a_tighter_per_user_budget(client, app_state, monkeypatch):
+    from thestill.web import dependencies
+    from thestill.web.middleware.rate_limit import RateLimit
+
+    monkeypatch.setattr(dependencies, "USER_SEARCH_LIMIT", RateLimit(max_events=1, window_seconds=60))
+    _sign_in(client, app_state, _user(app_state, "u@example.com"))
+    first = client.get("/api/search/quick?q=climate")
+    assert first.status_code != 429
+    assert client.get("/api/search/quick?q=climate").status_code == 429
+    assert client.get("/api/podcasts").status_code == 200  # the general budget is separate

@@ -337,6 +337,21 @@ CREATE TABLE IF NOT EXISTS suspended_follows (
 );
 CREATE INDEX IF NOT EXISTS idx_suspended_follows_podcast ON suspended_follows(podcast_id);
 
+-- Spec #104 Phase 2 — the per-user usage ledger behind quotas (alembic 0022).
+CREATE TABLE IF NOT EXISTS usage_events (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind text NOT NULL
+        CHECK (kind IN ('feed_introduced', 'follow', 'import', 'translation', 'narration', 'quota_exceeded')),
+    state text NOT NULL CHECK (state IN ('reserved', 'committed', 'released')),
+    created_at timestamptz NOT NULL,
+    settled_at timestamptz NULL,
+    subject_id text NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_events_user_kind ON usage_events(user_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_kind_created ON usage_events(kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_events_reserved ON usage_events(created_at) WHERE state = 'reserved';
+
 CREATE TABLE IF NOT EXISTS user_episode_inbox (
     id uuid PRIMARY KEY,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
