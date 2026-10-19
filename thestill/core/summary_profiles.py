@@ -18,7 +18,8 @@ Every profile emits the same nine ``## N.`` sections in the same order.
 Slots 1 (Gist), 2 (Timeline), 5 (Best Quotes) and 8 (Resource List) are
 fixed because code parses them; a profile fills slots 3, 4, 6, 7 and 9
 inside a fixed role per slot, and brings its own rules and worked
-example. ``general`` is the original prompt, byte for byte.
+example. ``general`` v1 was the original prompt byte for byte; v2 adds the
+shared rules and the format-aware Gist line.
 
 The profile is chosen per podcast: operator override, then the Apple
 category map, then ``general``. Profiles other than ``general`` are only
@@ -91,12 +92,25 @@ STYLE_GUIDE = """You are a sharp, no-nonsense research assistant. You are not a 
     * **Emojis:** Use them to make the text scannable.
 * **Citations:** Every claim must have a timestamp. Use [MM:SS] for episodes under 60 minutes, [HH:MM:SS] for longer episodes."""
 
+# Spec #98 Phase 2: rules every profile shares, placed after the style guide.
+# The publication date the second bullet refers to is sent with the
+# transcript (``TranscriptSummarizer``), not in the system prompt.
+SHARED_RULES = """**Faithfulness:**
+* Report only what the episode says. Do not update, correct or extend its facts, results or developments from your own knowledge, even when you believe they are out of date.
+* Time-sensitive facts (results, scores, prices, polls, who holds which job) are as of the episode's publication date, given above the transcript. Report them as the episode states them, and keep relative times ("next spring", "last year") in the episode's words rather than turning them into calendar years."""
+
 FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
     {
         1: SlotSpec(
             "🎙️",
             "The Gist",
-            "[Host] interviews [Guest(s) with roles/titles]\n\n"
+            # Spec #98 Phase 2: one line on who is speaking and in what
+            # format, not an assumed interview. The preview drops this line.
+            "One line saying who is speaking and in what format, with roles or titles where the episode gives them,"
+            ' e.g. "[host name] interviews [guest name, role]", "[host name] and [co-host names] discuss [topic]",'
+            ' "Narrated by [host name]", "[host name]\'s daily news round-up" or "A full-cast audio drama,'
+            ' introduced by [name]". Replace every bracketed part with the real names; never leave brackets in.'
+            " Only call it an interview when someone is being interviewed, and use only names the episode gives.\n\n"
             "A 2-sentence summary of the episode. Do NOT include the episode title, date, or duration"
             " - these are displayed elsewhere.",
         ),
@@ -137,7 +151,7 @@ EXAMPLE_HEADER = "## Example Output (follow this formatting exactly)"
 
 GENERAL = SummaryProfile(
     key="general",
-    version=1,
+    version=2,  # v2: shared rules + format-aware Gist line (spec #98 Phase 2)
     slots=MappingProxyType(
         {
             3: SlotSpec(
@@ -237,15 +251,14 @@ PROFILES: Mapping[str, SummaryProfile] = MappingProxyType({GENERAL.key: GENERAL}
 def compose_system_prompt(profile: SummaryProfile) -> str:
     """Build the summary system prompt for ``profile``.
 
-    Order: style guide → profile rules → slots 1–9 → example. Composing
-    ``general`` reproduces the original single prompt exactly.
+    Order: style guide → shared rules → profile rules → slots 1–9 → example.
     """
     addenda = {5: profile.quote_guidance, 8: profile.resource_hint}
     sections = [
         (FIXED_SLOT_SPECS.get(number) or profile.slots[number]).render(number, addenda.get(number, ""))
         for number in range(1, 10)
     ]
-    parts = [STYLE_GUIDE, profile.rules, *sections, EXAMPLE_SEPARATOR, EXAMPLE_HEADER, profile.example]
+    parts = [STYLE_GUIDE, SHARED_RULES, profile.rules, *sections, EXAMPLE_SEPARATOR, EXAMPLE_HEADER, profile.example]
     return "\n\n".join(part for part in parts if part)
 
 

@@ -72,7 +72,7 @@ class TranscriptSummarizer:
     """LLM-based summarizer for podcast transcripts"""
 
     # The ``general`` profile's prompt (spec #98); kept as a class attribute
-    # for callers and tests that read the original single prompt.
+    # for callers and tests that read the default prompt.
     SYSTEM_PROMPT = compose_system_prompt(GENERAL)
 
     def __init__(
@@ -179,12 +179,19 @@ in the template describes the required structure; it is not output language.
         chunk_num: int,
         total_chunks: int,
         system_prompt: str,
+        metadata: Optional[EpisodeMetadata] = None,
     ) -> str:
         """Process a single transcript chunk"""
+        # Spec #98 Phase 2: the shared rules anchor time-sensitive facts to the
+        # publication date. It is rendered from our own datetime, so it sits
+        # outside the untrusted sentinels; the feed's title never goes in.
+        header = ""
+        if metadata and metadata.pub_date:
+            header = f"EPISODE PUBLISHED: {metadata.formatted_date}\n\n"
         # Wrap transcript content in untrusted sentinels
         # so prompt-injection attempts inside the audio cannot hijack the
         # model into ignoring the operator's instructions.
-        header = "TRANSCRIPT:\n\n"
+        header += "TRANSCRIPT:\n\n"
         if total_chunks > 1:
             header += f"[CHUNK {chunk_num}/{total_chunks}]\n\n"
         user_message = header + wrap_untrusted(chunk_text, label="TRANSCRIPT")
@@ -255,7 +262,7 @@ in the template describes the required structure; it is not output language.
                 if len(chunks) > 1:
                     self.console.progress(f"Processing chunk {i}/{len(chunks)}...")
 
-                output_text = self._process_single_chunk(chunk, i, len(chunks), system_prompt)
+                output_text = self._process_single_chunk(chunk, i, len(chunks), system_prompt, metadata)
                 chunk_outputs.append(output_text)
 
             # Combine results if multiple chunks
