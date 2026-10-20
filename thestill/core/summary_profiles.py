@@ -663,8 +663,277 @@ Priya arrives with a list of every hotel she's ever been thrown out of, and Dan 
 * Dan's airport-lounge bit gets a groan from both of them, and Jess moves swiftly on [24:50]""",
 )
 
+# Spec #98 category sweep (2026-10-20). Each was judged blind against
+# general v4 on its own shows before it was added. This rule helps inside
+# a profile whose sections carry claims and caveats; added to general on
+# its own it made attribution worse (lost 5–14), so it stays here.
+_ATTRIBUTION_RULE = (
+    '* Keep who said it and how sure they were: "Rhiannon thinks", "one small trial found", "he\'s guessing".'
+    " Don't turn a hunch into a fact, drop a caveat, or round a number the episode gives exactly."
+)
+
+
+HEALTH = SummaryProfile(
+    key="health",
+    version=1,
+    rules="\n".join(
+        [
+            "**This is a health show:**",
+            _MADE_UP_EXAMPLE,
+            _ATTRIBUTION_RULE,
+            "* Say what the episode suggests, never \"you should\". It isn't medical advice and shouldn't read like it.",
+            "* Doses, amounts, timings and protocols only exactly as the episode gives them, with the conditions and"
+            " who it isn't for. Never add your own.",
+            "* Mental health, abuse, grief and illness: be kind and plain. No jokes at the expense of anyone"
+            " struggling. If the episode points people to support, include it.",
+        ]
+    ),
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "🩺",
+                "What They Say",
+                "* The 3-5 main claims, each with who makes it and what it rests on, the way the episode puts it (a"
+                " trial, a study in mice, clinical experience, their own story) [timestamp].",
+            ),
+            4: SlotSpec(
+                "⚖️",
+                "Debated or Unsure",
+                "* Where the speakers disagree, push back, or say the evidence is thin or mixed [timestamp].\n"
+                '* If nothing was debated, say "Nothing debated" and move on.',
+            ),
+            6: SlotSpec(
+                "🛠️",
+                "Try This",
+                "* The concrete things the episode suggests doing, one bullet each: what, how much or how often, and"
+                " for whom, exactly as said [timestamp].\n"
+                '* If the episode gives no practical steps, say "No practical steps in this one".',
+            ),
+            7: SlotSpec(
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines: who'll get the most out of it, how practical or how deep it goes, and the"
+                " best part to skip to.",
+            ),
+            9: SlotSpec(
+                "🔍",
+                "Evidence Check",
+                "* Only from what the episode itself says: claims that rest on one story or a single small study,"
+                " things the speakers admit aren't settled, and products or sponsors tied to a claim [timestamp].\n"
+                "* Don't judge claims with your own knowledge.\n"
+                '* If there is nothing to flag, say "Nothing to flag".',
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Hollie Marsh interviews sleep researcher Dr. Tomasz Weir
+
+Tomasz walks through why shift workers sleep worse and what his clinic tries first. Hollie keeps asking what the evidence actually is, and he's straight about where it's thin.
+
+## 2. ⏱️ Timeline
+* [00:00 - 06:30] **Intro:** Hollie on her own night shifts years ago.
+* [06:30 - 24:10] **Why Shifts Hurt Sleep:** Light, timing and the body clock.
+* [24:10 - End] **What to Try:** Tomasz's clinic routine and its limits.
+
+## 3. 🩺 What They Say
+* Tomasz says light at the wrong time is the main problem for night workers, based on his clinic's patients [09:40]
+* He cites one trial of 60 nurses where blackout blinds helped daytime sleep [15:20]
+
+## 4. ⚖️ Debated or Unsure
+* **Naps:** Hollie thinks a pre-shift nap helps; Tomasz says the evidence is mixed and it depends on the person [19:05]
+
+## 5. 💬 Best Quotes
+* "Our night-shift patients keep a sleep diary for two weeks before we change anything." - Dr. Tomasz Weir [25:30]
+
+## 6. 🛠️ Try This
+* Blackout blinds for daytime sleep after a night shift, as in the nurses' trial [15:20]
+* Keep the same sleep window on days off if you can, which his clinic asks of everyone first [27:45]
+
+## 7. 🎧 Worth a Listen?
+* Practical and honest about the evidence. Shift workers should start at 24:10.
+
+## 8. 📚 Resource List
+* **Tomasz Weir** (person): Sleep researcher who runs a shift-work clinic [01:10]
+
+## 9. 🔍 Evidence Check
+* The blinds advice rests on one trial of 60 nurses, and Tomasz says it hasn't been repeated [16:00]""",
+)
+
+
+INVESTING = SummaryProfile(
+    key="investing",
+    version=1,
+    rules="\n".join(
+        [
+            "**This is an investing show:**",
+            _MADE_UP_EXAMPLE,
+            _ATTRIBUTION_RULE,
+            '* Every view is the speaker\'s, never yours: "Scott thinks Meta has bottomed", not "Meta has bottomed".'
+            " Don't turn an opinion into a buy or sell call the episode didn't make.",
+            "* Prices, returns, rates and valuations exactly as said and as of the publication date. Name the"
+            " companies, funds and tickers the way the episode does.",
+            "* Call-in shows: each caller's situation and the advice they got, one bullet each.",
+        ]
+    ),
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "📈",
+                "The Calls",
+                "* The main views, predictions and positions, told like you'd tell a friend: who holds them, why, and the"
+                " numbers behind them exactly as said, with the time frame [timestamp].\n"
+                "* On a call-in show, one bullet per caller: their situation and the advice they got [timestamp].",
+            ),
+            4: SlotSpec(
+                "⚖️",
+                "Bull vs Bear",
+                "* Where the speakers disagree, push back, or make the other side's case [timestamp].\n"
+                '* If nobody pushed back, say "No pushback" and move on.',
+            ),
+            6: SlotSpec(
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines: who'll get the most out of it (a markets junkie, someone sorting out their"
+                " own money), how deep it goes, and the best part to skip to.",
+            ),
+            7: SlotSpec(
+                "🗣️",
+                "Talking Points",
+                "* Three or four things from this episode worth bringing up with friends, a line each, in your own"
+                " words [timestamp].",
+            ),
+            9: SlotSpec(
+                "🧯",
+                "Risks They Flag",
+                '* The risks, caveats and "what would change my mind" the speakers themselves give [timestamp].\n'
+                "* Don't add your own market views.\n"
+                '* If nobody names a risk, say "No risks flagged".',
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Dev Arora and Nell Price chat
+
+Dev thinks UK small caps are cheap enough to buy now; Nell isn't convinced while rates stay where they are. They also take a listener question on paying off a mortgage early.
+
+## 2. ⏱️ Timeline
+* [00:00 - 04:20] **Markets This Week:** A quick run through the week's moves.
+* [04:20 - 22:40] **Small Caps:** Dev's case and Nell's doubts.
+* [22:40 - End] **Listener Question:** Overpaying a mortgage versus investing.
+
+## 3. 📈 The Calls
+* Dev thinks UK small caps are worth buying for the next two to three years: they've lagged the big companies for ages and sit on about 11 times earnings [06:15]
+* Nell would wait for rate cuts before adding any [14:30]
+* Listener Ruth, 41, asked about overpaying her 4.5% mortgage; Nell said keep the emergency fund first, then overpay [24:10]
+
+## 4. ⚖️ Bull vs Bear
+* **Small caps:** Dev points to the discount; Nell says the discount has been there for years and might not close [15:45]
+
+## 5. 💬 Best Quotes
+* "I'd want to see two rate cuts before I add any UK small caps." - Nell Price [14:40]
+
+## 6. 🎧 Worth a Listen?
+* A friendly argument more than a lecture. Small-cap curious? Start at 04:20; mortgage worriers, skip to 22:40.
+
+## 7. 🗣️ Talking Points
+* The small-cap discount has been there for years, and Nell isn't sure it ever closes [15:45]
+
+## 8. 📚 Resource List
+* **FTSE SmallCap Index** (other): The index Dev's valuation figure refers to [07:00]
+
+## 9. 🧯 Risks They Flag
+* Dev admits small caps would get hit hardest if a recession comes [10:50]""",
+)
+
+
+FAITH = SummaryProfile(
+    key="faith",
+    version=1,
+    rules="\n".join(
+        [
+            "**This is a faith show:**",
+            _MADE_UP_EXAMPLE,
+            "* Give the teaching the way the speaker gives it, in their terms. Don't fact-check, argue with or rank"
+            " anyone's beliefs.",
+            "* Name passages, readings and texts exactly as the episode cites them. Never add a reference it doesn't"
+            " give.",
+            '* Warm and respectful. No snark and no "drama" framing. In a conversation or debate, credit each view'
+            " to the person who holds it.",
+        ]
+    ),
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "📖",
+                "The Message",
+                "* The 3-5 main points of the teaching, reading or conversation, in the speaker's own terms, with the"
+                " passages they use [timestamp].",
+            ),
+            4: SlotSpec(
+                "💭",
+                "Questions Raised",
+                "* The hard questions, doubts or disagreements the episode itself takes on, and how it answers them"
+                " [timestamp].\n"
+                '* If it raises none, say "No hard questions in this one".',
+            ),
+            6: SlotSpec(
+                "🙏",
+                "To Take Away",
+                "* The reflection, prayer, practice or challenge the episode leaves listeners with, as given"
+                " [timestamp].\n"
+                '* If it gives none, say "Nothing specific to take away".',
+            ),
+            7: SlotSpec(
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines: what kind of listen it is (a sermon, a daily reading, a conversation), who'll"
+                " get the most from it, and the best part to start at.",
+            ),
+            9: SlotSpec(
+                "📜",
+                "Passages and Readings",
+                "* Each scripture passage, reading or text the episode cites, with what it's used for [timestamp].\n"
+                '* If none are cited, say "None cited".',
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Narrated by Fr. Colm Hardy
+
+Fr. Colm reads the day's two passages and stays with one line about the lost coin. His point is that being searched for matters more than doing the searching.
+
+## 2. ⏱️ Timeline
+* [00:00 - 01:30] **Opening Prayer:** A short prayer to start.
+* [01:30 - 11:20] **The Readings:** Both passages, read in full.
+* [11:20 - End] **Reflection:** Fr. Colm on the lost coin.
+
+## 3. 📖 The Message
+* Fr. Colm says the parable is about the one doing the searching, not the coin [12:40]
+* He links it to the first reading's promise to gather the scattered [15:10]
+
+## 4. 💭 Questions Raised
+* **Why bother with one coin?** Fr. Colm admits the woman's effort looks out of proportion, and says that's the point [14:05]
+
+## 5. 💬 Best Quotes
+* "I always slow down at verse nine, where she calls the neighbours in." - Fr. Colm Hardy [13:20]
+
+## 6. 🙏 To Take Away
+* Notice one person today who might feel overlooked, and look for them on purpose [17:30]
+
+## 7. 🎧 Worth a Listen?
+* A gentle twenty minutes for a daily habit. If you've heard the readings, start at 11:20.
+
+## 8. 📚 Resource List
+* **Fr. Colm Hardy** (person): The priest who leads the daily readings [00:10]
+
+## 9. 📜 Passages and Readings
+* Luke 15:8-10, the parable of the lost coin, the centre of the reflection [06:40]
+* Ezekiel 34:11-16, read first and tied to the parable [01:45]""",
+)
+
+
 PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
-    {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY)}
+    {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY, HEALTH, INVESTING, FAITH)}
 )
 
 
@@ -699,7 +968,25 @@ CATEGORY_PROFILES: Mapping[str, str] = MappingProxyType(
             "investing": ["Investing"],
             "comedy": ["Comedy", "Comedy Interviews", "Improv", "Stand-Up"],
             "history": ["History", "Documentary"],
-            "health": ["Health & Fitness", "Self-Improvement"],
+            "health": [
+                "Health & Fitness",
+                "Self-Improvement",
+                "Mental Health",
+                "Medicine",
+                "Fitness",
+                "Nutrition",
+                "Alternative Health",
+            ],
+            "faith": [
+                "Religion & Spirituality",
+                "Religion",
+                "Spirituality",
+                "Christianity",
+                "Buddhism",
+                "Hinduism",
+                "Islam",
+                "Judaism",
+            ],
             "general": ["Technology", "Tech News", "Science", "Business", "Entrepreneurship"],
         }.items()
         for name in names
