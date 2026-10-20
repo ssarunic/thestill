@@ -899,6 +899,15 @@ carry claims and caveats.
 example's quote. Every new example quote is now plain and tied to its
 made-up story; a rerun of health and investing showed no leaks.
 
+**Examples must obey the shared rules.** Review found six examples
+(sports, comedy, health, faith, fiction, language learning) listing one
+of the episode's own speakers as their only resource, which the shared
+Resource List rules exclude. They now list something a listener could
+look up, and a test checks no example lists its own speakers. Rerun on
+the same episodes: summaries whose resources name someone from the
+Gist's speaker line went from 5/20 to 2/20 in sports (level with v4)
+and stayed at or below v4 elsewhere.
+
 Not given a profile: Education talk shows (LOOD) stay on `general`.
 
 Follow-ups: investing's Bull vs Bear invented a disagreement on a calm

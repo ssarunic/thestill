@@ -710,6 +710,7 @@ HEALTH = SummaryProfile(
                 "Debated or Unsure",
                 "* Where the speakers disagree, push back, or say the evidence is thin or mixed [timestamp].\n"
                 '* If nothing was debated, say "Nothing debated" and move on.',
+                empty="Nothing debated",
             ),
             6: SlotSpec(
                 "🛠️",
@@ -717,6 +718,7 @@ HEALTH = SummaryProfile(
                 "* The concrete things the episode suggests doing, one bullet each: what, how much or how often, and"
                 " for whom, exactly as said [timestamp].\n"
                 '* If the episode gives no practical steps, say "No practical steps in this one".',
+                empty="No practical steps in this one",
             ),
             7: SlotSpec(
                 "🎧",
@@ -731,6 +733,7 @@ HEALTH = SummaryProfile(
                 " things the speakers admit aren't settled, and products or sponsors tied to a claim [timestamp].\n"
                 "* Don't judge claims with your own knowledge.\n"
                 '* If there is nothing to flag, say "Nothing to flag".',
+                empty="Nothing to flag",
             ),
         }
     ),
@@ -746,7 +749,7 @@ Tomasz walks through why shift workers sleep worse and what his clinic tries fir
 
 ## 3. 🩺 What They Say
 * Tomasz says light at the wrong time is the main problem for night workers, based on his clinic's patients [09:40]
-* He cites one trial of 60 nurses where blackout blinds helped daytime sleep [15:20]
+* He cites the Harlow trial of 60 nurses, where blackout blinds helped daytime sleep [15:20]
 
 ## 4. ⚖️ Debated or Unsure
 * **Naps:** Hollie thinks a pre-shift nap helps; Tomasz says the evidence is mixed and it depends on the person [19:05]
@@ -762,7 +765,7 @@ Tomasz walks through why shift workers sleep worse and what his clinic tries fir
 * Practical and honest about the evidence. Shift workers should start at 24:10.
 
 ## 8. 📚 Resource List
-* **Tomasz Weir** (person): Sleep researcher who runs a shift-work clinic [01:10]
+* **Harlow Nurses Sleep Trial** (paper): The trial of 60 nurses behind the blackout-blinds advice [15:20]
 
 ## 9. 🔍 Evidence Check
 * The blinds advice rests on one trial of 60 nurses, and Tomasz says it hasn't been repeated [16:00]""",
@@ -798,6 +801,7 @@ INVESTING = SummaryProfile(
                 "Bull vs Bear",
                 "* Where the speakers disagree, push back, or make the other side's case [timestamp].\n"
                 '* If nobody pushed back, say "No pushback" and move on.',
+                empty="No pushback",
             ),
             6: SlotSpec(
                 "🎧",
@@ -817,6 +821,7 @@ INVESTING = SummaryProfile(
                 '* The risks, caveats and "what would change my mind" the speakers themselves give [timestamp].\n'
                 "* Don't add your own market views.\n"
                 '* If nobody names a risk, say "No risks flagged".',
+                empty="No risks flagged",
             ),
         }
     ),
@@ -884,6 +889,7 @@ FAITH = SummaryProfile(
                 "* The hard questions, doubts or disagreements the episode itself takes on, and how it answers them"
                 " [timestamp].\n"
                 '* If it raises none, say "No hard questions in this one".',
+                empty="No hard questions in this one",
             ),
             6: SlotSpec(
                 "🙏",
@@ -891,6 +897,7 @@ FAITH = SummaryProfile(
                 "* The reflection, prayer, practice or challenge the episode leaves listeners with, as given"
                 " [timestamp].\n"
                 '* If it gives none, say "Nothing specific to take away".',
+                empty="Nothing specific to take away",
             ),
             7: SlotSpec(
                 "🎧",
@@ -903,6 +910,7 @@ FAITH = SummaryProfile(
                 "Passages and Readings",
                 "* Each scripture passage, reading or text the episode cites, with what it's used for [timestamp].\n"
                 '* If none are cited, say "None cited".',
+                empty="None cited",
             ),
         }
     ),
@@ -933,7 +941,7 @@ Fr. Colm reads the day's two passages and stays with one line about the lost coi
 * A gentle twenty minutes for a daily habit. If you've heard the readings, start at 11:20.
 
 ## 8. 📚 Resource List
-* **Fr. Colm Hardy** (person): The priest who leads the daily readings [00:10]
+* **Gospel of Luke** (book): Where the parable of the lost coin comes from [06:40]
 
 ## 9. 📜 Passages and Readings
 * Luke 15:8-10, the parable of the lost coin, the centre of the reflection [06:40]
@@ -985,6 +993,7 @@ FICTION = SummaryProfile(
                 "* Where it sits in the series, mysteries left open, and callbacks to earlier episodes, only as the"
                 " episode gives them.\n"
                 '* If it stands alone, say "A standalone story".',
+                empty="A standalone story",
             ),
         }
     ),
@@ -1018,7 +1027,7 @@ A lighthouse keeper on a small island starts getting letters addressed to someon
 * Quiet and creepy rather than scary, good for a dark evening. Fine to start here.
 
 ## 8. 📚 Resource List
-* **Ivy Rennick** (person): Narrator of the series [00:05]
+* **The Keeper's Letters** (book): The novel the series is adapted from, named in the closing credits [22:40]
 
 ## 9. 🧵 Threads and Series
 * The boatman's silence and the tidy lamp room are left open for later episodes [12:45]""",
@@ -1057,6 +1066,7 @@ LANGUAGE_LEARNING = SummaryProfile(
                 "Tricky Bits",
                 "* Mistakes, exceptions or confusions the episode warns about [timestamp].\n"
                 '* If it flags none, say "Nothing tricky flagged".',
+                empty="Nothing tricky flagged",
             ),
             7: SlotSpec(
                 "🎧",
@@ -1070,6 +1080,7 @@ LANGUAGE_LEARNING = SummaryProfile(
                 "Practise",
                 "* The exercises, prompts or homework the episode gives, as given [timestamp].\n"
                 '* If there are none, say "No exercises in this one".',
+                empty="No exercises in this one",
             ),
         }
     ),
@@ -1101,7 +1112,7 @@ A beginner Spanish lesson on ordering at a café. Finn makes the mistakes so you
 * Slow and friendly, and Finn's mistakes make it easy to follow. Fine as a first lesson.
 
 ## 8. 📚 Resource List
-* **Rosa Delgado** (person): The teacher who leads the lesson [00:10]
+* **Café Phrases Worksheet** (other): The printable phrase list Rosa points to for practice [14:50]
 
 ## 9. ✍️ Practise
 * Order your next coffee in Spanish in your head before you order it for real [14:30]""",
