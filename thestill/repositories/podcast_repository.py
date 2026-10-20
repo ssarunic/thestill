@@ -446,6 +446,46 @@ class PodcastRepository(ABC):
         """Read-only ``{"apple", "youtube", "spotify"}`` → source (or None) for one podcast (spec #87 Phase 3c)."""
         pass
 
+    @abstractmethod
+    def get_platform_link_sample(self, podcast_id: str, limit: int) -> List[PlatformLinkCandidate]:
+        """
+        The podcast's newest ``limit`` episodes with a ``pub_date``, as link
+        candidates, whatever their link state (spec #87 Phase 3d). Channel
+        discovery verifies a channel against this stable sample: the pass's
+        retry candidates are often one or two episodes. Newest first.
+        """
+        pass
+
+    @abstractmethod
+    def count_platform_links(self, podcast_id: str, platform: str, match_methods: Sequence[str]) -> int:
+        """Found links (rows with a URL) of one podcast on ``platform`` made by any of ``match_methods``."""
+        pass
+
+    @abstractmethod
+    def get_youtube_discovery_checked_at(self, podcast_id: str) -> Optional[datetime]:
+        """When YouTube channel discovery (spec #87 Phase 3d) last ran for this podcast, or None."""
+        pass
+
+    @abstractmethod
+    def set_youtube_discovery_checked_at(self, podcast_id: str, checked_at: Optional[datetime]) -> None:
+        """Stamp (or clear, with None) the last channel discovery attempt."""
+        pass
+
+    @abstractmethod
+    def forget_discovered_youtube_channels(
+        self, podcast_id: Optional[str] = None, *, dry_run: bool = False
+    ) -> Tuple[int, int]:
+        """
+        Roll back spec #87 Phase 3d for every podcast whose YouTube channel
+        was discovered (``youtube_url_source = 'resolver'``), or only
+        ``podcast_id``. In one transaction: delete the podcast's YouTube rows
+        made by a channel listing (``title_date`` / ``title_duration``) and
+        its YouTube not-found markers, keep ``publisher`` rows, and clear
+        ``youtube_url``, its source and the discovery stamp. Returns
+        ``(podcasts, link rows)`` affected; ``dry_run`` only counts.
+        """
+        pass
+
     # ------------------------------------------------------------------
     # Spec #48/#60 — background refresh scheduling + failure policy.
     # Declared abstract so a backend missing one of these fails LOUDLY at

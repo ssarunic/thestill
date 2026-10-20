@@ -169,6 +169,8 @@ CREATE TABLE IF NOT EXISTS podcasts (
     apple_url_source text NULL CHECK (apple_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
     youtube_url_source text NULL CHECK (youtube_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
     spotify_url_source text NULL CHECK (spotify_url_source IN ('chart', 'publisher', 'resolver', 'curated')),
+    -- Spec #87 Phase 3d: when YouTube channel discovery last ran (migration 0023).
+    youtube_discovery_checked_at timestamptz NULL,
     primary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     secondary_category_id bigint NULL REFERENCES categories(id) ON DELETE SET NULL,
     host_entity_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -191,7 +193,7 @@ CREATE TABLE IF NOT EXISTS podcasts (
     refresh_retry_after_at timestamptz NULL,
     -- Spec #94: false hides the show from every signed-out surface (migration 0015).
     public_pages boolean NOT NULL DEFAULT true,
-    -- Spec #98: operator override of the summary genre profile (migration 0023).
+    -- Spec #98: operator override of the summary genre profile (migration 0024).
     summary_profile text NULL
 );
 CREATE INDEX IF NOT EXISTS idx_podcasts_slug ON podcasts(slug) WHERE slug != '';
@@ -207,6 +209,9 @@ ALTER TABLE podcasts
     ADD COLUMN IF NOT EXISTS refresh_disabled_reason text NULL,
     ADD COLUMN IF NOT EXISTS refresh_retry_after_at timestamptz NULL;
 ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS public_pages boolean NOT NULL DEFAULT true;
+-- Spec #87 Phase 3d (alembic 0023).
+ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS youtube_discovery_checked_at timestamptz NULL;
+-- Spec #98 (alembic 0024).
 ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS summary_profile text NULL;
 CREATE INDEX IF NOT EXISTS idx_podcasts_quarantine ON podcasts(refresh_disabled_reason, last_refresh_at) WHERE refresh_disabled_reason IS NOT NULL;
 
