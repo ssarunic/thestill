@@ -377,12 +377,45 @@ def test_example_parses_for_every_consumer(profile):
     assert [int(n) for n in _HEADING_RE.findall(example)] == list(range(1, 10)), "examples show every slot"
 
 
-def test_nothing_contested_is_not_narration_colour():
+def _slot4_drama(slot4: str) -> tuple:
     from thestill.services.briefing_script_generator import extract_summary_sections
 
-    summary = "## 1. 🎙️ The Gist\nA and B chat\n\n## 3. 🧠 Key Takeaways\n* A point [01:00]\n\n## 4. 🌶️ Where It Got Interesting\nNothing contested\n"
+    summary = f"## 1. 🎙️ The Gist\nA and B chat\n\n## 3. 🧠 Key Takeaways\n* A point [01:00]\n\n## 4. 🌶️ Slot\n{slot4}\n"
+    return extract_summary_sections(summary).drama
 
-    assert extract_summary_sections(summary).drama == ()
+
+@pytest.mark.parametrize(
+    "slot4",
+    [
+        "Nothing contested",
+        "* Nothing contested.",
+        "* **Nothing contested here:** the episode only gives the minister's side [04:10]",
+        "* Friendly all round",
+    ],
+)
+def test_a_profiles_nothing_here_line_is_not_narration_colour(slot4):
+    assert not _slot4_drama(slot4)
+
+
+@pytest.mark.parametrize(
+    "slot4",
+    [
+        "* Alice rejects Bob's argument [01:00]",  # short but real
+        "* 主持人反驳了嘉宾的观点 [02:00]",  # no spaces between words
+    ],
+)
+def test_short_or_unspaced_disagreements_stay_narration_colour(slot4):
+    assert _slot4_drama(slot4)
+
+
+@pytest.mark.parametrize(
+    "profile, number",
+    [(p, n) for p in PROFILES.values() for n, spec in p.slots.items() if spec.empty],
+    ids=lambda v: getattr(v, "key", v),
+)
+def test_each_nothing_here_line_is_the_one_the_instructions_ask_for(profile, number):
+    spec = profile.slots[number]
+    assert f'"{spec.empty}"' in spec.instructions
 
 
 @pytest.mark.parametrize("profile", [p for p in PROFILES.values() if p is not GENERAL], ids=lambda p: p.key)

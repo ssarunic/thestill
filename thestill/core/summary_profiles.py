@@ -52,6 +52,10 @@ class SlotSpec:
     emoji: str
     title: str  # English; localised by the spec #58 rule like every other heading
     instructions: str
+    # The exact line the instructions tell the model to write when the slot
+    # has nothing for this episode ("Nothing contested"). Consumers skip it;
+    # a test checks it appears in the instructions.
+    empty: str = ""
 
     def render(self, number: int, addendum: str = "") -> str:
         body = f"{self.instructions}\n{addendum}" if addendum else self.instructions
@@ -200,6 +204,7 @@ GENERAL = SummaryProfile(
 * **A narrated story:** where accounts, witnesses or sources conflict [timestamp].
 
 Friendly banter and teasing aren't conflict. If nothing was contested, say "Nothing contested" and move on.""",
+                empty="Nothing contested",
             ),
             6: SlotSpec(
                 "🎧",
@@ -218,6 +223,7 @@ Friendly banter and teasing aren't conflict. If nothing was contested, say "Noth
                 "Reality Check",
                 """* Only where someone actually makes a claim: anything weak, circular, overhyped or one-sided, and speculation presented as fact [timestamp].
 * If nobody makes claims worth checking, say "Nothing to check".""",
+                empty="Nothing to check",
             ),
         }
     ),
@@ -284,6 +290,7 @@ NEWS = SummaryProfile(
                 "Contested",
                 """* Where sides, sources or the people in the room disagree, and what each one says [timestamp].
 * If the episode only gives one side, say "Nothing contested here" and name the side it gives.""",
+                empty="Nothing contested here",
             ),
             6: SlotSpec(
                 "📅",
@@ -608,6 +615,7 @@ COMEDY = SummaryProfile(
                 "Banter & Roasts",
                 """* Who got roasted, by whom, and whether it landed [timestamp].
 * "Friendly all round" is a fine answer.""",
+                empty="Friendly all round",
             ),
             6: SlotSpec(
                 "🔁",
@@ -625,6 +633,7 @@ COMEDY = SummaryProfile(
                 "What Fell Flat",
                 """* Only bits the people in the room treat as not landing: a groan, "that didn't work", someone moving swiftly on [timestamp]. Don't judge what's funny yourself, and a deliberate or self-deprecating bit isn't a flop.
 * If nothing like that happens, say "Everything landed".""",
+                empty="Everything landed",
             ),
         }
     ),
@@ -666,6 +675,13 @@ Priya arrives with a list of every hotel she's ever been thrown out of, and Dan 
 PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
     {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY)}
 )
+
+
+def empty_slot_lines(number: int) -> frozenset[str]:
+    """Every profile's "nothing here" line for slot ``number``, lower-cased."""
+    return frozenset(
+        spec.empty.lower() for profile in PROFILES.values() if (spec := profile.slots.get(number)) and spec.empty
+    )
 
 
 def compose_system_prompt(profile: SummaryProfile) -> str:
