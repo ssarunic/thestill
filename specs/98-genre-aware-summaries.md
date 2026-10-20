@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime`, `comedy` implemented and evaluated (off by default); `general` v4 (format-neutral sections) 2026-10-20; category sweep for the remaining genres and Phase 4 open
+> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime`, `comedy` implemented and evaluated (off by default); `general` v4 (format-neutral sections) and the sweep's `health`, `investing`, `faith`, `fiction` and `language_learning` 2026-10-20 (all off by default); Phase 4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -303,14 +303,17 @@ publication date. Never fill in what happened later.
 
 | Slot | Title | Content |
 | --- | --- | --- |
-| 3 | 🧠 Key Takeaways | As `general` |
-| 4 | 🐂 Bull vs Bear | The opposing cases, who makes each |
-| 6 | 📊 The Numbers | Metrics, valuations, forecasts, rates, verbatim with speaker and timestamp |
-| 7 | 🎯 Calls & Theses | Who is long or short what, why, over what horizon, and the risks they named |
-| 9 | 💼 Conflicts & BS Test | Talking their own book, undisclosed positions, weak or circular reasoning |
+| 3 | 📈 The Calls | Each view, prediction or position with who holds it, why, the numbers behind it and the time frame; one bullet per caller on call-in shows |
+| 4 | ⚖️ Bull vs Bear | Where the speakers disagree or make the other side's case; "No pushback" otherwise |
+| 6 | 🎧 Worth a Listen? | Who'll get the most out of it, how deep it goes, where to skip to |
+| 7 | 🗣️ Talking Points | As `general` |
+| 9 | 🧯 Risks They Flag | Risks, caveats and "what would change my mind" from the speakers themselves, never the summary's own market view |
 
-Rules: report numbers exactly as spoken, never computed or rounded.
-Never frame anything as advice to the reader.
+Rules: every view is the speaker's, never the summary's, and never a
+stronger buy or sell call than the episode makes. Figures exactly as
+said and as of the publication date. A first draft with a separate
+Numbers That Matter list lost every voice comparison (0–7); the numbers
+now sit inside The Calls.
 
 #### `comedy`
 
@@ -341,15 +344,56 @@ Resource hint: people, places, events, books.
 
 | Slot | Title | Content |
 | --- | --- | --- |
-| 3 | ✅ What to Try | Actionable advice, each tagged by the evidence the speaker gave: **Study**, **Clinical experience**, **Anecdote** or **Opinion** |
-| 4 | 🥊 Contested Claims | Where the episode, or the experts it cites, disagree |
-| 6 | 🔬 Evidence Cited | Studies and trials named, with what was said about them (size, population) |
-| 7 | 🚩 Before You Try It | Caveats and who the advice is not for, as stated in the episode |
-| 9 | 💊 The "BS" Test | Weak evidence, supplements and protocols sold by the speaker, extrapolation from mice or tiny samples |
+| 3 | 🩺 What They Say | The main claims, each with who makes it and what it rests on (a trial, a study in mice, clinical experience, their own story) |
+| 4 | ⚖️ Debated or Unsure | Where the speakers disagree or say the evidence is thin; "Nothing debated" otherwise |
+| 6 | 🛠️ Try This | Concrete steps exactly as suggested: what, how much or how often, for whom; "No practical steps in this one" otherwise |
+| 7 | 🎧 Worth a Listen? | Who'll get the most out of it, how practical or deep it is, where to skip to |
+| 9 | 🔍 Evidence Check | Only from the episode: claims resting on one story or one small study, things the speakers admit aren't settled, products tied to a claim |
 
-Rules: never add medical advice the episode does not give. No
-boilerplate "consult your doctor" unless the episode or a specific risk
-calls for it.
+Rules: say what the episode suggests, never "you should". Doses,
+amounts and protocols only as given, with their conditions. Mental
+health, abuse, grief and illness handled kindly and plainly; any support
+the episode points to is included.
+
+#### `faith`
+
+| Slot | Title | Content |
+| --- | --- | --- |
+| 3 | 📖 The Message | The teaching or conversation in the speaker's own terms, with the passages used |
+| 4 | 💭 Questions Raised | Hard questions or doubts the episode itself takes on, and its answer |
+| 6 | 🙏 To Take Away | The reflection, prayer, practice or challenge it leaves listeners with |
+| 7 | 🎧 Worth a Listen? | Sermon, daily reading or conversation; who it suits; where to start |
+| 9 | 📜 Passages and Readings | Each passage or text cited, with what it's used for |
+
+Rules: never fact-check, argue with or rank anyone's beliefs; references
+exactly as cited; warm and respectful, no "drama" framing.
+
+#### `fiction`
+
+| Slot | Title | Content |
+| --- | --- | --- |
+| 3 | 📖 The Story | What happens, in order, up to the turn, without the ending |
+| 4 | 🎭 Who's Who | The main characters, a line each |
+| 6 | 🔚 How It Ends (spoilers) | The ending or cliffhanger, the only place it appears |
+| 7 | 🎧 Worth a Listen? | Mood, who it suits (age for children's stories), whether earlier episodes are needed |
+| 9 | 🧵 Threads and Series | Series position, open mysteries, callbacks; "A standalone story" otherwise |
+
+Rules: retell it as a story, never as real events or something to
+fact-check; narrator and cast are not characters.
+
+#### `language_learning`
+
+| Slot | Title | Content |
+| --- | --- | --- |
+| 3 | 🎯 What You'll Learn | The topic, grammar point or situation the lesson covers |
+| 4 | 🗝️ Key Words and Phrases | Each word or phrase taught, with the meaning the episode gives (none if it gives none) |
+| 6 | 🧩 Tricky Bits | Mistakes and exceptions the episode warns about |
+| 7 | 🎧 Worth a Listen? | Pace, how hard it feels, who it suits; a level only if the episode names one |
+| 9 | ✍️ Practise | Exercises and homework as given |
+
+Rules: words, translations and grammar exactly as given; announced or
+previewed material is not "taught". Education talk shows stay on
+`general`.
 
 ### Choosing a profile
 
@@ -375,7 +419,10 @@ Initial category map (Apple Podcasts taxonomy):
 | Investing | `investing` |
 | Comedy, Comedy Interviews, Improv, Stand-Up | `comedy` |
 | History, Documentary | `history` |
-| Health & Fitness and every subcategory, Self-Improvement | `health` |
+| Health & Fitness and every subcategory (Mental Health, Medicine, Fitness, Nutrition, Alternative Health), Self-Improvement | `health` |
+| Religion & Spirituality and every subcategory | `faith` |
+| Fiction, Drama, Science Fiction, Comedy Fiction, Stories for Kids | `fiction` |
+| Language Learning | `language_learning` |
 | Everything else, including Technology, Tech News, Science, Business, Entrepreneurship | `general` |
 
 Apple categories are self-declared and often wrong, so the override
@@ -787,9 +834,72 @@ Follow-ups:
 - Enable `true_crime` first.
 - Summarizer recovery for a prompt-level `PROHIBITED_CONTENT` block, and
   report it as such instead of "no candidates".
-- Sweep the categories without a profile (faith, fiction, health,
-  investing, learning) with v4, and add a profile only where v4
-  measurably fails.
+- ~~Sweep the categories without a profile.~~ Done, see the [category sweep](#category-sweep-2026-10-20).
+
+## Category sweep (2026-10-20)
+
+After v4, the categories with no profile were swept: health, investing,
+faith, fiction and language learning. Together they are about half of
+the chart catalogue. Thirteen shows were added locally to fill the
+gaps, three episodes each.
+
+**Absolute grading did not work.** Each v4 summary was first graded on
+its own against a per-group checklist. Health and investing scored
+about 2.3 out of 5, but a control of tech, business and science
+interviews (general's home ground) scored 2.5 and failed the same
+items: attribution, caveats, overreach. A strict grader marks
+everything down, so the sweep switched to blind pairwise judging: a
+draft profile against v4, on its own shows and criteria, the same
+method as Phase 3.
+
+| Group | Shows | Draft vs v4 | Faithfulness | Voice |
+| --- | --- | --- | --- | --- |
+| health | Huberman Lab, The Peter Attia Drive, SOLVED with Mark Manson | 9–0 | 5–0 | 0–2 |
+| investing (v2) | Prof G Markets, Masters in Business | 10–0 | 3–0 | 0–1 |
+| faith | Bible in a Year, Timothy Keller Sermons, Pints With Aquinas, Kirsty Gallagher | 12–0 | 10–0 | 11–0 |
+| fiction | The Magnus Archives, The Archers, Welcome to Night Vale, Sleep Tight Stories | 9–0 | 5–1 | 8–1 |
+| language learning (v2) | News in Slow Spanish, Coffee Break Spanish, 6 Minute English | 7–1 | 5–1 | 5–3 |
+| investing, extra shows | The Ramsey Show (call-in), Unhedged | 2–2 | 2–2 | 0–2 |
+
+Ties make up the rest of each row. What v4 got wrong, by group:
+
+- **Health:** hedged claims turned into flat advice, no protocols, and
+  on an episode about abusive relationships the highlight was a crude
+  joke while the support advice was dropped.
+- **Investing:** the topics but not the calls, figures or the
+  speakers' own caveats; Reality Check filled with the summary's own
+  market views. The first investing draft won 10–0 but lost voice 0–7
+  to a bare Numbers That Matter list. On the Ramsey call-in show the
+  profile won both episodes (each caller and their advice); on Unhedged
+  it lost both, inventing a disagreement and a book reference, so
+  investing stands at 12–2 overall.
+- **Language learning:** v4 wrote a news recap with no vocabulary and
+  "Nothing contested" filler. The first draft won 8–0 but lost voice
+  0–4 and invented levels ("intermediate") in 5 of 8; v2 fixed voice,
+  and a last change to Worth a Listen? (a level only if the episode
+  names one) took invented levels to 0 in 16 summaries, checked
+  deterministically. Glosses for words the episode only announces still
+  slip in.
+- **Faith:** Reality Check fact-checked teaching and astrology, with
+  "supposedly" and "apparently".
+- **Fiction:** Reality Check fact-checked stories; endings given away
+  in the Gist.
+
+**A shared attribution rule made things worse.** "Keep who said it and
+how sure they were" added to `general` lost to plain v4 5–14 on the
+Phase 2 set, with more misattributions and invented quotes. It stays
+inside the health and investing profiles, whose sections are built to
+carry claims and caveats.
+
+**Example quotes leak.** One investing summary in 20 reused the draft
+example's quote. Every new example quote is now plain and tied to its
+made-up story; a rerun of health and investing showed no leaks.
+
+Not given a profile: Education talk shows (LOOD) stay on `general`.
+
+Follow-ups: investing's Bull vs Bear invented a disagreement on a calm
+markets show (Unhedged), the same failure The Drama had; worth a
+recheck with more such shows.
 
 ## Alternatives considered
 

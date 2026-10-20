@@ -241,6 +241,13 @@ def all_genres_defined(monkeypatch):
             "faith",
             "category: Christianity",
         ),
+        (
+            {"primary_category": "Education", "primary_subcategory": "Language Learning"},
+            "language_learning",
+            "category: Language Learning",
+        ),
+        # Education talk shows stay on general.
+        ({"primary_category": "Education"}, "general", "default"),
         # A comedy story is a story: the subcategory beats its Comedy parent.
         (
             {"primary_category": "Comedy", "primary_subcategory": "Comedy Fiction"},

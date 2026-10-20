@@ -1016,10 +1016,105 @@ A lighthouse keeper on a small island starts getting letters addressed to someon
 )
 
 
+LANGUAGE_LEARNING = SummaryProfile(
+    key="language_learning",
+    version=1,
+    rules="\n".join(
+        [
+            "**This is a language lesson:**",
+            _MADE_UP_EXAMPLE,
+            "* Words, phrases, grammar and translations exactly as the episode gives them, in their original"
+            " spelling. Never add your own examples or translations. If the episode names a word or idiom but"
+            " doesn't explain it, list it without a meaning.",
+            '* Give the level only if the episode says it. Previewed or announced material isn\'t "taught".',
+            "* Write like a friendly teacher talking to a learner, not a syllabus.",
+        ]
+    ),
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "🎯",
+                "What You'll Learn",
+                "* The 3-5 things the lesson teaches: the topic, the grammar point, the situation it prepares you for"
+                " [timestamp].",
+            ),
+            4: SlotSpec(
+                "🗝️",
+                "Key Words and Phrases",
+                "* The words and phrases taught, each with the meaning the episode gives [timestamp].",
+            ),
+            6: SlotSpec(
+                "🧩",
+                "Tricky Bits",
+                "* Mistakes, exceptions or confusions the episode warns about [timestamp].\n"
+                '* If it flags none, say "Nothing tricky flagged".',
+            ),
+            7: SlotSpec(
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines, as you'd tell a friend who's learning: how fast and how hard it feels, who it"
+                " suits, and whether you need earlier lessons first. Don't name a level (beginner, intermediate, B1)"
+                " unless the episode does.",
+            ),
+            9: SlotSpec(
+                "✍️",
+                "Practise",
+                "* The exercises, prompts or homework the episode gives, as given [timestamp].\n"
+                '* If there are none, say "No exercises in this one".',
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Rosa Delgado and Finn Carey chat
+
+A beginner Spanish lesson on ordering at a café. Finn makes the mistakes so you don't have to, and Rosa explains why "quisiera" sounds politer than "quiero".
+
+## 2. ⏱️ Timeline
+* [00:00 - 02:30] **Warm-Up:** A quick review of numbers.
+* [02:30 - 14:10] **At the Café:** Ordering, step by step.
+* [14:10 - End] **Your Turn:** Rosa sets the practice.
+
+## 3. 🎯 What You'll Learn
+* How to order a drink and ask for the bill in Spanish [03:15]
+* Why "quisiera" is politer than "quiero" [08:40]
+
+## 4. 🗝️ Key Words and Phrases
+* **quisiera:** "I would like", the polite way to order [08:40]
+* **la cuenta, por favor:** "the bill, please" [11:20]
+
+## 5. 💬 Best Quotes
+* "Try it with café con leche first, then with té con limón." - Rosa Delgado [12:05]
+
+## 6. 🧩 Tricky Bits
+* Finn keeps saying "un café con leche" with "una"; Rosa explains café is masculine [05:30]
+
+## 7. 🎧 Worth a Listen?
+* Slow and friendly, and Finn's mistakes make it easy to follow. Fine as a first lesson.
+
+## 8. 📚 Resource List
+* **Rosa Delgado** (person): The teacher who leads the lesson [00:10]
+
+## 9. ✍️ Practise
+* Order your next coffee in Spanish in your head before you order it for real [14:30]""",
+)
+
+
 PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
     {
         profile.key: profile
-        for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY, HEALTH, INVESTING, FAITH, FICTION)
+        for profile in (
+            GENERAL,
+            NEWS,
+            SPORTS,
+            HISTORY,
+            TRUE_CRIME,
+            COMEDY,
+            HEALTH,
+            INVESTING,
+            FAITH,
+            FICTION,
+            LANGUAGE_LEARNING,
+        )
     }
 )
 
@@ -1055,6 +1150,7 @@ CATEGORY_PROFILES: Mapping[str, str] = MappingProxyType(
             "investing": ["Investing"],
             "comedy": ["Comedy", "Comedy Interviews", "Improv", "Stand-Up"],
             "fiction": ["Fiction", "Drama", "Science Fiction", "Comedy Fiction", "Stories for Kids"],
+            "language_learning": ["Language Learning"],
             "history": ["History", "Documentary"],
             "health": [
                 "Health & Fitness",
