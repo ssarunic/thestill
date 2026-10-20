@@ -369,7 +369,10 @@ def test_example_parses_for_every_consumer(profile):
     assert extract_gist(example)
     assert sections.takeaways, "narration reads slot 3 as claims"
     assert sections.drama, "narration reads slot 4 as colour"
-    assert parse_resource_list(example)
+    resources = parse_resource_list(example)
+    assert resources
+    speakers = example.split("## 2.", 1)[0] + " ".join(re.findall(r'" - ([^\[]+) \[', example))
+    assert not [r.name for r in resources if r.name in speakers], "the shared rules exclude the episode's own speakers"
     assert run_summary_checks({"summary": example}, duration_seconds=3600)["sections"]["ok"]
     assert [int(n) for n in _HEADING_RE.findall(example)] == list(range(1, 10)), "examples show every slot"
 

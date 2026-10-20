@@ -403,7 +403,7 @@ Ashford snatch it at the death to keep the title race alive, and the panel can't
 
 ## 4. 🔥 Hot Takes & Clashes
 * **Round 1: Genius or Luck?** [08:30]
-  * **The take:** Leon says Kowalski's triple change won it.
+  * **The take:** Leon says Anton Kowalski's triple change won it.
   * **The pushback:** Maria reckons Millbrook were just out on their feet.
 
 ## 5. 💬 Best Quotes
@@ -418,7 +418,7 @@ Ashford snatch it at the death to keep the title race alive, and the panel can't
 * Ashford's last five look kinder on paper, and Maria isn't buying it [24:30]
 
 ## 8. 📚 Resource List
-* **Leon Hughes** (person): Former Millbrook captain, now a regular on the panel [00:20]
+* **Anton Kowalski** (person): Millbrook's manager, whose triple change the panel argues about [09:12]
 
 ## 9. 🧢 Hype Check
 * "Best side in the country" got thrown around after a game Maria herself said Ashford were lucky to win [14:05]""",
@@ -657,7 +657,7 @@ Priya arrives with a list of every hotel she's ever been thrown out of, and Dan 
 * High energy and Priya fits right in. If you only have ten minutes, skip to the hotel list at 9:40.
 
 ## 8. 📚 Resource List
-* **Priya Nair** (person): Stand-up comedian, here plugging her autumn tour [00:40]
+* **The Seaview** (place): The Hove hotel in Priya's toaster story [16:20]
 
 ## 9. 🙃 What Fell Flat
 * Dan's airport-lounge bit gets a groan from both of them, and Jess moves swiftly on [24:50]""",
