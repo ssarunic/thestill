@@ -158,100 +158,103 @@ EXAMPLE_HEADER = "## Example Output (follow this formatting exactly)"
 
 # --- Profiles ----------------------------------------------------------------
 
+# Every profile's example is made up and tied to made-up names, because the model
+# copied generic example quotes into real episodes (spec #98 Phase 3).
+_MADE_UP_EXAMPLE = (
+    "* The example at the end is made up. Never reuse its names, quotes, scores, numbers or facts:"
+    " everything you write comes from this episode."
+)
+
+# general v4 (spec #98 ablation): sections that work for any format. v3's
+# The Drama, Blog Ideas and Social Snippets lost 19–1 to these on a mixed
+# 20-episode set: they invited invented tension, quotes and facts on shows
+# with no drama to report.
 GENERAL = SummaryProfile(
     key="general",
-    version=3,  # v2: shared rules + format-aware Gist line; v3: explicit interview / no-guest cases (spec #98)
+    version=4,  # v2: shared rules + format-aware Gist; v3: explicit interview / no-guest cases; v4: format-neutral sections
+    rules="\n".join(
+        [
+            "**Read the format first:**",
+            _MADE_UP_EXAMPLE,
+            "* Notice how people are talking: an interview, hosts chatting, a panel, a narrated story, or a mix that"
+            " changes part-way through. Every section below works for any format.",
+            "* If a section has nothing real to say for this episode, say so in one line. Never invent tension,"
+            " scepticism or a flop to fill it.",
+        ]
+    ),
     slots=MappingProxyType(
         {
             3: SlotSpec(
                 "🧠",
                 "Key Takeaways",
-                "* The 3-5 things that actually matter. Short bullet points. (Cite timestamps)",
+                "* The 3-5 things a listener should come away with, whatever the format: the main points of an"
+                " interview, the stories in a round-up, how a narrated story unfolds and ends, the results in a sports"
+                " show. Short bullets, each with a timestamp.",
             ),
             4: SlotSpec(
                 "🌶️",
-                "The Drama",
-                """Look for INTERPERSONAL tension, not just intellectual disagreement:
+                "Where It Got Interesting",
+                """Real tension or disagreement, matched to how the episode works:
+* **An interview:** pushback, a dodged question, a guest going into PR mode [timestamp].
+* **Hosts or a panel:** where they genuinely disagree, and who said what [timestamp].
+* **A narrated story:** where accounts, witnesses or sources conflict [timestamp].
 
-**What to catch:**
-* **Deflection/Defensiveness:** Does someone dodge a question by turning it back on the questioner? ("If YOU don't like it, sell YOUR shares")
-* **Personal vs. abstract:** Is someone making it personal when the question was professional? (Attacking the host vs. addressing critics generally)
-* **Evasion:** Did a direct question get a non-answer? What question was avoided?
-* **Tone shifts:** Does the conversation suddenly get cold/awkward/tense?
-* **Power dynamics:** Is a guest challenging their host? Is someone punching down?
-* **Uncomfortable moments:** Silences, subject changes, someone talking over another
-* **Corporate hedging vs. straight talk:** Is someone giving PR answers when pressed?
-
-**Format your findings (IMPORTANT: separate each drama moment clearly):**
-
-If there are multiple drama moments, format them like this:
-
-* **Round 1: [Short descriptive title]** [Timestamp]
-  * **What happened:** Describe the moment factually (who said what to whom)
-  * **Why it matters:** What does this reveal? Insecurity? Genuine disagreement? PR mode?
-  * **The temperature:** Was this awkward? Hostile? Just tense?
-* **Round 2: [Short descriptive title]** [Timestamp]
-  * **What happened:** ...
-  * **Why it matters:** ...
-  * **The temperature:** ...
-
-Number drama moments as "Round 1", "Round 2", etc. Give each round a short, punchy title that captures the conflict.
-
-If there's only one drama moment, skip the "Round" numbering and just use the title format.
-
-If nothing spicy happened, say so briefly. Don't force drama where there isn't any.""",
+Friendly banter and teasing aren't conflict. If nothing was contested, say "Nothing contested" and move on.""",
             ),
             6: SlotSpec(
-                "✍️",
-                "Blog Ideas",
-                """* Give me 3 angles I could write about.
-* **Title:** Catchy, not academic.
-* **The Angle:** Why should I care? (1 sentence).
-* **Main Points:** 3 rapid-fire bullets.
-* **Source:** Where in the audio did this come from? [timestamp]""",
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines: what kind of listen it is (a deep interview, a chatty catch-up, a story), who'll"
+                " enjoy it, and the best part to skip to.",
             ),
             7: SlotSpec(
-                "📱",
-                "Social Snippets",
-                """* 3 posts for LinkedIn/X.
-* Make them sound human, not like a bot.""",
+                "🗣️",
+                "Talking Points",
+                "* Three or four things from this episode worth bringing up with friends, a line each, in your own words"
+                " [timestamp].",
             ),
             9: SlotSpec(
-                "💩",
-                'The "BS" Test',
-                "* Did anything sound weak, circular, or overly hyped? Call it out.",
+                "🔍",
+                "Reality Check",
+                """* Only where someone actually makes a claim: anything weak, circular, overhyped or one-sided, and speculation presented as fact [timestamp].
+* If nobody makes claims worth checking, say "Nothing to check".""",
             ),
         }
     ),
+    # Made-up names and deliberately plain quotes: the ablation draft's punchy
+    # example quote turned up verbatim in real summaries.
     example="""## 1. 🎙️ The Gist
-Sarah Chen interviews Dr. James Miller, Chief AI Officer at Stanford Medicine
+Nadia Fenwick and Owen Tull interview economist Rhiannon Bale
 
-A deep dive into how machine learning is transforming diagnostics and why doctors shouldn't fear the robots just yet.
+Rhiannon reckons the four-day week works in offices and falls apart on hospital wards, and Owen isn't having it. Nadia keeps them both honest with the numbers from the Calderbrook trial.
 
 ## 2. ⏱️ Timeline
-* [00:00 - 08:30] **Introductions:** Background on Dr. Miller's journey from radiologist to AI researcher.
-* [08:30 - 22:15] **AI in Diagnostics:** How neural networks now spot tumours faster than humans.
-* [22:15 - 35:00] **The Human Element:** Why AI won't replace doctors, but augment them.
-* [35:00 - End] **Future Predictions:** What's coming in the next 5 years.
+* [00:00 - 08:10] **Catch-Up:** Nadia and Owen on their own week, briefly.
+* [08:10 - 29:40] **The Calderbrook Trial:** Rhiannon walks through how the trial was run.
+* [29:40 - End] **Hospitals:** Where Rhiannon and Owen fall out.
 
 ## 3. 🧠 Key Takeaways
-* AI catches 94% of early-stage cancers vs 88% for human radiologists. [12:45]
-* The FDA has approved 500+ AI medical devices since 2020. [18:30]
-* Biggest barrier isn't tech—it's getting doctors to trust the black box. [28:15]
+* Rhiannon says the Calderbrook offices kept output flat on four days [12:20]
+* She thinks shift work like nursing can't copy it without more staff [31:05]
 
-## 6. ✍️ Blog Ideas
-* **Title:** Why Your Next Diagnosis Might Come From a Machine
-  * **The Angle:** AI is already better than doctors at spotting certain diseases.
-  * **Main Points:**
-    * Radiology AI now matches expert-level accuracy.
-    * Early detection rates have jumped 15% in pilot programmes.
-    * Patient outcomes improve when AI assists (not replaces) doctors.
-  * **Source:** [12:45, 15:20, 28:15]
+## 4. 🌶️ Where It Got Interesting
+* **Owen v Rhiannon on hospitals:** Owen says rotas could absorb it; Rhiannon says the trial never covered shift work [33:40]
+
+## 5. 💬 Best Quotes
+* "We measured output in the same way before and after, so the comparison is fair." - Rhiannon Bale [14:05]
+
+## 6. 🎧 Worth a Listen?
+* A proper interview with a real disagreement in the last third. If you're short on time, start at 29:40.
+
+## 7. 🗣️ Talking Points
+* Office output didn't drop on four days, according to the trial Rhiannon describes [12:20]
+* Nobody in the room could say how a hospital would do it [33:40]
 
 ## 8. 📚 Resource List
-* **The Emperor of All Maladies** (book): Siddhartha Mukherjee's history of cancer, which Dr. Miller credits with his switch to oncology imaging [31:10]
-* **Siddhartha Mukherjee** (person): Oncologist and author of the book above [31:10]
-* **Aidoc** (company): Radiology AI startup used as the main example of an FDA-cleared tool [18:30]""",
+* **Calderbrook Four-Day Week Trial** (event): The trial Rhiannon's numbers come from [09:05]
+
+## 9. 🔍 Reality Check
+* Owen's "rotas will absorb it" has no numbers behind it, and Rhiannon says so [34:20]""",
 )
 
 # Spec #98 Phase 3 genre profiles. Instructions and examples are written in
@@ -260,11 +263,6 @@ A deep dive into how machine learning is transforming diagnostics and why doctor
 # comparison. Each example shows all nine sections (a slot the example skips
 # is a slot the model drops) and is tied to made-up names, because the model
 # copied a generic example quote into real episodes.
-
-_MADE_UP_EXAMPLE = (
-    "* The example at the end is made up. Never reuse its names, quotes, scores, numbers or facts:"
-    " everything you write comes from this episode."
-)
 
 NEWS = SummaryProfile(
     key="news",

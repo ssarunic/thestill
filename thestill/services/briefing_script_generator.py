@@ -184,6 +184,9 @@ class SummarySections:
 _SCARE_QUOTE_RE = re.compile(r"(?<!\w)[\u2018']([^'\u2019\n]{1,40}?)[\u2019'](?!\w)")
 
 
+_MIN_DRAMA_WORDS = 6
+
+
 def _unquote_terms(text: str) -> str:
     return _SCARE_QUOTE_RE.sub(r"\1", text)
 
@@ -210,7 +213,9 @@ def extract_summary_sections(summary_text: str) -> Optional[SummarySections]:
     """
     gist_body = _summary_section(summary_text, 1)
     takeaways = _items_as_strings(_summary_section(summary_text, 3))
-    drama = _items_as_strings(_summary_section(summary_text, 4))
+    # Spec #98: slot 4 says "Nothing contested" (in the summary's language)
+    # when there was no tension; a line that short is never colour.
+    drama = tuple(d for d in _items_as_strings(_summary_section(summary_text, 4)) if len(d.split()) >= _MIN_DRAMA_WORDS)
     if gist_body is None and not takeaways and not drama:
         return None
     gist = _unquote_terms(" ".join(_strip_summary_markup(gist_body or "")))

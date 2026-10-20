@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime`, `comedy` implemented and evaluated (off by default); `investing`, `health` and Phase 4 open
+> **Status:** 🚧 In progress — Phases 1–2 implemented 2026-10-19; Phase 3 `news`, `sports`, `history`, `true_crime`, `comedy` implemented and evaluated (off by default); `general` v4 (format-neutral sections) 2026-10-20; category sweep for the remaining genres and Phase 4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -234,17 +234,20 @@ because the style guide sentence is unchanged.
 The first set of profiles is below. Titles and wording are the starting
 point for the Phase 3 evals, not final copy.
 
-#### `general` (today's prompt)
+#### `general`
 
-| Slot | Title |
-| --- | --- |
-| 3 | 🧠 Key Takeaways |
-| 4 | 🌶️ The Drama |
-| 6 | ✍️ Blog Ideas |
-| 7 | 📱 Social Snippets |
-| 9 | 💩 The "BS" Test |
+| Slot | v1–v3 (the original prompt) | v4 (2026-10-20) |
+| --- | --- | --- |
+| 3 | 🧠 Key Takeaways | 🧠 Key Takeaways (any format) |
+| 4 | 🌶️ The Drama | 🌶️ Where It Got Interesting (matched to the format) |
+| 6 | ✍️ Blog Ideas | 🎧 Worth a Listen? |
+| 7 | 📱 Social Snippets | 🗣️ Talking Points |
+| 9 | 💩 The "BS" Test | 🔍 Reality Check |
 
-No change to rules or example.
+v1–v3 kept the original sections. v4 replaces them with sections that
+work for any format, adds "read the format first" rules and a made-up
+example showing all nine sections. See
+[Genre vs format ablation](#genre-vs-format-ablation-and-general-v4-2026-10-20).
 
 #### `true_crime`
 
@@ -712,6 +715,82 @@ Open after Phase 3:
   true-crime show to true crime. They mostly still won, but an operator
   override or a per-episode check is worth having before rollout.
 
+## Genre vs format ablation and general v4 (2026-10-20)
+
+The question: how much of the profiles' win comes from genre, and how
+much from simply fitting the format (an interview, hosts chatting, a
+panel, a narrated story)? A format-aware `general` (FA) was written with
+sections that work for any format and judged blind, with the same
+judges and criteria as Phase 3, against both sides.
+
+FA against `general` v3 on the 20-episode Phase 2 set (a mix of tech,
+business, news, comedy, history, sports, true crime, health, fiction,
+science, education and TV): FA won 19–1 overall, 17–1 on faithfulness
+and 16–0 on voice. Almost every judge named the same cause: v3's The
+Drama, Blog Ideas, Social Snippets and BS Test are where it invents
+tension, "temperature", outside facts and quotes on shows with no drama
+to report.
+
+Each genre profile against FA, 20 episodes per genre (19 for true crime):
+
+| Genre | Profile vs FA | Profile vs general v2 | Faithfulness (profile–FA) | Voice (profile–FA) |
+| --- | --- | --- | --- | --- |
+| news | 17–3 | 18–2 | 10–5 | 0–7 |
+| sports | 14–6 | 15–5 | 5–8 | 7–3 |
+| history | 15–5 | 19–1 | 10–5 | 5–7 |
+| true crime | 18–1 | 19–1 | 16–1 | 12–2 |
+| comedy | 14–6 | 17–3 | 2–9 | 18–0 |
+
+Both axes matter. Format belongs in the default prompt; genre structure
+still wins for its genre, almost entirely on fit. True crime needs its
+profile most: FA's "Where It Got Interesting" pitched real cases as
+entertainment and dropped case status and content warnings. Sports and
+comedy profiles are *less* faithful than FA, and the errors sit in their
+genre sections: misstated results and scores, banter lines credited to
+the wrong person, and comedy's What Fell Flat still inventing flops
+(5 of 20).
+
+**`general` v4** is FA with a new example. The ablation draft's punchy
+example quote turned up verbatim in two real summaries and an example
+name in a third (3 of 238), so the v4 example uses made-up names and a
+plain quote. Results, 20 episodes, against v3:
+
+| Run | Overall | Faithfulness | Voice |
+| --- | --- | --- | --- |
+| 1 | 19–1 | 17–0 | 15–1 |
+| 2 | 18–2 | 18–2 | 13–0 |
+
+Deterministic checks over 159 v4 summaries (3 runs of the Phase 2 set
+plus one run of each genre set): no example text or names leaked, every
+summary parses for the preview, gist, narration and resource consumers,
+and section checks fail only on localised (Croatian) headings, as
+before. Summaries are about a third shorter (≈710 words against
+≈1,050).
+
+Notes:
+
+- Slot 4 can now say "Nothing contested". Narration skips a slot-4
+  item under six words, so a one-liner is never used as colour.
+- One Croatian true-crime episode is refused by Gemini with
+  `PROHIBITED_CONTENT` on the prompt under v4 (and FA), but not under
+  v3 or the `true_crime` profile. Removing any one of v4's rule lines
+  also gets it through: the transcript sits on the filter's edge rather
+  than any wording triggering it. The summarizer has no recovery for a
+  prompt block (the cleaner has), and the provider reports it as "no
+  candidates". Follow-up below.
+
+Follow-ups:
+
+- Rebuild the genre profiles on v4's rules. Comedy: replace What Fell
+  Flat; don't name a speaker in fast banter unless it's clear. Sports:
+  give a score only if someone says it.
+- Enable `true_crime` first.
+- Summarizer recovery for a prompt-level `PROHIBITED_CONTENT` block, and
+  report it as such instead of "no candidates".
+- Sweep the categories without a profile (faith, fiction, health,
+  investing, learning) with v4, and add a profile only where v4
+  measurably fails.
+
 ## Alternatives considered
 
 - **A separate prompt per genre with its own sections.** Most freedom,
@@ -733,10 +812,8 @@ Open after Phase 3:
 ## Open questions
 
 1. **Should `general` change slots 6 and 7 to serve the subscriber?**
-   Blog Ideas and Social Snippets suit the operator's own use. A
-   "Should you listen?" slot may serve public-page readers better.
-   This is a product call, not a genre one, so it is left out of this
-   spec until #94 ships.
+   Resolved by v4: Worth a Listen? and Talking Points replace Blog
+   Ideas and Social Snippets.
 2. **Tech News.** It is mapped to `general` to protect the corpus that
    works. Daily tech round-ups are structurally news. Measure after
    `news` ships, and consider mapping it then.
