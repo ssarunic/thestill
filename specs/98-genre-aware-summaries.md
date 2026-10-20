@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 🚧 In progress — Phase 1 (refactor, no behaviour change) implemented 2026-10-19; Phases 2–4 open
+> **Status:** 🚧 In progress — Phase 1 (refactor) and Phase 2 (shared rules, `general` v2) implemented 2026-10-19; Phases 3–4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -525,7 +525,31 @@ chooses to run it.
      `general`) or `auto`.
 2. **Shared rules.** Format-aware Gist line and episode-date anchoring
    for all profiles. `general` becomes v2. Evaluated on 10 random
-   episodes across the whole corpus, against v1.
+   episodes across the whole corpus, against v1. **Done 2026-10-19**,
+   evaluated on 20 episodes instead of 10 (see [Phase 2 evaluation](#phase-2-evaluation-2026-10-19)).
+   Notes from the implementation:
+   - `SHARED_RULES` ("Stick to the episode") sits after the style
+     guide and is written in the style guide's own voice. A first,
+     compliance-style wording ("Report only what the episode says. Do
+     not update…") pulled the whole summary towards a reporting
+     register, which the operator noticed. It also says to keep
+     relative times ("next spring") in the episode's words: once the
+     model sees the date it started turning them into wrong calendar
+     years.
+   - The publication date goes in the user message, as
+     `EPISODE PUBLISHED: 15 Jun 2026` above the transcript and outside
+     the untrusted sentinels. It is rendered from our datetime, and the
+     feed's title stays out (#96).
+   - The Gist's first line is only who is speaking and how ("Co-hosts
+     …", "[host name] with a panel: …", "Narrated by …"), never the
+     topic. A "discuss [topic]" example turned it into a listings blurb
+     and left the two sentences below with no hook. The brackets are
+     named, there is an audio-drama example, and it says never to leave
+     brackets in: an earlier wording leaked "[Host]" into every
+     audio-drama summary.
+   - The legacy-manifest backfill no longer passes a profile, so old
+     summaries stay `general` v1 instead of being stamped with today's
+     version.
 3. **Profiles, one at a time.** Add each profile with its example and
    rubric criteria, run the evaluation, enable it. Suggested order by
    corpus size and risk: `news`, `investing`, `sports`, `comedy`,
@@ -535,6 +559,80 @@ chooses to run it.
    override field on the podcast settings page, a mixed-profile
    briefing narration check, and an optional backfill of each enabled
    profile's newest N episodes per podcast.
+
+## Phase 2 evaluation (2026-10-19)
+
+20 episodes from 20 podcasts, one per show, spread across interview,
+co-host, panel, news, sports results, narrated, solo, audio drama and
+two Croatian shows (one of them true crime). v1 is the Phase 1 commit's
+code and v2 the final prompt. Both use `gemini-3-flash-preview` on the
+same clean transcripts, four runs each (80 summaries per version).
+
+Deterministic, over the four runs:
+
+| Check | v1 | v2 |
+| --- | --- | --- |
+| Co-host, solo, narrated, panel or drama show called an "interview" | 32/40 | 0/40 |
+| Template placeholder in the Gist line | 0/80 | 0/80 |
+| Preview, narration gist or resource list fails to parse | 0/80 | 0/80 |
+| Years in the summary that are not in the transcript | 19 | 12 |
+| …of which 2023 or later | 7 | 4 |
+| "Next spring" written as a calendar year (The News Agents) | 0/4 | 0/4 |
+| Section 7 dropped (English shows) | 8/72 | 4/72 |
+| Gist section contractions per 1,000 words | 17.3 | 19.6 |
+
+Blind pairwise judging by Claude (a different model family from the
+summariser), A/B order randomised, reading the full transcript, with
+voice ("reads like a smart friend, not a press release") as its own
+criterion:
+
+| | v1 | v2 |
+| --- | --- | --- |
+| Preferred overall | 4 | 14 (2 ties) |
+| More faithful | 3 | 12 (5 ties) |
+| Better voice | 6 | 4 (10 ties) |
+| Gist line correct | 9/20 | 17/20 |
+
+The four episodes v2 lost got three more runs each. Dwarkesh and Off
+Menu came out even. The two news shows stayed with v1 (The News Agents
+3–1, Newscast 4–0), mostly on attribution: a host's paraphrase
+presented as a minister's quote, one faction's line credited to
+another. v1 makes the same kind of error, less often on these two
+shows. The `news` profile's "attribute every claim" rule is aimed at
+exactly this, and `news` is first in the Phase 3 order.
+
+How the prompt got here, each step measured on the same 20 episodes:
+
+- The first wording called nothing an interview but leaked "[Host]"
+  into the audio-drama summary on 4 of 4 runs.
+- With the brackets fixed, the publication date made the model write
+  "spring 2025" for the episode's "next spring" (2 of 8 runs). The
+  relative-time clause fixed it.
+- That version won on accuracy (preferred 15–4) but read more formal:
+  36 of 72 first lines were "X and Y discuss [topic]", followed by
+  "The episode covers…". Taking the topic out of the first line and
+  rewriting the shared rules in the style guide's voice brought voice
+  back level with v1.
+- A `gemini-3.1-pro-preview` judge on the first wording agreed on
+  accuracy (10 v2, 2 v1, 6 ties over 18), with rubric faithfulness
+  8.72 → 9.06 and attribution 9.89 → 9.39.
+
+Open after Phase 2, none caused by it:
+
+- Guest roles the transcript never states ("CEO of Convergent
+  Research", "Chair of Neurological Surgery at UCSF") appear in every
+  version. "Use only names and roles the episode gives" in the Gist
+  instruction did not stop them; they come from the model's own
+  knowledge of the guest.
+- Section 7 is dropped in about one summary in ten in every version.
+  The worked example shows sections 1, 2, 3, 6 and 8 only.
+- `summary_checks` reports every section missing on localised (#58)
+  summaries because it matches English titles. Phase 4's
+  `required_sections(profile)` should match on number.
+- Resource List descriptions add background (a book's author, a
+  company's founder) by design (#92). Judges count it as outside
+  knowledge, so per-profile rubrics should exclude section 8 from that
+  count.
 
 ## Alternatives considered
 

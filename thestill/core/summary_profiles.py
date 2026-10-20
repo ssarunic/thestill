@@ -18,7 +18,8 @@ Every profile emits the same nine ``## N.`` sections in the same order.
 Slots 1 (Gist), 2 (Timeline), 5 (Best Quotes) and 8 (Resource List) are
 fixed because code parses them; a profile fills slots 3, 4, 6, 7 and 9
 inside a fixed role per slot, and brings its own rules and worked
-example. ``general`` is the original prompt, byte for byte.
+example. ``general`` v1 was the original prompt byte for byte; v2 adds the
+shared rules and the format-aware Gist line.
 
 The profile is chosen per podcast: operator override, then the Apple
 category map, then ``general``. Profiles other than ``general`` are only
@@ -91,12 +92,30 @@ STYLE_GUIDE = """You are a sharp, no-nonsense research assistant. You are not a 
     * **Emojis:** Use them to make the text scannable.
 * **Citations:** Every claim must have a timestamp. Use [MM:SS] for episodes under 60 minutes, [HH:MM:SS] for longer episodes."""
 
+# Spec #98 Phase 2: rules every profile shares, placed after the style guide.
+# Written in the style guide's own voice: a stiffer, compliance-style wording
+# measurably pulled the summaries towards a reporting register. The
+# publication date the second bullet refers to is sent with the transcript
+# (``TranscriptSummarizer``), not in the system prompt.
+SHARED_RULES = """**Stick to the episode:**
+* Only say what the episode says. Don't top it up with things you know, and don't "fix" facts you think are out of date.
+* Scores, prices, polls and who holds which job are as of the publication date (it's above the transcript), so give them the way the episode does. "Next spring" stays "next spring"; don't turn it into a year.
+* Being accurate doesn't mean being formal. Keep the smart-friend voice."""
+
 FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
     {
         1: SlotSpec(
             "🎙️",
             "The Gist",
-            "[Host] interviews [Guest(s) with roles/titles]\n\n"
+            # Spec #98 Phase 2: one line on who is speaking and in what
+            # format, not an assumed interview. No topic here: a topic in this
+            # line turned it into a listings blurb and left the summary below
+            # without a hook. The preview drops this line.
+            'One short line with just who is speaking and how, e.g. "[host name] interviews [guest name, role]",'
+            ' "Co-hosts [names]", "[host name] with a panel: [names]", "[host name], solo", "Narrated by [host name]"'
+            ' or "A full-cast audio drama, introduced by [name]". Leave the topic for the summary below. Replace'
+            " every bracketed part with the real names; never leave brackets in. Only call it an interview when"
+            " someone is being interviewed, and use only names and roles the episode gives.\n\n"
             "A 2-sentence summary of the episode. Do NOT include the episode title, date, or duration"
             " - these are displayed elsewhere.",
         ),
@@ -137,7 +156,7 @@ EXAMPLE_HEADER = "## Example Output (follow this formatting exactly)"
 
 GENERAL = SummaryProfile(
     key="general",
-    version=1,
+    version=2,  # v2: shared rules + format-aware Gist line (spec #98 Phase 2)
     slots=MappingProxyType(
         {
             3: SlotSpec(
@@ -237,15 +256,14 @@ PROFILES: Mapping[str, SummaryProfile] = MappingProxyType({GENERAL.key: GENERAL}
 def compose_system_prompt(profile: SummaryProfile) -> str:
     """Build the summary system prompt for ``profile``.
 
-    Order: style guide → profile rules → slots 1–9 → example. Composing
-    ``general`` reproduces the original single prompt exactly.
+    Order: style guide → shared rules → profile rules → slots 1–9 → example.
     """
     addenda = {5: profile.quote_guidance, 8: profile.resource_hint}
     sections = [
         (FIXED_SLOT_SPECS.get(number) or profile.slots[number]).render(number, addenda.get(number, ""))
         for number in range(1, 10)
     ]
-    parts = [STYLE_GUIDE, profile.rules, *sections, EXAMPLE_SEPARATOR, EXAMPLE_HEADER, profile.example]
+    parts = [STYLE_GUIDE, SHARED_RULES, profile.rules, *sections, EXAMPLE_SEPARATOR, EXAMPLE_HEADER, profile.example]
     return "\n\n".join(part for part in parts if part)
 
 
