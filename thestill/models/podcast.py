@@ -442,6 +442,12 @@ class Podcast(BaseModel):
     # show link in episode descriptions).
     spotify_url: Optional[str] = None
 
+    # Spec #98 — operator override of the summary genre profile (a key in
+    # ``core.summary_profiles.PROFILES``); None resolves from the categories.
+    # Like the store links, ``save()``/``save_podcast()`` leave it untouched:
+    # ``PodcastRepository.set_podcast_summary_profile`` is the only writer.
+    summary_profile: Optional[str] = None
+
     # THES-145: Feed management (itunes:complete, copyright)
     is_complete: bool = False  # Podcast won't produce new episodes (from itunes:complete="Yes")
     copyright: Optional[str] = None  # Copyright notice (from channel <copyright>)

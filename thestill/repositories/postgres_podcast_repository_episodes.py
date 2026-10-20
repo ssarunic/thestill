@@ -164,6 +164,7 @@ _PODCAST_TUPLE_COLS = """p.id AS p_id, p.created_at AS p_created_at, p.rss_url, 
        p.secondary_category_id AS p_secondary_category_id,
        p.author AS p_author, p.explicit AS p_explicit, p.show_type AS p_show_type,
        p.website_url AS p_website_url, p.is_complete AS p_is_complete, p.copyright AS p_copyright,
+       p.summary_profile AS p_summary_profile,
        p.last_processed, p.last_processed_at, p.updated_at AS p_updated_at, e.*"""
 
 
@@ -231,6 +232,7 @@ class EpisodesMixin(CategoryCacheMixin):
             website_url=row["p_website_url"],
             is_complete=bool(row["p_is_complete"]) if row["p_is_complete"] is not None else False,
             copyright=row["p_copyright"],
+            summary_profile=row["p_summary_profile"],
             last_processed=row["last_processed"],
             last_processed_at=row.get("last_processed_at"),
             episodes=[],  # Episodes not loaded

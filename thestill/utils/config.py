@@ -78,6 +78,11 @@ def get_platform_links_youtube_discovery_days() -> int:
     return max(0, _env_int("PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS", 7))
 
 
+def get_summary_profiles_enabled() -> list[str]:
+    """Spec #98 — genre summary profiles that may be chosen; ``general`` is always on."""
+    return [key.strip().lower() for key in os.getenv("SUMMARY_PROFILES_ENABLED", "").split(",") if key.strip()]
+
+
 def get_default_refresh_interval_seconds() -> int:
     """Seeded/initial per-feed refresh interval (default 1h)."""
     return _env_int("REFRESH_DEFAULT_INTERVAL_SECONDS", 3600)

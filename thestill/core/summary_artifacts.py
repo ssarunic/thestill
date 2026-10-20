@@ -21,6 +21,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from thestill.core.summary_profiles import GENERAL, SummaryProfile
 from thestill.utils.file_storage import FileStorage
 from thestill.utils.language_config import normalize_language_code
 
@@ -54,6 +55,11 @@ class SummaryManifest(BaseModel):
     schema_version: int = SUMMARY_MANIFEST_SCHEMA_VERSION
     canonical_language: str
     summary_sha256: str
+    # Spec #98: the genre profile that produced the summary. Defaulted so
+    # manifests written before profiles existed stay valid. Literals, not
+    # GENERAL.version: those summaries are general v1 forever.
+    profile: str = "general"
+    profile_version: int = 1
 
 
 class SummaryTranslationMetadata(BaseModel):
@@ -73,12 +79,15 @@ def write_summary_manifest(
     summary_key: str,
     summary_content: str,
     canonical_language: str,
+    profile: SummaryProfile = GENERAL,
 ) -> SummaryManifest:
-    """Persist canonical summary language metadata after the summary write."""
+    """Persist canonical summary language and profile metadata after the summary write."""
 
     manifest = SummaryManifest(
         canonical_language=normalize_language_code(canonical_language),
         summary_sha256=content_sha256(summary_content),
+        profile=profile.key,
+        profile_version=profile.version,
     )
     file_storage.write_text(summary_manifest_key(summary_key), manifest.model_dump_json(indent=2))
     return manifest

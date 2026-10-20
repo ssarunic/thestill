@@ -1,6 +1,6 @@
 # Genre-Aware Summaries: One Contract, Many Profiles
 
-> **Status:** 📝 Draft — prompt and consumers surveyed against the code on 2026-10-15, design drafted, not yet scheduled
+> **Status:** 🚧 In progress — Phase 1 (refactor, no behaviour change) implemented 2026-10-19; Phases 2–4 open
 > **Created:** 2026-10-15
 > **Priority:** Medium — the summary is the product's main artifact, and for about a third of the corpus it asks the wrong questions
 > **Author:** Product & Engineering
@@ -503,7 +503,26 @@ chooses to run it.
    `general` only, compose the prompt from parts, add the byte-equality
    test, add the manifest fields, the override column (Alembic
    migration plus SQLite schema), resolution, logging and the two CLI
-   commands.
+   commands. **Done 2026-10-19.** Notes from the implementation:
+   - The byte-equality test compares against a fixture frozen from the
+     old literal (`tests/unit/core/fixtures/`), not against itself.
+   - Alembic `0024`, renumbered after the spec #87 Phase 3d PR took
+     `0023`. The worker loads its podcast through the episode-join
+     `get_episode`, so that projection carries the column too, with its
+     own contract test.
+   - Callers (worker, CLI, MCP) resolve the profile and pass it to
+     `summarize()` and `write_summary_manifest()`; the summarizer stays
+     podcast-agnostic. The legacy-manifest backfill writes `general` v1.
+   - The full category map ships now. A category that maps to a profile
+     not yet defined or enabled resolves to `general`, and
+     `summary-profiles` shows the candidate ("category: True Crime →
+     true_crime, not defined yet").
+   - Two map decisions the table above leaves open: News / Sports News
+     maps to `sports`, and the `general` categories are explicit rows,
+     so a show whose primary category is Technology is not moved to a
+     genre profile by its secondary category.
+   - `set-summary-profile` accepts only defined profiles (Phase 1:
+     `general`) or `auto`.
 2. **Shared rules.** Format-aware Gist line and episode-date anchoring
    for all profiles. `general` becomes v2. Evaluated on 10 random
    episodes across the whole corpus, against v1.

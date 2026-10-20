@@ -195,6 +195,17 @@ the scheduler are off by default.
 | `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables it | `48` |
 | `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` | Days before a show with no YouTube channel (or a chart channel that matches none of its episodes) is searched again (spec #87 Phase 3d). One attempt is one or two channel searches plus up to ten flat listings; a channel is stored only when its uploads match at least 3 of the show's newest episodes. `0` disables discovery; roll back with `thestill link-platforms --forget-discovered` | `7` |
 
+## Summary Profiles (spec #98)
+
+Each podcast's summaries use a genre profile, chosen by the operator
+override (`thestill set-summary-profile`), then the feed's Apple
+category, then `general`. Run `thestill summary-profiles` to see each
+podcast's effective profile and why.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SUMMARY_PROFILES_ENABLED` | Comma-separated genre profiles that may be chosen (e.g. `news,sports`). `general` is always on; a podcast whose category maps to a profile not listed here gets `general` | - (empty) |
+
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 
 The task worker auto-requeues infra-class failures once the dependency

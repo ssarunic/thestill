@@ -905,3 +905,26 @@ def test_find_by_audio_url_and_set_canonical_id(h):
     # Idempotent re-stamp of the same canonical id.
     h.repo.set_episode_canonical_id(ep.id, canonical)
     assert h.repo.find_episode_id_by_canonical_id(canonical) == ep.id
+
+
+def test_episode_join_carries_the_summary_profile_override(h):
+    """Spec #98: the summarize worker loads its podcast through
+    ``get_episode``; a missing column there would silently ignore the
+    operator's override."""
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    ep = _mk_episode(pid, uid)
+    h.repo.save_episode(ep)
+    assert h.repo.get_episode(ep.id)[0].summary_profile is None
+
+    if h.backend == "sqlite":
+        with sqlite3.connect(h.repo.db_path) as conn:
+            conn.execute("UPDATE podcasts SET summary_profile = 'general' WHERE id = ?", (pid,))
+    else:
+        import psycopg
+
+        with psycopg.connect(PG_DSN) as conn:
+            conn.execute("UPDATE podcasts SET summary_profile = 'general' WHERE id = %s", (pid,))
+
+    assert h.repo.get_episode(ep.id)[0].summary_profile == "general"
+    assert h.repo.get_episodes_by_ids([ep.id])[ep.id][0].summary_profile == "general"

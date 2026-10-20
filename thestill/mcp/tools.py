@@ -1586,19 +1586,23 @@ def setup_tools(
                             duration_seconds=episode.duration,
                             podcast_title=podcast.title,
                             language=podcast.language,
+                            episode_id=episode.id,
                         )
+                        from ..core.summary_artifacts import write_summary_manifest
+                        from ..core.summary_profiles import resolve_summary_profile
 
-                        summary_text = summarizer.summarize(transcript_text, metadata=metadata)
+                        profile = resolve_summary_profile(podcast).profile
+                        summary_text = summarizer.summarize(transcript_text, metadata=metadata, profile=profile)
                         # Spec #35 — persist via the configured FileStorage backend
                         summary_key = path_manager.to_relative(summary_path)
                         config.file_storage.write_text(summary_key, summary_text)
-                        from ..core.summary_artifacts import write_summary_manifest
 
                         write_summary_manifest(
                             config.file_storage,
                             summary_key=summary_key,
                             summary_content=summary_text,
                             canonical_language=podcast.language,
+                            profile=profile,
                         )
 
                         # Update feed manager
