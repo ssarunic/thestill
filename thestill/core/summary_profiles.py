@@ -932,8 +932,95 @@ Fr. Colm reads the day's two passages and stays with one line about the lost coi
 )
 
 
+FICTION = SummaryProfile(
+    key="fiction",
+    version=1,
+    rules="\n".join(
+        [
+            "**This is a story (fiction or audio drama):**",
+            _MADE_UP_EXAMPLE,
+            "* Retell it as a story. Don't treat its events as real, and don't fact-check it.",
+            "* Spoilers: the setup is fine everywhere, but how it ends goes only in How It Ends.",
+            "* Use the characters' names as the episode does. The narrator or cast reading it aren't characters.",
+            "* Stories for children: say the age it suits and anything a parent would want to know, only from what"
+            " the episode shows.",
+        ]
+    ),
+    slots=MappingProxyType(
+        {
+            3: SlotSpec(
+                "📖",
+                "The Story",
+                "* What happens, in order, up to the turn, without the ending: the setup, the trouble, what the"
+                " characters try [timestamp].",
+            ),
+            4: SlotSpec(
+                "🎭",
+                "Who's Who",
+                "* The main characters, a line each: who they are and what they want, as the episode shows them.",
+            ),
+            6: SlotSpec(
+                "🔚",
+                "How It Ends (spoilers)",
+                "* How this episode ends or the cliffhanger it leaves, in one or two lines [timestamp].",
+            ),
+            7: SlotSpec(
+                "🎧",
+                "Worth a Listen?",
+                "* In two or three lines: the mood (creepy, cosy, funny), who it suits (for children, the age), and"
+                " whether you need earlier episodes first.",
+            ),
+            9: SlotSpec(
+                "🧵",
+                "Threads and Series",
+                "* Where it sits in the series, mysteries left open, and callbacks to earlier episodes, only as the"
+                " episode gives them.\n"
+                '* If it stands alone, say "A standalone story".',
+            ),
+        }
+    ),
+    example="""## 1. 🎙️ The Gist
+Narrated by Ivy Rennick
+
+A lighthouse keeper on a small island starts getting letters addressed to someone who left years ago. It's a slow, creepy one, and it doesn't explain itself.
+
+## 2. ⏱️ Timeline
+* [00:00 - 03:10] **Arrival:** Arlo takes over the lighthouse.
+* [03:10 - 17:40] **The Letters:** A letter every week, all for Maren.
+* [17:40 - End] **The Reply:** Arlo finally writes back.
+
+## 3. 📖 The Story
+* Arlo arrives for a winter posting and finds the lamp room oddly tidy [01:50]
+* Letters keep coming for Maren, the keeper before him, each one more urgent [06:20]
+* Arlo asks the boatman about her, and he won't say [12:45]
+
+## 4. 🎭 Who's Who
+* **Arlo:** The new keeper, practical and a bit lonely.
+* **Maren:** The keeper before him, only ever seen through the letters.
+* **The boatman:** Brings the post and changes the subject.
+
+## 5. 💬 Best Quotes
+* "I'll leave the kettle on the stove, same as always." - from one of the letters [09:30]
+
+## 6. 🔚 How It Ends (spoilers)
+* Arlo writes back as Maren, and the next letter is addressed to him [21:05]
+
+## 7. 🎧 Worth a Listen?
+* Quiet and creepy rather than scary, good for a dark evening. Fine to start here.
+
+## 8. 📚 Resource List
+* **Ivy Rennick** (person): Narrator of the series [00:05]
+
+## 9. 🧵 Threads and Series
+* The boatman's silence and the tidy lamp room are left open for later episodes [12:45]""",
+)
+
+
 PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
-    {profile.key: profile for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY, HEALTH, INVESTING, FAITH)}
+    {
+        profile.key: profile
+        for profile in (GENERAL, NEWS, SPORTS, HISTORY, TRUE_CRIME, COMEDY, HEALTH, INVESTING, FAITH, FICTION)
+    }
 )
 
 
@@ -967,6 +1054,7 @@ CATEGORY_PROFILES: Mapping[str, str] = MappingProxyType(
             "news": ["News", "Daily News", "Politics", "News Commentary", "Government", "Business News"],
             "investing": ["Investing"],
             "comedy": ["Comedy", "Comedy Interviews", "Improv", "Stand-Up"],
+            "fiction": ["Fiction", "Drama", "Science Fiction", "Comedy Fiction", "Stories for Kids"],
             "history": ["History", "Documentary"],
             "health": [
                 "Health & Fitness",

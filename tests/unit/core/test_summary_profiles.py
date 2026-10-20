@@ -241,6 +241,12 @@ def all_genres_defined(monkeypatch):
             "faith",
             "category: Christianity",
         ),
+        # A comedy story is a story: the subcategory beats its Comedy parent.
+        (
+            {"primary_category": "Comedy", "primary_subcategory": "Comedy Fiction"},
+            "fiction",
+            "category: Comedy Fiction",
+        ),
         # A general-suited primary category is not moved by the secondary one.
         ({"primary_category": "Technology", "secondary_category": "True Crime"}, "general", "category: Technology"),
         # Secondary fallback when the primary is unmapped.
