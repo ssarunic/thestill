@@ -73,6 +73,11 @@ def get_platform_links_young_age_hours() -> int:
     return max(0, _env_int("PLATFORM_LINKS_YOUNG_AGE_HOURS", 48))
 
 
+def get_platform_links_youtube_discovery_days() -> int:
+    """Spec #87 Phase 3d — days before a show without a verified YouTube channel is searched again; 0 disables."""
+    return max(0, _env_int("PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS", 7))
+
+
 def get_summary_profiles_enabled() -> list[str]:
     """Spec #98 — genre summary profiles that may be chosen; ``general`` is always on."""
     return [key.strip().lower() for key in os.getenv("SUMMARY_PROFILES_ENABLED", "").split(",") if key.strip()]
