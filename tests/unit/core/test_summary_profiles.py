@@ -86,7 +86,7 @@ def test_general_v2_is_v1_plus_exactly_the_shared_rules_and_the_gist_line():
         style_guide_end, style_guide_end + summary_profiles.SHARED_RULES + "\n\n", 1
     ).replace(v1_gist_line, summary_profiles.FIXED_SLOT_SPECS[1].instructions.split("\n\n", 1)[0], 1)
 
-    assert GENERAL.version == 2
+    assert GENERAL.version == 3
     assert compose_system_prompt(GENERAL) == expected
     assert v1_gist_line not in expected
 
@@ -112,7 +112,7 @@ def test_genre_profile_keeps_fixed_slots_and_adds_rules_guidance_and_example():
     )
     prompt = compose_system_prompt(profile)
 
-    assert "## 1. 🎙️ The Gist\nOne short line with just who is speaking" in prompt
+    assert "## 1. 🎙️ The Gist\nOne short line with just who is speaking and how. Pick the case" in prompt
     assert "## 2. ⏱️ Timeline\nBreak the episode" in prompt
     assert "## 3. 🧪 true_crime slot 3\n* true_crime instructions for slot 3" in prompt
     assert prompt.index('"alleged"') < prompt.index("## 1. ")  # rules follow the style guide
@@ -342,3 +342,47 @@ def test_legacy_backfill_without_a_profile_records_general_v1_not_the_current_ve
     )
 
     assert (manifest.profile, manifest.profile_version) == ("general", 1)
+
+
+# --- Genre profiles: consumers stay genre-agnostic (spec #98 Phase 3) ----------
+
+
+@pytest.mark.parametrize("profile", [p for p in PROFILES.values() if p is not GENERAL], ids=lambda p: p.key)
+def test_genre_example_parses_for_every_consumer(profile):
+    from thestill.core.summary_resources import parse_resource_list
+    from thestill.evals.summary_checks import run_summary_checks
+    from thestill.services.briefing_script_generator import extract_gist, extract_summary_sections
+    from thestill.services.podcast_service import extract_summary_preview
+
+    example = profile.example
+    sections = extract_summary_sections(example)
+
+    assert extract_summary_preview(example)
+    assert extract_gist(example)
+    assert sections.takeaways, "narration reads slot 3 as claims"
+    assert sections.drama, "narration reads slot 4 as colour"
+    resources = parse_resource_list(example)
+    assert resources
+    speakers = example.split("## 2.", 1)[0] + " ".join(re.findall(r'" - ([^\[]+) \[', example))
+    assert not [r.name for r in resources if r.name in speakers], "the shared rules exclude the episode's own speakers"
+    assert run_summary_checks({"summary": example}, duration_seconds=3600)["sections"]["ok"]
+    assert [int(n) for n in _HEADING_RE.findall(example)] == list(range(1, 10)), "examples show every slot"
+
+
+@pytest.mark.parametrize("profile", [p for p in PROFILES.values() if p is not GENERAL], ids=lambda p: p.key)
+def test_genre_profile_keeps_the_fixed_slots_and_shared_rules(profile):
+    prompt = compose_system_prompt(profile)
+
+    assert summary_profiles.SHARED_RULES in prompt
+    assert prompt.index(summary_profiles.SHARED_RULES) < prompt.index(profile.rules) < prompt.index("## 1. ")
+    assert summary_profiles.FIXED_SLOT_SPECS[1].render(1) in prompt
+    assert summary_profiles.FIXED_SLOT_SPECS[2].render(2) in prompt
+    assert "Key Takeaways" not in prompt.split(summary_profiles.EXAMPLE_HEADER)[0]
+
+
+def test_true_crime_rules_override_the_playful_defaults():
+    prompt = compose_system_prompt(PROFILES["true_crime"])
+
+    assert '"alleged" or "accused"' in prompt
+    assert "no emojis outside the section headings" in prompt
+    assert "temperature" not in prompt.split(summary_profiles.EXAMPLE_HEADER)[0].replace('no "temperature" ratings', "")

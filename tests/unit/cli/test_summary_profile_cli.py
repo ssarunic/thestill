@@ -59,7 +59,7 @@ def test_summary_profiles_lists_each_podcast_with_its_reason(repo):
     assert result.exit_code == 0, result.output
     assert "Available profiles: general" in result.output
     assert "AI Weekly: general (default)" in result.output
-    assert "Case Files: general (category: True Crime → true_crime, not defined yet)" in result.output
+    assert "Case Files: general (category: True Crime → true_crime, not enabled)" in result.output
 
 
 def test_set_summary_profile_pins_and_clears_the_override(repo):
@@ -74,14 +74,14 @@ def test_set_summary_profile_pins_and_clears_the_override(repo):
 
     assert result.exit_code == 0, result.output
     assert repo.get_by_url("https://example.com/crime.xml").summary_profile is None
-    assert "category: True Crime → true_crime, not defined yet" in result.output
+    assert "category: True Crime → true_crime, not enabled" in result.output
 
 
 def test_set_summary_profile_rejects_an_undefined_profile(repo):
-    result = _invoke("set-summary-profile", "--podcast-id", "case-files", "--profile", "true_crime")
+    result = _invoke("set-summary-profile", "--podcast-id", "case-files", "--profile", "astrology")
 
     assert result.exit_code == 2
-    assert "Unknown profile 'true_crime'" in result.output
+    assert "Unknown profile 'astrology'" in result.output
     assert repo.get_by_url("https://example.com/crime.xml").summary_profile is None
 
 
@@ -90,3 +90,12 @@ def test_set_summary_profile_unknown_podcast(repo):
 
     assert result.exit_code == 1
     assert "Podcast not found" in result.output
+
+
+def test_enabled_genre_profile_is_reported(repo, monkeypatch):
+    monkeypatch.setenv("SUMMARY_PROFILES_ENABLED", "true_crime")
+
+    result = _invoke("summary-profiles")
+
+    assert "Available profiles: general, true_crime" in result.output
+    assert "Case Files: true_crime (category: True Crime)" in result.output
