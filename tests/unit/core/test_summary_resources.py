@@ -332,16 +332,14 @@ def test_the_motivating_episode():
 
 def test_the_summarizer_prompt_example_is_in_the_contract_shape():
     """Spec #92 Phase 3: the few-shot example is what the model copies, so
-    every Resource List bullet in it must parse as the contract."""
+    every Resource List bullet in it must parse as the contract (spec #98:
+    in every profile's example)."""
     from thestill.core.post_processor import TranscriptSummarizer
+    from thestill.core.summary_profiles import PROFILES, compose_system_prompt
     from thestill.core.summary_resources import is_contract_line, resource_bullets
 
-    example = TranscriptSummarizer.SYSTEM_PROMPT.split("## Example Output", 1)[1]
-    bullets = resource_bullets(example)
-    assert len(bullets) == 3 and all(is_contract_line(b) for b in bullets)
-    items = parse_resource_list(example)
-    assert [(i.name, i.kind) for i in items] == [
-        ("The Emperor of All Maladies", "book"),
-        ("Siddhartha Mukherjee", "person"),
-        ("Aidoc", "company"),
-    ]
+    for prompt in (TranscriptSummarizer.SYSTEM_PROMPT, *(compose_system_prompt(p) for p in PROFILES.values())):
+        example = prompt.split("## Example Output", 1)[1]
+        bullets = resource_bullets(example)
+        assert bullets and all(is_contract_line(b) for b in bullets)
+        assert len(parse_resource_list(example)) == len(bullets)
