@@ -816,8 +816,12 @@ before. Summaries are about a third shorter (≈710 words against
 
 Notes:
 
-- Slot 4 can now say "Nothing contested". Narration skips a slot-4
-  item under six words, so a one-liner is never used as colour.
+- Slot 4 can now say "Nothing contested". Each slot records the exact
+  "nothing here" line its instructions ask for (`SlotSpec.empty`), and
+  narration skips a slot-4 item that starts with one. A translated or
+  reworded line still reaches the writer, as before. An earlier
+  word-count rule dropped short real disagreements and unspaced CJK
+  text.
 - One Croatian true-crime episode is refused by Gemini with
   `PROHIBITED_CONTENT` on the prompt under v4 (and FA), but not under
   v3 or the `true_crime` profile. Removing any one of v4's rule lines

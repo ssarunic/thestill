@@ -52,6 +52,10 @@ class SlotSpec:
     emoji: str
     title: str  # English; localised by the spec #58 rule like every other heading
     instructions: str
+    # The exact line the instructions tell the model to write when the slot
+    # has nothing for this episode ("Nothing contested"). Consumers skip it;
+    # a test checks it appears in the instructions.
+    empty: str = ""
 
     def render(self, number: int, addendum: str = "") -> str:
         body = f"{self.instructions}\n{addendum}" if addendum else self.instructions
@@ -200,6 +204,7 @@ GENERAL = SummaryProfile(
 * **A narrated story:** where accounts, witnesses or sources conflict [timestamp].
 
 Friendly banter and teasing aren't conflict. If nothing was contested, say "Nothing contested" and move on.""",
+                empty="Nothing contested",
             ),
             6: SlotSpec(
                 "🎧",
@@ -218,6 +223,7 @@ Friendly banter and teasing aren't conflict. If nothing was contested, say "Noth
                 "Reality Check",
                 """* Only where someone actually makes a claim: anything weak, circular, overhyped or one-sided, and speculation presented as fact [timestamp].
 * If nobody makes claims worth checking, say "Nothing to check".""",
+                empty="Nothing to check",
             ),
         }
     ),
@@ -284,6 +290,7 @@ NEWS = SummaryProfile(
                 "Contested",
                 """* Where sides, sources or the people in the room disagree, and what each one says [timestamp].
 * If the episode only gives one side, say "Nothing contested here" and name the side it gives.""",
+                empty="Nothing contested here",
             ),
             6: SlotSpec(
                 "📅",
@@ -403,7 +410,7 @@ Ashford snatch it at the death to keep the title race alive, and the panel can't
 
 ## 4. 🔥 Hot Takes & Clashes
 * **Round 1: Genius or Luck?** [08:30]
-  * **The take:** Leon says Kowalski's triple change won it.
+  * **The take:** Leon says Anton Kowalski's triple change won it.
   * **The pushback:** Maria reckons Millbrook were just out on their feet.
 
 ## 5. 💬 Best Quotes
@@ -418,7 +425,7 @@ Ashford snatch it at the death to keep the title race alive, and the panel can't
 * Ashford's last five look kinder on paper, and Maria isn't buying it [24:30]
 
 ## 8. 📚 Resource List
-* **Leon Hughes** (person): Former Millbrook captain, now a regular on the panel [00:20]
+* **Anton Kowalski** (person): Millbrook's manager, whose triple change the panel argues about [09:12]
 
 ## 9. 🧢 Hype Check
 * "Best side in the country" got thrown around after a game Maria herself said Ashford were lucky to win [14:05]""",
@@ -608,6 +615,7 @@ COMEDY = SummaryProfile(
                 "Banter & Roasts",
                 """* Who got roasted, by whom, and whether it landed [timestamp].
 * "Friendly all round" is a fine answer.""",
+                empty="Friendly all round",
             ),
             6: SlotSpec(
                 "🔁",
@@ -625,6 +633,7 @@ COMEDY = SummaryProfile(
                 "What Fell Flat",
                 """* Only bits the people in the room treat as not landing: a groan, "that didn't work", someone moving swiftly on [timestamp]. Don't judge what's funny yourself, and a deliberate or self-deprecating bit isn't a flop.
 * If nothing like that happens, say "Everything landed".""",
+                empty="Everything landed",
             ),
         }
     ),
@@ -657,7 +666,7 @@ Priya arrives with a list of every hotel she's ever been thrown out of, and Dan 
 * High energy and Priya fits right in. If you only have ten minutes, skip to the hotel list at 9:40.
 
 ## 8. 📚 Resource List
-* **Priya Nair** (person): Stand-up comedian, here plugging her autumn tour [00:40]
+* **The Seaview** (place): The Hove hotel in Priya's toaster story [16:20]
 
 ## 9. 🙃 What Fell Flat
 * Dan's airport-lounge bit gets a groan from both of them, and Jess moves swiftly on [24:50]""",
@@ -1117,6 +1126,13 @@ PROFILES: Mapping[str, SummaryProfile] = MappingProxyType(
         )
     }
 )
+
+
+def empty_slot_lines(number: int) -> frozenset[str]:
+    """Every profile's "nothing here" line for slot ``number``, lower-cased."""
+    return frozenset(
+        spec.empty.lower() for profile in PROFILES.values() if (spec := profile.slots.get(number)) and spec.empty
+    )
 
 
 def compose_system_prompt(profile: SummaryProfile) -> str:
