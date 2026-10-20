@@ -31,6 +31,7 @@ from typing import Dict, List, Optional, Tuple
 
 from structlog import get_logger
 
+from ..core.summary_profiles import empty_slot_lines
 from ..models.podcast import Episode, Podcast
 from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
@@ -184,6 +185,14 @@ class SummarySections:
 _SCARE_QUOTE_RE = re.compile(r"(?<!\w)[\u2018']([^'\u2019\n]{1,40}?)[\u2019'](?!\w)")
 
 
+def _is_empty_slot_line(item: str, empty_lines: frozenset[str]) -> bool:
+    """True for a profile's "nothing here" line ("Nothing contested", or
+    "Nothing contested here: only the minister's side"). A translated or
+    reworded one passes through, as any slot-4 text did before spec #98."""
+    text = item.strip().lstrip("*_ ").lower()
+    return any(text.startswith(line) for line in empty_lines)
+
+
 def _unquote_terms(text: str) -> str:
     return _SCARE_QUOTE_RE.sub(r"\1", text)
 
@@ -210,7 +219,11 @@ def extract_summary_sections(summary_text: str) -> Optional[SummarySections]:
     """
     gist_body = _summary_section(summary_text, 1)
     takeaways = _items_as_strings(_summary_section(summary_text, 3))
-    drama = _items_as_strings(_summary_section(summary_text, 4))
+    # Spec #98: a profile's "nothing here" line in slot 4 is never colour.
+    empty_lines = empty_slot_lines(4)
+    drama = tuple(
+        d for d in _items_as_strings(_summary_section(summary_text, 4)) if not _is_empty_slot_line(d, empty_lines)
+    )
     if gist_body is None and not takeaways and not drama:
         return None
     gist = _unquote_terms(" ".join(_strip_summary_markup(gist_body or "")))

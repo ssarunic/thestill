@@ -79,16 +79,24 @@ class _RecordingProvider:
 # --- Composition ---------------------------------------------------------------
 
 
-def test_general_v2_is_v1_plus_exactly_the_shared_rules_and_the_gist_line():
-    v1_gist_line = "[Host] interviews [Guest(s) with roles/titles]"
-    style_guide_end = "[HH:MM:SS] for longer episodes.\n\n"
-    expected = _FROZEN_GENERAL_V1.replace(
-        style_guide_end, style_guide_end + summary_profiles.SHARED_RULES + "\n\n", 1
-    ).replace(v1_gist_line, summary_profiles.FIXED_SLOT_SPECS[1].instructions.split("\n\n", 1)[0], 1)
+def test_general_keeps_the_v1_style_guide_and_fixed_slots():
+    assert summary_profiles.STYLE_GUIDE in _FROZEN_GENERAL_V1
+    for number in (2, 5, 8):
+        assert summary_profiles.FIXED_SLOT_SPECS[number].render(number) in _FROZEN_GENERAL_V1
 
-    assert GENERAL.version == 3
-    assert compose_system_prompt(GENERAL) == expected
-    assert v1_gist_line not in expected
+
+def test_general_v4_drops_the_sections_that_invited_invented_drama():
+    prompt = compose_system_prompt(GENERAL)
+
+    assert GENERAL.version == 4
+    for title in ("The Drama", "Blog Ideas", "Social Snippets", 'The "BS" Test'):
+        assert title not in prompt
+    assert (
+        prompt.index(summary_profiles.SHARED_RULES)
+        < prompt.index("**Read the format first:**")
+        < prompt.index("## 1. ")
+    )
+    assert summary_profiles.FIXED_SLOT_SPECS[1].render(1) in prompt
 
 
 @pytest.mark.parametrize("profile", list(PROFILES.values()), ids=list(PROFILES))
@@ -347,8 +355,8 @@ def test_legacy_backfill_without_a_profile_records_general_v1_not_the_current_ve
 # --- Genre profiles: consumers stay genre-agnostic (spec #98 Phase 3) ----------
 
 
-@pytest.mark.parametrize("profile", [p for p in PROFILES.values() if p is not GENERAL], ids=lambda p: p.key)
-def test_genre_example_parses_for_every_consumer(profile):
+@pytest.mark.parametrize("profile", list(PROFILES.values()), ids=list(PROFILES))
+def test_example_parses_for_every_consumer(profile):
     from thestill.core.summary_resources import parse_resource_list
     from thestill.evals.summary_checks import run_summary_checks
     from thestill.services.briefing_script_generator import extract_gist, extract_summary_sections
@@ -367,6 +375,47 @@ def test_genre_example_parses_for_every_consumer(profile):
     assert not [r.name for r in resources if r.name in speakers], "the shared rules exclude the episode's own speakers"
     assert run_summary_checks({"summary": example}, duration_seconds=3600)["sections"]["ok"]
     assert [int(n) for n in _HEADING_RE.findall(example)] == list(range(1, 10)), "examples show every slot"
+
+
+def _slot4_drama(slot4: str) -> tuple:
+    from thestill.services.briefing_script_generator import extract_summary_sections
+
+    summary = f"## 1. 🎙️ The Gist\nA and B chat\n\n## 3. 🧠 Key Takeaways\n* A point [01:00]\n\n## 4. 🌶️ Slot\n{slot4}\n"
+    return extract_summary_sections(summary).drama
+
+
+@pytest.mark.parametrize(
+    "slot4",
+    [
+        "Nothing contested",
+        "* Nothing contested.",
+        "* **Nothing contested here:** the episode only gives the minister's side [04:10]",
+        "* Friendly all round",
+    ],
+)
+def test_a_profiles_nothing_here_line_is_not_narration_colour(slot4):
+    assert not _slot4_drama(slot4)
+
+
+@pytest.mark.parametrize(
+    "slot4",
+    [
+        "* Alice rejects Bob's argument [01:00]",  # short but real
+        "* 主持人反驳了嘉宾的观点 [02:00]",  # no spaces between words
+    ],
+)
+def test_short_or_unspaced_disagreements_stay_narration_colour(slot4):
+    assert _slot4_drama(slot4)
+
+
+@pytest.mark.parametrize(
+    "profile, number",
+    [(p, n) for p in PROFILES.values() for n, spec in p.slots.items() if spec.empty],
+    ids=lambda v: getattr(v, "key", v),
+)
+def test_each_nothing_here_line_is_the_one_the_instructions_ask_for(profile, number):
+    spec = profile.slots[number]
+    assert f'"{spec.empty}"' in spec.instructions
 
 
 @pytest.mark.parametrize("profile", [p for p in PROFILES.values() if p is not GENERAL], ids=lambda p: p.key)
