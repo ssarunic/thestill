@@ -593,6 +593,8 @@ class PodcastsMixin(CategoryCacheMixin):
             params = (podcast_id,)
         # Spec #87 Phase 3c: a curated link (and its source) is left alone;
         # otherwise the chart wins when it has a value and stamps 'chart'.
+        # Phase 3d: so is a verified, discovered ('resolver') YouTube channel,
+        # which may have replaced a wrong chart channel.
         conn.execute(
             f"""
             UPDATE podcasts AS p
@@ -601,9 +603,10 @@ class PodcastsMixin(CategoryCacheMixin):
                    apple_url_source = CASE WHEN p.apple_url_source = 'curated' THEN 'curated'
                                            WHEN t.apple_url IS NOT NULL THEN 'chart'
                                            ELSE p.apple_url_source END,
-                   youtube_url = CASE WHEN p.youtube_url_source = 'curated' THEN p.youtube_url
+                   youtube_url = CASE WHEN p.youtube_url_source IN ('curated', 'resolver') THEN p.youtube_url
                                       ELSE COALESCE(t.youtube_url, p.youtube_url) END,
-                   youtube_url_source = CASE WHEN p.youtube_url_source = 'curated' THEN 'curated'
+                   youtube_url_source = CASE WHEN p.youtube_url_source IN ('curated', 'resolver')
+                                                  THEN p.youtube_url_source
                                              WHEN t.youtube_url IS NOT NULL THEN 'chart'
                                              ELSE p.youtube_url_source END
               FROM top_podcasts AS t
@@ -690,6 +693,19 @@ class PodcastsMixin(CategoryCacheMixin):
             "youtube": row["youtube_url_source"],
             "spotify": row["spotify_url_source"],
         }
+
+    def get_youtube_discovery_checked_at(self, podcast_id: str) -> Optional[datetime]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT youtube_discovery_checked_at FROM podcasts WHERE id = %s", (podcast_id,)
+            ).fetchone()
+        return row["youtube_discovery_checked_at"] if row else None
+
+    def set_youtube_discovery_checked_at(self, podcast_id: str, checked_at: Optional[datetime]) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE podcasts SET youtube_discovery_checked_at = %s WHERE id = %s", (checked_at, podcast_id)
+            )
 
     def is_top_podcast_in_region(self, rss_url: str, region: str) -> bool:
         """Return True if the given RSS URL is in the top chart for ``region``.

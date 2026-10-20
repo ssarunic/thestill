@@ -69,7 +69,21 @@ def h(request, tmp_path):
             with repo._get_connection() as conn:
                 conn.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
 
-        yield SimpleNamespace(repo=repo, make_podcast=make_podcast, delete_episode=delete_episode, backend="sqlite")
+        def chart_row(rss_url: str, youtube_url: str) -> None:
+            with repo._get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO top_podcasts (name, rss_url, youtube_url, first_seen_at, last_seen_at) "
+                    "VALUES ('Chart', ?, ?, ?, ?)",
+                    (rss_url, youtube_url, NOW.isoformat(), NOW.isoformat()),
+                )
+
+        yield SimpleNamespace(
+            repo=repo,
+            make_podcast=make_podcast,
+            delete_episode=delete_episode,
+            chart_row=chart_row,
+            backend="sqlite",
+        )
         return
 
     if not PG_OK:
@@ -87,7 +101,9 @@ def h(request, tmp_path):
 
     ensure_schema(PG_DSN)
     with psycopg.connect(PG_DSN) as conn:
-        conn.execute("TRUNCATE episodes, episode_platform_links, episode_alternate_enclosures, podcasts CASCADE")
+        conn.execute(
+            "TRUNCATE episodes, episode_platform_links, episode_alternate_enclosures, podcasts, top_podcasts CASCADE"
+        )
 
     def make_podcast(podcast: Podcast) -> str:
         with psycopg.connect(PG_DSN) as conn:
@@ -125,8 +141,20 @@ def h(request, tmp_path):
         with psycopg.connect(PG_DSN) as conn:
             conn.execute("DELETE FROM episodes WHERE id = %s", (episode_id,))
 
+    def chart_row(rss_url: str, youtube_url: str) -> None:
+        with psycopg.connect(PG_DSN) as conn:
+            conn.execute(
+                "INSERT INTO top_podcasts (name, rss_url, youtube_url, first_seen_at, last_seen_at) "
+                "VALUES ('Chart', %s, %s, %s, %s)",
+                (rss_url, youtube_url, NOW, NOW),
+            )
+
     yield SimpleNamespace(
-        repo=_PgRepo(PG_DSN), make_podcast=make_podcast, delete_episode=delete_episode, backend="postgres"
+        repo=_PgRepo(PG_DSN),
+        make_podcast=make_podcast,
+        delete_episode=delete_episode,
+        chart_row=chart_row,
+        backend="postgres",
     )
 
 
@@ -158,9 +186,9 @@ def _podcast(episodes, apple_url=None) -> Podcast:
     )
 
 
-def _link(episode_id, url=None, method=None, checked_at=NOW, ref=None) -> PlatformLink:
+def _link(episode_id, url=None, method=None, checked_at=NOW, ref=None, platform="apple") -> PlatformLink:
     return PlatformLink(
-        episode_id=episode_id, platform="apple", url=url, external_ref=ref, match_method=method, checked_at=checked_at
+        episode_id=episode_id, platform=platform, url=url, external_ref=ref, match_method=method, checked_at=checked_at
     )
 
 
@@ -356,3 +384,124 @@ class TestShowUrl:
         assert h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@guess", source="resolver")
         assert h.repo.get_podcast_platform_url_sources(pid) == {"apple": None, "youtube": "resolver", "spotify": None}
         assert h.repo.get_podcast_platform_url_sources("") == {"apple": None, "youtube": None, "spotify": None}
+
+
+class TestChannelDiscoveryStorage:
+    """Spec #87 Phase 3d — the stamp, the verification sample, evidence counts and the rollback."""
+
+    def test_discovery_stamp_round_trip(self, h):
+        pid = h.make_podcast(_podcast([]))
+        assert h.repo.get_youtube_discovery_checked_at(pid) is None
+        h.repo.set_youtube_discovery_checked_at(pid, NOW)
+        assert h.repo.get_youtube_discovery_checked_at(pid) == NOW
+        h.repo.set_youtube_discovery_checked_at(pid, None)
+        assert h.repo.get_youtube_discovery_checked_at(pid) is None
+
+    def test_sample_ignores_link_state_and_skips_undated_episodes(self, h):
+        eps = [_episode(n, pub_date=NOW - timedelta(days=n)) for n in range(4)]
+        undated = _episode(9, pub_date=None)
+        pid = h.make_podcast(_podcast([*eps, undated]))
+        h.repo.upsert_platform_links(
+            [
+                _link(
+                    eps[0].id,
+                    url="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                    method="title_date",
+                    platform="youtube",
+                ),
+                _link(eps[1].id, platform="youtube"),  # a fresh not-found marker
+            ]
+        )
+        sample = h.repo.get_platform_link_sample(pid, 3)
+        assert [c.episode_id for c in sample] == [eps[0].id, eps[1].id, eps[2].id]
+        assert sample[0].pub_date == NOW and sample[0].duration == 1800
+
+    def test_count_by_method_ignores_publisher_rows_and_markers(self, h):
+        eps = [_episode(n, pub_date=NOW - timedelta(days=n)) for n in range(4)]
+        pid = h.make_podcast(_podcast(eps))
+        other = h.make_podcast(_podcast([_episode(7, pub_date=NOW)]))
+        h.repo.upsert_platform_links(
+            [
+                _link(
+                    eps[0].id, url="https://www.youtube.com/watch?v=aaaaaaaaaaa", method="publisher", platform="youtube"
+                ),
+                _link(eps[1].id, platform="youtube"),
+                _link(eps[2].id, url="https://podcasts.apple.com/x?i=2", method="title_date"),
+            ]
+        )
+        listing = ("title_date", "title_duration")
+        assert h.repo.count_platform_links(pid, "youtube", listing) == 0
+        h.repo.upsert_platform_links(
+            [
+                _link(
+                    eps[3].id,
+                    url="https://www.youtube.com/watch?v=bbbbbbbbbbb",
+                    method="title_duration",
+                    platform="youtube",
+                )
+            ]
+        )
+        assert h.repo.count_platform_links(pid, "youtube", listing) == 1
+        assert h.repo.count_platform_links(pid, "youtube", ("publisher",)) == 1
+        assert h.repo.count_platform_links(other, "youtube", listing) == 0
+        assert h.repo.count_platform_links(pid, "youtube", ()) == 0
+
+    def test_chart_sync_keeps_a_discovered_channel_but_fills_an_empty_one(self, h):
+        wrong = _podcast([])
+        empty = _podcast([])
+        pid = h.make_podcast(wrong)
+        empty_id = h.make_podcast(empty)
+        h.chart_row(str(wrong.rss_url), "https://www.youtube.com/@NYTPodcasts")
+        h.chart_row(str(empty.rss_url), "https://www.youtube.com/@ChartChannel")
+        assert h.repo.sync_podcast_chart_urls(pid)["youtube_url"] == "https://www.youtube.com/@NYTPodcasts"
+        assert h.repo.get_podcast_platform_url_sources(pid)["youtube"] == "chart"
+        assert h.repo.set_podcast_platform_url(pid, "youtube", "https://www.youtube.com/@thetimes", source="resolver")
+        assert h.repo.sync_podcast_chart_urls(pid)["youtube_url"] == "https://www.youtube.com/@thetimes"
+        assert h.repo.get_podcast_platform_url_sources(pid)["youtube"] == "resolver"
+        assert h.repo.sync_podcast_chart_urls(empty_id)["youtube_url"] == "https://www.youtube.com/@ChartChannel"
+
+    def test_forget_discovered_channels_keeps_publisher_rows_and_other_shows(self, h):
+        eps = [_episode(n, pub_date=NOW - timedelta(days=n)) for n in range(4)]
+        found = h.make_podcast(_podcast(eps))
+        kept_ep = _episode(5, pub_date=NOW)
+        kept = h.make_podcast(_podcast([kept_ep]))
+        h.repo.set_podcast_platform_url(found, "youtube", "https://www.youtube.com/@found", source="resolver")
+        h.repo.set_youtube_discovery_checked_at(found, NOW)
+        h.repo.set_podcast_platform_url(kept, "youtube", "https://www.youtube.com/@chart", source="chart")
+        h.repo.upsert_platform_links(
+            [
+                _link(
+                    eps[0].id,
+                    url="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+                    method="title_date",
+                    platform="youtube",
+                ),
+                _link(
+                    eps[1].id, url="https://www.youtube.com/watch?v=bbbbbbbbbbb", method="publisher", platform="youtube"
+                ),
+                _link(eps[2].id, platform="youtube"),
+                _link(eps[3].id, url="https://podcasts.apple.com/x?i=3", method="title_date"),
+                _link(
+                    kept_ep.id,
+                    url="https://www.youtube.com/watch?v=ccccccccccc",
+                    method="title_date",
+                    platform="youtube",
+                ),
+            ]
+        )
+        assert h.repo.forget_discovered_youtube_channels(dry_run=True) == (1, 2)
+        assert h.repo.get_platform_links(eps[0].id)  # a dry run deletes nothing
+        assert h.repo.forget_discovered_youtube_channels(kept) == (0, 0)  # not a discovered channel
+        assert h.repo.forget_discovered_youtube_channels() == (1, 2)
+        assert h.repo.get_platform_links(eps[0].id) == []
+        assert [link.match_method for link in h.repo.get_platform_links(eps[1].id)] == ["publisher"]
+        assert [link.platform for link in h.repo.get_platform_links(eps[3].id)] == ["apple"]
+        # The marker is gone too: the episode is a candidate again at once.
+        cands = h.repo.get_platform_link_candidates(found, "youtube", window=10, recheck_before=NOW - timedelta(days=1))
+        assert {c.episode_id for c in cands} == {eps[0].id, eps[2].id, eps[3].id}
+        assert h.repo.get_podcast_platform_urls(found)["youtube_url"] is None
+        assert h.repo.get_podcast_platform_url_sources(found)["youtube"] is None
+        assert h.repo.get_youtube_discovery_checked_at(found) is None
+        assert h.repo.get_podcast_platform_urls(kept)["youtube_url"] == "https://www.youtube.com/@chart"
+        assert h.repo.get_platform_links(kept_ep.id)
+        assert h.repo.forget_discovered_youtube_channels() == (0, 0)

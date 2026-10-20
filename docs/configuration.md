@@ -193,6 +193,7 @@ the scheduler are off by default.
 | `PLATFORM_LINKS_RECHECK_HOURS` | How long a "checked, not found" platform link suppresses another lookup for that episode | `24` |
 | `PLATFORM_LINKS_YOUNG_RECHECK_HOURS` | The shorter suppression for an episode published within the last `PLATFORM_LINKS_YOUNG_AGE_HOURS`: platforms index a fresh episode with a lag, and Spotify's probe only sees the show's newest | `2` |
 | `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables it | `48` |
+| `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` | Days before a show with no YouTube channel (or a chart channel that matches none of its episodes) is searched again (spec #87 Phase 3d). One attempt is one or two channel searches plus up to ten flat listings; a channel is stored only when its uploads match at least 3 of the show's newest episodes. `0` disables discovery; roll back with `thestill link-platforms --forget-discovered` | `7` |
 
 ## Queue Auto-Heal, Circuit Breaker & Watchdog (spec #49)
 

@@ -41,6 +41,12 @@ class FakeRepo:
         self.chart_syncs = 0
         self.alternates: Dict[str, list] = {}
         self.other_candidates: Dict[str, List[PlatformLinkCandidate]] = {}
+        # Spec #87 Phase 3d
+        self.url_sources: Dict[str, Optional[str]] = {}
+        self.discovery_checked_at: Optional[datetime] = None
+        self.discovery_stamps: List[Optional[datetime]] = []
+        self.sample: List[PlatformLinkCandidate] = []
+        self.listing_links = 0  # found YouTube rows made by a channel listing
 
     def get_platform_link_candidates(
         self, podcast_id, platform, *, window, recheck_before, young_recheck_before=None, young_since=None
@@ -75,6 +81,22 @@ class FakeRepo:
         else:
             self.set_platform_urls.append((platform, url))
         return True
+
+    def get_podcast_platform_url_sources(self, podcast_id):
+        return {"apple": None, "spotify": None, "youtube": None, **self.url_sources}
+
+    def get_youtube_discovery_checked_at(self, podcast_id):
+        return self.discovery_checked_at
+
+    def set_youtube_discovery_checked_at(self, podcast_id, checked_at):
+        self.discovery_stamps.append(checked_at)
+        self.discovery_checked_at = checked_at
+
+    def get_platform_link_sample(self, podcast_id, limit):
+        return list(self.sample[:limit])
+
+    def count_platform_links(self, podcast_id, platform, match_methods):
+        return self.listing_links if platform == "youtube" and "title_date" in match_methods else 0
 
     def get_alternate_enclosures_for_episodes(self, episode_ids):
         return {eid: self.alternates.get(eid, []) for eid in episode_ids}
@@ -116,6 +138,7 @@ def _service(
     spotify_latest=None,
     website=None,
     recheck_hours=24,
+    channel_search=None,
     **kwargs,
 ):
     calls = {
@@ -126,6 +149,7 @@ def _service(
         "spotify_info": [],
         "spotify_latest": [],
         "website": [],
+        "channel_search": [],
     }
 
     def _lookup(params):
@@ -144,9 +168,17 @@ def _service(
 
     def _videos(channel_url, *, limit):
         calls["videos"].append((channel_url, limit))
-        if isinstance(videos, Exception):
-            raise videos
-        return videos or []
+        listing = videos.get(channel_url, []) if isinstance(videos, dict) else videos
+        if isinstance(listing, Exception):
+            raise listing
+        return listing or []
+
+    def _channel_search(query):
+        calls["channel_search"].append(query)
+        result = channel_search.get(query, []) if isinstance(channel_search, dict) else channel_search
+        if isinstance(result, Exception):
+            raise result
+        return result or []
 
     def _video_info(video_id):
         calls["video_info"].append(video_id)
@@ -185,8 +217,10 @@ def _service(
         fetch_spotify_episode=_spotify_info,
         fetch_spotify_latest=_spotify_latest,
         fetch_website=_website,
+        search_channels=_channel_search,
         clock=lambda: NOW,
-        **kwargs,
+        # Channel discovery (Phase 3d) is off unless a test asks for it.
+        **{"youtube_discovery_days": 0, **kwargs},
     )
     return svc, calls
 
@@ -832,3 +866,273 @@ class TestShowLinkSources:
         podcast.website_url = "https://example.com"
         svc.link_podcast(podcast)
         assert ("youtube", "publisher") in repo.sources and repo.set_platform_urls == []
+
+
+def _hit(handle):
+    from thestill.core.youtube_channel_discovery import ChannelHit
+
+    url = f"https://www.youtube.com/@{handle}"
+    return ChannelHit(url=url, title=handle, aliases=(url,))
+
+
+def _show_episodes(n, *, prefix="Deep Questions"):
+    """``n`` dated, hour-long episodes; ``_uploads`` builds the channel that carries them."""
+    return [
+        _ocand(f"s{i}", title=f"{prefix} topic number {i}", pub_date=NOW - timedelta(days=i), duration=3600)
+        for i in range(n)
+    ]
+
+
+def _uploads(episodes, *, start=0, count=None, prefix="v"):
+    chosen = episodes[start : None if count is None else start + count]
+    return [_video(f"{prefix}{i:010d}"[:11], e.title, uploaded=e.pub_date) for i, e in enumerate(chosen)]
+
+
+def _unrelated_uploads(n=5, prefix="u"):
+    return [
+        _video(f"{prefix}{i:010d}"[:11], f"Unrelated video {i}", uploaded=NOW - timedelta(days=i)) for i in range(n)
+    ]
+
+
+class TestChannelDiscovery:
+    """Spec #87 Phase 3d — verified YouTube channel search."""
+
+    def _repo(self, *, youtube_url=None, source=None, sample=10, candidates=("s0",)):
+        repo = FakeRepo([], youtube_url=youtube_url)
+        if source:
+            repo.url_sources["youtube"] = source
+        episodes = _show_episodes(sample)
+        repo.sample = episodes
+        repo.other_candidates["youtube"] = [e for e in episodes if e.episode_id in candidates]
+        return repo, episodes
+
+    def test_empty_channel_found_verified_stored_and_used_in_the_same_pass(self):
+        repo, episodes = self._repo()
+        real = _hit("calnewport")
+        svc, calls = _service(
+            repo,
+            channel_search={"Prof G Markets": [_hit("namesake"), real]},
+            videos={real.url: _uploads(episodes, count=5), _hit("namesake").url: _unrelated_uploads()},
+            youtube_discovery_days=7,
+        )
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert repo.set_platform_urls == [("youtube", real.url)]
+        assert ("youtube", "resolver") in repo.sources
+        assert repo.discovery_stamps == [NOW]
+        # Only the discovery listings ran: the accepted channel's is reused for the pass.
+        assert [url for url, _ in calls["videos"]] == [_hit("namesake").url, real.url]
+        assert (yt.linked, yt.not_found, yt.skipped) == (1, 0, None)
+        assert _rows(repo, "youtube")["s0"].url.startswith("https://www.youtube.com/watch?v=")
+
+    def test_verification_uses_the_sample_not_the_single_retry_candidate(self):
+        # One newly eligible episode; the channel carries four older ones from the sample.
+        repo, episodes = self._repo(candidates=("s0",))
+        real = _hit("show")
+        svc, _ = _service(
+            repo,
+            channel_search=[real],
+            videos={real.url: _uploads(episodes, start=1, count=4)},
+            youtube_discovery_days=7,
+        )
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert repo.set_platform_urls == [("youtube", real.url)]
+        assert (yt.linked, yt.not_found) == (0, 1)  # s0 itself is not on the channel
+
+    def test_nothing_accepted_stamps_and_marks_not_found(self):
+        repo, episodes = self._repo()
+        crossposter = _hit("unherd")
+        svc, calls = _service(
+            repo,
+            channel_search=[crossposter],
+            videos={crossposter.url: _uploads(episodes, count=2)},
+            youtube_discovery_days=7,
+        )
+        yt = svc.link_podcast(_podcast()).outcomes[2]
+        assert repo.set_platform_urls == []
+        assert repo.discovery_stamps == [NOW]
+        assert (yt.skipped, yt.not_found) == ("no_channel", 1)
+        # No author on the show, so no second query.
+        assert calls["channel_search"] == ["Prof G Markets"]
+
+    def test_author_query_is_the_fallback(self):
+        repo, episodes = self._repo()
+        real = _hit("reidhoffman")
+        podcast = _podcast()
+        podcast.author = "Reid Hoffman"
+        svc, calls = _service(
+            repo,
+            channel_search={"Prof G Markets": [_hit("possiblehistory")], "Prof G Markets Reid Hoffman": [real]},
+            videos={real.url: _uploads(episodes, count=4), _hit("possiblehistory").url: _unrelated_uploads()},
+            youtube_discovery_days=7,
+        )
+        svc.link_podcast(podcast)
+        assert calls["channel_search"] == ["Prof G Markets", "Prof G Markets Reid Hoffman"]
+        assert repo.set_platform_urls == [("youtube", real.url)]
+
+    def test_an_unverified_result_defers_even_beside_three_matches(self):
+        repo, episodes = self._repo()
+        podcast = _podcast()
+        podcast.author = "Someone Else"
+        crossposter, real = _hit("crossposter"), _hit("real")
+        svc, calls = _service(
+            repo,
+            channel_search=[crossposter, real],
+            videos={crossposter.url: _uploads(episodes, count=3), real.url: RuntimeError("not a bot?")},
+            youtube_discovery_days=7,
+        )
+        svc.link_podcast(podcast)
+        assert repo.set_platform_urls == []
+        assert repo.discovery_stamps == [NOW]
+        assert calls["channel_search"] == ["Prof G Markets"]  # no looser query after a deferral
+
+    def test_a_channel_without_a_videos_tab_is_a_verified_zero(self):
+        repo, episodes = self._repo()
+        topic, real = _hit("topic"), _hit("real")
+        svc, _ = _service(
+            repo,
+            channel_search=[topic, real],
+            videos={
+                topic.url: RuntimeError("ERROR: [youtube:tab] UCx: This channel does not have a videos tab"),
+                real.url: _uploads(episodes, count=3),
+            },
+            youtube_discovery_days=7,
+        )
+        svc.link_podcast(_podcast())
+        assert repo.set_platform_urls == [("youtube", real.url)]
+
+    def test_throttled_for_the_interval_unless_forced(self):
+        repo, episodes = self._repo()
+        repo.discovery_checked_at = NOW - timedelta(days=3)
+        real = _hit("real")
+        kwargs = dict(channel_search=[real], videos={real.url: _uploads(episodes, count=4)}, youtube_discovery_days=7)
+        svc, calls = _service(repo, **kwargs)
+        assert svc.link_podcast(_podcast()).outcomes[2].skipped == "no_channel"
+        assert calls["channel_search"] == []
+        svc, calls = _service(repo, **kwargs)
+        svc.link_podcast(_podcast(), force=True)
+        assert calls["channel_search"] == ["Prof G Markets"]
+        assert repo.set_platform_urls == [("youtube", real.url)]
+
+    def test_disabled_never_searches(self):
+        repo, _ = self._repo()
+        svc, calls = _service(repo, channel_search=RuntimeError("must not be called"))
+        assert svc.link_podcast(_podcast(), force=True).outcomes[2].skipped == "no_channel"
+        assert calls["channel_search"] == []
+
+    def test_dry_run_stores_neither_channel_nor_stamp_but_uses_the_channel(self):
+        repo, episodes = self._repo()
+        real = _hit("real")
+        svc, _ = _service(
+            repo, channel_search=[real], videos={real.url: _uploads(episodes, count=4)}, youtube_discovery_days=7
+        )
+        yt = svc.link_podcast(_podcast(), dry_run=True).outcomes[2]
+        assert repo.set_platform_urls == [] and repo.discovery_stamps == [] and repo.upserts == []
+        assert yt.linked == 1
+
+    def test_search_failure_stamps(self):
+        repo, _ = self._repo()
+        svc, _ = _service(repo, channel_search=RuntimeError("bot check"), youtube_discovery_days=7)
+        assert svc.link_podcast(_podcast()).outcomes[2].skipped == "no_channel"
+        assert repo.discovery_stamps == [NOW]
+
+    def test_too_few_dated_episodes_never_searches(self):
+        repo, _ = self._repo(sample=2, candidates=("s0", "s1"))
+        svc, calls = _service(repo, channel_search=RuntimeError("must not be called"), youtube_discovery_days=7)
+        svc.link_podcast(_podcast())
+        assert calls["channel_search"] == [] and repo.discovery_stamps == [NOW]
+
+
+class TestWrongChartChannel:
+    """Spec #87 Phase 3d — a chart channel that matches nothing is replaced only by a verified one."""
+
+    WRONG = "https://www.youtube.com/@NYTPodcasts"
+
+    def _repo(self, *, source="chart", sample=10):
+        repo = FakeRepo([], youtube_url=self.WRONG)
+        repo.url_sources["youtube"] = source
+        episodes = _show_episodes(sample)
+        repo.sample = episodes
+        repo.other_candidates["youtube"] = episodes[:1]
+        return repo, episodes
+
+    def _run(self, repo, episodes, **kwargs):
+        real = _hit("thetimes")
+        svc, calls = _service(
+            repo,
+            channel_search=[_hit("NYTPodcasts"), real],
+            videos={self.WRONG: _unrelated_uploads(), real.url: _uploads(episodes, count=4)},
+            youtube_discovery_days=7,
+            **kwargs,
+        )
+        return svc.link_podcast(_podcast()).outcomes[2], calls, real
+
+    def test_replaced_even_beside_an_unrelated_publisher_link(self):
+        repo, episodes = self._repo()
+        # A publisher link on an episode says nothing about the chart channel.
+        repo.other_candidates["youtube"].append(_ocand("pub", canonical_id="youtube:aaaaaaaaaaa"))
+        yt, calls, real = self._run(repo, episodes)
+        assert repo.set_platform_urls == [("youtube", real.url)]
+        assert ("youtube", "resolver") in repo.sources
+        # The recorded channel is dropped from the results, never re-listed as a rival.
+        assert [url for url, _ in calls["videos"]] == [self.WRONG, real.url]
+        assert yt.linked == 2  # the publisher row and s0 on the new channel
+
+    def test_a_channel_that_linked_by_listing_before_is_kept(self):
+        repo, episodes = self._repo()
+        repo.listing_links = 1
+        _, calls, _ = self._run(repo, episodes)
+        assert repo.set_platform_urls == [] and calls["channel_search"] == []
+
+    @pytest.mark.parametrize("source", ["publisher", "curated", "resolver"])
+    def test_only_chart_channels_are_second_guessed(self, source):
+        repo, episodes = self._repo(source=source)
+        _, calls, _ = self._run(repo, episodes)
+        assert repo.set_platform_urls == [] and calls["channel_search"] == []
+
+    def test_a_channel_the_publisher_states_this_pass_is_not_second_guessed(self):
+        # The stored row still says 'chart' (empty), and a dry run never stores
+        # the publisher's channel: the pass's own source decides.
+        repo = FakeRepo([], youtube_url="")
+        repo.url_sources["youtube"] = "chart"
+        episodes = _show_episodes(10)
+        repo.sample = episodes
+        text = 'Watch: <a href="https://www.youtube.com/@RagingModerates">YouTube</a>'
+        repo.other_candidates["youtube"] = [
+            _ocand(e.episode_id, title=e.title, pub_date=e.pub_date, duration=3600, description_html=text)
+            for e in episodes[:3]
+        ]
+        svc, calls = _service(
+            repo,
+            channel_search=RuntimeError("must not be called"),
+            videos={"https://www.youtube.com/@RagingModerates": _unrelated_uploads()},
+            youtube_discovery_days=7,
+        )
+        svc.link_podcast(_podcast(), dry_run=True)
+        assert calls["channel_search"] == []
+
+    def test_a_small_sample_proves_nothing(self):
+        repo, episodes = self._repo(sample=7)
+        _, calls, _ = self._run(repo, episodes)
+        assert calls["channel_search"] == []
+
+    def test_a_failed_listing_is_not_evidence(self):
+        repo, episodes = self._repo()
+        svc, calls = _service(
+            repo,
+            channel_search=[_hit("thetimes")],
+            videos={self.WRONG: RuntimeError("bot check")},
+            youtube_discovery_days=7,
+        )
+        assert svc.link_podcast(_podcast()).outcomes[2].skipped == "lookup_failed"
+        assert calls["channel_search"] == [] and repo.discovery_stamps == []
+
+    def test_a_chart_channel_that_matches_the_sample_is_kept(self):
+        repo, episodes = self._repo()
+        svc, calls = _service(
+            repo,
+            channel_search=RuntimeError("must not be called"),
+            videos={self.WRONG: _uploads(episodes, start=2, count=1)},
+            youtube_discovery_days=7,
+        )
+        svc.link_podcast(_podcast())
+        assert calls["channel_search"] == [] and repo.set_platform_urls == []
