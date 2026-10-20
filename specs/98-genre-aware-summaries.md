@@ -509,9 +509,10 @@ chooses to run it.
    commands. **Done 2026-10-19.** Notes from the implementation:
    - The byte-equality test compares against a fixture frozen from the
      old literal (`tests/unit/core/fixtures/`), not against itself.
-   - Alembic `0023`. The worker loads its podcast through the
-     episode-join `get_episode`, so that projection carries the column
-     too, with its own contract test.
+   - Alembic `0024`, renumbered after the spec #87 Phase 3d PR took
+     `0023`. The worker loads its podcast through the episode-join
+     `get_episode`, so that projection carries the column too, with its
+     own contract test.
    - Callers (worker, CLI, MCP) resolve the profile and pass it to
      `summarize()` and `write_summary_manifest()`; the summarizer stays
      podcast-agnostic. The legacy-manifest backfill writes `general` v1.

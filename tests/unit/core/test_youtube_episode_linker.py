@@ -73,6 +73,7 @@ class TestParseListing:
                 {"id": "aaaaaaaaaaa", "title": " Ep 1 ", "timestamp": 1789689600, "duration": 100.0},
                 {"id": "bbbbbbbbbbb", "title": "Old", "upload_date": "20260101"},
                 {"id": "ccccccccccc", "title": "Live", "live_status": "is_live"},
+                {"id": "eeeeeeeeeee", "title": "AD FREE: Ep 1", "availability": "subscriber_only"},
                 {"id": "short", "title": "bad id"},
                 {"id": "ddddddddddd", "title": ""},
                 "junk",
@@ -158,6 +159,57 @@ class TestMatch:
         # Newest-first order puts the prefixed candidate first; it must not take the exact one's upload.
         m = match_candidates([prefixed, exact], [full])
         assert [(x.episode_id, x.match_method) for x in m] == [("exact", "title_date")]
+
+
+class TestRetitledUploads:
+    """Uploads retitled for YouTube: shared content words plus date and length."""
+
+    def test_shared_words_with_duration_agreement(self):
+        feed = _cand(
+            title="20VC: Atlassian CEO on Why Agents Won't Replace Interfaces | Why Enterprises", duration=3329
+        )
+        video = _video(title="Atlassian CEO: Why Agents Won't Replace Interfaces | Why Enterprises", duration=3535)
+        assert [x.match_method for x in match_candidates([feed], [video])] == ["title_duration"]
+        feed = _cand(title="Building the Cloud for an Agentic World | AWS CEO Matt Garman", duration=3377)
+        video = _video(title="Building the Cloud for AI Agents | AWS CEO Matt Garman", duration=3378)
+        assert match_candidates([feed], [video])
+
+    def test_shared_words_without_duration_agreement_do_not_match(self):
+        feed = _cand(title="Building the Cloud for an Agentic World | AWS CEO Matt Garman", duration=3377)
+        clip = _video(title="Building the Cloud for AI Agents | AWS CEO Matt Garman", duration=600)
+        assert match_candidates([feed], [clip]) == []
+        assert match_candidates([_cand(title=feed.title, duration=None)], [_video(title=clip.title)]) == []
+
+    def test_too_few_shared_words_do_not_match(self):
+        feed = _cand(title="When AI Agents Start Spending Your Money | Alex Rampell", duration=3089)
+        video = _video(title="Agentic Commerce: Why Your Wallet Is About to Change", duration=3031)
+        assert match_candidates([feed], [video]) == []
+
+    def test_near_identical_length_needs_two_shared_words(self):
+        feed = _cand(title="Rick Rubin: What Jay-Z Did in 30 Minutes Left Me Speechless!", duration=9985)
+        video = _video(title="Rick Rubin: The Only Skill That Matters Now Is The One Thing AI Can't Do", duration=9990)
+        assert [x.match_method for x in match_candidates([feed], [video])] == ["title_duration"]
+        # Length and date alone picked another episode's upload in the A/B run.
+        feed = _cand(title="20VC: Instinct Raises $1B at $10B Valuation | AMD Buys a World Model Lab", duration=4721)
+        video = _video(title="Daniel Dines on Why AI Can't Replace Humans in Enterprise", duration=4744)
+        assert match_candidates([feed], [video]) == []
+
+    def test_near_identical_length_only_within_three_days(self):
+        feed = _cand(title="Rick Rubin: What Jay-Z Did in 30 Minutes", pub_date=T0 - timedelta(days=4), duration=9985)
+        video = _video(title="Rick Rubin: The Only Skill That Matters Now", duration=9990)
+        assert match_candidates([feed], [video], now=T0 + timedelta(days=30)) == []
+
+    def test_equal_titles_are_reserved_before_shared_words(self):
+        full = _video("aaaaaaaaaaa", "Rich Roll on his crash course in entrepreneurship", duration=2136)
+        exact = _cand("exact", title="Rich Roll on his crash course in entrepreneurship", duration=2135)
+        retitled = _cand("retitled", title="Rich Roll's 'crash course' in entrepreneurship", duration=2135)
+        m = match_candidates([retitled, exact], [full])
+        assert [(x.episode_id, x.match_method) for x in m] == [("exact", "title_date")]
+
+    def test_single_item_form_accepts_a_retitled_upload(self):
+        c = _cand(title="Building a marketplace from scratch, with Hipcamp founder Alyssa Ravasio", duration=1922)
+        title = "How Hipcamp's Alyssa Ravasio found a business model worth building"
+        assert match_rule(c, title=title, released=T0, duration=1923, now=NOW) == "title_duration"
 
 
 class TestMatchRule:

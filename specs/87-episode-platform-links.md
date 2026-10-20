@@ -1,6 +1,6 @@
 # Episode Platform Links
 
-> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery, curated show links and the 3f resolver follow-ups implemented; edit field + verified channel discovery open
+> **Status:** 🚧 Phases 1–2 shipped in v1.11.0 (2026-09-29); Phase 3 in progress: core-title rule, Spotify latest-episode probe, website-scan discovery, curated show links and the 3f resolver follow-ups implemented; verified channel discovery (3d) implemented 2026-10-19, unmerged; edit field open
 > **Created:** 2026-09-28
 > **Author:** Product & Engineering
 > **Related:** [#62 youtube-video-rendition](62-youtube-video-rendition.md), [#65 apple-deep-history-import](65-apple-deep-history-import.md), [#73 mobile-list-row-density](73-mobile-list-row-density.md), [#76 episode-detail-page-hierarchy](76-episode-detail-page-hierarchy.md), [#79 spotify-link-import](79-spotify-link-import.md)
@@ -202,10 +202,12 @@ feed's own links, and the row simply does not show otherwise.
 
 ### YouTube resolver (Phase 2)
 
-1. **Channel.** `podcasts.youtube_url` (chart-sourced or publisher-stated,
-   above). No search fallback: a title search would link namesake
-   channels, and no window can prove a channel the way a GUID proves an
-   Apple show.
+1. **Channel.** `podcasts.youtube_url` (chart-sourced, publisher-stated or
+   curated, above). When it is empty, or is a chart channel that matches
+   none of the show's episodes, Phase 3d's verified discovery (below)
+   searches for one. A search result is never taken on its name: a
+   namesake channel has to match several of the show's own episodes, the
+   way a GUID proves an Apple show.
 2. **Listing.** One flat `yt-dlp` pass over `<channel>/videos` (newest 300,
    no shorts, no downloads, ~0.5 s). Entries carry id, title, duration and
    an **approximate** upload date ("3 weeks ago"), so the date tolerance
@@ -225,8 +227,251 @@ feed's own links, and the row simply does not show otherwise.
      "#2519 - Scott Eastwood" inside "Joe Rogan Experience #2519 - Scott
      Eastwood") or both carry the same single `#NNN` episode number
      ("#502 – Guest: Topic" vs "Topic | Show #502").
+   - `title_words` (stored as `title_duration`, PR #382): for uploads
+     retitled for YouTube. Date within tolerance and durations agreeing,
+     plus half the shorter title's content words shared (at least 3), or
+     lengths within 30 s inside 3 days with at least 2 shared words.
+     Length and date alone are never enough. Runs last, so it cannot take
+     an upload another episode matches more strictly.
+   Members-only uploads (yt-dlp `availability: subscriber_only`, the
+   "AD FREE" / "MEMBERS' EARLY ACCESS" cuts) are dropped from the listing.
    A listing failure (bot check, private channel) writes nothing for the
    unresolved candidates; the publisher rows are kept.
+
+### YouTube channel discovery (Phase 3d)
+
+**Why.** On 2026-10-19, 24 of the 48 shows with an episode in the last
+30 days had no YouTube link at all. Fifteen had no channel on record
+(Prof G Pod, Latent Space, How I AI, Deep Questions, …) and three had a
+wrong one from the chart (The Times Tech Podcast → `@NYTPodcasts`,
+Explora → `@GstaadGuyPodcast`) or the publisher scan (Behind the Craft →
+`@RasMic`). The chart carries a channel for 5254 of 7702 charted shows;
+discovery is for the rest and for off-chart shows.
+
+**Flow.** Inside the YouTube half of `link_podcast`, before the channel
+listing, when the show has unresolved YouTube candidates and either
+
+- no channel on record, or
+- a **chart-sourced** channel (never `publisher` or `curated`) that is
+  demonstrably wrong: its listing succeeded and matched **none** of the
+  verification sample (below, at least 8 episodes), and the show has no
+  YouTube link made by a channel listing (`title_date` /
+  `title_duration`). Publisher links (import, alternate enclosure, item
+  link, verified claim) identify the episode without any channel, so
+  they are not evidence for the channel and never block a replacement,
+
+and discovery has not run for this show in the last
+`PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` (7):
+
+0. **Verification sample.** The show's newest 20 episodes with a
+   `pub_date`, read regardless of link state or not-found markers. A
+   show with fewer than 3 dated episodes cannot reach the threshold, so
+   it is stamped without a search. The
+   pass's candidates only decide *whether* discovery runs: in steady
+   state they are the one or two episodes whose markers just expired,
+   too few to reach the threshold, and a failed attempt would then wait
+   a week.
+1. **Search.** One channel-filtered YouTube search by show title (the
+   results page with the channels filter, through yt-dlp, flat), top 5
+   results. Generic platform channels and the channel already on record
+   are dropped.
+2. **Verify.** List each result's uploads (150, same flat listing) and run
+   the episode matcher against the sample. Each result ends **verified**
+   with a match count, or **unverified**. A channel without a `/videos`
+   tab (auto-generated "Topic" channels, shorts-only clip channels) is
+   verified with 0 matches: yt-dlp states it definitively. Any other
+   listing failure (bot check, network, unavailable channel) is
+   unverified, never a zero.
+3. **Accept** the best channel only when every result in the set was
+   verified, the best matches **at least 3** episodes, and the runner-up
+   matches **at most a third** as many. An unverified result defers the
+   attempt: it could be the real channel, and scoring it 0 would let a
+   cross-posting channel pass the runner-up guard and be stored as
+   `resolver`. A publisher-run channel posting several shows (Stripe for
+   Cheeky Pint, SVPG for Product Therapy) is accepted the same way.
+4. **Fallback query.** When nothing is accepted and the show has an
+   `author` the title does not contain, search once more with
+   "title author" ("Possible" alone finds Project Possible and Possible
+   History; "Possible Reid Hoffman" finds the right channel). Not after a
+   deferral: the unverified result may be the real channel, and a looser
+   query must not pick a rival in its place that week.
+5. **Store** the accepted channel as `youtube_url` with source `resolver`
+   and continue the pass with it: the listing and matching below run on
+   the new channel in the same pass. The chart sync no longer overwrites a
+   `resolver` YouTube channel (it already yielded to `curated`), or a
+   wrong chart channel would come back on the next refresh.
+6. **Stamp** `podcasts.youtube_discovery_checked_at` whether a channel
+   was accepted, rejected or deferred. A search failure (bot check,
+   network) also stamps, so a blocked box does not search every refresh;
+   the cost is a week's delay for a show whose attempt was deferred.
+
+One attempt costs one or two searches plus up to ten flat listings,
+once a week per show at most. `--force` on `link-platforms` ignores the
+weekly stamp; `--dry-run` searches and verifies, uses the channel for the
+rest of the pass, and stores neither the channel nor the stamp.
+`PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS=0` turns discovery off.
+
+**Prototype, 2026-10-19** (public episodes, live channel listings, the
+PR #382 matcher): of the 15 shows without a channel, 11 have a clear winner
+on the title search (4–14 matches, every rival 0–1), and the author query
+adds Possible (Reid Hoffman, 6), The Product Experience (Mind the
+Product, 6) and Behind the Craft (Peter Yang, 10). The Knowledge Project
+finds its channel but matches only 1 episode (heavily retitled), and
+Unsupervised Learning has only 2 recent episodes; both stay unlinked.
+Five control shows with a correct channel on record found that same
+channel with every rival at 0–1. The guard that matters is the minimum
+of 3: The Econoclasts' own channel matched none, while UnHerd matched 2
+and Glenn Diesen 1 through guest cross-posts.
+
+#### Clarifications (2026-10-19)
+
+- *Replace wrong channels, or fill empty ones only?* Replace, guarded:
+  only a chart-sourced channel that matched 0 of the sample and has made
+  no channel-listing link for the show, and only when a different
+  channel passes verification. Publisher-stated and curated channels are never
+  replaced (Behind the Craft's `@RasMic` stays a `set-show-link` fix).
+- *How often may a show search?* A per-show timestamp, retried every 7
+  days. Riding the episode not-found markers would search daily and
+  every 2 h for 48 h after each new episode, up to about 150 YouTube
+  requests per episode for a show without a channel, from the EC2 box.
+- *Acceptance threshold?* At least 3 matches and a clear lead (runner-up
+  at most a third). 2 is exactly what UnHerd scored for The Econoclasts;
+  5 loses Prof G Pod, a16z, Dwarkesh, Masters of Scale and Times Tech.
+- *Base?* Stacked on PR #382: its retitled-upload rule carries several
+  of the wins (Prof G Pod, Deep Questions).
+
+Plan review (2026-10-19), folded in above:
+
+- A failed listing is *unverified*, not a zero, and defers acceptance
+  (a real channel's failed listing would otherwise let a cross-poster
+  pass the runner-up guard).
+- Verification runs on a stable sample of the newest 20 episodes, not on
+  the pass's retry candidates (one newly eligible episode cannot reach 3
+  matches, and the failed attempt would block a week).
+- Evidence for the recorded channel is a channel-listing link, not any
+  YouTube link: a publisher-provided link exists independently of the
+  channel and must not keep a wrong chart channel forever.
+- Rollback deletes the links a discovered channel made, not only the
+  channel (below).
+
+#### Execution plan
+
+**Phase A: search and pick (pure, no I/O in tests).**
+
+| # | File | Change |
+| --- | --- | --- |
+| A1 | `thestill/core/youtube_channel_discovery.py` (new) | `search_channels(query, limit)` (yt-dlp flat, channel filter, returns the @handle URL plus every alias for comparing with a stored link); `is_no_uploads_error(exc)` (the verified-0 case; the service's `_score_channels` turns any other listing error into an unverified result); `pick_channel(results)` (all verified, ≥ 3, runner-up ≤ a third); `search_queries(title, author)`; constants |
+| A2 | `tests/unit/core/test_youtube_channel_discovery.py` (new) | `pick_channel` thresholds, ties and deferral on any unverified result; the no-videos-tab error is a verified 0 and other errors are unverified; query fallback; result parsing from a recorded flat payload |
+
+Gate: the new unit tests and ruff pass.
+
+**Phase B: storage.**
+
+| # | File | Change |
+| --- | --- | --- |
+| B1 | `thestill/migrations/versions/0023_youtube_channel_discovery.py` (new) | `podcasts.youtube_discovery_checked_at timestamptz NULL` |
+| B2 | `postgres_schema.py`, SQLite schema + column migration | Same column |
+| B3 | `podcast_repository.py` + both backends | `get/set_youtube_discovery_checked_at`; `get_platform_link_sample(podcast_id, limit)` (newest episodes as candidates, link state ignored); `count_platform_links(podcast_id, platform, match_methods)`; `forget_discovered_youtube_channels(podcast_id=None)` (rollback, below); chart backfill keeps a `resolver` YouTube channel |
+| B4 | `tests/integration/test_platform_links_repository_contract.py` | Stamp round trip; the sample includes linked and recently marked episodes; counting by method ignores `publisher` rows and not-found markers; forget deletes listing links and markers on `resolver` shows only, keeps `publisher` rows and other shows; chart sync keeps `resolver` but still fills an empty row |
+
+Gate: contract tests on SQLite and on Postgres via `TEST_DATABASE_URL`.
+
+**Phase C: service, config, wiring.**
+
+| # | File | Change |
+| --- | --- | --- |
+| C1 | `thestill/services/platform_link_service.py` | `search_channels` injectable; `_discover_youtube_channel` before the listing; wrong-chart detection on the source of the channel *used in the pass* (a publisher-stated channel found this pass counts as `publisher` even in a dry run, where it is never stored); dry-run / force behaviour; a `platform_links_channel_discovery` log line (query, per-result scores, outcome) and `channel_discovered` on `platform_links_resolved` |
+| C2 | `thestill/utils/config.py`, `cli.py`, `web/app.py` | `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` (7, 0 = off); `thestill link-platforms --forget-discovered [--podcast-id X] [--dry-run]` |
+| C3 | `tests/unit/services/test_platform_link_service.py` | Empty channel found and used in the same pass; verification uses the sample when only one candidate is eligible; an unverified result defers even when a rival has 3+ matches; nothing accepted stamps and writes not-found markers; throttle respected and ignored under `--force`; dry run stores nothing; a wrong chart channel is replaced even beside an unrelated publisher link; a chart channel with a channel-listing link, or a failed listing, is never replaced; publisher / curated never replaced; search failure stamps |
+| C4 | `docs/configuration.md`, this spec, `specs/README.md` | Document the setting and the outcome |
+
+Gate: the platform-link unit and contract suites, ruff, and a live
+`thestill link-platforms --dry-run` against the local database on the
+prototype shows.
+
+#### Alternatives considered
+
+- **No discovery, curate by hand** (`set-show-link`). Works for a handful
+  of followed shows but does not scale to off-chart shows, and the chart
+  is wrong often enough (3 of 32 channels on record) that "correct by
+  hand" also means finding the errors.
+- **Search videos (`ytsearch`) and vote on uploaders.** One request
+  returns uploaders of matching videos, but a guest's or a clip
+  channel's upload ranks as high as the show's own; the channel filter
+  ranked the right channel first for every prototype show.
+- **Accept the top search result by name.** Exactly the namesake risk
+  Phase 2 refused ("How I AI" has four namesake channels; "Possible"
+  returns Project Possible first).
+- **A separate discovery job or CLI.** Would need its own scheduling and
+  candidate selection; the refresh pass already knows which shows have
+  unresolved YouTube candidates.
+
+#### Outcome (2026-10-19)
+
+Built as planned on `feat/87-youtube-channel-discovery`, in three gated
+phases plus a review pass. Deviations, each recorded above:
+
+- The wrong-channel check reads the source of the channel *used in the
+  pass*. The live dry run caught the first version replacing Prof G
+  Pod's publisher-voted `@RagingModerates`: a dry run never stores the
+  vote, so the stored row still said `chart`.
+- A deferral ends the attempt (no author query), and a show with fewer
+  than 3 dated episodes is stamped without a search.
+- `verify_listing` became `is_no_uploads_error` plus the service's
+  `_score_channels`.
+
+**Live dry run, local database** (episodes up to a month old):
+Better Offline `@BetterOfflinePod` 16 matches, Deep Questions
+`@CalNewportMedia` 7, How I AI `@howiaipodcast` 11, Latent Space
+`@LatentSpacePod` 15, Possible `@reidhoffman` 10 (author query), and
+Explora's chart `@GstaadGuyPodcast` replaced by `@ExploraHRT` (10 of
+10); every rival scored 0. The Times Tech Podcast was rejected (its
+small channel no longer lists the month-old local episodes), and
+Huberman Lab, whose chart channel matches, was never searched.
+
+**Follow-ups found on the way:**
+
+- Chart rows carry `''`, not NULL, for a missing channel; the chart sync
+  stamps `''` as `chart` and can blank a publisher-stated channel on
+  every pass (prod: Prof G Pod alternates between `@RagingModerates`
+  and empty). Treat `''` as NULL in both backfills.
+- The publisher vote can pick a sibling network show's channel (Prof G
+  Pod → Raging Moderates, whose republished episodes it carries). Its
+  episode links are right; the show-level link is not, and 3d never
+  replaces a publisher-stated channel.
+- After deploy: run `thestill link-platforms --force` once to search the
+  shows without a channel straight away instead of waiting for refresh.
+
+#### Rollback
+
+Set `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS=0` to stop searching, then
+run `thestill link-platforms --forget-discovered` (`--podcast-id` for one
+show, `--dry-run` to count first). Clearing `youtube_url` alone is not
+enough: episode links are separate rows, and the candidate query skips
+every found URL even under `--force`, so wrong episode links would stay
+visible and never relink.
+
+What a discovered channel made is attributable without a new column.
+`youtube_url_source = 'resolver'` marks every discovered channel (no
+other YouTube writer uses `resolver`). On such a show every YouTube row
+with `match_method` `title_date` / `title_duration` came from that
+channel's listing: discovery only runs on a show with no channel, or
+replaces a chart channel only when the show has no listing-made link.
+`--forget-discovered`, per `resolver` show and in one transaction:
+
+1. deletes the show's YouTube rows with `match_method IN ('title_date',
+   'title_duration')` and its YouTube not-found markers, so every
+   affected episode is a candidate again at once;
+2. keeps `publisher` rows, which never depended on a channel;
+3. clears `youtube_url`, `youtube_url_source` and
+   `youtube_discovery_checked_at`.
+
+The next `link-platforms` pass (or refresh) relinks from what is left:
+the chart channel comes back through the chart sync (its link source is
+`chart` again), and the publisher rows stand. With discovery still
+enabled, the cleared stamp means the show is searched again on that
+pass; leave it disabled while rolling back. The migration only adds a
+nullable column; its downgrade drops it.
 
 The playback manifest's YouTube rendition ([#62](62-youtube-video-rendition.md))
 still reads alternate enclosures only; feeding it from `publisher` /
@@ -273,7 +518,7 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | 3b | Spotify latest-episode probe from the show's embed page, driven by `podcasts.spotify_url` | ✅ 2026-09-29 |
 | 3c | Show-link provenance (`chart` / `publisher` / `resolver` / `curated`) with the curated guard on both backends, website-scan discovery with the uniqueness and generic-channel guards, `thestill set-show-link` | ✅ 2026-09-29 |
 | 3c′ | An edit field on the podcast page for the curated links; the manual pass ordered by follows, not chart rank (followed shows without a channel or Spotify id first) | Open |
-| 3d | Verified YouTube channel discovery: search by show title, accept a channel only when several of the show's episodes match its uploads on core title and duration — the namesake guard the linker already uses. The chart already carries a channel for 5254 of 7702 charted shows; discovery is for the rest and for off-chart shows | Open |
+| 3d | Verified YouTube channel discovery: channel search by show title (then title + author), accept a channel only when at least 3 of the show's episodes match its uploads and the runner-up has at most a third as many; also replaces a chart channel that matches nothing; weekly per-show stamp. See "YouTube channel discovery (Phase 3d)" | ✅ 2026-10-19 (unmerged; stacked on PR #382) |
 | 3e | Feed the #62 playback rendition from `youtube` links once they have been eyeballed in production | Open |
 | 3f | Resolver follow-ups from the a16z case: dominant-share vote for show links, young-episode recheck, publisher-stated Apple show page tried before the title search | ✅ 2026-09-29 |
 
@@ -285,6 +530,7 @@ and the podcast page a "Spotify" row beside Apple Podcasts and YouTube.
 | `PLATFORM_LINKS_RECHECK_HOURS` | How long a not-found row suppresses another lookup for that episode | `24` |
 | `PLATFORM_LINKS_YOUNG_RECHECK_HOURS` | The shorter suppression for an episode still inside its young window | `2` |
 | `PLATFORM_LINKS_YOUNG_AGE_HOURS` | Hours after `pub_date` during which the young interval applies; `0` disables | `48` |
+| `PLATFORM_LINKS_YOUTUBE_DISCOVERY_DAYS` | Days before a show without a verified YouTube channel is searched again (Phase 3d); `0` disables discovery | `7` |
 
 ## Testing
 
@@ -344,7 +590,7 @@ live on Lex's show.
 - Episodes older than the newest 200 stay unlinked on Apple. The import
   path's page-scrape fallback (#65 Tier 3) works per episode and is not
   worth one request per old episode here.
-- 39 shows have no YouTube channel on record: Phase 3c/3d above.
+- 39 shows had no YouTube channel on record on 2026-09-28: Phase 3c/3d above. Shows whose uploads are heavily retitled (The Knowledge Project) or that publish too rarely to reach 3 matches stay unlinked by 3d.
 - Spotify show ids have no discovery shortcut (no directory carries them),
   so 3c's curation is the only way to reach the probe at scale; a public
   dataset would be worth a look before hand-curating 500 rows.

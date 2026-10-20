@@ -31,6 +31,15 @@ so this matcher is deliberately stricter than the Apple one:
   characters), or both carry the same single ``#NNN`` episode number
   ("#502 – Guest: Topic" vs "Topic | Show #502"). Without a duration
   neither is enough: a clip named after the episode would pass.
+- ``title_words`` (reported as ``title_duration``): for uploads retitled for
+  YouTube ("20VC: Atlassian CEO on Why Agents Won't Replace Interfaces" vs
+  "Atlassian CEO: Why Agents Won't Replace Interfaces"). The date within
+  tolerance and the durations agreeing, plus either half of the shorter
+  title's content words shared (at least :data:`MIN_SHARED_WORDS`), or the
+  lengths within :data:`TIGHT_DURATION_SECONDS` inside
+  :data:`TIGHT_DATE_TOLERANCE` and at least :data:`MIN_SHARED_WORDS_TIGHT`
+  words shared. Length alone is never enough: a channel posting daily has
+  other hour-long uploads that week.
 
 **Dates are approximate.** A flat listing only carries the page's
 "3 weeks ago" / "2 months ago" text, so the further back an episode is
@@ -39,7 +48,9 @@ the coarser its upload date: :func:`date_tolerance` widens with age
 beyond). The exact duration carries the precision the date loses.
 
 A candidate with more than one qualifying upload is skipped, and each
-upload links at most one episode. The listing itself
+upload links at most one episode. Members-only uploads ("AD FREE",
+"MEMBERS' EARLY ACCESS") are dropped from the listing: most listeners
+cannot open them. The listing itself
 (:func:`list_channel_videos`) is a flat yt-dlp pass over the channel's
 ``/videos`` tab — no shorts, no downloads, one round trip.
 """
@@ -72,6 +83,14 @@ WEEKS_AGE = timedelta(days=56)
 DURATION_TOLERANCE_FLOOR = 180  # seconds
 DURATION_TOLERANCE_RATIO = 0.20
 MIN_CONTAINED_TITLE = 12  # normalised characters before containment counts ("2519 scott eastwood")
+# Retitled uploads (``title_words``): share of the shorter title's content words.
+MIN_WORD_OVERLAP = 0.5
+MIN_SHARED_WORDS = 3
+# Or near-identical length inside a few days, with a smaller word overlap
+# ("Rick Rubin: What Jay-Z Did…" 9985 s vs "Rick Rubin: The Only Skill…" 9990 s).
+TIGHT_DURATION_SECONDS = 30
+TIGHT_DATE_TOLERANCE = timedelta(days=3)
+MIN_SHARED_WORDS_TIGHT = 2
 
 # Newest uploads to list. Channels that post daily clips need a deep window
 # for the episodes inside it to be reachable at all.
@@ -84,6 +103,13 @@ _EPISODE_NUMBER_RE = re.compile(r"#(\d{1,6})(?!\d)")
 # The decoration publishers hang on a title: "#502", "Ep 12", "Episode 12.",
 # "E12" at a word boundary. Stripped, with the show name, for the core title.
 _EPISODE_TAG_RE = re.compile(r"(?:#|\b(?:ep|episode|e)\.?\s*)\d{1,6}\b", re.IGNORECASE)
+# Words that say nothing about which episode a title names.
+_STOPWORDS = frozenset(
+    "a an and are as at be by can do episode ep for from he her his how i in is it its me my of on or our part "
+    "podcast s she show t that the their they this to vs w was we what when who why will with you your".split()
+)
+# yt-dlp's ``availability`` for uploads only channel members can watch.
+_RESTRICTED_AVAILABILITY = frozenset({"subscriber_only", "premium_only", "needs_auth", "private"})
 
 
 @dataclass(frozen=True)
@@ -167,6 +193,8 @@ def parse_listing(entries: Iterable[Any]) -> List[YouTubeVideoEntry]:
             continue
         if raw.get("live_status") in ("is_live", "is_upcoming"):
             continue
+        if raw.get("availability") in _RESTRICTED_AVAILABILITY:
+            continue
         parsed.append(
             YouTubeVideoEntry(
                 video_id=video_id,
@@ -195,7 +223,7 @@ def match_candidates(
     # match.
     used: set[str] = set()
     found_by_id: Dict[str, Tuple[YouTubeVideoEntry, str]] = {}
-    for allowed in (("title_exact",), ("title_core",), ("title_duration",)):
+    for allowed in (("title_exact",), ("title_core",), ("title_duration",), ("title_words",)):
         for candidate in candidates:
             if candidate.episode_id in found_by_id:
                 continue
@@ -243,8 +271,11 @@ def match_rule(
         return None
     at = now or datetime.now(timezone.utc)
     item = _entry_for(YouTubeVideoEntry("", title, released, duration), show_name)
-    found = _match_one(candidate, [item], set(), at, ("title_exact", "title_core", "title_duration"), show_name)
+    found = _match_one(candidate, [item], set(), at, _ALL_STAGES, show_name)
     return found[1] if found else None
+
+
+_ALL_STAGES = ("title_exact", "title_core", "title_duration", "title_words")
 
 
 @dataclass(frozen=True)
@@ -253,10 +284,12 @@ class _Entry:
     title: str  # normalised
     core: str  # normalised, show name and episode tag removed
     number: Optional[str]
+    words: frozenset[str]  # content words of the core
 
 
 def _entry_for(entry: YouTubeVideoEntry, show_name: Optional[str]) -> _Entry:
-    return _Entry(entry, normalize_title(entry.title), core_title(entry.title, show_name), episode_number(entry.title))
+    core = core_title(entry.title, show_name)
+    return _Entry(entry, normalize_title(entry.title), core, episode_number(entry.title), content_words(core))
 
 
 def claim_corroborated(
@@ -288,7 +321,9 @@ def _match_one(
     entries: Sequence[_Entry],
     used: set[str],
     now: datetime,
-    allowed: Tuple[str, ...],  # stages: 'title_exact' | 'title_core' (both reported as title_date) | 'title_duration'
+    # stages: 'title_exact' | 'title_core' (both reported as title_date) | 'title_duration' | 'title_words'
+    # (reported as title_duration)
+    allowed: Tuple[str, ...],
     show_name: Optional[str] = None,
 ) -> Optional[Tuple[YouTubeVideoEntry, str]]:
     title = normalize_title(candidate.title or "")
@@ -296,6 +331,7 @@ def _match_one(
         return None
     core = core_title(candidate.title or "", show_name)
     number = episode_number(candidate.title or "")
+    words = content_words(core)
     tolerance = date_tolerance(candidate.pub_date, now)
     qualifying: List[Tuple[YouTubeVideoEntry, str]] = []
     for item in entries:
@@ -317,6 +353,10 @@ def _match_one(
             and (_contains(item.title, title) or (number is not None and item.number == number))
         ):
             qualifying.append((entry, "title_duration"))
+        elif (
+            "title_words" in allowed and durations_agree is True and _words_related(words, item.words, entry, candidate)
+        ):
+            qualifying.append((entry, "title_duration"))
     if len(qualifying) != 1:
         return None
     return qualifying[0]
@@ -336,6 +376,24 @@ def date_tolerance(pub_date: datetime, now: datetime) -> timedelta:
     if age <= WEEKS_AGE:
         return DATE_TOLERANCE_WEEKS
     return DATE_TOLERANCE_MONTHS
+
+
+def content_words(core: str) -> frozenset[str]:
+    """A core title's words minus stopwords and bare numbers (episode numbers differ by side)."""
+    return frozenset(w for w in core.split() if w not in _STOPWORDS and not w.isdigit())
+
+
+def _words_related(
+    feed: frozenset[str], video: frozenset[str], entry: YouTubeVideoEntry, candidate: PlatformLinkCandidate
+) -> bool:
+    """The ``title_words`` test; the caller has checked the date tolerance and duration agreement."""
+    shared = len(feed & video)
+    if shared >= MIN_SHARED_WORDS and shared >= MIN_WORD_OVERLAP * min(len(feed), len(video)):
+        return True
+    if shared < MIN_SHARED_WORDS_TIGHT or entry.uploaded is None or candidate.pub_date is None:
+        return False
+    close_date = _dates_close(entry.uploaded, candidate.pub_date, TIGHT_DATE_TOLERANCE)
+    return close_date and abs(int(entry.duration or 0) - int(candidate.duration or 0)) <= TIGHT_DURATION_SECONDS
 
 
 def _contains(a: str, b: str) -> bool:
