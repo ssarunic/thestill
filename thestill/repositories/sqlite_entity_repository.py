@@ -85,6 +85,30 @@ _ORPHAN_ENTITIES_SQL = """
 """
 
 
+# JSON lists of entity ids that merges and splits keep consistent:
+# (count key, table, column).
+_ENTITY_ID_LISTS = (
+    ("hosts", "podcasts", "host_entity_ids"),
+    ("recurring", "podcasts", "recurring_entity_ids"),
+    ("guests", "episodes", "guest_entity_ids"),
+    ("candidates", "entity_mentions", "candidate_entity_ids"),
+)
+
+
+def _json_list_replace(column: str) -> str:
+    """``column`` with ``:src`` replaced by ``:dst``, first-seen order kept
+    and duplicates dropped (the keeper may already be listed)."""
+    return f"""(
+        SELECT COALESCE(json_group_array(item), '[]')
+        FROM (
+            SELECT CASE WHEN value = :src THEN :dst ELSE value END AS item, min(key) AS first_pos
+            FROM json_each({column})
+            GROUP BY 1
+            ORDER BY first_pos
+        )
+    )"""
+
+
 class SqliteEntityRepository(EntityRepository):
     """Phase-0 typed stub for ``entities`` / ``entity_mentions`` tables.
 
@@ -262,6 +286,65 @@ class SqliteEntityRepository(EntityRepository):
         """
         with self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+            return cursor.rowcount > 0
+
+    def move_mentions(self, mention_ids: Sequence[int], *, from_entity_ids: Sequence[str], to_entity_id: str) -> int:
+        ids, sources = list(mention_ids), list(from_entity_ids)
+        if not ids or not sources:
+            return 0
+        moved = 0
+        source_marks = ",".join("?" * len(sources))
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                moved += conn.execute(
+                    f"UPDATE entity_mentions SET entity_id = ? WHERE id IN ({marks}) AND entity_id IN ({source_marks})",
+                    [to_entity_id, *chunk, *sources],
+                ).rowcount
+        return moved
+
+    def repoint_entity_references(self, *, from_entity_id: str, to_entity_id: str) -> Dict[str, int]:
+        params = {"src": from_entity_id, "dst": to_entity_id}
+        counts: Dict[str, int] = {}
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            counts["mentions"] = conn.execute(
+                "UPDATE entity_mentions SET entity_id = :dst WHERE entity_id = :src", params
+            ).rowcount
+            counts["overrides"] = conn.execute(
+                "UPDATE mention_overrides SET entity_id = :dst WHERE entity_id = :src", params
+            ).rowcount
+            for kind, table, column in _ENTITY_ID_LISTS:
+                counts[kind] = conn.execute(
+                    f"UPDATE {table} SET {column} = {_json_list_replace(column)}"
+                    f" WHERE {column} IS NOT NULL AND EXISTS (SELECT 1 FROM json_each({table}.{column}) WHERE value = :src)",
+                    params,
+                ).rowcount
+        return counts
+
+    def is_entity_referenced(self, entity_id: str) -> bool:
+        lists = " OR ".join(
+            f"EXISTS (SELECT 1 FROM {table}, json_each({table}.{column}) WHERE {table}.{column} IS NOT NULL AND value = :id)"
+            for _kind, table, column in _ENTITY_ID_LISTS
+        )
+        sql = f"""
+            SELECT EXISTS (SELECT 1 FROM entity_mentions WHERE entity_id = :id)
+                OR EXISTS (SELECT 1 FROM mention_overrides WHERE entity_id = :id)
+                OR {lists}
+        """
+        with self._get_connection() as conn:
+            return bool(conn.execute(sql, {"id": entity_id}).fetchone()[0])
+
+    def set_entity_wikidata(
+        self, entity_id: str, *, qid: Optional[str], description: Optional[str], instance_of: Sequence[str]
+    ) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE entities SET wikidata_qid = ?, description = ?, wikidata_instance_of = ?, updated_at = ?"
+                " WHERE id = ?",
+                (qid, description, json.dumps(list(instance_of)), datetime.now(timezone.utc).isoformat(), entity_id),
+            )
             return cursor.rowcount > 0
 
     def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:

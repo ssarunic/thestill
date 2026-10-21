@@ -23,7 +23,7 @@ audit endpoints need multi-user mode; settings and alerts work in both.
 
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -294,5 +294,164 @@ def list_audit(
         {
             **paginated_response(items, total=total, offset=offset, limit=limit, items_key="entries"),
             "actions": list(AUDIT_ACTIONS),
+        }
+    )
+
+
+# ----- entity curation -----
+# The same service as ``thestill entity merge / move-mentions / split /
+# relink / prune-orphans`` and ``resolution-blacklist add``; refusals are
+# AdminActionError and map to 409 through the shared handler.
+
+EntityTypeName = Literal["person", "company", "product", "topic"]
+
+
+def _curation(state: AppState):
+    from ...services.entity_curation import EntityCurationService
+
+    return EntityCurationService(
+        state.entity_repository, _abuse(state).audit, link_decisions=state.link_decision_repository
+    )
+
+
+def _entity_json(entity) -> Dict[str, Any]:
+    return {
+        "id": entity.id,
+        "type": entity.type.value,
+        "name": entity.canonical_name,
+        "wikidata_qid": entity.wikidata_qid,
+        "description": entity.description,
+    }
+
+
+class EntityMergeRequest(BaseModel):
+    keeper_id: str = Field(..., min_length=3, max_length=300)
+    loser_id: str = Field(..., min_length=3, max_length=300)
+    reason: Optional[str] = Field(None, max_length=500)
+    dry_run: bool = False
+
+
+class EntityMoveMentionsRequest(BaseModel):
+    from_entity_id: str = Field(..., min_length=3, max_length=300)
+    to_entity_id: str = Field(..., min_length=3, max_length=300)
+    mention_ids: List[int] = Field(..., min_length=1, max_length=5000)
+    delete_emptied: bool = False
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class EntitySplitRequest(BaseModel):
+    from_entity_id: str = Field(..., min_length=3, max_length=300)
+    name: str = Field(..., min_length=1, max_length=300)
+    type: EntityTypeName
+    qid: Optional[str] = Field(None, max_length=20)
+    description: Optional[str] = Field(None, max_length=500)
+    entity_id: Optional[str] = Field(None, min_length=3, max_length=300)
+    #: ``None`` moves everything that refers to the source.
+    mention_ids: Optional[List[int]] = Field(None, min_length=1, max_length=5000)
+    delete_emptied: bool = True
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class EntityRelinkRequest(BaseModel):
+    #: ``None`` unlinks the entity from Wikidata.
+    qid: Optional[str] = Field(None, max_length=20)
+    description: Optional[str] = Field(None, max_length=500)
+    blacklist_old: bool = True
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class BlacklistRequest(BaseModel):
+    surface_form: str = Field(..., min_length=1, max_length=300)
+    wrong_qid: str = Field(..., min_length=2, max_length=20)
+    reason: Optional[str] = Field(None, max_length=500)
+
+
+class PruneOrphansRequest(BaseModel):
+    apply: bool = False
+
+
+@router.post("/entities/merge")
+def merge_entities(
+    body: EntityMergeRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
+) -> dict:
+    result = _curation(state).merge(
+        body.keeper_id, body.loser_id, actor=Actor.web(admin.id), reason=body.reason, dry_run=body.dry_run
+    )
+    return api_response({**asdict(result), "dry_run": body.dry_run})
+
+
+@router.post("/entities/move-mentions")
+def move_entity_mentions(
+    body: EntityMoveMentionsRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
+) -> dict:
+    result = _curation(state).move_mentions(
+        body.mention_ids,
+        from_entity_id=body.from_entity_id,
+        to_entity_id=body.to_entity_id,
+        actor=Actor.web(admin.id),
+        delete_emptied=body.delete_emptied,
+        reason=body.reason,
+    )
+    return api_response(asdict(result))
+
+
+@router.post("/entities/split")
+def split_entity(
+    body: EntitySplitRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
+) -> dict:
+    from ...models.entities import EntityType
+
+    result = _curation(state).split(
+        name=body.name,
+        entity_type=EntityType(body.type),
+        from_entity_id=body.from_entity_id,
+        actor=Actor.web(admin.id),
+        qid=body.qid,
+        description=body.description,
+        entity_id=body.entity_id,
+        mention_ids=body.mention_ids,
+        delete_emptied=body.delete_emptied,
+        reason=body.reason,
+    )
+    return api_response({"entity": _entity_json(result.entity), "moved": result.moved, "deleted": result.deleted})
+
+
+@router.post("/entities/{entity_id}/relink")
+def relink_entity(
+    entity_id: str,
+    body: EntityRelinkRequest,
+    state: AppState = Depends(get_app_state),
+    admin: User = Depends(require_admin),
+) -> dict:
+    result = _curation(state).relink(
+        entity_id,
+        body.qid,
+        actor=Actor.web(admin.id),
+        description=body.description,
+        blacklist_old=body.blacklist_old,
+        reason=body.reason,
+    )
+    return api_response(asdict(result))
+
+
+@router.post("/entities/blacklist")
+def blacklist_entity_link(
+    body: BlacklistRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
+) -> dict:
+    _curation(state).blacklist(body.surface_form, body.wrong_qid, actor=Actor.web(admin.id), reason=body.reason)
+    return api_response({"surface_form": body.surface_form, "wrong_qid": body.wrong_qid})
+
+
+@router.post("/entities/prune-orphans")
+def prune_orphan_entities(
+    body: PruneOrphansRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
+) -> dict:
+    result = _curation(state).prune_orphans(actor=Actor.web(admin.id), apply=body.apply)
+    return api_response(
+        {
+            "orphans": len(result.orphans),
+            "sample": result.orphans[:50],
+            "deleted": result.deleted,
+            "applied": result.applied,
         }
     )

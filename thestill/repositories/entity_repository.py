@@ -280,6 +280,34 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def move_mentions(self, mention_ids: Sequence[int], *, from_entity_ids: Sequence[str], to_entity_id: str) -> int:
+        """Point the given mentions at ``to_entity_id``. Only a mention that
+        currently points at one of ``from_entity_ids`` moves, so a stale id
+        list cannot take another entity's mention. Returns how many moved."""
+
+    @abstractmethod
+    def repoint_entity_references(self, *, from_entity_id: str, to_entity_id: str) -> Dict[str, int]:
+        """Move everything that refers to ``from_entity_id`` onto
+        ``to_entity_id`` in one transaction: mentions, mention overrides,
+        podcast host and recurring lists, episode guest lists and mention
+        candidate lists (list order kept, no duplicates). Returns the rows
+        changed per kind: ``mentions``, ``overrides``, ``hosts``,
+        ``recurring``, ``guests``, ``candidates``."""
+
+    @abstractmethod
+    def is_entity_referenced(self, entity_id: str) -> bool:
+        """True while anything :meth:`repoint_entity_references` moves still
+        refers to ``entity_id``."""
+
+    @abstractmethod
+    def set_entity_wikidata(
+        self, entity_id: str, *, qid: Optional[str], description: Optional[str], instance_of: Sequence[str]
+    ) -> bool:
+        """Overwrite the entity's Wikidata link exactly: QID, description and
+        P31 list. ``upsert_entity`` never clears either, so a wrong link
+        needs this. Returns True if the entity exists."""
+
+    @abstractmethod
     def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
         """The subset of ``entity_ids`` that at least one mention points at."""
 

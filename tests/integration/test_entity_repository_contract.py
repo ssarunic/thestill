@@ -1483,3 +1483,74 @@ def test_orphan_delete_waits_for_an_uncommitted_mention(repo):
     assert not prune.is_alive()
     assert result["deleted"] == 0
     assert repo.entity_ids_with_mentions(["topic:racing"]) == {"topic:racing"}
+
+
+# ---------------------------------------------------------------------------
+# Curation: merge / split / relink building blocks
+# ---------------------------------------------------------------------------
+def test_repoint_entity_references_moves_every_reference_and_keeps_list_order(repo):
+    for entity_id in ("person:keeper", "person:loser", "person:other"):
+        repo.upsert_entity(_bare(entity_id, EntityType.PERSON))
+    repo.insert_mentions([_resolved_mention("person:loser"), _mention(surface="Amb")])
+    pending = repo.list_pending_mentions()[0]
+    repo.resolve_mention(
+        mention_id=pending.id,
+        entity_id=None,
+        status="ambiguous",
+        candidate_entity_ids=["person:loser", "person:keeper"],
+    )
+    repo.add_override(surface_form="Loser", episode_id=None, kind="force_entity", entity_id="person:loser")
+    repo.set_podcast_hosts(POD_1, ["person:other", "person:loser"])
+    repo.set_podcast_recurring(POD_1, ["person:loser"])
+    repo.set_episode_guests(EP_1, ["person:loser", "person:keeper"])
+
+    counts = repo.repoint_entity_references(from_entity_id="person:loser", to_entity_id="person:keeper")
+
+    assert counts == {"mentions": 1, "overrides": 1, "hosts": 1, "recurring": 1, "guests": 1, "candidates": 1}
+    assert not repo.is_entity_referenced("person:loser")
+    assert repo.is_entity_referenced("person:keeper")
+    assert repo.get_mention(pending.id).candidate_entity_ids == ["person:keeper"]
+    roles = repo.get_entity_roles("person:keeper", guest_episodes_limit=5)
+    assert [p["podcast_id"] for p in roles["hosts_podcasts"]] == [POD_1]
+
+
+def test_is_entity_referenced_sees_each_kind(repo):
+    repo.upsert_entity(_bare("person:anchor", EntityType.PERSON))
+    assert not repo.is_entity_referenced("person:anchor")
+    repo.set_episode_guests(EP_2, ["person:anchor"])
+    assert repo.is_entity_referenced("person:anchor")
+
+
+def test_move_mentions_only_moves_mentions_of_the_named_sources(repo):
+    for entity_id in ("topic:islam", "person:islam", "person:islam-makhachev"):
+        repo.upsert_entity(_bare(entity_id))
+    repo.insert_mentions([_mention(surface="Islam", segment_id=seg) for seg in (1, 2, 3)])
+    ids = sorted(m.id for m in repo.list_pending_mentions())
+    for mention_id, entity_id in zip(ids, ("topic:islam", "topic:islam", "person:islam")):
+        repo.resolve_mention(mention_id=mention_id, entity_id=entity_id, status="resolved")
+    moved = repo.move_mentions(ids[1:], from_entity_ids=["topic:islam"], to_entity_id="person:islam-makhachev")
+    # ids[2] points at person:islam, which was not named as a source.
+    assert moved == 1
+    assert repo.get_mention(ids[0]).entity_id == "topic:islam"
+    assert repo.get_mention(ids[1]).entity_id == "person:islam-makhachev"
+    assert repo.get_mention(ids[2]).entity_id == "person:islam"
+
+
+def test_set_entity_wikidata_overwrites_the_link_exactly(repo):
+    repo.upsert_entity(
+        _entity(
+            id="company:perplexity",
+            type=EntityType.COMPANY,
+            name="Perplexity",
+            qid="Q372193",
+            aliases=[],
+            description="the exponentiation of the information entropy",
+            wikidata_instance_of=["Q1"],
+        )
+    )
+    assert repo.set_entity_wikidata(
+        "company:perplexity", qid="Q123403392", description="Chatbot search engine", instance_of=[]
+    )
+    got = repo.get_entity("company:perplexity")
+    assert (got.wikidata_qid, got.description, got.wikidata_instance_of) == ("Q123403392", "Chatbot search engine", [])
+    assert not repo.set_entity_wikidata("company:missing", qid=None, description=None, instance_of=[])

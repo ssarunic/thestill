@@ -38,6 +38,13 @@ AUDIT_ACTIONS = (
     "admin.grant",
     "admin.revoke",
     "setting.set",
+    # Entity curation (thestill.services.entity_curation)
+    "entity.merge",
+    "entity.move_mentions",
+    "entity.split",
+    "entity.relink",
+    "entity.blacklist",
+    "entity.prune_orphans",
 )
 
 

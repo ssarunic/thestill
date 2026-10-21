@@ -67,6 +67,14 @@ thestill set-summary-profile --podcast-id X --profile <key|auto>
 # Narrate an existing briefing from the CLI:
 thestill narrate --briefing <briefing-id>
 
+# Entity curation (admin-only; same service as /api/admin/entities, audited).
+# Never fix entity data with SQL — use these:
+thestill entity merge KEEPER LOSER            # two rows, one thing
+thestill entity move-mentions FROM TO ID...   # one name, two things
+thestill entity split FROM --name N --type T [--qid Q] [--mention ID]...
+thestill entity relink ID QID                 # wrong Wikidata item; blacklists the old one
+thestill entity prune-orphans [--apply]       # rows nothing refers to
+
 # Product analytics from product tables (spec #95; multi-user + Postgres only):
 thestill analytics [--range 7d|28d|90d] [--json]
 
