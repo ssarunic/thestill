@@ -229,6 +229,32 @@ class TestEntityMergeCli:
         assert "Loser" in result.output
 
 
+class TestEntityPruneOrphansCli:
+    def _add_orphan(self, db_dir):
+        repo = SqliteEntityRepository(db_path=str(db_dir / "podcasts.db"))
+        repo.upsert_entity(
+            EntityRecord(id="company:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI", aliases=[])
+        )
+        return repo
+
+    def test_reports_without_deleting_by_default(self, tmp_db_with_entities):
+        repo = self._add_orphan(tmp_db_with_entities)
+        result = _run(["entity", "prune-orphans"])
+        assert result.exit_code == 0, result.output
+        assert "company:mistral-ai" in result.output
+        assert "--apply" in result.output
+        assert repo.get_entity("company:mistral-ai") is not None
+
+    def test_apply_deletes_only_orphans(self, tmp_db_with_entities):
+        repo = self._add_orphan(tmp_db_with_entities)
+        expected = repo.find_orphan_entity_ids()
+        result = _run(["entity", "prune-orphans", "--apply"])
+        assert result.exit_code == 0, result.output
+        assert f"✓ {len(expected)} deleted" in result.output
+        assert repo.get_entity("company:mistral-ai") is None
+        assert repo.get_entity("person:elon-musk") is not None
+
+
 class TestPodcastSetHostsCli:
     """Regression: a module-level ``def list`` click command used to shadow
     the ``list`` builtin, so ``set-hosts`` invoked the *list command* with

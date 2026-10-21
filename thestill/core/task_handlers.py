@@ -1265,12 +1265,18 @@ def resolve_pending_mentions(repo, linker, pending, *, episode_id: str, context=
 
     touched_entity_ids: set[str] = set()
     for r in run.results:
+        if r.status != "resolved":
+            # An unresolvable or dropped mention carries a local stand-in
+            # entity (``company:mistral-ai`` from the extractor's label) that
+            # no mention will point at. Storing it left empty rows that took
+            # re-typed entities' public URLs, so only the mention is written.
+            repo.resolve_mention(mention_id=r.mention_id, entity_id=None, status=r.status, method=r.method.value)
+            continue
         entity = _with_stable_identity(repo, r.entity)
         repo.upsert_entity(entity)
-        entity_id_for_mention = entity.id if r.status == "resolved" else None
         repo.resolve_mention(
             mention_id=r.mention_id,
-            entity_id=entity_id_for_mention,
+            entity_id=entity.id,
             status=r.status,
             method=r.method.value,
         )

@@ -157,6 +157,9 @@ class TestHappyPath:
         resolve_call = state.entity_repository.resolve_mention.call_args_list[0]
         assert resolve_call.kwargs["status"] == "unresolvable"
         assert resolve_call.kwargs["entity_id"] is None
+        # Its local stand-in entity is not stored: no mention points at it,
+        # and an empty row can take a re-typed entity's public URL.
+        state.entity_repository.upsert_entity.assert_not_called()
 
 
 class TestNoPending:

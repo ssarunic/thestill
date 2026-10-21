@@ -33,7 +33,7 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Dict, Iterable, List, Literal, Optional
+from typing import Annotated, Dict, Iterable, List, Literal, Optional, Sequence, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
@@ -456,11 +456,14 @@ def _entity_id_from_path(entity_repository, entity_type: str, id_slug: str) -> s
         raise HTTPException(status_code=400, detail=f"Invalid entity type: {entity_type}")
     prefix = f"{entity_type}:"
     bare_slug = id_slug[len(prefix) :] if id_slug.startswith(prefix) else id_slug
-    candidates = entity_repository.get_entities_by_ids(url_candidate_ids(bare_slug))
-    owner = url_owner(entity_type, bare_slug, candidates)
-    if owner is None:
+    candidates = url_candidates(
+        entity_type, bare_slug, entity_repository.get_entities_by_ids(url_candidate_ids(bare_slug))
+    )
+    if not candidates:
         raise HTTPException(status_code=404, detail=f"Entity not found: {entity_type}:{bare_slug}")
-    return owner
+    # Only a URL two entities claim needs the mention lookup.
+    with_mentions = entity_repository.entity_ids_with_mentions(candidates) if len(candidates) > 1 else set()
+    return url_owner(candidates, with_mentions)
 
 
 def url_candidate_ids(bare_slug: str) -> List[str]:
@@ -468,25 +471,30 @@ def url_candidate_ids(bare_slug: str) -> List[str]:
     return [f"{entity_type}:{bare_slug}" for entity_type in sorted(_VALID_TYPES)]
 
 
-def url_owner(entity_type: str, bare_slug: str, candidates: Iterable[EntityRecord]) -> Optional[str]:
-    """The id ``/entities/<entity_type>/<bare_slug>`` shows, given the stored
-    entities among :func:`url_candidate_ids`.
-
-    The id with the URL's own prefix wins whenever it exists; otherwise the
-    first re-typed id (by prefix) whose current type matches. Two entities
-    can claim one URL after a re-type (``person:islam``, a fighter's given
-    name re-typed to topic, next to ``topic:islam``), so the sitemap asks
-    this same function and lists only the owner (spec #42 FM-6).
-    """
-    by_id = {entity.id: entity for entity in candidates}
+def url_candidates(entity_type: str, bare_slug: str, stored: Iterable[EntityRecord]) -> List[str]:
+    """The ids that can answer ``/entities/<entity_type>/<bare_slug>``, best
+    first: the id with the URL's own prefix, then re-typed ids (by prefix)
+    whose current type matches."""
+    by_id = {entity.id: entity for entity in stored}
     exact = f"{entity_type}:{bare_slug}"
-    if exact in by_id:
-        return exact
+    ordered = [exact] if exact in by_id else []
     for other in sorted(_VALID_TYPES):
         entity = by_id.get(f"{other}:{bare_slug}")
         if other != entity_type and entity is not None and entity.type.value == entity_type:
-            return entity.id
-    return None
+            ordered.append(entity.id)
+    return ordered
+
+
+def url_owner(candidates: Sequence[str], with_mentions: Set[str]) -> str:
+    """The id an entity URL shows: the first candidate that has mentions,
+    else the first candidate.
+
+    Two entities can claim one URL after a re-type, and the one holding the
+    URL's own prefix is often an empty leftover (``company:mistral-ai``, no
+    mentions, next to the re-typed ``topic:mistral-ai`` with 141). The page
+    resolver and the sitemap both decide through here (spec #42 FM-6).
+    """
+    return next((entity_id for entity_id in candidates if entity_id in with_mentions), candidates[0])
 
 
 def _citation_row(ctx: MentionContext) -> CitationRow:

@@ -79,6 +79,28 @@ _MENTION_CONTEXT_SELECT = """
 """
 
 
+# Entity rows nothing refers to (see ``EntityRepository.find_orphan_entity_ids``).
+# Shared by the listing and the guarded delete, so both apply one definition.
+_ORPHAN_ENTITIES_SQL = """
+            WITH anchored AS (
+                SELECT jsonb_array_elements_text(host_entity_ids) AS id FROM podcasts
+                UNION SELECT jsonb_array_elements_text(recurring_entity_ids) FROM podcasts
+                UNION SELECT jsonb_array_elements_text(guest_entity_ids) FROM episodes
+                    WHERE guest_entity_ids <> '[]'::jsonb
+                UNION SELECT jsonb_array_elements_text(candidate_entity_ids) FROM entity_mentions
+                    WHERE candidate_entity_ids IS NOT NULL AND jsonb_typeof(candidate_entity_ids) = 'array'
+            )
+            SELECT e.id FROM entities e
+            WHERE e.wikidata_qid IS NULL
+              AND e.aliases = '[]'::jsonb
+              AND NOT e.public_hidden
+              AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM mention_overrides o WHERE o.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM entity_enrichment x WHERE x.entity_id = e.id)
+              AND e.id NOT IN (SELECT id FROM anchored WHERE id IS NOT NULL)
+"""
+
+
 class PostgresEntityRepository(EntityRepository):
     """PostgreSQL-backed entity repository. Thread-safe via
     connection-per-operation; the schema is owned by
@@ -169,6 +191,31 @@ class PostgresEntityRepository(EntityRepository):
                 (entity_id,),
             ).fetchone()
         return _row_to_entity(row) if row else None
+
+    def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
+        if not entity_ids:
+            return set()
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT entity_id FROM entity_mentions WHERE entity_id = ANY(%s)",
+                (list(entity_ids),),
+            ).fetchall()
+        return {row["entity_id"] for row in rows}
+
+    def find_orphan_entity_ids(self) -> List[str]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(f"{_ORPHAN_ENTITIES_SQL} ORDER BY e.id").fetchall()
+        return [row["id"] for row in rows]
+
+    def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
+        if not entity_ids:
+            return 0
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                f"DELETE FROM entities WHERE id = ANY(%s) AND id IN ({_ORPHAN_ENTITIES_SQL})",
+                (list(entity_ids),),
+            )
+            return cursor.rowcount
 
     def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
         if not entity_ids:

@@ -280,6 +280,28 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
+    def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
+        """The subset of ``entity_ids`` that at least one mention points at."""
+
+    @abstractmethod
+    def find_orphan_entity_ids(self) -> List[str]:
+        """Entity rows nothing refers to, sorted by id.
+
+        An orphan has no mention pointing at it, appears in no mention's
+        candidate list, has no Wikidata QID, no aliases and no enrichment
+        row, is not hidden, is the target of no mention override, and is
+        no podcast's host or recurring voice and no episode's guest. Such
+        rows are left behind when every mention moves elsewhere, and an
+        empty row can take a re-typed entity's public URL.
+        """
+
+    @abstractmethod
+    def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
+        """Delete those of ``entity_ids`` that are still orphans, checked in
+        the same statement: a mention resolved to one since it was listed
+        keeps it (a plain delete would cascade that mention away)."""
+
+    @abstractmethod
     def replace_aliases(self, entity_id: str, aliases: List[str]) -> bool:
         """Overwrite an entity's alias list (distinct, sorted). The one way
         to *remove* an alias: ``upsert_entity`` only ever unions. Returns

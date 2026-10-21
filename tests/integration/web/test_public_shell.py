@@ -192,6 +192,41 @@ def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
         assert "client_ip" not in fields and "user_agent" not in fields
 
 
+def test_sitemap_lists_a_retyped_entity_over_an_empty_row(site, app_state, monkeypatch):
+    """``company:mistral-ai`` is an empty leftover; the re-typed
+    ``topic:mistral-ai`` (now a company) has the mentions, so the page shows
+    it and the sitemap lists its URL."""
+    from thestill.models.entities import EntityMention, EntityRecord, EntityType, MentionRole
+    from thestill.repositories import public_quotes
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="company:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI"))
+    repo.upsert_entity(
+        EntityRecord(id="topic:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI", wikidata_qid="Q1")
+    )
+    repo.insert_mentions(
+        [
+            EntityMention(
+                entity_id="topic:mistral-ai",
+                episode_id="00000000-0000-0000-0000-000000000001",
+                segment_id=1,
+                start_ms=100_000,
+                end_ms=104_000,
+                role=MentionRole.MENTIONED,
+                surface_form="Mistral",
+                quote_excerpt="Mistral shipped a model.",
+                confidence=0.9,
+                extractor="gliner:test",
+            )
+        ]
+    )
+    rows = [{"entity_id": "topic:mistral-ai", "entity_type": "company", "quotes": 5}]
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "indexable_entities", lambda self, min_quotes=3: rows)
+    body = site.get("/sitemap.xml").text
+    assert body.count("https://thestill.test/entities/company/mistral-ai</loc>") == 1
+
+
 def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkeypatch):
     """Two entities can claim one URL after a re-type; the page shows the one
     with the URL's own prefix, so only that one may be listed."""
