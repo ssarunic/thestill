@@ -51,6 +51,24 @@ describe('buildPeople (spec #76 §3.5)', () => {
     expect(chips[2].segmentId).toBe(4)
   })
 
+  it('skips role-only labels but keeps named and unnamed participants', () => {
+    const labels = [
+      'Ad Narrator 1',
+      'Ad Narrator',
+      'Archival Audio 2',
+      'Archival Audio (Clip)',
+      'Narrator',
+      'Listener 3',
+      'None',
+      'Unknown Speaker',
+      'Host 1',
+      'Clipper Jones',
+      'Donald Trump (Archival Audio)',
+    ]
+    const chips = buildPeople([], labels.map((label, i) => segment(i, label)))
+    expect(chips.map((c) => c.name)).toEqual(['Host 1', 'Clipper Jones', 'Donald Trump (Archival Audio)'])
+  })
+
   it('caps entity people at eight and keeps Jim and James apart', () => {
     const entities = Array.from({ length: 10 }, (_, i) => person(`e${i}`, `Person ${i}`, 'guest', 10 - i))
     const chips = buildPeople(entities, [segment(1, 'Jim'), segment(2, 'James Person')])
