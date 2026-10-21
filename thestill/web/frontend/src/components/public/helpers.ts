@@ -24,10 +24,12 @@ export function typeLabel(type: PublicEntityType) {
   return TYPE_LABEL[type] ?? 'Topic'
 }
 
-/** A quote's link: ``?t=`` is the reader's own deep-link parameter, so the
- * same URL lands on the passage whether or not the recipient is signed in. */
+/** A quote's link: ``t`` is the reader's own deep-link parameter, so the
+ * same URL lands on the passage whether or not the recipient is signed in.
+ * It goes in the fragment so crawlers see one URL per episode, not one per
+ * quoted minute (see ``deepLinkParam``). */
 export function quoteUrl(quote: PublicQuote) {
-  return `${episodePath(quote.podcast.slug, quote.episode.slug)}?t=${quote.start_seconds}`
+  return `${episodePath(quote.podcast.slug, quote.episode.slug)}#t=${quote.start_seconds}`
 }
 
 /** Groups consecutive quotes by episode (the API returns newest episode first). */

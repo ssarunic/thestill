@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
-import { useLocation, useSearchParams } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import type { AnnotatedSegment } from '../api/types'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
+import { deepLinkParam } from './useDeepLinkSeek'
 
 // History entries (`location.key`) whose `?t=` has already been turned into a
 // scroll target. A Back/Forward to one of them is a return, and the saved
@@ -24,7 +25,7 @@ interface Options {
 }
 
 /**
- * Spec #72 §Deep link — resolve `?t=<seconds>` to the transcript segment under
+ * Spec #72 §Deep link — resolve `?t=<seconds>` (or `#t=`) to the transcript segment under
  * that moment and hand it to the reader's scroll-target mechanism, once per
  * history entry, on fresh entries only. Independent of the follow toggle
  * (useDeepLinkSeek only seeks; scrolling used to depend on follow being on).
@@ -32,8 +33,7 @@ interface Options {
  */
 export function useDeepLinkScrollTarget({ episodeId, segments, offset, onTarget }: Options): void {
   const location = useLocation()
-  const [searchParams] = useSearchParams()
-  const raw = searchParams.get('t')
+  const raw = deepLinkParam(location.search, location.hash, 't')
 
   useEffect(() => {
     if (!episodeId || !segments || segments.length === 0 || raw === null) return

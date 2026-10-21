@@ -2,7 +2,7 @@
 // A typed port of the design system's bundle (same class names, styles in
 // src/styles/public.css). Everything here renders under .public-theme.
 import { useState, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, type To } from 'react-router-dom'
 import {
   entityPath,
   episodePath,
@@ -80,7 +80,7 @@ export function FilterChip({
 }: {
   selected?: boolean
   type?: PublicEntityType
-  to?: string
+  to?: To
   onClick?: () => void
   children: ReactNode
 }) {

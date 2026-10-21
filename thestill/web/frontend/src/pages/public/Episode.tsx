@@ -1,7 +1,7 @@
 // Spec #94 — a public episode: the summary, who spoke and their best
 // lines. The transcript exists behind sign-in; the tab says so.
 import { lazy, Suspense, useEffect } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
 import {
   Avatar,
@@ -15,6 +15,7 @@ import {
   Skeleton,
 } from '../../components/public/ui'
 import { useSignIn } from '../../components/public/helpers'
+import { deepLinkParam } from '../../hooks/useDeepLinkSeek'
 import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
@@ -35,10 +36,13 @@ const MENTIONED_TITLES = {
 
 export default function Episode() {
   const { podcastSlug = '', episodeSlug = '' } = useParams()
-  const [params, setParams] = useSearchParams()
-  // ``t`` is the shared deep-link parameter (signed-in reader too); ``q`` was
-  // its first name and still works for links shared before.
-  const q = params.get('t') ?? params.get('q')
+  const [params] = useSearchParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  // ``t`` is the shared deep-link parameter (signed-in reader too), in the
+  // query or the fragment; ``q`` was its first name and still works for
+  // links shared before.
+  const q = deepLinkParam(location.search, location.hash, 't') ?? params.get('q')
   const linkedSeconds = q && /^\d{1,6}$/.test(q) ? Number(q) : null
   const tab = params.get('view') === 'transcript' ? 'transcript' : 'summary'
   const speaker = params.get('speaker')
@@ -75,17 +79,22 @@ export default function Episode() {
     return <NotFound title="This episode isn't summarised yet" message="Its show may have newer episodes with summaries." />
   }
   const episode = episodeQuery.data?.episode
+  // Filter and tab changes keep the fragment, so the linked quote stays pinned.
+  const setParams = (next: URLSearchParams) => {
+    const search = next.toString()
+    navigate({ search: search ? `?${search}` : '', hash: location.hash }, { replace: true })
+  }
   const setSpeaker = (slug: string | null) => {
     const nextParams = new URLSearchParams(params)
     if (slug) nextParams.set('speaker', slug)
     else nextParams.delete('speaker')
-    setParams(nextParams, { replace: true })
+    setParams(nextParams)
   }
   const setTab = (next: 'summary' | 'transcript') => {
     const nextParams = new URLSearchParams(params)
     if (next === 'transcript') nextParams.set('view', 'transcript')
     else nextParams.delete('view')
-    setParams(nextParams, { replace: true })
+    setParams(nextParams)
   }
   const people = episode ? [...episode.hosts, ...episode.guests] : []
   const youtube = episode?.platform_links.find((l) => l.platform === 'youtube')?.url ?? null

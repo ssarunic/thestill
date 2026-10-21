@@ -110,7 +110,7 @@ test('landing renders the latest summary without signed-in calls', async ({ page
 
 test('episode page shows the summary, keeps the transcript behind sign-in, and lands on a linked quote', async ({ page }) => {
   const privateCalls = await mockPublicApi(page)
-  await page.goto('/podcasts/public-show/episodes/chips?t=460')
+  await page.goto('/podcasts/public-show/episodes/chips#t=460')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Chips and Cheese')
   await expect(page.getByText('Linked quote')).toBeVisible()
   await expect(page.getByText('one sign-in away')).toBeVisible()

@@ -43,6 +43,16 @@ describe('useDeepLinkScrollTarget (spec #72 §Deep link)', () => {
     expect(onTarget).toHaveBeenCalledTimes(1)
   })
 
+  it('reads t from the fragment too (public quote links use #t=)', () => {
+    const onTarget = vi.fn()
+    render(
+      <MemoryRouter initialEntries={['/ep#t=35']}>
+        <Harness onTarget={onTarget} />
+      </MemoryRouter>,
+    )
+    expect(onTarget).toHaveBeenCalledWith(3)
+  })
+
   it('fires again for a fresh push carrying a new t', () => {
     const onTarget = vi.fn()
     render(

@@ -1,7 +1,18 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * Parses a `?t=<seconds>` query param once and fires the supplied seek
+ * Reads a deep-link parameter (`t`, `about`) from the query string, falling
+ * back to the fragment. Public pages link with the fragment (`#t=238`) so a
+ * crawler sees one URL per episode; Google indexed every `?t=` variant as its
+ * own page despite the canonical tag. The query form keeps working for links
+ * shared before and for in-app links.
+ */
+export function deepLinkParam(search: string, hash: string, name: string): string | null {
+  return new URLSearchParams(search).get(name) ?? new URLSearchParams(hash.replace(/^#/, '')).get(name)
+}
+
+/**
+ * Parses a `?t=<seconds>` (or `#t=`) deep link once and fires the supplied seek
  * callback exactly one time per key change. `key` is typically the
  * episode id + the count of loaded segments, so the effect waits for
  * real data before firing.
@@ -16,8 +27,7 @@ export function useDeepLinkSeek(
     if (!ready || key == null) return
     if (firedForKey.current === key) return
     if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const raw = params.get('t')
+    const raw = deepLinkParam(window.location.search, window.location.hash, 't')
     if (!raw) {
       firedForKey.current = key
       return
