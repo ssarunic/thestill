@@ -167,6 +167,14 @@ search = [
     # two lists in lockstep when bumping versions.
     "sentence-transformers>=3.0.0",
     "scikit-learn>=1.3.0",
+    # fsspec comes in transitively (torch, huggingface-hub). Floor for
+    # Dependabot alert #208 (ReferenceFileSystem jinja2 RCE, fixed in
+    # 2026.6.0). Without it uv keeps one fsspec for every fork, and the
+    # [local-transcription] fork caps it below 2026 (NeMo 3.0.0 pins
+    # lightning 2.4.0, which requires fsspec<2026.0), so the prod image
+    # would stay on a vulnerable version. That fork stays vulnerable
+    # until NeMo unpins lightning; it is not deployed.
+    "fsspec>=2026.6.0",
 ]
 entities = [
     # Spec #28 — entity extraction via GLiNER zero-shot NER. Downloads
@@ -206,6 +214,8 @@ entities = [
     # virtual table type for k-NN over float32 blobs.
     "sentence-transformers>=3.0.0",
     "sqlite-vec>=0.1.6",
+    # Same fsspec floor as [search] (alert #208); see the comment there.
+    "fsspec>=2026.6.0",
     # Spec #28 §5.2 — "Related episodes" relevance. Dense vectors encode
     # conversational register more than topic, so the rail blends in a
     # TF-IDF topical signal (``search.related_builder``). scikit-learn
