@@ -1,6 +1,6 @@
 # Codebase Cleanup: Dead Code, Inert Flags, One-Off Tools and Duplication
 
-> **Status:** 🚧 Phases 0–1 done, Phase 3a done (2026-10-21); Phases 2, 3b–3c, 4–7 open
+> **Status:** 🚧 Phases 0, 1, 3a and 3c done (2026-10-21, released in v1.29.1); Phases 2, 3b, 4–7 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. One live prod bug (Phase 1) comes out of this audit. The rest is cost of carrying: about 3,500 lines of unused production code, flags that do nothing, and SQLite/Postgres twins that have already shipped three parity bugs.
@@ -515,7 +515,7 @@ Apply whichever option D3 picks for the reranker and entity leg,
 - [ ] Phase 3: dead code (Python, frontend)
   - [x] 3a: Python A.1 and A.2
   - [ ] 3b: Python A.3 and A.4, with their tests
-  - [ ] 3c: frontend A.6
+  - [x] 3c: frontend A.6
 - [ ] Phase 4: inert configuration and docs
 - [ ] Phase 5: PathManager output targets
 - [ ] Phase 6: interfaces, contract tests, shared logic, small duplicates

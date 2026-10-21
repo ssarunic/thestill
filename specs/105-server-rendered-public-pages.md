@@ -1,6 +1,6 @@
 # Server-Rendered Content for Public Pages
 
-> **Status:** 📝 Draft (2026-10-21)
+> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending; Phases 1–4 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Google already indexes the public pages. This spec is for Bing, DuckDuckGo and AI answer engines, which today see an empty page body.

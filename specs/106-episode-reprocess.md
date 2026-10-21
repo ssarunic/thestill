@@ -1,6 +1,6 @@
 # Reprocess an Episode From a Chosen Stage
 
-> **Status:** 🚧 Phases 1–2 implemented (2026-10-21), unmerged
+> **Status:** ✅ Phases 1–2 deployed: PR #394 in v1.28.0, review fixes PR #399 in v1.29.0 (2026-10-21); first prod reprocess pending; Phase 3 (optional) open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Every prompt or provider fix (the v1.27.2 cleaner ad rule, summary profile bumps) only reaches new episodes today. Getting an existing episode onto the fix means SQL on the prod database.
@@ -297,7 +297,7 @@ stage and the task id.
 
 | Phase | Scope |
 |---|---|
-| 1 | Backend: endpoint, `has_active_task_for_episode`, stage changes (transcribe, clean, reindex), retry carries `reprocess`, `SummaryManifest` provider/model, CLI `thestill reprocess` |
+| 1 | Backend: endpoint, `add_task_if_episode_idle` (atomic busy check) and the `complete_task` hand-off, stage changes (transcribe, clean, reindex), retry carries `reprocess`, `SummaryManifest` provider/model, CLI `thestill reprocess` |
 | 2 | Episode page: menu item, dialog, polling while a task is active |
 | 3 (optional) | Remove the mentions gap (open question 1) |
 

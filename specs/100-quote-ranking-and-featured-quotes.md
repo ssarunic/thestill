@@ -1,7 +1,8 @@
 # Quote Ranking: Featured Quotes and Most Quoted People
 
-> **Status:** 📝 Draft (2026-10-15)
+> **Status:** 🚧 Partial: spec #94 (PR #353, v1.23.0) shipped `entities.public_hidden`, `set-entity-visibility` and a read-time stand-in for the featured quote, quote streams and "Who's talking" (`repositories/public_quotes.py`); the candidates table, `quote_gate.py`, scoring and Phase 2 are open
 > **Created:** 2026-10-15
+> **Updated:** 2026-10-21
 > **Priority:** High. The public person and entity pages (spec #94, UX brief 2026-10-15) lead with "who said what"; without a quality gate and a ranking they would lead with sponsor reads and sentence fragments.
 > **Author:** Product & Engineering
 > **Related:** [#28 corpus-search-and-entities](28-corpus-search-and-entities.md), [#33 narrated-digest](33-narrated-digest.md) (quote selector reused here), [#81 live-wikidata-entity-linking](81-live-wikidata-entity-linking.md), [#94 public-pages](94-public-pages.md), [#96 prompt-injection-hardening](96-prompt-injection-hardening.md), [#99 top-chart-movement-and-topics](99-top-chart-movement-and-topics.md) (shares the chart's side column)
