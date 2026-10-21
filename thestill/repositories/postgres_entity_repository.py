@@ -101,6 +101,29 @@ _ORPHAN_ENTITIES_SQL = """
 """
 
 
+# jsonb lists of entity ids that merges and splits keep consistent:
+# (count key, table, column).
+_ENTITY_ID_LISTS = (
+    ("hosts", "podcasts", "host_entity_ids"),
+    ("recurring", "podcasts", "recurring_entity_ids"),
+    ("guests", "episodes", "guest_entity_ids"),
+    ("candidates", "entity_mentions", "candidate_entity_ids"),
+)
+
+
+def _jsonb_list_replace(column: str) -> str:
+    """``column`` with ``%(src)s`` replaced by ``%(dst)s``, first-seen order
+    kept and duplicates dropped (the keeper may already be listed)."""
+    return f"""(
+        SELECT COALESCE(jsonb_agg(item ORDER BY first_pos), '[]'::jsonb)
+        FROM (
+            SELECT CASE WHEN value = %(src)s THEN %(dst)s ELSE value END AS item, min(pos) AS first_pos
+            FROM jsonb_array_elements_text({column}) WITH ORDINALITY AS t(value, pos)
+            GROUP BY 1
+        ) items
+    )"""
+
+
 # Rows locked per prune transaction: short enough not to stall resolvers.
 _ORPHAN_DELETE_BATCH = 1000
 
@@ -195,6 +218,59 @@ class PostgresEntityRepository(EntityRepository):
                 (entity_id,),
             ).fetchone()
         return _row_to_entity(row) if row else None
+
+    def move_mentions(self, mention_ids: Sequence[int], *, from_entity_ids: Sequence[str], to_entity_id: str) -> int:
+        if not mention_ids or not from_entity_ids:
+            return 0
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                "UPDATE entity_mentions SET entity_id = %s WHERE id = ANY(%s) AND entity_id = ANY(%s)",
+                (to_entity_id, list(mention_ids), list(from_entity_ids)),
+            )
+            return cursor.rowcount
+
+    def repoint_entity_references(self, *, from_entity_id: str, to_entity_id: str) -> Dict[str, int]:
+        params = {"src": from_entity_id, "dst": to_entity_id}
+        counts: Dict[str, int] = {}
+        with connect(self.dsn) as conn:
+            counts["mentions"] = conn.execute(
+                "UPDATE entity_mentions SET entity_id = %(dst)s WHERE entity_id = %(src)s", params
+            ).rowcount
+            counts["overrides"] = conn.execute(
+                "UPDATE mention_overrides SET entity_id = %(dst)s WHERE entity_id = %(src)s", params
+            ).rowcount
+            for kind, table, column in _ENTITY_ID_LISTS:
+                counts[kind] = conn.execute(
+                    f"UPDATE {table} SET {column} = {_jsonb_list_replace(column)}"
+                    f" WHERE jsonb_typeof({column}) = 'array' AND {column} @> jsonb_build_array(%(src)s::text)",
+                    params,
+                ).rowcount
+        return counts
+
+    def is_entity_referenced(self, entity_id: str) -> bool:
+        lists = " OR ".join(
+            f"EXISTS (SELECT 1 FROM {table} WHERE jsonb_typeof({column}) = 'array'"
+            f" AND {column} @> jsonb_build_array(%(id)s::text))"
+            for _kind, table, column in _ENTITY_ID_LISTS
+        )
+        sql = f"""
+            SELECT EXISTS (SELECT 1 FROM entity_mentions WHERE entity_id = %(id)s)
+                OR EXISTS (SELECT 1 FROM mention_overrides WHERE entity_id = %(id)s)
+                OR {lists} AS referenced
+        """
+        with connect(self.dsn) as conn:
+            return bool(conn.execute(sql, {"id": entity_id}).fetchone()["referenced"])
+
+    def set_entity_wikidata(
+        self, entity_id: str, *, qid: Optional[str], description: Optional[str], instance_of: Sequence[str]
+    ) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                "UPDATE entities SET wikidata_qid = %s, description = %s, wikidata_instance_of = %s,"
+                " updated_at = %s WHERE id = %s",
+                (qid, description, Jsonb(list(instance_of)), datetime.now(timezone.utc), entity_id),
+            )
+            return cursor.rowcount > 0
 
     def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
         if not entity_ids:

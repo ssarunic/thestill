@@ -255,6 +255,43 @@ class TestEntityPruneOrphansCli:
         assert repo.get_entity("person:elon-musk") is not None
 
 
+class TestEntityCurationCli:
+    """``split`` / ``move-mentions`` / ``relink`` go through the admin
+    curation service: same rules and audit entries as the admin API."""
+
+    def _repo(self, db_dir):
+        return SqliteEntityRepository(db_path=str(db_dir / "podcasts.db"))
+
+    def test_split_moves_everything_and_deletes_the_emptied_source(self, tmp_db_with_entities):
+        result = _run(
+            ["entity", "split", "company:spacex", "--name", "SpaceX Starbase", "--type", "product", "--qid", "Q107"]
+        )
+        assert result.exit_code == 0, result.output
+        assert "product:spacex-starbase created; 1 mention(s) moved" in result.output
+        repo = self._repo(tmp_db_with_entities)
+        assert repo.get_entity("company:spacex") is None
+        assert repo.entity_ids_with_mentions(["product:spacex-starbase"]) == {"product:spacex-starbase"}
+
+    def test_move_mentions_moves_only_the_named_mentions(self, tmp_db_with_entities):
+        repo = self._repo(tmp_db_with_entities)
+        mention_id = next(m.mention.id for m in repo.find_mentions(entity_id="company:spacex"))
+        result = _run(["entity", "move-mentions", "company:spacex", "company:tesla", str(mention_id)])
+        assert result.exit_code == 0, result.output
+        assert repo.get_mention(mention_id).entity_id == "company:tesla"
+
+    def test_relink_refuses_a_qid_another_entity_holds(self, tmp_db_with_entities):
+        result = _run(["entity", "relink", "company:tesla", "Q193701"])
+        assert result.exit_code == 1
+        assert "already belongs to company:spacex" in result.output
+
+    def test_relink_blacklists_the_old_qid(self, tmp_db_with_entities):
+        result = _run(["entity", "relink", "company:tesla", "Q999999", "--reason", "wrong item"])
+        assert result.exit_code == 0, result.output
+        repo = self._repo(tmp_db_with_entities)
+        assert repo.get_entity("company:tesla").wikidata_qid == "Q999999"
+        assert repo.is_blacklisted("Tesla", "Q478214")
+
+
 class TestPodcastSetHostsCli:
     """Regression: a module-level ``def list`` click command used to shadow
     the ``list`` builtin, so ``set-hosts`` invoked the *list command* with

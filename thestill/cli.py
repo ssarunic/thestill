@@ -4776,47 +4776,156 @@ def entity_get(ctx, id_or_name, entity_type, json_output):
             )
 
 
+def _entity_curation(ctx):
+    """The admin curation service; the CLI is the operator (``Actor.cli``)."""
+    from .services.entity_curation import EntityCurationService
+
+    return EntityCurationService(
+        ctx.obj.entity_repository, ctx.obj.abuse.audit, link_decisions=ctx.obj.link_decision_repository
+    )
+
+
+def _curate(ctx, action):
+    """Run ``action(service, actor)``; a refused action exits 1 with its message."""
+    from .services.abuse.actor import Actor
+    from .services.abuse.errors import AdminActionError
+
+    try:
+        return action(_entity_curation(ctx), Actor.cli())
+    except AdminActionError as exc:
+        click.echo(f"❌ {exc}", err=True)
+        ctx.exit(1)
+
+
 @entity_group.command("merge")
 @click.argument("keeper")
 @click.argument("loser")
 @click.option("--dry-run", "-d", is_flag=True, help="Report without writing.")
+@click.option("--reason", default=None, help="Recorded in the admin audit log.")
 @click.pass_context
 @require_config
 @log_command
-def entity_merge(ctx, keeper, loser, dry_run):
-    """Repoint LOSER's mentions to KEEPER and delete LOSER.
+def entity_merge(ctx, keeper, loser, dry_run, reason):
+    """Move everything that refers to LOSER onto KEEPER and delete LOSER.
 
-    Use after fixing a mis-resolved entity by hand. Both arguments
-    are entity ids in the canonical ``"{type}:{slug}"`` form. Refuses
-    to merge entities of different types.
+    For two rows that are one thing. Both are entity ids
+    (``"{type}:{slug}"``) of the same type; mentions, overrides, host /
+    recurring / guest lists and mention candidates all move. Use
+    ``entity move-mentions`` or ``entity split`` when they are different
+    things.
     """
-    repo = ctx.obj.entity_repository
-    keeper_ent = repo.get_entity(keeper)
-    loser_ent = repo.get_entity(loser)
-    if keeper_ent is None:
-        click.echo(f"❌ Keeper {keeper!r} not found", err=True)
-        ctx.exit(1)
-    if loser_ent is None:
-        click.echo(f"❌ Loser {loser!r} not found", err=True)
-        ctx.exit(1)
-    if keeper_ent.type is not loser_ent.type:
-        click.echo(
-            f"❌ Cannot merge across types: {keeper_ent.type.value} ≠ {loser_ent.type.value}",
-            err=True,
-        )
-        ctx.exit(1)
-
-    label = "would merge" if dry_run else "merged"
+    result = _curate(ctx, lambda svc, actor: svc.merge(keeper, loser, actor=actor, reason=reason, dry_run=dry_run))
     if dry_run:
-        click.echo(f"  [dry-run] would repoint mentions {loser_ent.id!r} → {keeper_ent.id!r}")
-        click.echo(f"  [dry-run] would delete {loser_ent.id!r}")
-        click.echo(f"\n🎉 1 {label} (dry-run)")
+        click.echo(f"  [dry-run] would repoint every reference {result.loser_id!r} → {result.keeper_id!r}")
+        click.echo(f"  [dry-run] would delete {result.loser_id!r}")
+        click.echo("\n🎉 1 would merge (dry-run)")
         return
+    moved = ", ".join(f"{kind} {count}" for kind, count in result.moved.items() if count) or "nothing"
+    click.echo(f"✓ moved {moved}; {result.loser_id} deleted")
+    click.echo("\n🎉 1 merged")
 
-    moved = repo.repoint_mentions(from_entity_id=loser_ent.id, to_entity_id=keeper_ent.id)
-    repo.delete_entity(loser_ent.id)
-    click.echo(f"✓ {moved} mention(s) repointed; {loser_ent.id} deleted")
-    click.echo(f"\n🎉 1 {label}")
+
+@entity_group.command("move-mentions")
+@click.argument("from_entity_id")
+@click.argument("to_entity_id")
+@click.argument("mention_ids", nargs=-1, type=int, required=True)
+@click.option("--delete-emptied", is_flag=True, help="Delete FROM once nothing refers to it.")
+@click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.pass_context
+@require_config
+@log_command
+def entity_move_mentions(ctx, from_entity_id, to_entity_id, mention_ids, delete_emptied, reason):
+    """Point chosen MENTION_IDS of FROM_ENTITY_ID at TO_ENTITY_ID.
+
+    For one name used for two things. Only mentions that currently point
+    at FROM_ENTITY_ID move.
+    """
+    result = _curate(
+        ctx,
+        lambda svc, actor: svc.move_mentions(
+            list(mention_ids),
+            from_entity_id=from_entity_id,
+            to_entity_id=to_entity_id,
+            actor=actor,
+            delete_emptied=delete_emptied,
+            reason=reason,
+        ),
+    )
+    click.echo(f"✓ {result.moved} of {len(mention_ids)} mention(s) moved to {result.to_entity_id}")
+    for entity_id in result.deleted:
+        click.echo(f"  {entity_id} deleted (nothing referred to it)")
+
+
+@entity_group.command("split")
+@click.argument("from_entity_id")
+@click.option("--name", required=True, help="Canonical name of the new entity.")
+@click.option("--type", "entity_type", required=True, type=click.Choice(["person", "company", "product", "topic"]))
+@click.option("--qid", default=None, help="Wikidata id of the new entity (e.g. Q18637676).")
+@click.option("--description", default=None)
+@click.option("--id", "entity_id", default=None, help="Explicit id (default: derived from type and name).")
+@click.option("--mention", "mention_ids", multiple=True, type=int, help="Move only these mentions (repeatable).")
+@click.option("--keep-emptied", is_flag=True, help="Keep FROM even when nothing refers to it any more.")
+@click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.pass_context
+@require_config
+@log_command
+def entity_split(
+    ctx, from_entity_id, name, entity_type, qid, description, entity_id, mention_ids, keep_emptied, reason
+):
+    """Create a new entity and move FROM_ENTITY_ID's mentions to it.
+
+    Without ``--mention`` everything that refers to FROM moves (a
+    wrongly typed or wrongly linked row); with it, only those mentions.
+    FROM is deleted once nothing refers to it.
+    """
+    from .models.entities import EntityType
+
+    result = _curate(
+        ctx,
+        lambda svc, actor: svc.split(
+            name=name,
+            entity_type=EntityType(entity_type),
+            from_entity_id=from_entity_id,
+            actor=actor,
+            qid=qid,
+            description=description,
+            entity_id=entity_id,
+            mention_ids=list(mention_ids) or None,
+            delete_emptied=not keep_emptied,
+            reason=reason,
+        ),
+    )
+    click.echo(f"✓ {result.entity.id} created; {result.moved} mention(s) moved from {from_entity_id}")
+    for deleted in result.deleted:
+        click.echo(f"  {deleted} deleted (nothing referred to it)")
+
+
+@entity_group.command("relink")
+@click.argument("entity_id")
+@click.argument("qid")
+@click.option("--description", default=None, help="Description for the new link (else cleared).")
+@click.option("--keep-old-qid", is_flag=True, help="Do not blacklist the entity's names for the old QID.")
+@click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.pass_context
+@require_config
+@log_command
+def entity_relink(ctx, entity_id, qid, description, keep_old_qid, reason):
+    """Point ENTITY_ID at the right Wikidata item QID (``none`` unlinks).
+
+    Drops the description, P31 classes, image and facts that came from the
+    old item (run ``enrich-entities --entity-id ENTITY_ID --force`` after)
+    and blacklists the entity's names for the old QID.
+    """
+    new_qid = None if qid.lower() == "none" else qid
+    result = _curate(
+        ctx,
+        lambda svc, actor: svc.relink(
+            entity_id, new_qid, actor=actor, description=description, blacklist_old=not keep_old_qid, reason=reason
+        ),
+    )
+    click.echo(f"✓ {result.entity_id}: {result.old_qid or '—'} → {result.new_qid or '—'}")
+    if result.blacklisted:
+        click.echo(f"  blacklisted for {result.old_qid}: {', '.join(repr(s) for s in result.blacklisted)}")
 
 
 @entity_group.command("prune-orphans")
@@ -4836,8 +4945,8 @@ def entity_prune_orphans(ctx, apply, show):
     """
     from collections import Counter
 
-    repo = ctx.obj.entity_repository
-    orphans = repo.find_orphan_entity_ids()
+    result = _curate(ctx, lambda svc, actor: svc.prune_orphans(actor=actor, apply=apply))
+    orphans = result.orphans
     by_type = Counter(entity_id.split(":", 1)[0] for entity_id in orphans)
     summary = ", ".join(f"{kind} {count}" for kind, count in sorted(by_type.items())) or "none"
     click.echo(f"{len(orphans)} orphan entit{'y' if len(orphans) == 1 else 'ies'} ({summary})")
@@ -4845,14 +4954,14 @@ def entity_prune_orphans(ctx, apply, show):
         click.echo(f"  {entity_id}")
     if len(orphans) > show:
         click.echo(f"  … and {len(orphans) - show} more")
-    if not apply:
+    if not result.applied:
         if orphans:
             click.echo("\nReport only. Re-run with --apply to delete them.")
         return
-    deleted = repo.delete_orphan_entities(orphans)
-    kept = len(orphans) - deleted
+    kept = len(orphans) - result.deleted
     click.echo(
-        f"\n✓ {deleted} deleted" + (f" ({kept} gained a reference since the listing and were kept)" if kept else "")
+        f"\n✓ {result.deleted} deleted"
+        + (f" ({kept} gained a reference since the listing and were kept)" if kept else "")
     )
 
 
@@ -5606,8 +5715,7 @@ def resolution_blacklist(ctx, subcommand, surface_form, wrong_qid, reason):
     if not surface_form or not wrong_qid:
         click.echo("Usage: resolution-blacklist add <surface_form> <wrong_qid> [--reason ...]", err=True)
         ctx.exit(1)
-    repo.add_blacklist_entry(surface_form=surface_form, wrong_qid=wrong_qid, reason=reason)
-    invalidate_link_decisions(ctx.obj.link_decision_repository, surface_form)
+    _curate(ctx, lambda svc, actor: svc.blacklist(surface_form, wrong_qid, actor=actor, reason=reason))
     click.echo(f"✓ Blacklisted: {surface_form!r} ↛ {wrong_qid}")
 
 
