@@ -56,4 +56,29 @@ describe('Artwork (spec #76 §5.8)', () => {
     expect(img.className).toContain('aspect-square')
     expect(img.className).toContain('w-12')
   })
+
+  it('paints the placeholder behind the frame until the source loads, then drops it', () => {
+    render(
+      <Artwork role="card" sources={['https://example.com/big.jpg']} placeholder="https://example.com/thumb.jpg" alt="Show artwork" />,
+    )
+    const img = screen.getByRole('img', { name: 'Show artwork' })
+    expect(img).toHaveAttribute('src', 'https://example.com/big.jpg')
+    expect(img.style.backgroundImage).toBe('url("https://example.com/thumb.jpg")')
+
+    loadAs(img, 3000, 3000)
+    expect(img.style.backgroundImage).toBe('')
+  })
+
+  it('falls back to the placeholder when every source fails', () => {
+    render(
+      <Artwork role="card" sources={['https://example.com/broken.jpg']} placeholder="https://example.com/thumb.jpg" alt="Show artwork" />,
+    )
+    fireEvent.error(screen.getByRole('img', { name: 'Show artwork' }))
+    expect(screen.getByRole('img', { name: 'Show artwork' })).toHaveAttribute('src', 'https://example.com/thumb.jpg')
+  })
+
+  it('has no background without a placeholder', () => {
+    render(<Artwork role="card" sources={['https://example.com/a.jpg']} alt="Show artwork" />)
+    expect(screen.getByRole('img', { name: 'Show artwork' }).style.backgroundImage).toBe('')
+  })
 })

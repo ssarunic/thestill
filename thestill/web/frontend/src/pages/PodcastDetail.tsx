@@ -8,6 +8,7 @@ import {
   useProcessingStageByEpisodeId,
   useInvalidateEpisodesWhenRefreshSettles,
 } from '../hooks/useApi'
+import { useArtworkHint } from '../hooks/useArtworkHint'
 import { useToast } from '../components/Toast'
 import EpisodeCard from '../components/EpisodeCard'
 import ExpandableDescription from '../components/ExpandableDescription'
@@ -30,6 +31,9 @@ export default function PodcastDetail() {
   const { showToast } = useToast()
   const [isMutating, setIsMutating] = useState(false)
   const { data: podcastData, isLoading: podcastLoading, error: podcastError } = usePodcast(podcastSlug!)
+  // The cover the list showed for this show, so the frame isn't empty while
+  // the (often much larger) RSS artwork loads.
+  const artworkHint = useArtworkHint()
   // Spec #74 — refetch the episode list once the open-triggered refresh lands.
   useInvalidateEpisodesWhenRefreshSettles(podcastSlug!, podcastData?.podcast?.refresh_pending)
   const { mutate: follow } = useFollowPodcast()
@@ -117,12 +121,16 @@ export default function PodcastDetail() {
 
       {/* Header — spec #76 §5 primitives: hero, action row, description. */}
       {podcastLoading ? (
-        <div className="animate-pulse" aria-hidden="true">
+        <div aria-hidden="true">
           <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
             <div className="flex justify-center sm:block">
-              <div className={`${artworkFrameClass('card')} bg-gray-200`} />
+              {artworkHint ? (
+                <Artwork role="card" sources={[artworkHint]} loading="eager" />
+              ) : (
+                <div className={`${artworkFrameClass('card')} bg-gray-200 animate-pulse`} />
+              )}
             </div>
-            <div className="flex-1 space-y-3">
+            <div className="flex-1 space-y-3 animate-pulse">
               <div className="h-4 w-1/3 rounded bg-gray-200" />
               <div className="h-7 w-3/4 rounded bg-gray-200 sm:w-1/2" />
               <div className="h-5 w-1/3 rounded bg-gray-200" />
@@ -132,7 +140,15 @@ export default function PodcastDetail() {
         </div>
       ) : podcast ? (
         <PageHero
-          artwork={<Artwork role="card" sources={[podcast.image_url]} alt={`${podcast.title} artwork`} loading="eager" />}
+          artwork={
+            <Artwork
+              role="card"
+              sources={[podcast.image_url]}
+              placeholder={artworkHint}
+              alt={`${podcast.title} artwork`}
+              loading="eager"
+            />
+          }
           below={
             podcast.description ? (
               <ExpandableDescription html={podcast.description} maxLines={3} />

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import TopPodcasts from './TopPodcasts'
 import type { TopPodcast, TopPodcastsResponse } from '../api/types'
@@ -26,9 +26,10 @@ vi.mock('../components/Toast', () => ({
   useToast: () => ({ showToast: vi.fn(), dismissToast: vi.fn() }),
 }))
 
-import { getTopPodcasts } from '../api/client'
+import { getTopPodcasts, resolvePodcast } from '../api/client'
 
 const mockGetTopPodcasts = getTopPodcasts as ReturnType<typeof vi.fn>
+const mockResolvePodcast = resolvePodcast as ReturnType<typeof vi.fn>
 
 function row(overrides: Partial<TopPodcast> = {}): TopPodcast {
   return {
@@ -290,5 +291,61 @@ describe('TopPodcasts URL-persisted filters', () => {
     // The search input reflects the restored query.
     const input = screen.getByLabelText(/search top podcasts/i) as HTMLInputElement
     expect(input.value).toBe('hist')
+  })
+})
+
+// Stand-in show page: prints the router state the list navigated with.
+function ShowState() {
+  const location = useLocation()
+  return <pre data-testid="show-state">{JSON.stringify(location.state)}</pre>
+}
+
+describe('TopPodcasts → show page artwork hand-off', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function renderWithShowRoute() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/top']}>
+          <Routes>
+            <Route path="/top" element={<TopPodcasts />} />
+            <Route path="/podcasts/:podcastSlug" element={<ShowState />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+
+  it('passes the chart cover when resolving an unimported entry', async () => {
+    mockGetTopPodcasts.mockResolvedValue(
+      response([row({ name: 'Mel Robbins', image_url: 'https://chart.example/mel-600.jpg' })]),
+    )
+    mockResolvePodcast.mockResolvedValue({ podcast_slug: 'the-mel-robbins-podcast' })
+    renderWithShowRoute()
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Open Mel Robbins' }))
+
+    expect(mockResolvePodcast).toHaveBeenCalledWith({ url: 'https://example.com/feed' })
+    expect(await screen.findByTestId('show-state')).toHaveTextContent(
+      JSON.stringify({ artworkHint: 'https://chart.example/mel-600.jpg' }),
+    )
+  })
+
+  it('passes the cover on the link of an already-imported entry', async () => {
+    mockGetTopPodcasts.mockResolvedValue(
+      response([
+        row({ name: 'Mel Robbins', podcast_slug: 'the-mel-robbins-podcast', image_url: 'https://rss.example/mel.jpg' }),
+      ]),
+    )
+    renderWithShowRoute()
+
+    await userEvent.click(await screen.findByRole('link', { name: 'Open Mel Robbins' }))
+
+    expect(await screen.findByTestId('show-state')).toHaveTextContent(
+      JSON.stringify({ artworkHint: 'https://rss.example/mel.jpg' }),
+    )
   })
 })

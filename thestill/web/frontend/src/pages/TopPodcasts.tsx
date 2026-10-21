@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { addPodcast, resolvePodcast } from '../api/client'
 import { useTopPodcasts } from '../hooks/useApi'
+import type { ArtworkHintState } from '../hooks/useArtworkHint'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import { useToast } from '../components/Toast'
@@ -103,9 +104,12 @@ export default function TopPodcasts() {
   }
 
   async function handleOpen(podcast: TopPodcast) {
+    // The detail page renders the RSS artwork, not this row's chart cover;
+    // hand the cover over so it shows until the RSS file loads.
+    const state: ArtworkHintState = { artworkHint: podcast.image_url }
     // Fast path: chart entry already linked to a local ``podcasts`` row.
     if (podcast.podcast_slug) {
-      navigate(`/podcasts/${podcast.podcast_slug}`)
+      navigate(`/podcasts/${podcast.podcast_slug}`, { state })
       return
     }
 
@@ -114,7 +118,7 @@ export default function TopPodcasts() {
     setResolving((prev) => ({ ...prev, [key]: true }))
     try {
       const res = await resolvePodcast({ url: podcast.rss_url })
-      navigate(`/podcasts/${res.podcast_slug}`)
+      navigate(`/podcasts/${res.podcast_slug}`, { state })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to open podcast'
       showToast(message, 'error')
@@ -263,6 +267,7 @@ export default function TopPodcasts() {
                 </>
               }
               to={podcast.podcast_slug ? `/podcasts/${podcast.podcast_slug}` : undefined}
+              state={{ artworkHint: podcast.image_url } satisfies ArtworkHintState}
               onClick={podcast.podcast_slug ? undefined : () => handleOpen(podcast)}
               busy={isResolving}
               trailing={
