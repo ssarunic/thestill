@@ -61,12 +61,12 @@ function podcast(overrides: Record<string, unknown> = {}) {
   }
 }
 
-function renderPage() {
+function renderPage(state?: unknown) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MemoryRouter initialEntries={['/podcasts/prof-g-markets']}>
+        <MemoryRouter initialEntries={[{ pathname: '/podcasts/prof-g-markets', state }]}>
           <Routes>
             <Route path="/podcasts/:podcastSlug" element={<PodcastDetail />} />
           </Routes>
@@ -96,6 +96,24 @@ describe('PodcastDetail header (spec #76 phase 3)', () => {
     expect(terms).toEqual(['Author', 'Category', 'Episodes', 'Processed', 'Explicit', 'Website', 'Copyright'])
     expect(details).toHaveTextContent('Business › Investing')
     expect(details).toHaveTextContent('118')
+  })
+
+  it('shows the list cover handed over in router state while the show loads', () => {
+    mockUsePodcast.mockReturnValue({ data: undefined, isLoading: true, error: null })
+    const { container } = renderPage({ artworkHint: 'https://chart.example/cover-600.jpg' })
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://chart.example/cover-600.jpg')
+  })
+
+  it('paints the handed-over cover behind the RSS artwork until it loads', () => {
+    mockUsePodcast.mockReturnValue({
+      data: podcast({ image_url: 'https://rss.example/cover-3000.jpg' }),
+      isLoading: false,
+      error: null,
+    })
+    renderPage({ artworkHint: 'https://chart.example/cover-600.jpg' })
+    const img = screen.getByRole('img', { name: 'Prof G Markets artwork' })
+    expect(img).toHaveAttribute('src', 'https://rss.example/cover-3000.jpg')
+    expect(img.style.backgroundImage).toContain('https://chart.example/cover-600.jpg')
   })
 
   it('shows the refresh spinner beside the Episodes heading while a refresh is pending (spec #74)', () => {

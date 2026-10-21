@@ -10,26 +10,42 @@ interface ArtworkProps {
   alt?: string
   loading?: 'eager' | 'lazy'
   className?: string
+  /**
+   * An image the browser already has (e.g. the list thumbnail the user just
+   * clicked). Painted behind the frame until the first source loads, and the
+   * last fallback if every source fails.
+   */
+  placeholder?: string | null
 }
 
-export default function Artwork({ sources, role, alt = '', loading = 'lazy', className = '' }: ArtworkProps) {
+export default function Artwork({ sources, role, alt = '', loading = 'lazy', className = '', placeholder }: ArtworkProps) {
   const { box, radius, px, glyph, landscapeBox } = ARTWORK_ROLE[role]
   // Only known once the image has loaded; roles without a landscape frame stay square.
   const [landscape, setLandscape] = useState(false)
   const frame = landscape && landscapeBox ? landscapeBox : `${box} aspect-square`
+  const candidates = placeholder ? [...sources, placeholder] : sources
+  // Keyed on the candidate set so a new item shows its placeholder again.
+  const key = candidates.join('|')
+  const [loadedKey, setLoadedKey] = useState<string | null>(null)
+  // Dropped after load so transparent artwork doesn't show the placeholder through it.
+  const showPlaceholder = !!placeholder && loadedKey !== key
   return (
     <SmartImage
-      sources={sources}
+      sources={candidates}
       alt={alt}
       width={px}
       height={px}
       loading={loading}
-      onLoad={
-        landscapeBox
-          ? (e) => {
-              const { naturalWidth, naturalHeight } = e.currentTarget
-              setLandscape(naturalHeight > 0 && naturalWidth / naturalHeight >= LANDSCAPE_MIN_RATIO)
-            }
+      onLoad={(e) => {
+        setLoadedKey(key)
+        if (landscapeBox) {
+          const { naturalWidth, naturalHeight } = e.currentTarget
+          setLandscape(naturalHeight > 0 && naturalWidth / naturalHeight >= LANDSCAPE_MIN_RATIO)
+        }
+      }}
+      style={
+        showPlaceholder
+          ? { backgroundImage: `url(${JSON.stringify(placeholder)})`, backgroundSize: 'cover', backgroundPosition: 'center' }
           : undefined
       }
       className={`${frame} ${radius} object-cover shrink-0 bg-gray-100 ${className}`}
