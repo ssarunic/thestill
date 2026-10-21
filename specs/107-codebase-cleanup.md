@@ -49,8 +49,8 @@ and only behind explicit conditions.
    tests is deleted together with those tests. A test fake used by other
    tests stays.
 4. **"No frontend caller" is not "unused".** Endpoints are documented
-   interfaces. They are removed only with prod access-log evidence
-   (Phase 0) and a docs update.
+   interfaces. They are removed only with prod usage evidence (Phase 0,
+   [A.8](#a8-endpoints-no-durable-access-history)) and a docs update.
 5. **Completed on prod is not completed everywhere.** One-time repairs
    and migrations stay until the upgrade policy (Decision 1) says old
    databases need not upgrade through them.
@@ -85,15 +85,19 @@ No production code changes, except one comment.
 - Produce the deletion list for Phases 3 and 4 as a checklist (file,
   symbol, evidence, test files touched). Commit it as an appendix to this
   spec.
-- Pull 30-day prod hit counts from CloudWatch for these endpoints:
+- Gather prod usage evidence for these endpoints:
   - `GET /api/podcasts/{slug}/followers/count`
   - `GET /api/inbox/unread-count`
   - `GET /api/commands/status`
   - `GET /api/commands/task/{id}` and `GET /api/commands/progress/current`
   - `GET /api/episodes/failed` and `GET /api/episodes/{id}/failure`
 
+  The plan was 30-day hit counts from CloudWatch. Prod does not ship
+  logs there, so [A.8](#a8-endpoints-no-durable-access-history) replaces
+  it with a capture of the retained container logs.
+
 **Done when:** the appendix exists and every Phase 3–4 item in it carries
-evidence.
+evidence. Done 2026-10-21: [Appendix A](#appendix-a-phase-0-inventory).
 
 ## Phase 1: DLQ "Retry all" on Postgres
 
@@ -450,8 +454,10 @@ Apply whichever option D3 picks for the reranker and entity leg,
 
 ### 7g. Endpoints
 
-- Remove any Phase 0 endpoint with zero prod hits in 30 days, together
-  with its `docs/web-server.md` row and tests.
+- Remove any Phase 0 endpoint that has no hits in the
+  [A.8](#a8-endpoints-no-durable-access-history) captures and that the
+  operator confirms nothing external calls. Remove its
+  `docs/web-server.md` row and tests with it.
 - Keep the non-SSE task status endpoints if they are the documented
   fallback for SSE.
 
@@ -512,3 +518,267 @@ Apply whichever option D3 picks for the reranker and entity leg,
 - [ ] Phase 6: interfaces, contract tests, shared logic, small duplicates
 - [ ] D1–D4 recorded in this spec
 - [ ] Phase 7a–7h, each behind its condition
+
+## Appendix A: Phase 0 inventory
+
+Generated 2026-10-21 on `origin/main` at `022a1f85`. Line numbers are at
+that commit; each later PR re-checks them. "Tests" lists the files under
+`tests/` that a deletion touches.
+
+### A.0 Method
+
+```bash
+uvx vulture thestill --min-confidence 60 --exclude 'thestill/web/frontend'
+npx --yes knip --reporter compact            # in thestill/web/frontend
+npx --yes knip --production --reporter compact
+uvx pylint --disable=all --enable=duplicate-code --min-similarity-lines=12 \
+  --ignore-imports=yes --ignore-docstrings=yes --ignore=frontend,migrations thestill
+```
+
+Each vulture candidate was then checked with a word-boundary grep over
+`thestill/`, `tests/`, `scripts/`, `evaluation/`, `deploy/`, `docs/` and
+`specs/`. Definition lines, comments, docstrings, doctests and log
+strings do not count as uses.
+
+Vulture reported 388 unused functions, methods and classes. 223 are
+registered by a framework and are not dead:
+
+- Click commands
+- FastAPI routes and exception handlers
+- Pydantic validators
+- Starlette `dispatch` methods
+- Alembic `upgrade` and `downgrade`
+
+Of the rest, the groups below are real findings. Name collisions and
+docstring-only mentions were resolved by hand. `SupportsStaleReset` stays:
+it is a protocol the tests use to check that both queue managers conform.
+
+### A.1 Python: no references (Phase 3)
+
+About 970 lines.
+
+| Location | Symbol | Note |
+|---|---|---|
+| `models/podcast.py:530,549,558,631` | `TranscriptMetadata`, `ProcessedContent`, `CleanedTranscript`, `TranscriptCleaningMetrics` | 147 lines; specs still mention `CleanedTranscript` |
+| `core/google_transcriber.py:2067,2209` | `wait_for_pending_operations`, `_format_timestamp_mmss` | 105 lines; one docstring mention |
+| `core/elevenlabs_transcriber.py:385` | `_log_error` | |
+| `core/whisper_transcriber.py:612` | `_preprocess_audio` | |
+| `core/audio_preprocessor.py:91` | `clip_audio` | |
+| `core/error_classifier.py:416,435` | `wrap_as_transient`, `wrap_as_fatal` | |
+| `core/feed_manager.py:1432,1467` | `get_episodes_with_raw_transcripts`, `get_episodes_with_clean_transcripts` | |
+| `core/progress_store.py:231` | `get_all_active` | |
+| `core/summary_citations.py:151` | `summary_citations_path` | |
+| `core/task_handlers.py:818` | `handle_entity_branch_placeholder` | Spec #28 Phase 0 no-op; no stage registers it any more |
+| `models/transcript.py:85` | `get_text_with_timestamps` | |
+| `repositories/postgres_podcast_repository_podcasts.py:1011` | `_save_episode_row` | |
+| `services/narration/models.py:64` | `with_id` | |
+| `services/podcast_service.py:764` | `get_segmented_transcript` | |
+| `services/role_linker.py:224` | `_split_name_and_bio` | |
+| `utils/cli_formatter.py:61-142` | `format_episode_list`, `format_success`, `format_error`, `format_info`, `format_progress`, `format_completion` | The class stays |
+| `utils/logger.py:51-94` | `ProcessingLogger` (9 methods), `get_default_log_path` | `setup_logger` stays |
+| `utils/path_manager.py:84,377,453,486,548,563` | `_validate_episode_id`, `clean_transcript_json_file`, `raw_transcript_evaluation_file`, `clean_transcript_evaluation_file`, `pending_operation_file`, `chunks_dir` | |
+| `utils/config.py:1106` | `get_default_config_path` | |
+| `utils/console.py:86` | `progress_complete` | |
+| `utils/duration.py:251` | `format_duration_verbose` | |
+| `utils/jwt.py:97` | `_unsafe_peek_token_expiry` | |
+| `utils/slug.py:53` | `generate_unique_slug` | Doctest only; no doctest runner |
+| `utils/url_generator.py:70` | `episode_transcript` | |
+| `mcp/utils.py:167-220` | `build_podcast_uri`, `build_episode_uri`, `build_transcript_uri`, `build_audio_uri` | Remove the unused import in `mcp/resources.py:36` too |
+| `web/routes/api_dashboard.py:44,67` | `DashboardStats`, `ActivityResponse` | Pydantic models no route uses |
+| `web/routes/api_search.py:654` | `_resolve_episode_slugs` | |
+| `web/routes/webhooks.py:86,103` | `ElevenLabsWebhookPayload`, `WebhookResultSummary` | Pydantic models no route uses |
+
+### A.2 Python: defined on two classes, called by neither (Phase 3)
+
+About 130 lines. None of these is on a base class.
+
+| Location | Symbol |
+|---|---|
+| `core/google_transcriber.py:2020`, `core/elevenlabs_transcriber.py:967` | `resume_pending_operations` |
+| `core/whisper_transcriber.py:474,486`, `core/parakeet_transcriber.py:207,214` | `estimate_processing_time`, `generate_prompt_from_podcast_info` |
+
+### A.3 Python: test-only (Phase 3, delete with the tests)
+
+About 1,590 lines, including the whole `transcript_parser.py` module.
+
+| Location | Symbol | Tests |
+|---|---|---|
+| `core/transcript_parser.py` (whole module, 565 lines) | `load_best_external_transcript` and the rest | `unit/core/test_transcript_parser.py` |
+| `core/llm_provider.py:1293,1519,2090,2741,3038` | `chat_completion_streaming` (5 providers, ~500 lines) | `unit/providers/test_gemini_provider.py`, `unit/providers/test_mistral_provider.py` |
+| `core/llm_provider.py:1052,1624,2432,2897` | `chat_completion_with_continuation` (4 providers) | `unit/providers/test_gemini_provider.py`; update the log string at `:1164` that recommends it |
+| `core/audio_downloader.py:265` | `cleanup_old_files` | `unit/core/test_audio_downloader.py` |
+| `core/external_transcript_downloader.py:188` | `download_all_pending` | `unit/core/test_external_transcript_downloader.py` |
+| `core/feed_manager.py:130` | `transaction` (and its `_in_transaction` state) | `unit/services/test_feed_manager.py` |
+| `core/google_transcriber.py:1656` | `_load_operation` | `unit/core/test_transcriber_pending_ops_persistence.py` |
+| `core/media_source.py:1710,1719` | `get_youtube_source`, `get_rss_source` | `unit/models/test_media_source.py` |
+| `core/queue_manager.py:195` | `is_idempotent_stage` | `unit/core/test_restart_recovery.py` |
+| `core/task_worker.py:908` | `_maybe_enqueue_next_stage` (superseded by the atomic hand-off in `complete_task`) | `unit/core/test_entity_branch_fanout.py`, `unit/core/test_chain_stops_when_unwanted.py`: point them at `_chain_successors` |
+| `core/transcript_formatter.py:146` | `format_to_file` | `unit/utils/test_formatter.py` |
+| `core/wikidata_client.py:210` | `lookup_entity` | `unit/core/entity_linking/test_candidates.py` |
+| `core/wikidata_client.py:493`, `core/wikipedia_client.py:182` | `NullWikidataClient`, `NullWikipediaClient` | Move to `tests/` (used by `unit/core/test_wikidata_client.py`, `unit/core/test_wikipedia_client.py`) |
+| `mcp/scopes.py:62` | `registered_tools` | `unit/mcp/test_scopes.py` |
+| `repositories/factory.py:264` | `make_user_repository` | `integration/test_user_repository_contract.py` |
+| `services/follower_service.py:232,311` | `get_followed_podcasts`, `is_following_by_slug` | `integration/follower/test_follower_flow.py` |
+| `services/platform_link_service.py:213` | `link_all` | `unit/services/test_platform_link_service.py` |
+| `utils/jwt.py:135` | `is_token_expiring_soon` | `integration/auth/test_auth.py` |
+| `utils/path_manager.py:361,583,620,654` | `clean_transcript_file_with_podcast`, `feeds_file`, `file_exists`, `get_file_path` | `unit/services/test_path_manager.py` |
+| `utils/podcast_categories.py:107-119` | `is_valid_category`, `is_valid_subcategory`, `get_subcategories` | `unit/utils/test_podcast_categories.py` |
+| `utils/url_generator.py:83` | `episode_summary` | `unit/services/test_path_manager.py` (the other matches are a different `episode_summary`) |
+| `core/entity_linking/rate_limiter.py:91` | `reset_shared_rate_limiter` | **Keep:** a test-reset hook (`unit/core/entity_linking/test_rate_limiter.py`, `test_factory_and_config.py`) |
+
+### A.4 Python: interface methods with no production caller (Phase 3)
+
+About 720 lines across the base classes and both backends. Remove each one
+from the interface and every implementation in one change.
+
+| Method | Defined in | Tests |
+|---|---|---|
+| `cleanup_old_tasks`, `cancel_retry` | `core/queue_manager.py:1780,2475`, `core/postgres_queue_manager.py:1001,1668` | `integration/test_postgres_queue_manager.py`, `unit/core/test_queue_auto_heal.py` |
+| `get_episodes_by_podcast` | `podcast_repository.py:816` + both backends | `integration/test_podcast_repository_episodes_contract.py`, `unit/repositories/test_sqlite_podcast_repository.py` |
+| `get_unprocessed_episodes` | `podcast_repository.py:885` + both backends | same two files |
+| `is_top_podcast_in_region` | SQLite `:5420`, Postgres podcasts `:716` (not on the interface) | `integration/test_podcast_repository_podcasts_contract.py`, `unit/repositories/test_sqlite_top_podcasts.py` |
+| `transaction` (repository) | SQLite `:2771`, Postgres podcasts `:245` | docstring examples only |
+| `update_last_login` | `user_repository.py:121` + both backends | `integration/test_user_repository_contract.py` |
+| `get_by_podcast` | follower repositories (3) | `integration/follower/test_follower_flow.py` |
+| `update_payload` | pending-ops repositories (3) | `integration/test_pending_operations_repository_contract.py`, `unit/repositories/test_sqlite_pending_operations_repository.py` |
+| `count_mentions_for_episode`, `get_enrichment`, `list_overrides` | entity repositories (3 each) | `integration/test_entity_repository_contract.py`, `unit/repositories/test_sqlite_entity_repository.py`, `unit/repositories/test_sqlite_entity_enrichment.py`, `unit/cli/test_enrich_entities_cli.py` |
+| `count_imports_for_user_since` | inbox repositories (3); spec #31 import cap, superseded by the #104 usage ledger | `integration/test_inbox_repository_contract.py`, `unit/repositories/test_sqlite_inbox_repository.py`, `unit/services/test_import_service_apple.py` |
+| `delete_batch`, `get_public_url`, `get_size`, `ensure_directory` | `utils/file_storage/base.py`, `local.py`, `s3.py` | `unit/utils/file_storage/test_contract.py`, `test_local.py`, `test_s3.py` |
+
+**Exceptions to decide in Phase 3.** These have no production caller, but
+tests use them widely to seed data or to read it back. Deleting them
+means rewriting fixtures, so they may stay as test support:
+
+- `save_podcast`, `save_episodes`: about 390 lines across the interface and both backends.
+- `get_episode_by_external_id`: 37 test lines.
+- `get_for_briefing`: 47 test lines.
+- Follower `get_by_user`: used by the abuse-admin tests.
+
+`scripts/backfill_feed_holes.py` also calls `save_episodes`; that script
+retires in Phase 7f.
+
+**Confirm with the owner.** `count_admins` (user-directory repositories,
+added in spec #104 on 2026-10-18) has no production caller yet. Delete it
+unless a last-admin guard is planned.
+
+### A.5 Whole modules
+
+| Module | Lines | Importers | Phase |
+|---|---:|---|---|
+| `core/transcript_parser.py` | 565 | `tests/unit/core/test_transcript_parser.py` only | 3 (A.3) |
+| `utils/db_migration.py` | 302 | `tests/integration/test_sqlite_to_postgres_migration.py` only | 7e |
+| `utils/db_promotion.py` | 518 | none | 7e |
+
+### A.6 Frontend (Phase 3)
+
+| Kind | Items |
+|---|---|
+| Dead files | `src/components/ShareButton.tsx` and `ShareButton.test.tsx`; update the `useShareAction.ts` doc comment |
+| Dead client functions (`src/api/client.ts`) | `getPipelineTaskStatus`, `getEpisodeTasksExtended`, `getInboxUnreadCount`, plus `getFailedEpisodes` and `getEpisodeFailure` once their hooks go |
+| Dead hooks (`src/hooks/useApi.ts`) | `useRecentActivity`, `usePodcastEpisodes`, `useAddPodcast`, `useFailedEpisodes`, `useEpisodeFailure`, `useInbox` (only a comment in `queryClient.ts` mentions it) |
+| Dead query invalidations | `['inbox', 'unread-count']` in `ImportEpisodeModal.tsx:50` and `useApi.ts:1208`; no query reads that key |
+| Duplicate | `browserTimezone` is exported from `client.ts` and redefined in `BriefingScheduleSettings.tsx:25`. Import the export |
+| Drop `export`, keep the symbol | `useMarkInboxRead` (used inside `useApi.ts`), `EVENT_PROPS`, `variantStyles`, `sizeStyles`, `GuestLine`, `TICK_INTERVAL_MS`, `SEEK_DEBOUNCE_MS`, `randomId`, `MIN_RESUME_SECONDS`, `setFollowPlayback`, `SWIPE_CLOSE_PX`, `FOCUSABLE_SELECTOR`, `transistorOrigin`, `supportsMediaSession`, `TOP_N`, `RATE_OPTIONS`, `DEFAULT_RATE`, `isValidRate`; the named or default double export of `KaraokeWord` |
+| Unused exported types | About 50 in `src/api/types.ts` and 14 elsewhere (knip list in A.0): drop `export` where the type is used inside its file, delete it where it is not (`ExtendedPipelineTask`, `EpisodeWithFailure`, the inbox unread-count response) |
+| Dependencies | Remove `@types/dompurify` (dompurify 3 ships its own types). Declare `hast` and `unified`, which are imported but not listed. Edit `package.json` and the lockfile without a macOS `npm install` |
+| Keep | `contexts/playback-engine/youtube-player-fake.ts`, `tests/episode-hero-fixture.ts`, `src/test/setup.ts` (test infrastructure) and the exports that exist for tests (`APP_ROUTE_PATTERNS`, `gpcEnabled`, `apiErrorCode`, `__reset*ForTests`) |
+
+### A.7 Phase 4 items re-checked on this commit
+
+All still hold:
+
+- `REFRESH_VIA_QUEUE` is read only into a log field (`web/app.py:607`).
+  The CLI help at `cli.py:647` still says it implies `--queue`, and the
+  comment at `:660` says it does not.
+- `ENABLE_TRANSCRIPT_CLEANING` and `CLEANING_EXTRACT_ENTITIES` build
+  `cleaning_config` at `cli.py:2027` and `:2248`. It is never passed on:
+  `transcribe_audio` gets only `TranscribeOptions`.
+- `DEBUG_CLIP_DURATION` (`config.py:479`) is never read. Its only test
+  checks that `thestill-aws` never migrates it.
+- The `SPOTIFY_CLIENT_*` Config fields (`config.py:338`) are unread;
+  `spotify_resolver.py:436` reads the environment directly.
+- `_deprecated_eval_wrapper` (`cli.py:3326`) with `evaluate-raw-transcript`
+  and `evaluate-clean-transcript`. Update `tests/unit/cli/test_eval_cli.py`
+  and `docs/evals.md:196`.
+- In `core/post_processor.py:36`, `MODEL_CONFIGS` and `ModelLimits` sit in
+  `__all__`, but nothing imports them from there. The module itself uses
+  both, so only the `__all__` entries go.
+- `BATCH_RECOGNIZE_TIMEOUT_SECONDS` (`google_transcriber.py:81`) is unused.
+- `_extract_executive_summary` (`briefing_script_generator.py:389`) has
+  one caller.
+- These env vars are read twice:
+  - `ELEVENLABS_WEBHOOK_SECRET`: `webhooks.py:78`
+  - `ELEVENLABS_API_KEY`, `ELEVENLABS_BASE_URL`: `elevenlabs_transcriber.py:133,141`
+  - `DALSTON_BASE_URL`, `DALSTON_API_KEY`, `DALSTON_MODEL`:
+    `dalston_transcriber.py:100-102`, with a `DEFAULT_BASE_URL` fallback
+    that Config does not have.
+
+### A.8 Endpoints: no durable access history
+
+Prod keeps no access logs that could produce 30-day counts:
+
+- Nothing ships logs to CloudWatch. Every compose service uses Docker's
+  `local` driver with 5 × 20 MB rotation
+  (`deploy/aws-ec2/docker-compose.prod.yml:18`).
+- Caddy has no `log` directive.
+- Every deploy recreates the app container, so its logs start again.
+
+`docs/logging-cloudwatch-queries.md` assumes a CloudWatch pipeline that
+this deployment does not have. That includes the "Tokens and Cost by
+Stage" query the LLM usage cost check (PR #351) relies on. This is a separate
+follow-up.
+
+**Evidence route instead:**
+
+1. **The operator confirms the admin-only endpoints.** These are
+   `/api/commands/status`, `/api/commands/task/{id}`,
+   `/api/commands/progress/current`, `/api/episodes/failed` and
+   `/api/episodes/{id}/failure`. Only admins can call them, and prod has
+   one.
+2. **Capture the user endpoints from the retained app log before each
+   deploy for two weeks.** These are `/followers/count` and
+   `/inbox/unread-count`. On the box (`thestill-aws ssh`, then
+   `cd /srv/thestill`):
+
+```bash
+docker compose -f docker-compose.prod.yml logs --no-log-prefix --timestamps thestill 2>/dev/null \
+  | head -1 | cut -c1-20                       # oldest retained line = coverage start
+docker compose -f docker-compose.prod.yml logs --no-log-prefix thestill 2>/dev/null \
+  | grep '"http_request_completed"' \
+  | grep -oE '"endpoint": ?"[^"]*(/followers/count|/inbox/unread-count|/api/commands/status|/api/commands/task/[^"]*|/api/commands/progress/current|/api/episodes/failed|/api/episodes/[^"/]*/failure)"' \
+  | sed -E 's#/api/podcasts/[^/]+/#/api/podcasts/{slug}/#; s#/commands/task/[^"]+#/commands/task/{id}#; s#/episodes/[^/"]+/failure#/episodes/{id}/failure#' \
+  | sort | uniq -c
+```
+
+Record each capture (date, coverage start, counts) in this section.
+Phase 7g removes an endpoint only when every capture shows zero hits and
+the operator confirms nothing external calls it.
+
+| Capture date | Coverage from | Hits |
+|---|---|---|
+| _pending_ | | |
+
+### A.9 Duplicate-code clusters (Phases 5–6)
+
+pylint finds 24 clusters of 12 or more similar lines. They match the
+audit:
+
+- **ElevenLabs transcriber vs webhook processor:**
+  `elevenlabs_transcriber.py:780-911` ↔ `webhook_transcript_processor.py:217-349`
+  (132 lines). `_build_segments` is shared with
+  `dalston_transcriber.py:548-611`.
+- **Queue managers:** `enqueue_*` at `queue_manager.py:1069-1189` ↔
+  `postgres_queue_manager.py:353-479`, and `:2604-2639` ↔ `:1796-1831`.
+- **Postgres `_episode_from_row` copies:**
+  `postgres_inbox_repository.py:118-137` ↔
+  `postgres_podcast_repository_episodes.py:122-141` ↔
+  `postgres_podcast_repository_podcasts.py:1659-1674`.
+- **Output paths:** `cli.py:1159-1189` ↔ `mcp/tools.py:1153-1180` ↔
+  `task_handlers.py:596-614`.
+- **Search and related builders:** `sqlite_vec_client.py:158-222` ↔
+  `pgvector_client.py:182-242`, `related_builder.py:158-180` ↔
+  `pg_related_builder.py:114-136`, and `chunk_writer.py:106-132` ↔
+  `postgres_chunk_writer.py:78-105`.
+- **Repository SQL twins:** 13 pairs across the entity, inbox and podcast
+  repositories. These are Phase 6 candidates only where the logic, not
+  just the SQL, is the same.

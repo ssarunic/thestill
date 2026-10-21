@@ -385,8 +385,8 @@ def handle_transcribe(
 
     # Dalston can fetch audio directly via URL, skipping download/downsample -
     # but only when the URL is an audio file. A YouTube episode's audio_url is
-    # the watch page (HTML); sending it produced "[400] Unsupported content
-    # type: text/html" and a dead-lettered episode.
+    # the watch page (HTML); sending it produced a 400 "Unsupported content
+    # type" error for text/html and a dead-lettered episode.
     audio_url_str = str(episode.audio_url) if episode.audio_url else None
     url_fetchable = is_remote_fetchable_audio_url(audio_url_str)
     use_dalston_url = (
