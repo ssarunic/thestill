@@ -33,7 +33,7 @@ from ..utils.path_manager import PathManager
 from .errors import McpUserError, public_error_message
 from .identity import McpIdentity, remote_call_limiter, require_authenticated
 from .registration import register_resources
-from .utils import build_audio_uri, build_episode_uri, build_podcast_uri, build_transcript_uri, parse_thestill_uri
+from .utils import parse_thestill_uri
 
 logger = get_logger(__name__)
 

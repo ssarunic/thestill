@@ -227,13 +227,3 @@ class ProgressStore:
             self._progress.pop(task_id, None)
             self._subscribers.pop(task_id, None)
         logger.debug(f"Cleaned up progress for task {task_id}")
-
-    def get_all_active(self) -> Dict[str, TaskProgress]:
-        """
-        Get progress for all active tasks.
-
-        Returns:
-            Dictionary mapping task IDs to their progress
-        """
-        with self._lock:
-            return dict(self._progress)

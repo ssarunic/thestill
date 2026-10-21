@@ -94,38 +94,11 @@ def decode_token(
         return None
 
 
-def _unsafe_peek_token_expiry(token: str) -> Optional[datetime]:
-    """
-    Extract ``exp`` from a token without verifying the signature.
-
-    This is labelled ``_unsafe_`` because an attacker can forge arbitrary
-    claims — the returned datetime must NEVER be used for an auth
-    decision. Call sites are limited to:
-
-    * observability logging (``token_expires_at=...`` fields);
-    * deciding whether to ATTEMPT a refresh — the refresh itself must
-      re-verify the token server-side.
-
-    Anything that needs trustworthy expiry must call
-    :func:`get_token_expiry` with the secret key.
-
-    """
-    try:
-        payload = jwt.decode(token, options={"verify_signature": False})
-        exp_timestamp = payload.get("exp")
-        if exp_timestamp:
-            return datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
-        return None
-    except jwt.InvalidTokenError:
-        return None
-
-
 def get_token_expiry(token: str, secret_key: str, algorithm: str = "HS256") -> Optional[datetime]:
     """
     Extract expiry from a token **after verifying its signature**.
 
-    Unlike :func:`_unsafe_peek_token_expiry`, this is safe to use for
-    auth decisions.  Returns ``None`` for any token that fails
+    Safe to use for auth decisions.  Returns ``None`` for any token that fails
     validation, including expired tokens.
     """
     payload = decode_token(token, secret_key, algorithm=algorithm)

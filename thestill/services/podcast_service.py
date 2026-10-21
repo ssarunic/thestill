@@ -761,24 +761,6 @@ class PodcastService:
         logger.info(f"No transcript available for: {episode.title}")
         return TranscriptResult(content="N/A - No transcript available", transcript_type=None)
 
-    def get_segmented_transcript(
-        self, podcast_id: Union[str, int], episode_id: Union[str, int]
-    ) -> Optional[SegmentedTranscriptResult]:
-        """Load the ``AnnotatedTranscript`` JSON sidecar for an episode (spec #18).
-
-        Convenience wrapper around
-        :meth:`get_segmented_transcript_for_episode` that resolves the
-        episode from its ids first. Prefer calling the ``_for_episode``
-        variant when the caller already has an ``Episode`` in scope —
-        it avoids a redundant podcast/episode lookup (and on the web
-        route, three such lookups per request).
-        """
-        episode = self.get_episode(podcast_id, episode_id)
-        if episode is None:
-            logger.warning(f"Episode not found for segmented transcript: {podcast_id}/{episode_id}")
-            return None
-        return self.get_segmented_transcript_for_episode(episode)
-
     def get_segmented_transcript_for_episode(self, episode: Episode) -> Optional[SegmentedTranscriptResult]:
         """Load the ``AnnotatedTranscript`` JSON sidecar for an already-resolved episode.
 

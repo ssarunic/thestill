@@ -1,6 +1,6 @@
 # Codebase Cleanup: Dead Code, Inert Flags, One-Off Tools and Duplication
 
-> **Status:** 🚧 Phase 1 implemented (2026-10-21); Phases 0, 2–7 open
+> **Status:** 🚧 Phases 0–1 done, Phase 3a done (2026-10-21); Phases 2, 3b–3c, 4–7 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. One live prod bug (Phase 1) comes out of this audit. The rest is cost of carrying: about 3,500 lines of unused production code, flags that do nothing, and SQLite/Postgres twins that have already shipped three parity bugs.
@@ -509,10 +509,13 @@ Apply whichever option D3 picks for the reranker and entity leg,
 
 ## Tracking
 
-- [ ] Phase 0: inventory appendix, endpoint hit counts, vulture comment fix
+- [x] Phase 0: inventory appendix, endpoint evidence route, vulture comment fix
 - [x] Phase 1: DLQ retry-all on Postgres
 - [ ] Phase 2: ElevenLabs webhook pending-op cleanup
 - [ ] Phase 3: dead code (Python, frontend)
+  - [x] 3a: Python A.1 and A.2
+  - [ ] 3b: Python A.3 and A.4, with their tests
+  - [ ] 3c: frontend A.6
 - [ ] Phase 4: inert configuration and docs
 - [ ] Phase 5: PathManager output targets
 - [ ] Phase 6: interfaces, contract tests, shared logic, small duplicates
@@ -555,7 +558,9 @@ it is a protocol the tests use to check that both queue managers conform.
 
 ### A.1 Python: no references (Phase 3)
 
-About 970 lines.
+About 970 lines. Removed in Phase 3a, together with what the removals
+stranded: `Quote`, `GoogleTranscriptMetadata`, `WhisperTranscriber._split_on_silence`
+and five imports.
 
 | Location | Symbol | Note |
 |---|---|---|
@@ -590,7 +595,7 @@ About 970 lines.
 
 ### A.2 Python: defined on two classes, called by neither (Phase 3)
 
-About 130 lines. None of these is on a base class.
+About 130 lines. None of these is on a base class. Removed in Phase 3a.
 
 | Location | Symbol |
 |---|---|
@@ -657,9 +662,13 @@ means rewriting fixtures, so they may stay as test support:
 `scripts/backfill_feed_holes.py` also calls `save_episodes`; that script
 retires in Phase 7f.
 
-**Confirm with the owner.** `count_admins` (user-directory repositories,
-added in spec #104 on 2026-10-18) has no production caller yet. Delete it
-unless a last-admin guard is planned.
+**`count_admins`: delete in Phase 3b.** It is on the user-directory
+repositories, added in spec #104 on 2026-10-18. The last-admin guard it
+was meant for already exists: `revoke_admin` and the disable path call
+`set_admin(..., keep_an_active_admin=True)` (and the status update with the
+same flag), which counts the other active admins in the same transaction as
+the update, under an advisory lock. So the standalone count is unused, and a
+count-then-update built on it would race.
 
 ### A.5 Whole modules
 

@@ -1101,8 +1101,3 @@ def load_config(env_file: Optional[str] = None) -> Config:
             ) from exc
 
     return Config(**config_data)
-
-
-def get_default_config_path() -> Path:
-    """Get the default configuration file path"""
-    return Path.cwd() / ".env"

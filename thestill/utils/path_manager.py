@@ -81,22 +81,6 @@ def _validate_run_id(run_id: str) -> str:
     return run_id
 
 
-def _validate_episode_id(episode_id: str) -> str:
-    """Refuse anything that isn't a UUID4-shaped string.
-
-    Used by the spec #28 corpus path helpers (``corpus_episode_file`` /
-    ``corpus_episode_segmap_file``) where the filename comes from
-    ``Episode.id`` rather than a slug. The DB enforces ``length(id) =
-    36`` already; this is the same belt-and-braces stance as
-    ``_validate_slug``. Returns the **lowercased** form so a caller
-    that round-trips an uppercase UUID through this validator gets
-    consistent file paths on case-sensitive filesystems.
-    """
-    if not isinstance(episode_id, str) or not _UUID_RE.fullmatch(episode_id.lower()):
-        raise ValueError(f"invalid episode_id={episode_id!r}: must be a UUID4")
-    return episode_id.lower()
-
-
 class PathManager:
     """
     Manages all file paths for the thestill podcast processing pipeline.
@@ -374,27 +358,6 @@ class PathManager:
         _validate_slug(podcast_slug, name="podcast_slug")
         return self._assert_inside_root(self.clean_transcripts_dir() / podcast_slug / episode_filename)
 
-    def clean_transcript_json_file(self, podcast_slug: str, episode_filename: str) -> Path:
-        """Full path to the structured ``AnnotatedTranscript`` JSON sidecar.
-
-        Sits alongside the blended Markdown produced by the segmented
-        cleanup path (spec #18). ``episode_filename`` is the Markdown
-        filename (e.g. ``episode-slug_hash_cleaned.md``) — the ``.md``
-        suffix is swapped for ``.json`` so the two files pair up by name.
-
-        Args:
-            podcast_slug: Slugified podcast title.
-            episode_filename: The cleaned-transcript Markdown filename.
-
-        Returns:
-            Full path: clean_transcripts/{podcast_slug}/{base}.json
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        base = episode_filename
-        if base.endswith(".md"):
-            base = base[:-3]
-        return self._assert_inside_root(self.clean_transcripts_dir() / podcast_slug / f"{base}.json")
-
     def summary_file(self, filename: str) -> Path:
         """
         Get full path to a summary file.
@@ -450,22 +413,6 @@ class PathManager:
         """
         return self.evaluations_dir() / filename
 
-    def raw_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
-        """
-        Get full path to a raw transcript evaluation file.
-
-        Evaluations are organized by type (raw vs clean) and podcast.
-
-        Args:
-            podcast_slug: Slugified podcast title
-            episode_filename: Filename for the evaluation (e.g., "episode-slug_hash_evaluation.json")
-
-        Returns:
-            Full path: evaluations/raw/{podcast_slug}/{episode_filename}
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        return self._assert_inside_root(self.evaluations_dir() / "raw" / podcast_slug / episode_filename)
-
     def evaluation_runs_dir(self) -> Path:
         """Get path to the append-only eval runs directory (spec #53)."""
         return self.evaluations_dir() / "runs"
@@ -482,22 +429,6 @@ class PathManager:
         """
         _validate_run_id(run_id)
         return self._assert_inside_root(self.evaluation_runs_dir() / run_id)
-
-    def clean_transcript_evaluation_file(self, podcast_slug: str, episode_filename: str) -> Path:
-        """
-        Get full path to a clean transcript evaluation file.
-
-        Evaluations are organized by type (raw vs clean) and podcast.
-
-        Args:
-            podcast_slug: Slugified podcast title
-            episode_filename: Filename for the evaluation (e.g., "episode-slug_hash_evaluation.json")
-
-        Returns:
-            Full path: evaluations/clean/{podcast_slug}/{episode_filename}
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        return self._assert_inside_root(self.evaluations_dir() / "clean" / podcast_slug / episode_filename)
 
     def podcast_facts_file(self, podcast_slug: str) -> Path:
         """
@@ -544,41 +475,6 @@ class PathManager:
         """
         _validate_slug(podcast_slug, name="podcast_slug")
         return self._assert_inside_root(self.debug_feeds_dir() / f"{podcast_slug}.xml")
-
-    def pending_operation_file(self, operation_id: str) -> Path:
-        """
-        Get full path to a pending operation state file.
-
-        Stores the state of in-progress Google Cloud transcription operations
-        so they can be resumed if the app is restarted.
-
-        Args:
-            operation_id: Unique operation identifier
-
-        Returns:
-            Full path to the operation JSON file in pending_operations directory
-        """
-        return self.pending_operations_dir() / f"{operation_id}.json"
-
-    def chunks_dir(self, podcast_slug: str, episode_slug: str) -> Path:
-        """
-        Get path to chunk debug directory for an episode.
-
-        Chunks are stored inside the podcast subdirectory to avoid clashes
-        between episodes from different podcasts.
-
-        Structure: raw_transcripts/{podcast_slug}/chunks/{episode_slug}/
-
-        Args:
-            podcast_slug: Slugified podcast title
-            episode_slug: Slugified episode title (used as subfolder name)
-
-        Returns:
-            Full path to the chunks directory for this episode
-        """
-        _validate_slug(podcast_slug, name="podcast_slug")
-        _validate_slug(episode_slug, name="episode_slug")
-        return self._assert_inside_root(self.raw_transcripts_dir() / podcast_slug / "chunks" / episode_slug)
 
     def feeds_file(self) -> Path:
         """

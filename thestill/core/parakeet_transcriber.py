@@ -204,18 +204,6 @@ class ParakeetTranscriber(Transcriber):
             timestamp=time.time(),
         )
 
-    def estimate_processing_time(self, audio_duration_minutes: float) -> float:
-        if self.device == "cuda":
-            ratio = 0.08
-        else:
-            ratio = 0.2
-        return audio_duration_minutes * ratio
-
-    def generate_prompt_from_podcast_info(self, podcast_title: str, episode_title: str = "") -> str:
-        # Parakeet has no biasing/prompt input. Kept for interface parity.
-        del podcast_title, episode_title
-        return ""
-
 
 # ---------------------------------------------------------------------------
 # Hypothesis-shape helpers

@@ -1729,7 +1729,7 @@ class GoogleCloudTranscriber(Transcriber):
         2. Cancel operations that are stuck or taking too long
         3. Start fresh without waiting for pending operations
 
-        Unlike wait_for_pending_operations(), this does NOT poll/wait - it checks once
+        This does NOT poll or wait: it checks once
         and immediately returns. Operations still running on GCP are CANCELLED via API.
 
         Returns:
@@ -2017,140 +2017,6 @@ class GoogleCloudTranscriber(Transcriber):
             )
             raise RuntimeError(f"Failed to download transcript: {e}")
 
-    def resume_pending_operations(self) -> List[Tuple[TranscriptionOperation, Optional[Transcript]]]:
-        """
-        Resume all pending operations from previous app run.
-
-        This method:
-        1. Lists all pending operations from local storage
-        2. Checks each operation's status with GCP
-        3. Downloads transcripts for completed operations
-        4. Returns results for integration into the pipeline
-
-        Returns:
-            List of (operation, transcript) tuples.
-            transcript is None if operation is still pending or failed.
-        """
-        results = []
-        pending_ops = self.list_pending_operations()
-
-        if not pending_ops:
-            return results
-
-        logger.info("Found pending operations to resume", operation_count=len(pending_ops))
-
-        for op in pending_ops:
-            try:
-                # Check operation status
-                updated_op = self.check_pending_operation(op)
-
-                if updated_op.state == TranscriptionOperationState.COMPLETED:
-                    # Download the transcript
-                    transcript_data = self.download_completed_operation(updated_op)
-                    results.append((updated_op, transcript_data))
-                elif updated_op.state == TranscriptionOperationState.FAILED:
-                    logger.warning("Operation failed", operation_id=op.operation_id, error=updated_op.error)
-                    results.append((updated_op, None))
-                else:
-                    # Still pending
-                    results.append((updated_op, None))
-
-            except Exception as e:
-                logger.error("Error resuming operation", operation_id=op.operation_id, error=str(e))
-                op.state = TranscriptionOperationState.FAILED
-                op.error = str(e)
-                self._save_operation(op)
-                results.append((op, None))
-
-        return results
-
-    def wait_for_pending_operations(
-        self,
-        timeout_minutes: int = 60,
-        poll_interval_seconds: int = OPERATION_POLL_INTERVAL_SECONDS,
-    ) -> List[Tuple[TranscriptionOperation, Optional[Dict]]]:
-        """
-        Wait for all pending operations to complete, with timeout.
-
-        This method polls all pending operations until they complete, fail, or timeout.
-        Use this when you want to wait for in-progress transcriptions before starting
-        new ones (e.g., to avoid re-transcribing the same episodes).
-
-        Args:
-            timeout_minutes: Maximum time to wait for all operations (default: 60 minutes)
-            poll_interval_seconds: How often to check status (default: 30 seconds)
-
-        Returns:
-            List of (operation, transcript_data) tuples.
-            transcript_data is None if operation failed or timed out.
-        """
-        results = []
-        pending_ops = self.list_pending_operations()
-
-        if not pending_ops:
-            return results
-
-        logger.info(
-            "Waiting for pending operations",
-            operation_count=len(pending_ops),
-            timeout_minutes=timeout_minutes,
-        )
-        start_time = time.time()
-        timeout_seconds = timeout_minutes * 60
-
-        # Track which operations are still pending
-        remaining_ops = {op.operation_id: op for op in pending_ops}
-
-        while remaining_ops and (time.time() - start_time) < timeout_seconds:
-            # Check each remaining operation
-            for op_id, op in list(remaining_ops.items()):
-                try:
-                    updated_op = self.check_pending_operation(op)
-
-                    if updated_op.state == TranscriptionOperationState.COMPLETED:
-                        # Download the transcript
-                        transcript_data = self.download_completed_operation(updated_op)
-                        results.append((updated_op, transcript_data))
-                        del remaining_ops[op_id]
-                        self.console.success(f"{op.podcast_slug}/{op.episode_slug} completed")
-                    elif updated_op.state == TranscriptionOperationState.FAILED:
-                        results.append((updated_op, None))
-                        del remaining_ops[op_id]
-                        self.console.error(f"{op.podcast_slug}/{op.episode_slug} failed: {updated_op.error}")
-                    else:
-                        # Update reference for next iteration
-                        remaining_ops[op_id] = updated_op
-
-                except Exception as e:
-                    logger.error("Error checking operation", operation_id=op_id, error=str(e))
-                    op.state = TranscriptionOperationState.FAILED
-                    op.error = str(e)
-                    self._save_operation(op)
-                    results.append((op, None))
-                    del remaining_ops[op_id]
-
-            # If still have pending operations, wait before next poll
-            if remaining_ops:
-                elapsed = time.time() - start_time
-                remaining_time = timeout_seconds - elapsed
-                if remaining_time > poll_interval_seconds:
-                    elapsed_mins = int(elapsed / 60)
-                    if not self.console.quiet:
-                        import sys
-
-                        sys.stdout.write(f"\r⏳ Waiting... ({len(remaining_ops)} pending, {elapsed_mins}m elapsed)")
-                        sys.stdout.flush()
-                    time.sleep(poll_interval_seconds)
-
-        # Handle timed-out operations
-        for op_id, op in remaining_ops.items():
-            logger.warning("Operation timed out", operation_id=op_id, timeout_minutes=timeout_minutes)
-            op.error = f"Timed out waiting after {timeout_minutes} minutes"
-            # Don't mark as failed - it might still complete later
-            results.append((op, None))
-
-        return results
-
     def _build_recognition_config(
         self, language: str, enable_diarization: Optional[bool] = None
     ) -> cloud_speech.RecognitionConfig:
@@ -2205,26 +2071,6 @@ class GoogleCloudTranscriber(Transcriber):
             mins = int((seconds % 3600) // 60)
             secs = int(seconds % 60)
             return f"{hours}h {mins}m {secs}s"
-
-    def _format_timestamp_mmss(self, ms: int) -> str:
-        """
-        Format milliseconds into MM:SS or H:MM:SS timestamp.
-
-        Examples:
-            45000 ms → "0:45"
-            125000 ms → "2:05"
-            3725000 ms → "1:02:05"
-        """
-        total_seconds = ms // 1000
-        if total_seconds < 3600:
-            mins = total_seconds // 60
-            secs = total_seconds % 60
-            return f"{mins}:{secs:02d}"
-        else:
-            hours = total_seconds // 3600
-            mins = (total_seconds % 3600) // 60
-            secs = total_seconds % 60
-            return f"{hours}:{mins:02d}:{secs:02d}"
 
     def _format_transcript(
         self,

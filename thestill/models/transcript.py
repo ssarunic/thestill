@@ -82,25 +82,6 @@ class Transcript(BaseModel):
     # Provider-specific metadata (e.g., Google request_id, billing info)
     provider_metadata: Optional[Dict[str, Any]] = None
 
-    def get_text_with_timestamps(self) -> str:
-        """
-        Extract plain text with timestamps from transcript.
-
-        Returns formatted string like:
-            [00:15] [SPEAKER_01] Welcome to the podcast.
-            [00:18] [SPEAKER_02] Thanks for having me.
-        """
-        lines = []
-        for segment in self.segments:
-            text = segment.text.strip()
-            if text:
-                mins, secs = int(segment.start // 60), int(segment.start % 60)
-                if segment.speaker:
-                    lines.append(f"[{mins:02d}:{secs:02d}] [{segment.speaker}] {text}")
-                else:
-                    lines.append(f"[{mins:02d}:{secs:02d}] {text}")
-        return "\n".join(lines)
-
     def get_speakers(self) -> List[str]:
         """Get list of unique speaker labels in order of appearance."""
         seen = set()

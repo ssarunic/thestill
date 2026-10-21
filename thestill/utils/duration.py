@@ -100,9 +100,7 @@ NARRATION_DURATION_PRESETS: dict[str, int] = {
 # Inverse map for ``slug_for_duration_seconds``. Built once at import
 # so the slug returned for a preset duration is always the same string
 # the parser accepts.
-_DURATION_SLUG_BY_SECONDS: dict[int, str] = {
-    seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()
-}
+_DURATION_SLUG_BY_SECONDS: dict[int, str] = {seconds: slug for slug, seconds in NARRATION_DURATION_PRESETS.items()}
 
 
 def slug_for_duration_seconds(seconds: int) -> str:
@@ -116,9 +114,7 @@ def slug_for_duration_seconds(seconds: int) -> str:
     return _DURATION_SLUG_BY_SECONDS.get(seconds, f"custom-{seconds}s")
 
 
-def resolve_target_or_default(
-    value: Optional[Union[int, str]], default: int
-) -> int:
+def resolve_target_or_default(value: Optional[Union[int, str]], default: int) -> int:
     """Resolve a target-duration request value to seconds.
 
     ``value`` may be ``None`` (use ``default``), a positive int
@@ -246,31 +242,6 @@ def format_duration(seconds: Union[int, float]) -> str:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     else:
         return f"{minutes}:{secs:02d}"
-
-
-def format_duration_verbose(seconds: Union[int, float]) -> str:
-    """
-    Format seconds as verbose human-readable duration.
-
-    Args:
-        seconds: Duration in seconds
-
-    Returns:
-        Formatted string like "1h 23m 45s" or "45m 30s"
-    """
-    seconds = int(seconds)
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-
-    parts = []
-    if hours > 0:
-        parts.append(f"{hours}h")
-    if minutes > 0 or hours > 0:
-        parts.append(f"{minutes}m")
-    parts.append(f"{secs}s")
-
-    return " ".join(parts)
 
 
 def get_audio_duration(audio_path: Union[str, Path]) -> Optional[int]:

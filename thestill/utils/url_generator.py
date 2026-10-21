@@ -67,19 +67,6 @@ class UrlGenerator:
         seconds = max(0, int(start_seconds))
         return f"{self.episode(podcast_slug, episode_slug)}?t={seconds}"
 
-    def episode_transcript(self, podcast_slug: str, episode_slug: str) -> str:
-        """
-        Generate URL for an episode transcript.
-
-        Args:
-            podcast_slug: URL-safe podcast identifier
-            episode_slug: URL-safe episode identifier
-
-        Returns:
-            Relative URL path
-        """
-        return f"/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript"
-
     def episode_summary(self, podcast_slug: str, episode_slug: str) -> str:
         """
         Generate URL for an episode summary.

@@ -596,12 +596,11 @@ def _episode_typeahead(
 class _EpisodePayload(BaseModel):
     """Per-episode playback metadata used by both search endpoints.
 
-    The slug pair was the original payload shape (``_resolve_episode_slugs``);
-    we expanded it to carry the data the FloatingPlayer needs (audio
-    URL, artwork, duration) so neither the search-results page nor the
-    ⌘K command bar has to do a follow-up ``/episodes/<id>`` fetch on
-    click. Rows with no audio URL still come back so the caller can
-    fall back to a deep-link navigation.
+    The slug pair was the original payload shape; we expanded it to carry
+    the data the FloatingPlayer needs (audio URL, artwork, duration) so
+    neither the search-results page nor the ⌘K command bar has to do a
+    follow-up ``/episodes/<id>`` fetch on click. Rows with no audio URL
+    still come back so the caller can fall back to a deep-link navigation.
     """
 
     podcast_slug: str
@@ -649,18 +648,3 @@ def _resolve_episode_payloads(
             duration=row["duration"],
         )
     return out
-
-
-def _resolve_episode_slugs(
-    *,
-    state,
-    episode_ids: List[str],
-) -> dict[str, tuple[str, str]]:
-    """Backwards-compatible slug-only shape.
-
-    Kept so existing callers (and tests that import the symbol directly)
-    don't break while the FloatingPlayer wiring rolls out. New code
-    should prefer ``_resolve_episode_payloads``.
-    """
-    payloads = _resolve_episode_payloads(state=state, episode_ids=episode_ids)
-    return {ep_id: (p.podcast_slug, p.episode_slug) for ep_id, p in payloads.items()}

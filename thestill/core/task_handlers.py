@@ -815,24 +815,6 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             state.inbox_service.fanout_on_publish(episode.id, podcast.id)
 
 
-def handle_entity_branch_placeholder(task: Task, state: "AppState") -> None:
-    """Spec #28 §0.5 — shared no-op handler for entity stages still in Phase 0 mode.
-
-    Phase 1 replaces these one-by-one with real handlers (GLiNER
-    extractor, ReFinED resolver, chunk writer). Until
-    each stage's real handler lands, the no-op keeps the linear chain
-    progressing through to ``REINDEX`` without hitting "no handler
-    registered" → DLQ. ``task.stage.value`` distinguishes the call
-    sites in structured logs.
-    """
-    logger.info(
-        "entity_branch_placeholder",
-        stage=task.stage.value,
-        episode_id=task.episode_id,
-        note="phase_0_no_op",
-    )
-
-
 def handle_reindex(task: Task, state: "AppState") -> None:
     """Spec #28 §2.10 — embed and index the episode's transcript chunks.
 

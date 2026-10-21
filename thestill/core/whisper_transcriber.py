@@ -28,9 +28,6 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydub import AudioSegment
-from pydub.effects import normalize
-
 from thestill.models.transcript import Segment, Transcript, Word
 from thestill.models.transcription import TranscribeOptions
 from thestill.utils.console import ConsoleOutput
@@ -471,43 +468,6 @@ class WhisperTranscriber(Transcriber):
             timestamp=time.time(),
         )
 
-    def estimate_processing_time(self, audio_duration_minutes: float) -> float:
-        """Estimate transcription time based on audio duration"""
-        base_ratio = {
-            "tiny": 0.05,
-            "base": 0.1,
-            "small": 0.15,
-            "medium": 0.25,
-            "large": 0.4,
-        }
-        ratio = base_ratio.get(self.model_name, 0.15)
-        return audio_duration_minutes * ratio
-
-    def generate_prompt_from_podcast_info(self, podcast_title: str, episode_title: str = "") -> str:
-        """Generate a custom prompt based on podcast information"""
-        prompt_parts = []
-
-        if podcast_title:
-            prompt_parts.append(f"This is from the podcast '{podcast_title}'.")
-
-        if episode_title:
-            prompt_parts.append(f"Episode title: '{episode_title}'.")
-
-        if "politics" in podcast_title.lower():
-            prompt_parts.append(
-                "Topics include British politics, international relations, "
-                "Conservative Party, Labour Party, Parliament, Westminster, Ukraine, Gaza, Nigeria."
-            )
-
-        if "rest is politics" in podcast_title.lower():
-            prompt_parts.append("Speakers may include Rory Stewart, Alastair Campbell.")
-
-        full_prompt = " ".join(prompt_parts)
-        if len(full_prompt) > 1000:
-            full_prompt = full_prompt[:1000]
-
-        return full_prompt
-
     def _filter_hallucinations(self, segments: List[Segment]) -> List[Segment]:
         """Filter out hallucinated segments with repetitive patterns"""
         if not segments:
@@ -608,57 +568,6 @@ class WhisperTranscriber(Transcriber):
                     return True
 
         return False
-
-    def _preprocess_audio(self, audio_path: str) -> str:
-        """Preprocess audio to reduce conditions that cause hallucinations"""
-        try:
-            self.console.progress("Preprocessing audio to reduce noise and normalize volume...")
-
-            audio = AudioSegment.from_file(audio_path)
-            audio = normalize(audio)
-
-            silence_threshold = -50
-            chunks = self._split_on_silence(audio, silence_threshold)
-
-            if chunks:
-                processed_audio = chunks[0]
-                for chunk in chunks[1:]:
-                    gap = AudioSegment.silent(duration=100)
-                    processed_audio += gap + chunk
-            else:
-                processed_audio = audio
-
-            input_ext = Path(audio_path).suffix
-            temp_path = audio_path.replace(input_ext, "_processed.mp3")
-            processed_audio.export(temp_path, format="mp3", bitrate="128k")
-
-            self.console.success(f"Audio preprocessed and saved to: {temp_path}")
-            return temp_path
-
-        except Exception as e:
-            self.console.error(f"Error preprocessing audio: {e}")
-            return audio_path
-
-    def _split_on_silence(self, audio: AudioSegment, silence_thresh: int) -> List[AudioSegment]:
-        """Split audio on silence periods to remove long quiet sections"""
-        chunks = []
-        current_chunk = AudioSegment.empty()
-
-        segment_length = 1000  # 1 second
-        for i in range(0, len(audio), segment_length):
-            segment = audio[i : i + segment_length]
-
-            if segment.dBFS < silence_thresh:
-                if len(current_chunk) > 0:
-                    chunks.append(current_chunk)
-                    current_chunk = AudioSegment.empty()
-            else:
-                current_chunk += segment
-
-        if len(current_chunk) > 0:
-            chunks.append(current_chunk)
-
-        return chunks
 
 
 class WhisperXTranscriber(Transcriber):

@@ -21,7 +21,7 @@ Centralizes formatting logic for CLI commands to improve consistency and testabi
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List
 
-from ..services.podcast_service import EpisodeWithIndex, PodcastWithIndex
+from ..services.podcast_service import PodcastWithIndex
 
 if TYPE_CHECKING:
     from ..services.stats_service import ActivityItem
@@ -59,68 +59,6 @@ class CLIFormatter:
         return "\n".join(lines)
 
     @staticmethod
-    def format_episode_list(episodes: List[EpisodeWithIndex], podcast_title: str = None) -> str:
-        """
-        Format list of episodes for display.
-
-        Args:
-            episodes: List of episodes with index information
-            podcast_title: Optional podcast title for header
-
-        Returns:
-            Formatted string ready for display
-        """
-        if not episodes:
-            return "No episodes found."
-
-        lines = []
-
-        if podcast_title:
-            lines.append(f"\n📻 {podcast_title}")
-            lines.append("")
-
-        for episode in episodes:
-            # Map episode state to status icon
-            state_icons = {
-                "discovered": "○",  # Not downloaded
-                "downloaded": "↓",  # Downloaded
-                "downsampled": "♪",  # Audio ready
-                "transcribed": "✎",  # Transcribed (pencil writing)
-                "cleaned": "✓",  # Cleaned
-                "summarized": "★",  # Fully processed
-            }
-            status_icon = state_icons.get(episode.state, "?")
-
-            lines.append(f"  {status_icon} {episode.episode_index}. {episode.title}")
-            if episode.pub_date:
-                lines.append(f"     Published: {episode.pub_date.strftime('%Y-%m-%d')}")
-            if episode.duration:
-                lines.append(f"     Duration: {episode.duration}")
-            if episode.state == "cleaned":
-                if episode.transcript_available:
-                    lines.append("     📝 Transcript available")
-                if episode.summary_available:
-                    lines.append("     📄 Summary available")
-            lines.append("")
-
-        return "\n".join(lines)
-
-    @staticmethod
-    def format_success(message: str) -> str:
-        """Format success message with checkmark."""
-        return f"✅ {message}"
-
-    @staticmethod
-    def format_error(message: str) -> str:
-        """Format error message with X mark."""
-        return f"❌ {message}"
-
-    @staticmethod
-    def format_info(message: str) -> str:
-        """Format informational message with icon."""
-        return f"ℹ️  {message}"
-
-    @staticmethod
     def format_header(title: str, icon: str = "📊") -> str:
         """
         Format section header with icon and separator.
@@ -133,16 +71,6 @@ class CLIFormatter:
             Formatted header with separator line
         """
         return f"{icon} {title}\n{'═' * 30}"
-
-    @staticmethod
-    def format_progress(message: str) -> str:
-        """Format progress message with icon."""
-        return f"🔄 {message}"
-
-    @staticmethod
-    def format_completion(message: str) -> str:
-        """Format completion message with checkmark."""
-        return f"✅ {message}"
 
     @staticmethod
     def format_activity_log(items: List["ActivityItem"]) -> str:
@@ -158,7 +86,7 @@ class CLIFormatter:
         if not items:
             return "No recent activity."
 
-        # State icons (same as format_episode_list)
+        # State icons
         state_icons = {
             "discovered": "○",  # Not downloaded
             "downloaded": "↓",  # Downloaded
