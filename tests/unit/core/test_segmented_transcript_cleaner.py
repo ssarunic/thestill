@@ -842,6 +842,41 @@ class TestAdVoiceFragmentReassignment:
         ]
         assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
 
+    @pytest.mark.parametrize(
+        "before, fragment, after",
+        [
+            ("هل ستأتي غدا؟", "نعم سآتي بالتأكيد", "حسنا، أراك غدا."),
+            ("明日来ますか。", "はい、行きます", "では、また明日。"),
+            ("你明天来吗？", "我会来的", "好的，明天见。"),
+            ("Θα έρθεις αύριο;", "Ναι, θα έρθω", "Ωραία, τα λέμε."),
+            ("Θα έρθεις αύριο\u037e", "Ναι, θα έρθω", "Ωραία, τα λέμε."),
+            ("Kommst du morgen?»", "Ja, sicher", "Gut, bis morgen."),
+            ("「明日来ますか」。", "はい", "では。"),
+        ],
+    )
+    def test_sentence_ends_in_other_scripts_count_as_full_stops(self, before: str, fragment: str, after: str) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Host", text=before),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text=fragment),
+            _segment(seg_id=2, speaker="Host", text=after),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_clean_keeps_an_arabic_reply_with_its_own_speaker(self) -> None:
+        provider = FakeProvider()
+        provider.patch_factory = lambda target_ids: []
+        cleaner = SegmentedTranscriptCleaner(provider)
+        annotated = _annotated(
+            [
+                _segment(seg_id=0, speaker="A", text="هل ستأتي إلى الاجتماع غدا؟"),
+                _segment(seg_id=1, speaker="B", text="نعم سآتي بالتأكيد"),
+                _segment(seg_id=2, speaker="A", text="حسنا، أراك غدا في المكتب."),
+            ]
+        )
+        facts = EpisodeFacts(episode_title="t", speaker_mapping={"A": "Host (Host)", "B": "Ad Narrator 2"})
+        cleaned = cleaner.clean(annotated=annotated, podcast_facts=None, episode_facts=facts, language="ar")
+        assert [s.speaker for s in cleaned.segments] == ["Host", "Ad Narrator 2", "Host"]
+
     def test_different_speakers_either_side_leave_it_alone(self) -> None:
         segments = [
             _segment(seg_id=0, speaker="Rory", text="and the thing about the"),

@@ -87,7 +87,16 @@ ORPHAN_SPEAKER_MAX_FRAGMENTS = 3
 # exactly."). Longer ad-voice speech is left alone too: it is as often a
 # mislabelled guest as a missed ad read.
 AD_VOICE_FRAGMENT_MAX_WORDS = 6
-_SENTENCE_END_RE = re.compile(r"[.?!…][\"'”’»)]*\s*$")
+# Sentence-final punctuation across the supported transcript languages
+# (``utils.language_config``): Latin/Cyrillic ``. ? ! …``, the Greek
+# question mark (U+037E, and ASCII ``;`` which Greek text often uses in
+# its place), Arabic ``؟`` and Urdu ``۔``, CJK full-width ``。 ？ ！ ．``
+# and halfwidth ``｡``, Devanagari ``।``. Then any closing quotes or
+# brackets. Over-matching is the safe direction: a sentence end read
+# where there is none only leaves a fragment under its original label.
+_SENTENCE_END_RE = re.compile(
+    r"[.?!…;\u037e\u061f\u06d4\u3002\uff1f\uff01\uff0e\uff61\u0964‽][\"'”’»›)）」』】》]*\s*$"
+)
 # The kinds a listener hears as the episode. Ad reads, music, and filler
 # are not speech a participant is credited with.
 _SPEECH_KINDS: frozenset = frozenset({"content", "intro", "outro"})
