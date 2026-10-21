@@ -14,9 +14,10 @@
 
 """Per-page ``<head>`` for the SPA shell, robots.txt and sitemap.xml (spec #94 §3-4).
 
-The body of every page is still rendered in the browser; crawlers and link
-unfurlers get real titles, descriptions, canonical URLs, Open Graph tags and
-JSON-LD from here. ``index.html`` carries a marker block that is replaced
+Crawlers and link unfurlers get real titles, descriptions, canonical URLs,
+Open Graph tags and JSON-LD from here; the page's main content for
+signed-out requests comes from :mod:`thestill.web.public_prerender`
+(spec #105). ``index.html`` carries a marker block that is replaced
 per request; every value is HTML-escaped, and JSON-LD is serialised with
 ``<``, ``>``, ``&`` and the two JS line separators escaped so no title can
 close the script element.
@@ -83,11 +84,19 @@ def shell_kind(path: str) -> Optional[str]:
     return None
 
 
-def log_shell_served(path: str, status: int, user_agent: Optional[str], started: float) -> None:
+def log_shell_served(
+    path: str,
+    status: int,
+    user_agent: Optional[str],
+    started: float,
+    prerendered: str = "false",
+    cache: Optional[str] = None,
+) -> None:
     """Spec #105 §5: one line per public shell response, so crawler fetches
     can be counted per family. No IP and no full user agent: the request
     context's ``client_ip`` (bound by ``LoggingMiddleware``) is held back
-    for this one event."""
+    for this one event. The user agent is read here, after the response is
+    built, and nowhere on the way to it (§2.1)."""
     kind = shell_kind(path)
     if kind is None:
         return
@@ -99,6 +108,8 @@ def log_shell_served(path: str, status: int, user_agent: Optional[str], started:
             kind=kind,
             status=status,
             ua_family=crawler_family(user_agent),
+            prerendered=prerendered,
+            cache=cache,
             ms=round((time.perf_counter() - started) * 1000, 1),
         )
     finally:
@@ -146,17 +157,23 @@ def _drop_empty(value: Any) -> Any:
     return value
 
 
-def json_ld_script(data: Dict[str, Any]) -> str:
-    """A JSON-LD ``<script>`` that no string inside ``data`` can break out of."""
-    body = json.dumps(_drop_empty(data), ensure_ascii=False, separators=(",", ":"))
-    body = (
+def safe_json(data: Any) -> str:
+    """JSON for a ``<script>`` data block that no string inside ``data`` can
+    break out of: ``<``, ``>``, ``&`` and the two JS line separators are
+    escaped (the JSON-LD block and the spec #105 bootstrap block)."""
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return (
         body.replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
         .replace(" ", "\\u2028")
         .replace(" ", "\\u2029")
     )
-    return f'<script type="application/ld+json">{body}</script>'
+
+
+def json_ld_script(data: Dict[str, Any]) -> str:
+    """A JSON-LD ``<script>`` that no string inside ``data`` can break out of."""
+    return f'<script type="application/ld+json">{safe_json(_drop_empty(data))}</script>'
 
 
 def render_head(tags: HeadTags, base_url: Optional[str]) -> str:
@@ -270,52 +287,55 @@ class ShellRenderer:
         return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
 
     def _podcast_or_episode(self, parts: List[str]) -> HeadTags:
-        state = self._state
-        visibility = get_public_visibility(state)
+        """Head tags from the same cached payloads as the public API and the
+        server-written body (spec #105, FM-6)."""
+        from fastapi import HTTPException
+
+        from .routes.api_public import public_episode_models, public_episode_payload, public_podcast_payload
+
+        try:
+            if len(parts) == 2:
+                podcast = public_podcast_payload(self._state, parts[1])["podcast"]
+            else:
+                episode = public_episode_payload(self._state, parts[1], parts[3])["episode"]
+                _, model = public_episode_models(self._state, parts[1], parts[3])
+        except HTTPException:
+            return HeadTags(status_code=404)
         if len(parts) == 2:
-            row = state.repository.get_podcast_row_by_slug(parts[1])
-            if not row or not visibility.podcast_is_public(row["id"]):
-                return HeadTags(status_code=404)
-            _, summarised = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=1)
-            title = row.get("title") or ""
+            title = podcast["title"] or ""
             return HeadTags(
                 title=f"{title} — episode summaries · {SITE_NAME}",
-                description=_first_sentence(row.get("description")) or DEFAULT_DESCRIPTION,
+                description=_first_sentence(podcast["description"]) or DEFAULT_DESCRIPTION,
                 canonical_path=f"/podcasts/{parts[1]}",
-                image=row.get("image_url"),
-                index=summarised > 0,
+                image=podcast["image_url"],
+                index=podcast["summarised_count"] > 0,
                 json_ld={
                     "@context": "https://schema.org",
                     "@type": "PodcastSeries",
                     "name": title,
-                    "description": _clip(row.get("description"), 300),
-                    "image": row.get("image_url"),
-                    "author": {"@type": "Person", "name": row.get("author")} if row.get("author") else None,
+                    "description": _clip(podcast["description"], 300),
+                    "image": podcast["image_url"],
+                    "author": {"@type": "Person", "name": podcast["author"]} if podcast["author"] else None,
                 },
             )
-        result = state.repository.get_episode_by_slug(parts[1], parts[3])
-        if not result:
-            return HeadTags(status_code=404)
-        podcast, episode = result
-        if not visibility.episode_is_public(podcast.id, episode):
-            return HeadTags(status_code=404)
+        show = episode["podcast"]
         return HeadTags(
-            title=f"{episode.title} · {podcast.title} · {SITE_NAME}",
-            description=_first_sentence(episode.summary_preview) or DEFAULT_DESCRIPTION,
+            title=f"{episode['title']} · {show['title']} · {SITE_NAME}",
+            description=_first_sentence(model.summary_preview) or DEFAULT_DESCRIPTION,
             canonical_path=f"/podcasts/{parts[1]}/episodes/{parts[3]}",
             og_type="article",
-            image=episode.image_url or podcast.image_url,
+            image=episode["image_url"],
             index=True,
             json_ld={
                 "@context": "https://schema.org",
                 "@type": "PodcastEpisode",
-                "name": episode.title,
-                "description": _clip(episode.summary_preview, 300),
-                "datePublished": episode.pub_date.isoformat() if episode.pub_date else None,
+                "name": episode["title"],
+                "description": _clip(model.summary_preview, 300),
+                "datePublished": episode["pub_date"],
                 "associatedMedia": (
-                    {"@type": "MediaObject", "contentUrl": str(episode.audio_url)} if episode.audio_url else None
+                    {"@type": "MediaObject", "contentUrl": episode["audio_url"]} if episode["audio_url"] else None
                 ),
-                "partOfSeries": {"@type": "PodcastSeries", "name": podcast.title},
+                "partOfSeries": {"@type": "PodcastSeries", "name": show["title"]},
             },
         )
 

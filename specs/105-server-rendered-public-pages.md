@@ -1,6 +1,6 @@
 # Server-Rendered Content for Public Pages
 
-> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending; Phases 1–4 open
+> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phase 1 (episode pages) implemented 2026-10-21; Phases 2–4 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Google already indexes the public pages. This spec is for Bing, DuckDuckGo and AI answer engines, which today see an empty page body.
@@ -634,6 +634,36 @@ changes no API response shape, and the existing API tests enforce that.
 An old bundle meeting a new shell ignores the marker content after its
 first commit and fetches as today. A new bundle meeting an old shell
 finds no bootstrap block and fetches as today.
+
+## Implementation notes
+
+### Phase 1 (2026-10-21)
+
+- Payload functions live in `api_public.py` (`public_podcast_payload`,
+  `public_podcast_episodes_payload`, `public_episode_payload`,
+  `public_episode_summary_payload`, `public_episode_quotes_payload`, plus
+  `public_episode_models` for the slug lookup), each with its own 120 s
+  `TtlCache` of 1,024 entries. The route, the head tags and the fallback all
+  call them.
+- `TtlCache` gained a cache-only mode (`public_access.cache_only`): the
+  shell first builds from cache and only an uncached build takes one of the
+  `PRERENDER_MAX_CONCURRENT` slots, so a cached page is never shed.
+- The data block names a `publicKeys` factory and its arguments
+  (`{"query": "episodeQuotes", "args": [...], "data": ..., "page_param": 1}`)
+  instead of carrying React Query keys, so each key has one definition, in
+  `api/public.ts`.
+- `React.lazy` suspends on its first render even for a loaded chunk, which
+  would flash a blank frame over the server HTML. The public pages, the
+  public app and `SummaryViewer` are now `preloadable()` components that
+  `main.tsx` preloads before `createRoot`.
+- `public.css` moved into the entry stylesheet, so the fallback is styled
+  before any JavaScript runs (it was a lazy chunk's CSS).
+- The episode page's "Summary" tab label stands in for a heading; there is
+  no visually hidden text in the fallback.
+- Measured locally on 5 random episodes with 3 or more quotes (in-process
+  app against the dev database): 579–731 words of body text, 27–35 KB raw,
+  6–9 KB gzipped, 114–171 ms uncached and 3–7 ms cached, identical bytes
+  for Bingbot and Chrome.
 
 ## Decisions
 

@@ -66,12 +66,22 @@ const AuthContext = createContext<AuthContextType | null>(null)
 
 const AUTH_BASE = '/api/auth'
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({
+  children,
+  initialViewer,
+}: {
+  children: ReactNode
+  // Spec #105 — the server wrote this page for a signed-out visitor (its
+  // data block says so). The public site renders from the first frame;
+  // /api/auth/status then only confirms it, or switches to the app.
+  initialViewer?: 'anonymous'
+}) {
+  const anonymous = initialViewer === 'anonymous'
   const [user, setUser] = useState<User | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [isMultiUser, setIsMultiUser] = useState(false)
+  const [isLoading, setIsLoading] = useState(!anonymous)
+  const [isMultiUser, setIsMultiUser] = useState(anonymous)
   const [emailDeliveryAvailable, setEmailDeliveryAvailable] = useState(false)
-  const [publicPages, setPublicPages] = useState(false)
+  const [publicPages, setPublicPages] = useState(anonymous)
   const [usageAnalyticsAvailable, setUsageAnalyticsAvailable] = useState(false)
   const [analyticsKey, setAnalyticsKey] = useState<string | null>(null)
   const [accountDisabled, setAccountDisabled] = useState(false)

@@ -590,6 +590,12 @@ class Config(BaseModel):
     # Spec #94 — signed-out public pages (API under /api/public, page-shell
     # head tags, robots.txt, sitemap.xml). Multi-user mode only.
     public_pages_enabled: bool = True
+    # Spec #105 — server-written page content inside ``#root`` for signed-out
+    # requests. The env default of the ``public_prerender_enabled`` runtime
+    # switch; the cap bounds uncached builds across the process (over it,
+    # a request gets today's head-only shell).
+    public_prerender_enabled: bool = True
+    prerender_max_concurrent: int = 4
     # OpenAPI docs / redoc. On in dev; on in prod only if explicitly enabled.
     enable_docs: bool = False
     # Spec #95 Layer B — product usage events to PostHog Cloud (EU). Off
@@ -974,6 +980,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "trusted_proxies": [proxy.strip() for proxy in os.getenv("TRUSTED_PROXIES", "").split(",") if proxy.strip()],
         "public_base_url": os.getenv("PUBLIC_BASE_URL", "").rstrip("/"),
         "public_pages_enabled": _env_bool("PUBLIC_PAGES_ENABLED", True),
+        "public_prerender_enabled": _env_bool("PUBLIC_PRERENDER_ENABLED", True),
+        "prerender_max_concurrent": max(1, _env_int("PRERENDER_MAX_CONCURRENT", 4)),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         # Product usage events (spec #95 Layer B)
         "posthog_project_key": os.getenv("POSTHOG_PROJECT_KEY", "").strip(),

@@ -89,6 +89,8 @@ from .dependencies import (
 )
 from .error_handlers import register_abuse_handlers
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
+from .public_access import has_valid_session
+from .public_prerender import Outcome, get_prerenderer, inject_body
 from .public_shell import (
     ROBOTS_PRIVATE,
     ROBOTS_PUBLIC,
@@ -955,6 +957,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             renderer = get_shell_renderer(state)
             if not renderer.enabled:
                 return FileResponse(str(index_file), headers=no_cache)
+            # Spec #105: the body differs for signed-in and anonymous requests.
+            no_cache["Vary"] = "Cookie, Authorization"
             started = time.perf_counter()
             user_agent = request.headers.get("user-agent")
             try:
@@ -976,7 +980,16 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     tags.status_code = 503
                     no_cache = {**no_cache, "Retry-After": "120"}
             html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
-            log_shell_served(full_path, tags.status_code, user_agent, started)
+            # Spec #105: anonymous requests to a public page also get its
+            # main content as HTML plus a data block. Signed-in requests
+            # keep the head-only shell.
+            outcome = Outcome(None, "false")
+            if tags.status_code == 200 and not has_valid_session(request):
+                outcome = get_prerenderer(state).render(full_path, request.url.query)
+            html_text = inject_body(html_text, outcome.body)
+            log_shell_served(
+                full_path, tags.status_code, user_agent, started, prerendered=outcome.prerendered, cache=outcome.cache
+            )
             return HTMLResponse(html_text, status_code=tags.status_code, headers=no_cache)
 
         logger.info("serving_static_frontend", directory=str(static_dir))

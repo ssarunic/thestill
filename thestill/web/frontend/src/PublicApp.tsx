@@ -6,12 +6,8 @@ import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import PublicLayout from './components/public/PublicLayout'
 import PublicPageViews from './analytics/PublicPageViews'
+import { EntityPage, Episode, Landing, Show, TopChart } from './pages/public/registry'
 
-const Landing = lazy(() => import('./pages/public/Landing'))
-const TopChart = lazy(() => import('./pages/public/TopChart'))
-const Show = lazy(() => import('./pages/public/Show'))
-const Episode = lazy(() => import('./pages/public/Episode'))
-const EntityPage = lazy(() => import('./pages/public/EntityPage'))
 const Legal = lazy(() => import('./pages/public/Legal'))
 const NotFound = lazy(() => import('./pages/public/NotFound'))
 const Login = lazy(() => import('./pages/Login'))

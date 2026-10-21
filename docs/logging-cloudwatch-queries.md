@@ -261,7 +261,7 @@ filter message = "llm_usage" and ispresent(episode_id)
 
 ## Public Page Crawlers
 
-Each public page response (landing, `/top`, podcast, episode and entity pages) logs one `public_shell.served` event with `kind`, `status`, `ua_family` and `ms` (spec #105 §5). `ua_family` names the crawler (`googlebot`, `bingbot`, `oai-searchbot`, `chatgpt-user`, `gptbot`, `claude-searchbot`, `claude-user`, `claudebot`, `perplexitybot`, `perplexity-user`, `ccbot`, `meta-externalagent`, `bytespider`, `applebot`, `duckduckbot`) or falls back to `other-bot`, `preview` or `browser`. The event carries no IP and no full user agent. The family comes from the user agent alone, so a spoofed agent counts as the crawler it claims to be.
+Each public page response (landing, `/top`, podcast, episode and entity pages) logs one `public_shell.served` event with `kind`, `status`, `ua_family`, `prerendered`, `cache` and `ms` (spec #105 §5). `prerendered` is `true` when the response carried server-written page content, `shed` when the concurrency cap sent the head-only shell instead, and `false` otherwise (signed-in request, switch off, error page, or a page kind without content yet); `cache` is `hit` when every payload came from cache. `ua_family` names the crawler (`googlebot`, `bingbot`, `oai-searchbot`, `chatgpt-user`, `gptbot`, `claude-searchbot`, `claude-user`, `claudebot`, `perplexitybot`, `perplexity-user`, `ccbot`, `meta-externalagent`, `bytespider`, `applebot`, `duckduckbot`) or falls back to `other-bot`, `preview` or `browser`. The event carries no IP and no full user agent. The family comes from the user agent alone, so a spoofed agent counts as the crawler it claims to be.
 
 ### Shell Fetches per Crawler per Day
 
@@ -278,6 +278,16 @@ filter message = "public_shell.served" and ua_family not in ["browser", "preview
 | stats count(*) as fetches, pct(ms, 95) as p95_ms by ua_family, kind, status
 | sort fetches desc
 ```
+
+### Server-Written Content: Prerender and Shed Rates
+
+```sql
+filter message = "public_shell.served" and status = 200
+| stats count(*) as responses, pct(ms, 95) as p95_ms by bin(1h) as hour, kind, prerendered, cache
+| sort hour desc, responses desc
+```
+
+A steady `shed` count means crawl bursts exceed `PRERENDER_MAX_CONCURRENT`; a failure while building logs `public_prerender.failed` (warning) and the page falls back to the head-only shell.
 
 Training crawlers (`gptbot`, `claudebot`, `ccbot`, `meta-externalagent`, `bytespider`) are disallowed in `robots.txt`, so any fetches from them after the robots change are either a crawler ignoring it or a spoofed agent.
 

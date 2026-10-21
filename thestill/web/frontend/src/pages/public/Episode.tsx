@@ -1,6 +1,6 @@
 // Spec #94 — a public episode: the summary, who spoke and their best
 // lines. The transcript exists behind sign-in; the tab says so.
-import { lazy, Suspense, useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
 import {
@@ -14,6 +14,7 @@ import {
   SignInCard,
   Skeleton,
 } from '../../components/public/ui'
+import { PublicSummaryViewer as SummaryViewer } from '../../components/public/summaryViewer'
 import { useSignIn } from '../../components/public/helpers'
 import { deepLinkParam } from '../../hooks/useDeepLinkSeek'
 import {
@@ -24,7 +25,6 @@ import {
 } from '../../hooks/usePublicApi'
 import NotFound, { ModuleError } from './NotFound'
 
-const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
 
 // The signed-in reader's section names (EntityRail).
 const MENTIONED_TITLES = {

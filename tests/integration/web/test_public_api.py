@@ -575,7 +575,7 @@ def test_top_chart_region_follows_the_visitor_then_the_us(anon, app_state, monke
 
 def test_episode_quotes_page_filter_and_find_a_linked_quote_anywhere(anon, app_state, monkeypatch):
     _seed_people(app_state)
-    monkeypatch.setattr(api_public, "_QUOTE_PAGE", 1)
+    monkeypatch.setattr(api_public, "_EPISODE_QUOTE_PAGE", 1)
     url = "/api/public/podcasts/public-show/episodes/summarised/quotes"
 
     first = anon.get(url, params={"q": 185}).json()

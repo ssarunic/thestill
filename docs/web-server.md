@@ -204,7 +204,7 @@ stale-while-revalidate=300`; a request carrying a credential gets
 | `/api/public/podcasts/{slug}/episodes` | GET | Summarised episodes, newest first (`?limit=` ≤50, `?offset=`) |
 | `/api/public/podcasts/{slug}/episodes/{episode}` | GET | Episode metadata, hosts/guests, platform links, `has_transcript` |
 | `/api/public/podcasts/{slug}/episodes/{episode}/summary` | GET | Stored summary (`?lang=` only if already translated; never calls an LLM) |
-| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes; `?q=<seconds>` returns the quote within 5 s as `linked` (the page's URL carries it as `?t=`, the reader's deep-link parameter); `?speaker=<slug>` and `?page=` page through the rest |
+| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes, 6 per page (spec #105 decision 2); `?q=<seconds>` returns the quote within 5 s as `linked` (the page's URL carries it as `?t=`, the reader's deep-link parameter); `?speaker=<slug>` and `?page=` page through the rest |
 | `/api/public/recent-summaries` | GET | Latest summarised episodes across public shows (≤12) |
 | `/api/public/top-podcasts` | GET | Apple chart; hidden shows lose their link |
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |
@@ -230,6 +230,35 @@ canonical, Open Graph and JSON-LD into `index.html`, and answers 404 +
 paths and blocks the signed-in app; `/sitemap.xml` lists public shows,
 episodes and indexable entities (a sitemap index past 40k URLs). In
 single-user mode `robots.txt` disallows everything.
+
+**Server-written content (spec #105).** For a signed-out request to a
+public episode page, the shell also writes the page's main content inside
+`#root` (h1, summary lead, the first 6 quotes, people, links) and a
+`<script type="application/json" id="thestill-bootstrap">` data block, both
+built from the same cached payloads as `/api/public`
+(`thestill/web/public_prerender.py`). The app seeds React Query from the
+block and preloads the page's chunks before its first render, so
+`createRoot` swaps the server HTML for the same page with no blank frame
+and no repeat API calls. Every user agent gets the same bytes; signed-in
+requests, a URL with a query string (header only), the runtime switch
+(`thestill settings set public_prerender_enabled false`) and the
+`PRERENDER_MAX_CONCURRENT` cap fall back to the head-only shell. To see
+what a crawler without JavaScript reads:
+
+```bash
+./venv/bin/python scripts/body_word_count.py https://thestill.me/podcasts/<show>/episodes/<episode>
+./venv/bin/python scripts/body_word_count.py --text --ua chrome <url>   # print the text too
+```
+
+Fallback checklist when a public page changes:
+
+- New visible text on a prerendered page: add it to the fallback builder
+  if crawlers should read it, and to `UI_STRINGS` if it is fixed UI text
+  (`test_public_prerender.py` fails on any text the page does not show).
+- Content behind a click, sign-in or a later page never goes in the
+  fallback, and neither do transcripts.
+- A new public query: add its key to `publicKeys` in `api/public.ts`
+  and, if the server seeds it, an entry name the seeder test covers.
 
 **Frontend.** A signed-out visitor gets `PublicApp` (lazy-loaded), styled
 with the scoped `.public-theme` tokens in `src/styles/public.css`. Signed-in

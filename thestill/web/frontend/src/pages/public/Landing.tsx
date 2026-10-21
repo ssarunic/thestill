@@ -1,6 +1,6 @@
 // Spec #94 — the landing page: what thestill is in one screen, one real
 // summary, one subject heard across several shows, and what signing in adds.
-import { lazy, Suspense } from 'react'
+import { Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import { entityPath, episodePath, formatDate } from '../../api/public'
 import {
@@ -11,9 +11,9 @@ import {
   QuoteSkeleton,
   Skeleton,
 } from '../../components/public/ui'
+import { PublicSummaryViewer as SummaryViewer } from '../../components/public/summaryViewer'
 import { usePublicRecentSummaries, usePublicSummary, usePublicWhoSaidWhat } from '../../hooks/usePublicApi'
 
-const SummaryViewer = lazy(() => import('../../components/SummaryViewer'))
 
 function LatestSummary() {
   const recent = usePublicRecentSummaries(1)
