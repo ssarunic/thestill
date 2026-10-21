@@ -16,11 +16,7 @@
 
 import pytest
 
-from thestill.utils.log_safety import (
-    log_safety_processor,
-    redact_mapping,
-    sanitize_control_chars,
-)
+from thestill.utils.log_safety import log_safety_processor, redact_mapping, sanitize_control_chars
 
 
 class TestRedactMapping:
@@ -42,6 +38,43 @@ class TestRedactMapping:
     def test_sensitive_keys_redacted(self, key):
         out = redact_mapping({key: "s3cret"})
         assert out[key] == "[redacted]"
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("status_code", 200),
+            ("input_tokens", 1200),
+            ("output_tokens", 300),
+            ("thinking_tokens", 50),
+            ("cached_tokens", 0),
+            ("exit_code", 1),
+            ("token_revoked", True),
+            ("codec", "mp3"),
+            ("circuit_state", "open"),
+            ("from_state", "closed"),
+            ("stateless", True),
+            ("stated_word_target", 1200),
+        ],
+    )
+    def test_counts_statuses_and_lookalike_keys_pass_through(self, key, value):
+        """``llm_usage`` token counts and ``http_request_completed``
+        status codes were logged as ``[redacted]`` on prod."""
+        assert redact_mapping({key: value}) == {key: value}
+
+    @pytest.mark.parametrize(
+        ("key", "value"),
+        [
+            ("code", 123456),  # a bare secret key, even numeric
+            ("token", 42),
+            ("auth_token", "abc"),
+            ("oauth_code", "xyz"),
+            ("oauth_state", "csrf"),
+            ("csrf_state", "csrf"),
+            ("session_key", "k"),
+        ],
+    )
+    def test_secrets_stay_redacted(self, key, value):
+        assert redact_mapping({key: value}) == {key: "[redacted]"}
 
     def test_non_sensitive_keys_passed_through(self):
         out = redact_mapping({"podcast_title": "Tech News", "episode_id": "abc"})
@@ -66,7 +99,7 @@ class TestRedactMapping:
 
 class TestSanitizeControlChars:
     def test_crlf_escaped(self):
-        out = sanitize_control_chars("title\r\n{\"injected\":true}")
+        out = sanitize_control_chars('title\r\n{"injected":true}')
         assert "\r" not in out
         assert "\n" not in out
         assert "\\x0d" in out or "\\x0a" in out
@@ -95,7 +128,7 @@ class TestProcessor:
         event = {
             "event": "webhook_received",
             "token": "supersecret",
-            "podcast_title": "Evil\r\n{\"forged\":true}",
+            "podcast_title": 'Evil\r\n{"forged":true}',
             "nested": {"password": "hunter2", "count": 3},
         }
         out = log_safety_processor(None, "info", event)
