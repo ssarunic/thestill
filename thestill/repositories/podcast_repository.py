@@ -949,3 +949,16 @@ class EpisodeRepository(ABC):
             )
         """
         pass
+
+    @abstractmethod
+    def clear_episode_failures(self, episode_ids: Sequence[str]) -> int:
+        """Clear the failure state (stage, reason, type, timestamp) of many
+        episodes in one write.
+
+        Called by the DLQ "retry all" endpoint after it requeues dead tasks.
+        Duplicate and unknown ids are ignored.
+
+        Returns:
+            Number of episode rows updated.
+        """
+        pass

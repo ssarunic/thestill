@@ -48,6 +48,17 @@ from ..task_manager import TaskStatus, TaskType
 
 logger = get_logger(__name__)
 
+# Lock, timeout and connection errors from either storage backend. The DLQ
+# retry-all failure-banner clear tolerates these: the requeue has already
+# landed by then, so a lost clear must not turn the retry into a 500.
+_DB_OPERATIONAL_ERRORS: tuple[type[Exception], ...] = (sqlite3.OperationalError,)
+try:
+    import psycopg
+
+    _DB_OPERATIONAL_ERRORS += (psycopg.OperationalError,)
+except ImportError:  # the optional ``postgres`` extra is not installed
+    pass
+
 # Plain-auth commands (session required via the router-level require_auth
 # applied at registration in app.py).
 router = APIRouter()
@@ -1804,16 +1815,20 @@ def retry_all_dlq_tasks(
     # episode-scoped tasks record episode-level failure). A lock loss here is
     # non-fatal — the requeue already landed, and each banner self-clears on the
     # task's next successful stage via ``clear_episode_failure_for_stages`` — so
-    # don't let a cosmetic clear turn a successful retry into a 500.
+    # don't let a cosmetic clear turn a successful retry into a 500. The two
+    # clears are independent: losing the episode one must not leave feeds parked.
     episode_ids = [t.episode_id for t in dead_tasks if t.id in retried_set and t.podcast_id is None]
     podcast_ids = [t.podcast_id for t in dead_tasks if t.id in retried_set and t.podcast_id is not None]
-    try:
-        if episode_ids:
+    if episode_ids:
+        try:
             state.repository.clear_episode_failures(episode_ids)
-        if podcast_ids:
+        except _DB_OPERATIONAL_ERRORS as e:
+            logger.warning("dlq_retry_all_clear_failure_lock", target="episode", error=str(e), retried=len(retried_ids))
+    if podcast_ids:
+        try:
             state.repository.clear_podcast_refresh_failures(podcast_ids, get_default_refresh_interval_seconds())
-    except sqlite3.OperationalError as e:
-        logger.warning("dlq_retry_all_clear_failure_lock", error=str(e), retried=len(retried_ids))
+        except _DB_OPERATIONAL_ERRORS as e:
+            logger.warning("dlq_retry_all_clear_failure_lock", target="podcast", error=str(e), retried=len(retried_ids))
 
     return DLQBulkRetryResponse(
         status="ok",

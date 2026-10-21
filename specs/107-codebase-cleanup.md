@@ -1,6 +1,6 @@
 # Codebase Cleanup: Dead Code, Inert Flags, One-Off Tools and Duplication
 
-> **Status:** 📝 Draft (2026-10-21)
+> **Status:** 🚧 Phase 1 implemented (2026-10-21); Phases 0, 2–7 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. One live prod bug (Phase 1) comes out of this audit. The rest is cost of carrying: about 3,500 lines of unused production code, flags that do nothing, and SQLite/Postgres twins that have already shipped three parity bugs.
@@ -504,7 +504,7 @@ Apply whichever option D3 picks for the reranker and entity leg,
 ## Tracking
 
 - [ ] Phase 0: inventory appendix, endpoint hit counts, vulture comment fix
-- [ ] Phase 1: DLQ retry-all on Postgres
+- [x] Phase 1: DLQ retry-all on Postgres
 - [ ] Phase 2: ElevenLabs webhook pending-op cleanup
 - [ ] Phase 3: dead code (Python, frontend)
 - [ ] Phase 4: inert configuration and docs
