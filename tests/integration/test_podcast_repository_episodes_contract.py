@@ -594,6 +594,32 @@ def test_clear_episode_failure_for_stages_is_scoped(h):
     assert got.failed_at_stage is None
 
 
+def test_clear_episode_failures_bulk(h):
+    # DLQ "retry all" clears many banners in one write (spec #107 Phase 1:
+    # this was SQLite-only, so the endpoint 500'd on Postgres).
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    eps = [_mk_episode(pid, uid, n) for n in (1, 2, 3)]
+    for ep in eps:
+        h.repo.save_episode(ep)
+        h.repo.mark_episode_failed(ep.id, "transcribe", "boom", "fatal")
+    first, second, untouched = eps
+
+    assert h.repo.clear_episode_failures([]) == 0
+    # Duplicates and unknown ids are ignored; only real rows count.
+    assert h.repo.clear_episode_failures([first.id, second.id, first.id, MISSING_ID]) == 2
+
+    for ep in (first, second):
+        _, got = h.repo.get_episode(ep.id)
+        assert got.failed_at_stage is None
+        assert got.failure_reason is None
+        assert got.failure_type is None
+        assert got.failed_at is None
+    _, got = h.repo.get_episode(untouched.id)
+    assert got.failed_at_stage == "transcribe"
+    assert [e.id for _, e in h.repo.get_failed_episodes()] == [untouched.id]
+
+
 # ---------------------------------------------------------------------------
 # get_all_episodes — filters, sorting, pagination
 # ---------------------------------------------------------------------------

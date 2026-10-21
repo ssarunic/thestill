@@ -1038,6 +1038,35 @@ class EpisodesMixin(CategoryCacheMixin):
                 logger.warning(f"Failed to clear failure for episode {episode_id}: not found")
             return updated
 
+    def clear_episode_failures(self, episode_ids: Sequence[str]) -> int:
+        """Bulk variant of :meth:`clear_episode_failure` for the DLQ "retry
+        all" endpoint (previously MISSING on Postgres, so that endpoint
+        returned 500 after the requeue had already landed — spec #107
+        Phase 1). One ``= ANY(%s)`` update; no chunking needed (Postgres has
+        no SQLite-style parameter ceiling). Returns the number of rows updated.
+        """
+        ids = list(dict.fromkeys(episode_ids))  # de-dupe, preserve order
+        if not ids:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        with connect(self.dsn) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE episodes
+                SET failed_at_stage = NULL,
+                    failure_reason = NULL,
+                    failure_type = NULL,
+                    failed_at = NULL,
+                    updated_at = %s
+                WHERE id = ANY(%s)
+                """,
+                (now, ids),
+            )
+            updated = cursor.rowcount or 0
+        logger.info("Bulk-cleared episode failure state", requested=len(ids), updated=updated)
+        return updated
+
     def clear_episode_failure_for_stages(self, episode_id: str, stages: Sequence[str]) -> bool:
         """Clear an episode's failure banner only if it was recorded at one of ``stages``.
 
