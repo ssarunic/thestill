@@ -60,6 +60,10 @@ class SummaryManifest(BaseModel):
     # GENERAL.version: those summaries are general v1 forever.
     profile: str = "general"
     profile_version: int = 1
+    # Spec #106: the LLM that wrote it, so a reprocessed summary can be told
+    # from the one it replaced. None on manifests written before this field.
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 class SummaryTranslationMetadata(BaseModel):
@@ -80,18 +84,24 @@ def write_summary_manifest(
     summary_content: str,
     canonical_language: str,
     profile: Optional[SummaryProfile] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> SummaryManifest:
     """Persist canonical summary language and profile metadata after the summary write.
 
     ``profile`` is the one that just produced the summary. Leave it out only
     when recording a manifest for an existing legacy summary: that keeps the
     model's ``general`` v1 defaults rather than claiming today's version.
+    ``provider`` and ``model`` name the LLM that wrote the summary; leave
+    them out when it is not known.
     """
 
     provenance = {"profile": profile.key, "profile_version": profile.version} if profile else {}
     manifest = SummaryManifest(
         canonical_language=normalize_language_code(canonical_language),
         summary_sha256=content_sha256(summary_content),
+        provider=provider,
+        model=model,
         **provenance,
     )
     file_storage.write_text(summary_manifest_key(summary_key), manifest.model_dump_json(indent=2))

@@ -32,6 +32,7 @@ ROUTERS = [(api_episodes.router, "/api/episodes")]
 ADMIN_ENDPOINTS = [
     ("POST", "/api/episodes/bulk/process", {"episode_ids": ["ep-1"]}),
     ("POST", "/api/episodes/ep-1/retry", None),
+    ("POST", "/api/episodes/ep-1/reprocess", {"from_stage": "clean"}),
     ("GET", "/api/episodes", None),
     ("GET", "/api/episodes/failed", None),
     ("GET", "/api/episodes/ep-1/failure", None),

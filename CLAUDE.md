@@ -45,6 +45,11 @@ thestill summarize                  # 6. Summarize
 
 # All commands support: --podcast-id, --max-episodes, --dry-run
 
+# Re-run one processed episode from a stage, through summarize and the
+# entity branch (spec #106); queued for the web server's worker. Also in the
+# episode page's ⋯ menu for admins:
+thestill reprocess --podcast-id X --episode <slug> --from transcribe|clean|summarize|entities [--refresh-episode-facts] [--dry-run]
+
 # Per-episode Apple / Spotify / YouTube links (spec #87) resolve after every
 # refresh; backfill or debug with:
 thestill link-platforms [--podcast-id X] [--dry-run] [--force]

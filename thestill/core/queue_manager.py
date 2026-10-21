@@ -1577,6 +1577,26 @@ class QueueManager:
 
             return cursor.fetchone() is not None
 
+    def has_active_task_for_episode(self, episode_id: str) -> bool:
+        """
+        Check if an episode has a pending, processing, or retry_scheduled task in any stage.
+
+        Spec #106: a reprocess is refused while anything is in flight for
+        the episode, so it never merges into a plain queued task (whose
+        metadata would win) or races a running stage.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT 1 FROM tasks
+                WHERE episode_id = ? AND status IN ('pending', 'processing', 'retry_scheduled')
+                LIMIT 1
+            """,
+                (episode_id,),
+            )
+
+            return cursor.fetchone() is not None
+
     def get_pending_count(self) -> int:
         """
         Get the count of pending tasks.

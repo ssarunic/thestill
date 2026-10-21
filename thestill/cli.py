@@ -4304,6 +4304,70 @@ def relink_direct(ctx, podcast_id, since, max_episodes, all_links, max_open_task
     click.echo(f"✓ Reset {reset:,} mention(s); enqueued resolve-entities for {len(plan.episode_ids):,} episode(s)")
 
 
+@main.command("reprocess")
+@click.option("--episode-id", help="Episode UUID.")
+@click.option("--podcast-id", help="Podcast UUID or slug (with --episode).")
+@click.option("--episode", "episode_slug", help="Episode slug (with --podcast-id).")
+@click.option(
+    "--from",
+    "from_stage",
+    required=True,
+    type=click.Choice(["transcribe", "clean", "summarize", "entities"]),
+    help="Re-run this stage and every stage after it.",
+)
+@click.option("--refresh-episode-facts", is_flag=True, help="Re-extract speaker names and guests (transcribe/clean).")
+@click.option("--dry-run", "-d", is_flag=True, help="Check and show the starting stage without queueing.")
+@click.pass_context
+@require_config
+@log_command
+def reprocess(ctx, episode_id, podcast_id, episode_slug, from_stage, refresh_episode_facts, dry_run):
+    """Re-run one episode from a stage, through summarize and the entity branch (spec #106).
+
+    Queues the run for the web server's worker; nothing runs in this
+    process. Readers keep the current transcript and summary until the
+    run replaces them.
+    """
+    from .services.episode_reprocess import ReprocessRejected, queue_reprocess
+
+    repository = ctx.obj.repository
+    if episode_id:
+        found = repository.get_episode(episode_id)
+    elif podcast_id and episode_slug:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        found = repository.get_episode_by_slug(podcast.slug, episode_slug) if podcast else None
+    else:
+        raise click.UsageError("Pass --episode-id, or --podcast-id with --episode.")
+    if not found:
+        click.echo("❌ Episode not found", err=True)
+        ctx.exit(1)
+    _podcast, episode = found
+
+    try:
+        queued = queue_reprocess(
+            repository=repository,
+            queue_manager=make_queue_manager(ctx.obj.config),
+            config=ctx.obj.config,
+            episode_id=episode.id,
+            from_stage=from_stage,
+            refresh_episode_facts=refresh_episode_facts,
+            requested_by="cli",
+            dry_run=dry_run,
+        )
+    except ReprocessRejected as rejected:
+        click.echo(f"❌ {rejected}", err=True)
+        ctx.exit(1)
+
+    if dry_run:
+        click.echo(
+            f"Would reprocess {queued.episode_title} from {from_stage}, starting at {queued.starting_stage.value}"
+        )
+        return
+    click.echo(
+        f"✓ Queued {queued.episode_title} from {from_stage}, starting at {queued.starting_stage.value} "
+        f"(task {queued.task_id}). The web server's worker runs it."
+    )
+
+
 @main.command("rebuild-entities")
 @click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
 @click.option("--since", help="Only episodes published in this window (e.g. 30d, 24h, 2w).")

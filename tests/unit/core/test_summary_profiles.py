@@ -366,6 +366,33 @@ def test_manifest_written_before_profiles_existed_reads_as_general_v1(tmp_path):
     assert (manifest.profile, manifest.profile_version) == ("general", 1)
 
 
+def test_manifest_records_the_llm_that_wrote_the_summary(tmp_path):
+    # Spec #106: a reprocessed summary can be told from the one it replaced.
+    storage = LocalFileStorage(str(tmp_path))
+    write_summary_manifest(
+        storage,
+        summary_key="s/ep_summary.md",
+        summary_content="body",
+        canonical_language="en",
+        provider="gemini",
+        model="gemini-3-flash-preview",
+    )
+
+    manifest = load_valid_summary_manifest(storage, summary_key="s/ep_summary.md", summary_content="body")
+    assert (manifest.provider, manifest.model) == ("gemini", "gemini-3-flash-preview")
+
+
+def test_manifest_without_the_llm_fields_reads_as_unknown(tmp_path):
+    storage = LocalFileStorage(str(tmp_path))
+    storage.write_text(
+        summary_manifest_key("s/ep_summary.md"),
+        json.dumps({"schema_version": 1, "canonical_language": "en", "summary_sha256": content_sha256("body")}),
+    )
+
+    manifest = load_valid_summary_manifest(storage, summary_key="s/ep_summary.md", summary_content="body")
+    assert (manifest.provider, manifest.model) == (None, None)
+
+
 def test_legacy_backfill_without_a_profile_records_general_v1_not_the_current_version(tmp_path):
     assert GENERAL.version > 1
     manifest = write_summary_manifest(

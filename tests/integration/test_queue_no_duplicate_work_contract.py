@@ -247,3 +247,30 @@ class TestHealer:
         failed_id = _failed_infra_task(qm, EP)
         healed = qm.heal_task(failed_id, max_heal_attempts=2)
         assert healed is not None and healed.status == TaskStatus.PENDING
+
+
+class TestHasActiveTaskForEpisode:
+    """Spec #106 — the reprocess guard looks at every stage of one episode."""
+
+    def test_no_tasks_is_inactive(self, qm):
+        assert qm.has_active_task_for_episode(EP) is False
+
+    def test_queued_running_and_retry_scheduled_tasks_in_any_stage_count(self, qm):
+        qm.add_task(episode_id=EP, stage=TaskStage.REINDEX)
+        assert qm.has_active_task_for_episode(EP) is True
+        assert qm.has_active_task_for_episode(EP2) is False
+
+        running = qm.get_next_task()
+        assert running.stage == TaskStage.REINDEX
+        assert qm.has_active_task_for_episode(EP) is True
+
+        qm.schedule_retry(running.id, "timeout")
+        assert qm.get_task(running.id).status == TaskStatus.RETRY_SCHEDULED
+        assert qm.has_active_task_for_episode(EP) is True
+
+    def test_dead_and_completed_tasks_do_not_count(self, qm):
+        _dead_task(qm, EP)
+        done = qm.add_task(episode_id=EP, stage=TaskStage.CLEAN)
+        qm.get_next_task()
+        qm.complete_task(done.id)
+        assert qm.has_active_task_for_episode(EP) is False

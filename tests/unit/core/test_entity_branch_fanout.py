@@ -205,3 +205,47 @@ class TestEntityBranchAlwaysChains:
         worker, queue = _make_worker()
         worker._maybe_enqueue_next_stage(self._bare_task(TaskStage.CLEAN))
         queue.add_task.assert_not_called()
+
+
+class TestReprocessChain:
+    """Spec #106 — a reprocess run walks the whole chain and stays a reprocess."""
+
+    METADATA = {
+        "run_full_pipeline": True,
+        "initiated_by": "reprocess",
+        "reprocess": {"from_stage": "clean", "requested_at": "2026-10-21T12:00:00+00:00"},
+    }
+
+    def _walk(self, start: TaskStage) -> list[TaskStage]:
+        worker, queue = _make_worker()
+        queue.episode_unwanted.return_value = True  # an operator tag ignores this
+        stage, walked = start, [start]
+        while True:
+            queue.add_task.reset_mock()
+            worker._maybe_enqueue_next_stage(
+                Task(
+                    id="t",
+                    episode_id="episode-uuid",
+                    stage=stage,
+                    status=TaskStatus.COMPLETED,
+                    metadata=self.METADATA,
+                )
+            )
+            if not queue.add_task.called:
+                return walked
+            call = queue.add_task.call_args
+            assert call.kwargs["metadata"]["reprocess"] == self.METADATA["reprocess"]
+            stage = call.kwargs["stage"]
+            walked.append(stage)
+
+    def test_clean_runs_through_summarize_and_the_entity_branch(self):
+        assert self._walk(TaskStage.CLEAN) == [
+            TaskStage.CLEAN,
+            TaskStage.SUMMARIZE,
+            TaskStage.EXTRACT_ENTITIES,
+            TaskStage.RESOLVE_ENTITIES,
+            TaskStage.REINDEX,
+            TaskStage.REBUILD_COOCCURRENCES,
+            TaskStage.COMPUTE_RELATED,
+            TaskStage.ENRICH_ENTITIES,
+        ]

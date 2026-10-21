@@ -57,6 +57,7 @@ Commands below).
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
 | `/api/episodes/{id}/failure` | GET | Get failure details |
 | `/api/episodes/{id}/retry` | POST | Clear failure and retry |
+| `/api/episodes/{id}/reprocess` | POST | Re-run an episode from a stage onwards (spec #106) |
 
 ### Commands (`/api/commands`)
 
@@ -374,7 +375,7 @@ operator-only surface requires an admin session (`require_admin`):
 
 - Manual pipeline triggers: `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}` and `POST /api/commands/episode/{id}/cancel-pipeline`
 - Queue and DLQ management: `/api/commands/queue/*`, `/api/commands/dlq*`
-- Bulk processing and retries: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`
+- Bulk processing, retries and reprocessing: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`, `POST /api/episodes/{id}/reprocess`
 - Corpus-wide episode browser and failure details: `GET /api/episodes`, `GET /api/episodes/failed`, `GET /api/episodes/{id}/failure` (non-admins get `failure_reason: null` on the podcast episode routes too)
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)

@@ -18,15 +18,17 @@ Episodes API endpoints for Thestill web UI.
 Provides cross-podcast episode listing, search, and bulk operations.
 """
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from structlog import get_logger
 
 from ...core.queue_manager import TaskStage
+from ...core.reprocess_metadata import reprocess_options
 from ...models.podcast import EpisodeState
 from ...models.user import User
+from ...services.episode_reprocess import ReprocessRejected, queue_reprocess
 from ...services.playback import build_playback_manifest
 from ...services.podcast_service import resolve_summary_preview
 from ...utils.duration import format_duration
@@ -300,6 +302,22 @@ class EpisodeRetryResponse(BaseModel):
     stage: Optional[str] = None
 
 
+class EpisodeReprocessRequest(BaseModel):
+    """Spec #106 — reprocess an episode from ``from_stage`` onwards."""
+
+    from_stage: Literal["transcribe", "clean", "summarize", "entities"]
+    refresh_episode_facts: bool = False
+
+
+class EpisodeReprocessResponse(BaseModel):
+    status: str
+    message: str
+    episode_id: str
+    task_id: str
+    from_stage: str
+    starting_stage: str
+
+
 class FailedEpisodeListResponse(BaseModel):
     """Response for listing failed episodes."""
 
@@ -396,6 +414,54 @@ def get_episode_failure(
     )
 
 
+@router.post("/{episode_id}/reprocess", response_model=EpisodeReprocessResponse)
+def reprocess_episode(
+    episode_id: str,
+    request: EpisodeReprocessRequest,
+    app_state: AppState = Depends(get_app_state),
+    user: User = Depends(require_admin),
+) -> EpisodeReprocessResponse:
+    """Re-run ``from_stage`` and every stage after it (spec #106).
+
+    Readers keep the current transcript and summary until the run replaces
+    them. 404 for an unknown episode, 400 when the stage's input is
+    missing, 409 when the episode already has a task queued or running.
+    """
+    try:
+        queued = queue_reprocess(
+            repository=app_state.repository,
+            queue_manager=app_state.queue_manager,
+            config=app_state.config,
+            episode_id=episode_id,
+            from_stage=request.from_stage,
+            refresh_episode_facts=request.refresh_episode_facts,
+            requested_by=user.id,
+        )
+    except ReprocessRejected as rejected:
+        if rejected.kind == "not_found":
+            not_found("Episode", episode_id)
+        if rejected.kind == "busy":
+            conflict(str(rejected))
+        bad_request(str(rejected))
+
+    return EpisodeReprocessResponse(
+        status="ok",
+        message=f"{queued.episode_title} queued for reprocessing from {queued.from_stage}",
+        episode_id=queued.episode_id,
+        task_id=queued.task_id,
+        from_stage=queued.from_stage,
+        starting_stage=queued.starting_stage.value,
+    )
+
+
+def _failed_reprocess_options(queue_manager, episode_id: str, stage: TaskStage) -> Optional[dict]:
+    """The ``reprocess`` block of the latest task of ``stage``, if that run was one."""
+    for task in queue_manager.get_tasks_for_episode(episode_id):  # newest first
+        if task.stage == stage:
+            return reprocess_options(task.metadata)
+    return None
+
+
 @router.post("/{episode_id}/retry", response_model=EpisodeRetryResponse)
 def retry_failed_episode(
     episode_id: str,
@@ -449,11 +515,13 @@ def retry_failed_episode(
     # (retry_stage → … → summarize + entity branch), not just the one failed
     # stage. Without this the episode stops again the moment the retried stage
     # succeeds — e.g. a retried transcribe would never auto-advance to clean.
-    task = app_state.queue_manager.add_task(
-        episode_id,
-        retry_stage,
-        metadata={"run_full_pipeline": True, "initiated_by": "episode-retry"},
-    )
+    metadata = {"run_full_pipeline": True, "initiated_by": "episode-retry"}
+    # Spec #106: a failed reprocess carries on as a reprocess, so the
+    # rest of the run still re-transcribes, refreshes facts and re-embeds.
+    reprocess = _failed_reprocess_options(app_state.queue_manager, episode_id, retry_stage)
+    if reprocess:
+        metadata["reprocess"] = reprocess
+    task = app_state.queue_manager.add_task(episode_id, retry_stage, metadata=metadata)
 
     return EpisodeRetryResponse(
         status="ok",

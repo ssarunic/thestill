@@ -34,6 +34,8 @@ import type {
   EpisodeFailure,
   FailedEpisodesResponse,
   EpisodeRetryResponse,
+  EpisodeReprocessRequest,
+  EpisodeReprocessResponse,
   RunPipelineRequest,
   RunPipelineResponse,
   CancelPipelineResponse,
@@ -466,6 +468,27 @@ export async function getEpisodeFailure(episodeId: string): Promise<EpisodeFailu
 export async function retryFailedEpisode(episodeId: string): Promise<EpisodeRetryResponse> {
   const response = await fetch(`${API_BASE}/episodes/${episodeId}/retry`, {
     method: 'POST',
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    const message = apiErrorMessage(error, response.status)
+    throw new Error(message)
+  }
+
+  return response.json()
+}
+
+export async function reprocessEpisode(
+  episodeId: string,
+  request: EpisodeReprocessRequest,
+): Promise<EpisodeReprocessResponse> {
+  const response = await fetch(`${API_BASE}/episodes/${episodeId}/reprocess`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
   })
 
   if (!response.ok) {

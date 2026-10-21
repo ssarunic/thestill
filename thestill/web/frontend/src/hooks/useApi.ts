@@ -41,6 +41,7 @@ import {
   getFailedEpisodes,
   getEpisodeFailure,
   retryFailedEpisode,
+  reprocessEpisode,
   runPipeline,
   cancelPipeline,
   followPodcast,
@@ -68,7 +69,7 @@ import {
   markBriefingListened,
   markBriefingOpened,
 } from '../api/client'
-import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -723,17 +724,24 @@ export function useEpisodeTasks(
   })
 }
 
-// Entity-branch stages whose completion changes what the reader renders, and
-// the per-episode query each one makes stale. The episode entities endpoint
+// Stages whose completion changes what the reader renders, and the
+// per-episode query each one makes stale. The episode entities endpoint
 // returns resolved mentions only, so `extract-entities` alone changes nothing.
-const ENTITY_BRANCH_REFRESH_TARGETS: Partial<Record<PipelineStage, 'entities' | 'related'>> = {
+// `clean` and `summarize` matter on a reprocess (spec #106): they overwrite
+// the transcript and summary of an episode that stays `summarized`
+// throughout, so no state change marks the new content arriving.
+type RefreshTarget = 'entities' | 'related' | 'transcript' | 'summary'
+const STAGE_REFRESH_TARGETS: Partial<Record<PipelineStage, RefreshTarget>> = {
   'resolve-entities': 'entities',
   'compute-related': 'related',
+  clean: 'transcript',
+  summarize: 'summary',
 }
 
 /**
  * Refetch the entity strip/rail and the Related-episodes rail as the entity
- * branch finishes.
+ * branch finishes, and the transcript and summary as a reprocess rewrites
+ * them (spec #106).
  *
  * The branch runs after `summarize`, so the episode never changes state
  * again: `useEpisodeLiveRefresh`'s state-diff invalidation fires at
@@ -755,29 +763,40 @@ const ENTITY_BRANCH_REFRESH_TARGETS: Partial<Record<PipelineStage, 'entities' | 
 export function useEntityBranchRefresh(
   episodeId: string | null | undefined,
   tasks: EpisodeTask[] | undefined,
+  /** The transcript and summary queries are keyed by slug, not id. */
+  slugs?: { podcastSlug: string; episodeSlug: string },
 ) {
   const queryClient = useQueryClient()
   const seenRef = useRef<{ episodeId: string; completed: Set<string> } | null>(null)
+  const podcastSlug = slugs?.podcastSlug
+  const episodeSlug = slugs?.episodeSlug
 
   useEffect(() => {
     if (!episodeId || !tasks) return
 
     const completed = tasks.filter(
-      (t) => t.status === 'completed' && ENTITY_BRANCH_REFRESH_TARGETS[t.stage] !== undefined,
+      (t) => t.status === 'completed' && STAGE_REFRESH_TARGETS[t.stage] !== undefined,
     )
     const prev = seenRef.current
     seenRef.current = { episodeId, completed: new Set(completed.map((t) => t.id)) }
     if (!prev || prev.episodeId !== episodeId) return
 
     const targets = new Set(
-      completed.filter((t) => !prev.completed.has(t.id)).map((t) => ENTITY_BRANCH_REFRESH_TARGETS[t.stage]),
+      completed.filter((t) => !prev.completed.has(t.id)).map((t) => STAGE_REFRESH_TARGETS[t.stage]),
     )
     for (const target of targets) {
+      if (target === 'transcript' || target === 'summary') {
+        // Prefix key — covers the words query and every summary language.
+        if (podcastSlug && episodeSlug) {
+          queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, target] })
+        }
+        continue
+      }
       // Prefix key — covers every minConfidence / limit variant, including
       // the NowPlayingSheet's entities observer.
       queryClient.invalidateQueries({ queryKey: ['episodes', episodeId, target] })
     }
-  }, [episodeId, tasks, queryClient])
+  }, [episodeId, tasks, queryClient, podcastSlug, episodeSlug])
 }
 
 // Episode Browser hooks (cross-podcast)
@@ -950,6 +969,19 @@ export function useRetryFailedEpisode() {
       queryClient.invalidateQueries({ queryKey: ['episodes'] })
       queryClient.invalidateQueries({ queryKey: ['dlq'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
+  })
+}
+
+/** Spec #106 — re-run an already processed episode from a chosen stage. */
+export function useReprocessEpisode(episodeId: string | null | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (request: EpisodeReprocessRequest) => reprocessEpisode(episodeId!, request),
+    onSuccess: () => {
+      // Restarts the task poll, which then tracks the run stage by stage.
+      queryClient.invalidateQueries({ queryKey: ['episodes', 'tasks', episodeId] })
     },
   })
 }

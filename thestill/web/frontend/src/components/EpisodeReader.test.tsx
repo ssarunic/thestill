@@ -28,6 +28,13 @@ vi.mock('../hooks/useApi', () => ({
   useEpisodeLiveRefresh: vi.fn(() => ({ settled: false, contentTerminal: false })),
   useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
   useEntityBranchRefresh: vi.fn(),
+  useReprocessEpisode: vi.fn(() => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null })),
+}))
+
+let mockIsAdmin = false
+vi.mock('../contexts/AuthContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../contexts/AuthContext')>()),
+  useAuth: () => ({ isAdmin: mockIsAdmin }),
 }))
 
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))
@@ -224,6 +231,26 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     expect(screen.getByRole('button', { name: 'Send to my inbox' })).toBeInTheDocument()
     // Watch video only under the spec #62 §6 condition — absent here.
     expect(screen.queryByRole('button', { name: 'Watch video' })).toBeNull()
+  })
+
+  it('offers Reprocess in the ⋯ menu to admins only, once the episode has a summary (spec #106)', async () => {
+    mockUseEpisode.mockReturnValue({ data: episodeResponse(), isLoading: false, error: null })
+    const openMenu = async () => {
+      await userEvent.click(screen.getByRole('button', { name: 'More actions' }))
+    }
+
+    mockIsAdmin = false
+    const { unmount } = renderAtEpisodeRoute(<EpisodeReader />)
+    await openMenu()
+    expect(screen.queryByRole('button', { name: 'Reprocess…' })).toBeNull()
+    unmount()
+
+    mockIsAdmin = true
+    renderAtEpisodeRoute(<EpisodeReader />)
+    await openMenu()
+    await userEvent.click(screen.getByRole('button', { name: 'Reprocess…' }))
+    expect(screen.getByRole('dialog', { name: 'Reprocess episode' })).toBeInTheDocument()
+    mockIsAdmin = false
   })
 
   it('offers Watch video for an audio episode with a YouTube rendition (spec #62 §6)', () => {
