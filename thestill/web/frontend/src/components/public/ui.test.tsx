@@ -14,7 +14,7 @@ const quote: PublicQuote = {
 }
 
 describe('QuoteCard (spec #94)', () => {
-  it('always shows attribution and links the minute to the episode with ?t= (the reader deep-link parameter)', () => {
+  it('always shows attribution and links the minute to the episode with #t= (the reader deep-link parameter, kept out of the crawlable URL)', () => {
     render(
       <MemoryRouter>
         <QuoteCard quote={quote} />
@@ -24,7 +24,7 @@ describe('QuoteCard (spec #94)', () => {
     expect(screen.getByRole('link', { name: 'Scott Galloway' })).toHaveAttribute('href', '/entities/person/scott-galloway')
     expect(screen.getByRole('link', { name: 'The Prof G Pod' })).toHaveAttribute('href', '/podcasts/prof-g')
     const minute = screen.getByRole('link', { name: 'at 3 minutes 58 seconds' })
-    expect(minute).toHaveAttribute('href', '/podcasts/prof-g/episodes/portfolio?t=238')
+    expect(minute).toHaveAttribute('href', '/podcasts/prof-g/episodes/portfolio#t=238')
     expect(minute).toHaveTextContent('at 3:58')
   })
 

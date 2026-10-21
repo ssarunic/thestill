@@ -3,7 +3,7 @@
 // as ?about=), where they're heard, what others say about them. Things:
 // who's talking about it and the latest quotes naming it.
 import { useMemo, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, formatDate, type PublicEntityType, type PublicQuote } from '../../api/public'
 import {
   ActivitySparkline,
@@ -20,6 +20,7 @@ import {
   Skeleton,
 } from '../../components/public/ui'
 import { groupByEpisode, typeLabel } from '../../components/public/helpers'
+import { deepLinkParam } from '../../hooks/useDeepLinkSeek'
 import { usePublicEntity, usePublicEntityQuotes } from '../../hooks/usePublicApi'
 import NotFound, { ModuleError } from './NotFound'
 
@@ -87,13 +88,13 @@ function QuoteStream({
 
 export default function EntityPage() {
   const { entityType = '', slug = '' } = useParams()
-  const [params] = useSearchParams()
+  const location = useLocation()
   const validType = ENTITY_TYPES.includes(entityType as PublicEntityType)
   const entity = usePublicEntity(entityType, slug)
   const data = entity.data
   const isPerson = entityType === 'person'
 
-  const aboutSlug = params.get('about')
+  const aboutSlug = deepLinkParam(location.search, location.hash, 'about')
   const aboutTopic = useMemo(
     () => (aboutSlug && data ? data.topics.find((t) => t.slug === aboutSlug) ?? null : null),
     [aboutSlug, data],
@@ -210,11 +211,11 @@ export default function EntityPage() {
       {isPerson && data && data.topics.length >= 2 && (
         <div className="ts-sticky-filter">
           <div className="ts-chips" role="group" aria-label="Filter quotes by topic">
-            <FilterChip selected={!aboutTopic} to="?">
+            <FilterChip selected={!aboutTopic} to={{ hash: '' }}>
               All
             </FilterChip>
             {data.topics.map((topic) => (
-              <FilterChip key={topic.id} type={topic.type} selected={aboutTopic?.id === topic.id} to={`?about=${topic.slug}`}>
+              <FilterChip key={topic.id} type={topic.type} selected={aboutTopic?.id === topic.id} to={{ hash: `about=${topic.slug}` }}>
                 {topic.name}
               </FilterChip>
             ))}
@@ -233,7 +234,7 @@ export default function EntityPage() {
               </div>
               <div>
                 {data.speakers.map((person) => (
-                  <Link key={person.slug} to={`/entities/person/${person.slug}?about=${data.entity.slug}`} className="ts-personrow">
+                  <Link key={person.slug} to={`/entities/person/${person.slug}#about=${data.entity.slug}`} className="ts-personrow">
                     <Avatar src={person.image_url} name={person.name} size={40} />
                     <div className="ts-personrow-main">
                       <div className="ts-personrow-head">
