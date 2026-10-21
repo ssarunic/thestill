@@ -30,12 +30,14 @@ responses and the rate-limit dependency for anonymous callers.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Callable, Dict, Hashable, Iterator, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Collection, Dict, Hashable, Iterator, Optional, Set, Tuple
 
 from fastapi import HTTPException, Request, Response, status
 
@@ -225,6 +227,80 @@ class PublicVisibility:
         with self._lock:
             self._podcast_public.clear()
         clear_public_caches()
+
+
+# ---------------------------------------------------------------------------
+# Spec #105 decision 3 — which entity pages are indexed
+# ---------------------------------------------------------------------------
+
+#: The entity speaks: this many quotes said (or a guest or host role).
+INDEX_MIN_SAID = 5
+#: It is discussed in depth: this many quotes about it.
+INDEX_MIN_ABOUT = 10
+#: It is discussed widely: this many public episodes and quotes in total.
+INDEX_WIDE_EPISODES = 2
+INDEX_WIDE_QUOTES = 5
+HUMAN_QID = "Q5"
+
+
+@dataclass(frozen=True)
+class EntityIndexFacts:
+    """What decides whether an entity page is indexed (``index`` robots meta
+    and a sitemap entry). The page builds this from its payload and the
+    sitemap from one SQL pass; :func:`entity_is_indexable` decides both."""
+
+    entity_id: str
+    entity_type: str
+    said: int
+    about: int
+    episodes: int
+    has_role: bool
+    wikidata_qid: Optional[str] = None
+    instance_of: Tuple[str, ...] = ()
+
+
+def instance_of_list(value: Any) -> Tuple[str, ...]:
+    """``wikidata_instance_of`` as stored: a list (Postgres jsonb) or JSON
+    text (SQLite)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return ()
+    return tuple(str(v) for v in (value or ()) if v)
+
+
+def entity_is_indexable(facts: EntityIndexFacts, noindex: Collection[str] = ()) -> bool:
+    """The value test and the type test of spec #105 decision 3.
+
+    Value (any one): the entity speaks (``INDEX_MIN_SAID`` quotes said, or a
+    guest or host role); it is discussed in depth (``INDEX_MIN_ABOUT``
+    quotes about it); or widely (``INDEX_WIDE_EPISODES`` episodes and
+    ``INDEX_WIDE_QUOTES`` quotes in total). Type: a person whose Wikidata
+    item is known not to be a human (Q5) fails, and so does a thing that
+    is one. ``noindex`` is the operator's list for what the rule misses.
+    """
+    if facts.entity_id in noindex:
+        return False
+    if facts.wikidata_qid and facts.instance_of:
+        human = HUMAN_QID in facts.instance_of
+        if (facts.entity_type == "person") != human:
+            return False
+    speaks = facts.said >= INDEX_MIN_SAID or facts.has_role
+    in_depth = facts.about >= INDEX_MIN_ABOUT
+    widely = facts.episodes >= INDEX_WIDE_EPISODES and facts.said + facts.about >= INDEX_WIDE_QUOTES
+    return speaks or in_depth or widely
+
+
+def entity_noindex_ids(state: "AppState") -> Set[str]:
+    """The operator's ``entity_noindex`` list (``thestill settings``)."""
+    settings = getattr(getattr(state, "abuse", None), "settings", None)
+    if settings is None:
+        return set()
+    try:
+        return set(settings.get("entity_noindex"))
+    except Exception:  # noqa: BLE001 - an unreadable list indexes by the rule alone
+        return set()
 
 
 _VISIBILITY_ATTR = "_public_visibility"

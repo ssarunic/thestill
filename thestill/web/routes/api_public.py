@@ -56,11 +56,15 @@ from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state
 from ..middleware import resolve_client_ip
 from ..public_access import (
+    EntityIndexFacts,
     PublicVisibility,
     TtlCache,
     apply_public_cache_headers,
+    entity_is_indexable,
+    entity_noindex_ids,
     get_public_visibility,
     has_valid_session,
+    instance_of_list,
     public_rate_limit,
 )
 from ..responses import api_response, etag_json_response
@@ -584,7 +588,6 @@ _RELATED_PER_TYPE = 6
 _FEATURED_WINDOW_DAYS = 90
 _SPEAKERS_WINDOW_DAYS = 365
 _ACTIVITY_WEEKS = 26
-_INDEX_MIN_QUOTES = 3
 _ENTITY_TTL_SECONDS = 120.0
 _ABOUT_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
 
@@ -642,15 +645,22 @@ def _stands_alone(text: str) -> bool:
     return bool(text) and text[0].isupper() and not _DANGLING_OPENERS.match(text) and text[-1] in ".!?"
 
 
+_entity_path_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+
+
 def _public_entity_id(state: AppState, visibility: PublicVisibility, entity_type: str, slug: str) -> str:
     if entity_type not in _ENTITY_TYPES:
         raise _not_found("Entity")
     _check_slug(slug, "Entity")
-    try:
-        entity_id = _entity_id_from_path(state.entity_repository, entity_type, slug)
-    except HTTPException:
-        raise _not_found("Entity") from None
-    if not visibility.entity_is_public(entity_id):
+
+    def resolve() -> Optional[str]:
+        try:
+            return _entity_id_from_path(state.entity_repository, entity_type, slug)
+        except HTTPException:
+            return None
+
+    entity_id = _entity_path_cache.get_or_compute((entity_type, slug, visibility.fingerprint()), resolve)
+    if entity_id is None or not visibility.entity_is_public(entity_id):
         raise _not_found("Entity")
     return entity_id
 
@@ -827,6 +837,22 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
         and visibility.episode_is_public(r["podcast_id"], guest_lookup[str(r["episode_id"])][1])
     ][:12]
 
+    roles = {
+        "hosts": podcast_refs(summary.get("hosts_podcasts", []), "episode_count"),
+        "recurring": podcast_refs(summary.get("recurring_podcasts", []), "episode_count"),
+        "guest_episodes": guest_episodes,
+    }
+    stats = _stats(presence)
+    facts = EntityIndexFacts(
+        entity_id=record.id,
+        entity_type=entity_type,
+        said=said_total,
+        about=about_total,
+        episodes=stats["episodes"],
+        has_role=bool(roles["hosts"] or roles["recurring"] or roles["guest_episodes"]),
+        wikidata_qid=record.wikidata_qid,
+        instance_of=instance_of_list(record.wikidata_instance_of),
+    )
     return {
         "entity": {
             "name": display_name(record.canonical_name),
@@ -836,20 +862,17 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             "wikidata_qid": record.wikidata_qid,
         },
         "enrichment": enrichment_wire,
-        "stats": _stats(presence),
+        "stats": stats,
         "activity": _activity(presence),
-        "roles": {
-            "hosts": podcast_refs(summary.get("hosts_podcasts", []), "episode_count"),
-            "recurring": podcast_refs(summary.get("recurring_podcasts", []), "episode_count"),
-            "guest_episodes": guest_episodes,
-        },
+        "roles": roles,
         "most_discussed_on": podcast_refs(summary.get("most_discussed_on", []), "mention_count")[:8],
         "related": _per_type(related, _RELATED_PER_TYPE),
         "featured_quote": featured_quote,
         "topics": topics,
         "speakers": speakers,
         "quote_counts": {"said": said_total, "about": about_total},
-        "indexable": (said_total + about_total) >= _INDEX_MIN_QUOTES,
+        # Spec #105 decision 3: the same rule as the sitemap's entity list.
+        "indexable": entity_is_indexable(facts, entity_noindex_ids(state)),
     }
 
 
@@ -890,6 +913,18 @@ def list_public_entity_quotes(
 ) -> dict:
     """Quote stream: ``said`` = quotes the person said (optionally ``about``
     one entity id); ``about`` = quotes by other named speakers that name it."""
+    payload = public_entity_quotes_payload(state, entity_type, slug, kind, about=about, page=page)
+    apply_public_cache_headers(request, response)
+    return api_response(payload)
+
+
+_entity_quotes_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+
+
+def public_entity_quotes_payload(
+    state: AppState, entity_type: str, slug: str, kind: str, about: Optional[str] = None, page: int = 1
+) -> Dict[str, Any]:
+    """One page of a person's or entity's quote stream (``said`` or ``about``)."""
     visibility = get_public_visibility(state)
     entity_id = _public_entity_id(state, visibility, entity_type, slug)
     if about is not None and (not _ABOUT_RE.match(about) or not visibility.entity_is_public(about)):
@@ -898,18 +933,19 @@ def list_public_entity_quotes(
         f = QuoteFilter(speaker_id=entity_id, about_id=about)
     else:
         f = QuoteFilter(about_id=entity_id, exclude_speaker_id=entity_id)
-    rows, total = state.entity_repository.public_quote_queries().quotes(
-        f, order="recent", limit=_QUOTE_PAGE, offset=(page - 1) * _QUOTE_PAGE
-    )
-    apply_public_cache_headers(request, response)
-    return api_response(
-        {
+
+    def build() -> Dict[str, Any]:
+        rows, total = state.entity_repository.public_quote_queries().quotes(
+            f, order="recent", limit=_QUOTE_PAGE, offset=(page - 1) * _QUOTE_PAGE
+        )
+        return {
             "quotes": [_quote_item(r) for r in rows],
             "total": total,
             "page": page,
             "next_page": page + 1 if page * _QUOTE_PAGE < total else None,
         }
-    )
+
+    return _entity_quotes_cache.get_or_compute((entity_id, kind, about, page, visibility.fingerprint()), build)
 
 
 # Spec #105 decision 2: an episode's first quote page is 6 for everyone,

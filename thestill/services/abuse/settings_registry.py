@@ -20,6 +20,7 @@ validate through the same ``SettingSpec``.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
@@ -86,6 +87,24 @@ def _parse_allowlist(raw: str) -> List[str]:
     if raw.startswith("["):
         return json.loads(raw)
     return [part for part in raw.replace("\n", ",").split(",") if part.strip()]
+
+
+_ENTITY_ID_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
+
+
+def _validate_entity_ids(value: Any) -> List[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError("expected a list of entity ids (person:<slug>, company:<slug>, ...)")
+    normalised: List[str] = []
+    for entry in value:
+        entry = entry.strip().lower()
+        if not entry:
+            continue
+        if not _ENTITY_ID_RE.match(entry):
+            raise ValueError(f"not an entity id: {entry!r}")
+        if entry not in normalised:
+            normalised.append(entry)
+    return normalised
 
 
 def _validate_quota_overrides(value: Any) -> Dict[str, Dict[str, int]]:
@@ -191,6 +210,15 @@ SETTINGS: Dict[str, SettingSpec] = {
             "public_prerender_enabled",
             "Off: public pages send the head-only shell, with no server-written content (spec #105).",
             lambda c: bool(c.public_prerender_enabled),
+        ),
+        SettingSpec(
+            "entity_noindex",
+            "Entity pages to keep out of search (noindex, not in the sitemap) whatever the spec #105 rule says: "
+            '["person:altruist", ...]. Pages stay reachable.',
+            lambda _c: [],
+            _validate_entity_ids,
+            _parse_allowlist,
+            failsafe=[],
         ),
         SettingSpec(
             "quota_overrides",

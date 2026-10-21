@@ -192,6 +192,18 @@ def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
         assert "client_ip" not in fields and "user_agent" not in fields
 
 
+def _facts(entity_id, entity_type, said=0, about=0, episodes=1, qid=None, instance_of="[]"):
+    return {
+        "entity_id": entity_id,
+        "entity_type": entity_type,
+        "said": said,
+        "about": about,
+        "episodes": episodes,
+        "wikidata_qid": qid,
+        "wikidata_instance_of": instance_of,
+    }
+
+
 def test_sitemap_lists_a_retyped_entity_over_an_empty_row(site, app_state, monkeypatch):
     """``company:mistral-ai`` is an empty leftover; the re-typed
     ``topic:mistral-ai`` (now a company) has the mentions, so the page shows
@@ -221,8 +233,8 @@ def test_sitemap_lists_a_retyped_entity_over_an_empty_row(site, app_state, monke
             )
         ]
     )
-    rows = [{"entity_id": "topic:mistral-ai", "entity_type": "company", "quotes": 5}]
-    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "indexable_entities", lambda self, min_quotes=3: rows)
+    rows = [_facts("topic:mistral-ai", "company", about=12)]
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
     assert body.count("https://thestill.test/entities/company/mistral-ai</loc>") == 1
 
@@ -241,11 +253,11 @@ def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkey
     ):
         repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
     rows = [
-        {"entity_id": "person:islam", "entity_type": "topic", "quotes": 15},
-        {"entity_id": "topic:islam", "entity_type": "topic", "quotes": 4},
-        {"entity_id": "company:abraham-pais", "entity_type": "person", "quotes": 5},
+        _facts("person:islam", "topic", about=15),
+        _facts("topic:islam", "topic", about=10),
+        _facts("company:abraham-pais", "person", said=5),
     ]
-    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "indexable_entities", lambda self, min_quotes=3: rows)
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
     assert body.count("https://thestill.test/entities/topic/islam</loc>") == 1
     assert "https://thestill.test/entities/person/abraham-pais</loc>" in body

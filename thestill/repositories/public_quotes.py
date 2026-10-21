@@ -205,10 +205,13 @@ def trending_sql(p: str, *, since: datetime, limit: int) -> Tuple[str, List[Any]
     return sql, [*params, limit]
 
 
-def indexable_entities_sql(p: str, *, min_quotes: int) -> Tuple[str, List[Any]]:
-    """Entities whose public page has enough quotes to be worth indexing:
-    people by quotes said plus quotes about them, things by quotes about
-    them. ``(entity_id, entity_type, quotes)`` rows."""
+def entity_index_facts_sql(p: str) -> Tuple[str, List[Any]]:
+    """Spec #105 decision 3: what the indexing rule needs for every entity
+    that has a public page worth considering, counted exactly as the page
+    counts it: quotes said and quotes about (distinct segments, the public
+    quote gate), public episodes it appears in, and its Wikidata identity.
+    ``(entity_id, entity_type, wikidata_qid, wikidata_instance_of, said,
+    about, episodes)`` rows; roles come from the caller."""
     gate_sql, params = _gate(p)
     sql = f"""
         WITH q AS (
@@ -217,20 +220,29 @@ def indexable_entities_sql(p: str, *, min_quotes: int) -> Tuple[str, List[Any]]:
             {_FROM}
             WHERE {gate_sql}
         ),
-        -- Distinct segments, as the page counts them: a segment naming two
-        -- things is one quote by its speaker, not two.
-        counts AS (
-            SELECT speaker_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY speaker_id
-            UNION ALL
-            SELECT about_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY about_id
+        said AS (SELECT speaker_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY speaker_id),
+        about AS (SELECT about_id AS entity_id, COUNT(DISTINCT seg) AS n FROM q GROUP BY about_id),
+        presence AS (
+            SELECT m.entity_id, COUNT(DISTINCT e.id) AS n
+            FROM entity_mentions m
+            JOIN episodes e ON e.id = m.episode_id
+            JOIN podcasts p ON p.id = e.podcast_id
+            WHERE m.resolution_status = 'resolved' AND m.entity_id IS NOT NULL
+              AND p.public_pages AND NOT COALESCE(p.synthetic, FALSE)
+              AND e.summary_path IS NOT NULL AND COALESCE(e.summary_preview, '') <> ''
+            GROUP BY m.entity_id
         )
-        SELECT c.entity_id, ent.type AS entity_type, SUM(c.n) AS quotes
-        FROM counts c JOIN entities ent ON ent.id = c.entity_id
-        GROUP BY c.entity_id, ent.type
-        HAVING SUM(c.n) >= {p}
-        ORDER BY c.entity_id
+        SELECT ent.id AS entity_id, ent.type AS entity_type, ent.wikidata_qid,
+               ent.wikidata_instance_of,
+               COALESCE(said.n, 0) AS said, COALESCE(about.n, 0) AS about, presence.n AS episodes
+        FROM presence
+        JOIN entities ent ON ent.id = presence.entity_id
+        LEFT JOIN said ON said.entity_id = presence.entity_id
+        LEFT JOIN about ON about.entity_id = presence.entity_id
+        WHERE NOT ent.public_hidden
+        ORDER BY ent.id
     """
-    return sql, [*params, min_quotes]
+    return sql, params
 
 
 def presence_sql(entity_id: str, p: str) -> Tuple[str, List[Any]]:
@@ -281,8 +293,8 @@ class PublicQuoteQueries:
         sql, params = trending_sql(self._p, since=since, limit=limit)
         return self._fetch(sql, params)
 
-    def indexable_entities(self, *, min_quotes: int = 3) -> List[Dict[str, Any]]:
-        sql, params = indexable_entities_sql(self._p, min_quotes=min_quotes)
+    def entity_index_facts(self) -> List[Dict[str, Any]]:
+        sql, params = entity_index_facts_sql(self._p)
         return self._fetch(sql, params)
 
     def presence(self, entity_id: str) -> List[Dict[str, Any]]:

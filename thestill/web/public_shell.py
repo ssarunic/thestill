@@ -36,7 +36,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
 import structlog
@@ -44,7 +44,15 @@ from structlog import get_logger
 
 from ..utils.user_agent import crawler_family
 from .middleware.rate_limit import allow_public_request
-from .public_access import TtlCache, get_public_visibility, has_valid_session
+from .public_access import (
+    EntityIndexFacts,
+    TtlCache,
+    entity_is_indexable,
+    entity_noindex_ids,
+    get_public_visibility,
+    has_valid_session,
+    instance_of_list,
+)
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -454,6 +462,17 @@ Sitemap: {base}/sitemap.xml
 
 ROBOTS_PRIVATE = "User-agent: *\nDisallow: /\n"
 
+
+def _json_ids(value: Any) -> Iterable[str]:
+    """``guest_entity_ids`` arrive as a list (Postgres jsonb) or JSON text (SQLite)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return ()
+    return [str(v) for v in value or () if v]
+
+
 _SITEMAP_MAX_URLS = 40_000
 _SITEMAP_TTL_SECONDS = 3600.0
 _SITEMAP_PAGE = 1000
@@ -470,10 +489,14 @@ class SitemapBuilder:
         repo = self._state.repository
         urls: List[Tuple[str, Optional[str]]] = [("/", None), ("/top", None)]
         podcasts: Dict[str, Optional[str]] = {}
+        podcast_ids: Set[str] = set()
+        guest_ids: Set[str] = set()
         offset = 0
         while True:
             rows, total = repo.list_public_episode_rows(limit=_SITEMAP_PAGE, offset=offset)
             for row in rows:
+                podcast_ids.add(str(row["podcast_id"]))
+                guest_ids.update(_json_ids(row.get("guest_entity_ids")))
                 lastmod = row.get("published_at") or row.get("pub_date")
                 lastmod_iso = (
                     lastmod.isoformat() if hasattr(lastmod, "isoformat") else (str(lastmod) if lastmod else None)
@@ -488,23 +511,40 @@ class SitemapBuilder:
             if not rows or offset >= total:
                 break
         urls[2:2] = [(f"/podcasts/{slug}", lastmod) for slug, lastmod in sorted(podcasts.items())]
-        urls.extend((path, None) for path in self._entity_paths())
+        role_ids = set(guest_ids)
+        for podcast_id in sorted(podcast_ids):
+            anchors = self._state.entity_repository.get_podcast_anchors(podcast_id)
+            role_ids.update(str(i) for i in [*anchors.get("hosts", []), *anchors.get("recurring", [])] if i)
+        urls.extend((path, None) for path in self._entity_paths(role_ids))
         return urls
 
-    def _entity_paths(self) -> List[str]:
-        """Person and entity pages with enough quotes to be worth indexing
-        (the same threshold the page uses for noindex), each listed only if
-        its URL shows that entity: a re-typed entity can share a URL with
-        another one, and the page resolves it to the other."""
+    def _entity_paths(self, role_ids: Set[str]) -> List[str]:
+        """Person and entity pages the indexing rule keeps (spec #105
+        decision 3, the same :func:`entity_is_indexable` the page uses for
+        noindex), each listed only if its URL shows that entity: a re-typed
+        entity can share a URL with another one, and the page resolves it
+        to the other."""
         from .routes.api_entities import url_candidate_ids, url_candidates, url_owner
 
         repo = self._state.entity_repository
+        noindex = entity_noindex_ids(self._state)
         rows = []
-        for row in repo.public_quote_queries().indexable_entities(min_quotes=3):
+        for row in repo.public_quote_queries().entity_index_facts():
             entity_id = str(row["entity_id"])
             slug = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
             entity_type = row["entity_type"].value if hasattr(row["entity_type"], "value") else row["entity_type"]
-            rows.append((entity_id, entity_type, slug))
+            facts = EntityIndexFacts(
+                entity_id=entity_id,
+                entity_type=str(entity_type),
+                said=int(row["said"] or 0),
+                about=int(row["about"] or 0),
+                episodes=int(row["episodes"] or 0),
+                has_role=entity_id in role_ids,
+                wikidata_qid=row.get("wikidata_qid"),
+                instance_of=instance_of_list(row.get("wikidata_instance_of")),
+            )
+            if entity_is_indexable(facts, noindex):
+                rows.append((entity_id, entity_type, slug))
         # An indexable row has mentions, so one with the URL's own prefix
         # always owns its URL; only a re-typed row can lose it.
         retyped_slugs = sorted({slug for entity_id, entity_type, slug in rows if entity_id != f"{entity_type}:{slug}"})

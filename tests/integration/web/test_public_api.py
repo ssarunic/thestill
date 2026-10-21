@@ -518,15 +518,16 @@ def test_sign_in_returns_to_next_once(anon, app_state, monkeypatch):
 
 def test_sitemap_and_page_count_quotes_the_same_way(anon, app_state):
     # One rule decides whether a person or entity page is indexed (FM-6):
-    # the sitemap's SQL count must equal the page's said + about count.
+    # the sitemap's SQL facts must equal what the page counts.
     _seed_people(app_state)
-    sql_counts = {
-        str(row["entity_id"]): int(row["quotes"])
-        for row in app_state.entity_repository.public_quote_queries().indexable_entities(min_quotes=1)
+    sql_facts = {
+        str(row["entity_id"]): (int(row["said"]), int(row["about"]), int(row["episodes"]))
+        for row in app_state.entity_repository.public_quote_queries().entity_index_facts()
     }
     for entity_type, slug in (("person", "scott-galloway"), ("person", "ed-elson"), ("company", "nvidia")):
-        counts = anon.get(f"/api/public/entities/{entity_type}/{slug}").json()["quote_counts"]
-        assert sql_counts.get(f"{entity_type}:{slug}", 0) == counts["said"] + counts["about"], slug
+        body = anon.get(f"/api/public/entities/{entity_type}/{slug}").json()
+        counts, stats = body["quote_counts"], body["stats"]
+        assert sql_facts[f"{entity_type}:{slug}"] == (counts["said"], counts["about"], stats["episodes"]), slug
 
 
 def test_top_chart_region_follows_the_visitor_then_the_us(anon, app_state, monkeypatch):
