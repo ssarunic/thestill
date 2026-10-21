@@ -261,6 +261,12 @@ what a crawler without JavaScript reads:
 ./venv/bin/python scripts/body_word_count.py --text --ua chrome <url>   # print the text too
 ```
 
+With `INDEXNOW_KEY` set, the key is served at `/<key>.txt`, and IndexNow
+(Bing, Yandex, Seznam, Naver) is pinged with an episode's page and its
+show's page when the episode is first published with a public summary,
+and with a show's pages when `thestill set-podcast-visibility` changes it
+(`indexnow.submitted` in the logs; Bing Webmaster lists the submissions).
+
 Fallback checklist when a public page changes:
 
 - New visible text on a prerendered page: add it to the fallback builder

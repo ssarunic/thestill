@@ -1,6 +1,6 @@
 # Server-Rendered Content for Public Pages
 
-> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phases 1–3 (episode, podcast, entity, landing and `/top` pages; decision 3 entity rule) implemented 2026-10-21; Phase 4 open
+> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phases 1–4 (episode, podcast, entity, landing and `/top` pages; decision 3 entity rule; IndexNow) implemented 2026-10-21; production checks and the decision 3 count pending
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Google already indexes the public pages. This spec is for Bing, DuckDuckGo and AI answer engines, which today see an empty page body.
@@ -722,6 +722,32 @@ finds no bootstrap block and fetches as today.
   words, 74 KB raw and 16.5 KB gzipped for 100 chart rows (the data block
   carries the API payload, artwork and Apple links included), over the
   episode-page budget, which was set for episode pages.
+
+### Phase 4 (2026-10-21)
+
+- `thestill/services/indexnow.py`: off unless `INDEXNOW_KEY` is set (and
+  the install serves public pages); the key is served at `/<key>.txt`.
+- Pings: the summarize task, on an episode's first publish with a public
+  page, sends the episode and its show (on a background thread; a failure
+  is logged, never raised); `thestill set-podcast-visibility` sends the
+  show and its public episodes, read before a takedown and after a
+  restore, and prints the HTTP status.
+- Not done: pings for re-summaries (the URL is unchanged) and for entity
+  pages (they change with every episode; the sitemap covers them).
+
+### End-to-end check (2026-10-21)
+
+A scratch server on the branch code and the local dev data (no task
+worker), driven by Playwright:
+
+- The `@live` test (`PRERENDER_SAMPLE_PATHS`) passed on 8 pages across all
+  five kinds: every server-written text node of more than 20 characters
+  appears in the page React renders. It compares text nodes, leaves
+  `<time>` out (the browser formats dates in the reader's locale) and
+  splits on `·` (the page renders separators as their own spans).
+- On the landing page, an episode, a podcast, a person, a company and
+  `/top`: one `h1` in `#root` at every DOM change after parsing, and no
+  `/api/public` data request during the first load.
 
 ## Decisions
 

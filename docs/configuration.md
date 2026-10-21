@@ -393,6 +393,7 @@ runtime: `thestill settings set alerts '{"queue_backlog": 1000}'`.
 | `PUBLIC_BASE_URL` | Operator-declared external base URL (OAuth callbacks, email links) | - |
 | `PUBLIC_PAGES_ENABLED` | Serve the signed-out public pages, `/api/public`, `robots.txt` and `sitemap.xml` in multi-user mode (spec #94); `false` restores the sign-in wall | `true` |
 | `PUBLIC_PRERENDER_ENABLED` | Write each public page's main content into the HTML for signed-out requests, so crawlers that do not run JavaScript can read it (spec #105). Env default of the `public_prerender_enabled` runtime switch: `thestill settings set public_prerender_enabled false` turns it off without a deploy | `true` |
+| `INDEXNOW_KEY` | IndexNow key (8–128 letters, digits or dashes; e.g. `python -c "import secrets; print(secrets.token_hex(16))"`), served at `/<key>.txt`. When set, a newly published public episode and `thestill set-podcast-visibility` ping `api.indexnow.org` with the affected URLs, so Bing and the other IndexNow engines see them in minutes (spec #105 Phase 4). Empty turns pings off | - (off) |
 | `PRERENDER_MAX_CONCURRENT` | Uncached server-written pages built at once per process; past it a request gets the head-only shell (logged as `public_prerender.shed`) | `4` |
 | `ENABLE_DOCS` | Expose FastAPI docs endpoints (`/docs`, `/redoc`) | `false` |
 | `MAX_AUDIO_BYTES` | Upper bound on downloaded audio size | `2147483648` (2 GiB) |

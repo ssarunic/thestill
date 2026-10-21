@@ -167,21 +167,33 @@ test('@live server text without JavaScript is text the page shows', async ({ bro
   const paths = (process.env.PRERENDER_SAMPLE_PATHS ?? '').split(',').filter(Boolean)
   test.skip(paths.length === 0, 'set PRERENDER_SAMPLE_PATHS and PLAYWRIGHT_BASE_URL to a server with a corpus')
   const normalize = (s: string) => s.replace(/\s+/g, ' ').trim()
+  const decode = (s: string) =>
+    s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
   for (const path of paths) {
+    // What a crawler without JavaScript gets: the text nodes of <main>.
+    // Dates are left out: the browser formats them in the reader's locale.
     const noJs = await browser.newContext({ javaScriptEnabled: false })
     const plain = await noJs.newPage()
     await plain.goto(path)
-    const serverText = normalize(await plain.locator('main').innerText())
+    const html = await plain.content()
     await noJs.close()
-    expect(serverText.split(' ').length, path).toBeGreaterThan(100)
+    const main = html.slice(html.indexOf('<main'), html.lastIndexOf('</main>'))
+    const nodes = main
+      .replace(/<time\b[^>]*>[\s\S]*?<\/time>/g, ' ')
+      .split(/<[^>]+>/)
+      // Separators are their own spans on the page; compare what is between them.
+      .flatMap((s) => decode(s).split('·'))
+      .map((s) => normalize(s).replace(/[“”…]/g, '').trim())
+    expect(nodes.join(' ').split(' ').length, path).toBeGreaterThan(100)
 
     const withJs = await browser.newContext()
     const rendered = await withJs.newPage()
     await rendered.goto(path)
     await rendered.waitForLoadState('networkidle')
-    const pageText = normalize(await rendered.locator('body').innerText())
+    // textContent, not innerText: CSS text-transform (uppercase rail labels)
+    // changes innerText but not what the page says.
+    const pageText = normalize((await rendered.locator('body').textContent()) ?? '').replace(/[“”]/g, '')
     await withJs.close()
-    const sentences = serverText.split(/(?<=[.!?])\s+/).map((s) => s.replace(/[“”…]/g, '').trim()).filter((s) => s.length > 20)
-    for (const sentence of sentences) expect(pageText.replace(/[“”]/g, ''), `${path}: ${sentence}`).toContain(sentence)
+    for (const node of nodes.filter((n) => n.length > 20)) expect(pageText, `${path}: ${node}`).toContain(node)
   }
 })
