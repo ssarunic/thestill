@@ -14,7 +14,23 @@ export interface PersonChip {
 }
 
 const MAX_ENTITY_PEOPLE = 8
-const PLACEHOLDER_SPEAKER = /^(speaker[_ ]?\d+|unknown)$/i
+const PLACEHOLDER_SPEAKER = /^(speaker[_ ]?\d+|unknown( speaker)?|none|null)$/i
+// Role words the facts extractor uses for voices outside the conversation
+// (facts_extractor's speaker-mapping prompt, role_linker's generic roles),
+// numbered when several share one ("Archival Audio 2") and sometimes
+// annotated ("Ad Narrator (Sponsor)"). A label that is only a role names
+// nobody, so it is no person to list. "Host 1" / "Guest 2" stay: they
+// are unnamed people taking part.
+const ROLE_ONLY_SPEAKER =
+  /^(?:(?:ad|sponsor|promo)(?: (?:narrator|reader|read|voice))?|narrator|announcer|voice ?over|archival(?: (?:audio|clip|footage))?|(?:audio |news |film )?clip|soundbite|listener|caller|theme music)$/i
+
+/** The label minus a trailing ``(Role)`` and a trailing number. */
+function roleStem(label: string): string {
+  return label
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/\s+\d+$/, '')
+    .trim()
+}
 
 /** Spec #76 §3.5 de-duplication contract: trim, collapse whitespace, case-fold. Nothing else. */
 export function normalizePersonName(name: string): string {
@@ -28,7 +44,8 @@ export function normalizePersonName(name: string): string {
  * 1. person entities tagged host or guest, by salience, capped at eight;
  * 2. distinct transcript speaker labels not already covered (exact
  *    normalised-name match only — alias merging belongs to the entity
- *    index, spec #28) and not diarisation placeholders.
+ *    index, spec #28), not diarisation placeholders and not role-only
+ *    labels such as "Ad Narrator 1" or "Archival Audio 2".
  */
 export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegment[] | null | undefined): PersonChip[] {
   const people = entities
@@ -40,21 +57,25 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
   // music and intros can carry a preserved speaker and would otherwise
   // both surface a chip and shift the palette away from the viewer's
   // colours (see buildSpeakerColorMap's contract).
+  const renderedSpeakers: (string | null)[] = []
   const speakerLabels: { label: string; segmentId: number }[] = []
   const seenSpeakers = new Set<string>()
   for (const segment of segments ?? []) {
     if (segment.kind !== 'content' && segment.kind !== 'filler') continue
+    renderedSpeakers.push(segment.speaker)
     const label = segment.speaker?.trim()
-    if (!label || PLACEHOLDER_SPEAKER.test(label)) continue
+    if (!label || PLACEHOLDER_SPEAKER.test(label) || ROLE_ONLY_SPEAKER.test(roleStem(label))) continue
     const key = normalizePersonName(label)
     if (seenSpeakers.has(key)) continue
     seenSpeakers.add(key)
     speakerLabels.push({ label, segmentId: segment.id })
   }
 
-  // One colour map, transcript speakers first so a person heard in the
-  // episode keeps the colour the transcript gives their label.
-  const colors = buildSpeakerColorMap([...speakerLabels.map((s) => s.label), ...people.map((p) => p.entity.canonical_name)])
+  // One colour map, fed every speaker row exactly as the transcript feeds
+  // its own (placeholders and role labels included, though they get no
+  // chip), then the entity people, so a person heard in the episode keeps
+  // the colour the transcript gives their label.
+  const colors = buildSpeakerColorMap([...renderedSpeakers, ...people.map((p) => p.entity.canonical_name)])
   const covered = new Set<string>()
   const chips: PersonChip[] = []
 
