@@ -258,3 +258,86 @@ def test_youtube_with_a_stale_downsampled_path_does_not_fall_back_to_url_fetch()
         else:
             raise AssertionError("the URL fallback only applies to URLs that are audio")
     create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Spec #106 — a reprocess run must call the provider again, and must keep the
+# old clean transcript and summary readable until the run replaces them.
+# ---------------------------------------------------------------------------
+
+
+class _TimedStorage(_FakeStorage):
+    """``_FakeStorage`` with a modification time per file."""
+
+    def __init__(self, files: dict[str, str], mtime: float):
+        super().__init__(files)
+        self.mtime = mtime
+
+    def get_modified_time(self, path: str) -> float:
+        return self.mtime
+
+
+def _reprocess_task(requested_at: str = "2026-10-21T12:00:00+00:00") -> Task:
+    task = _make_task()
+    task.metadata = {
+        "run_full_pipeline": True,
+        "initiated_by": "reprocess",
+        "reprocess": {"from_stage": "transcribe", "requested_at": requested_at},
+    }
+    return task
+
+
+_REQUESTED_AT = 1792584000.0  # 2026-10-21T12:00:00Z
+
+
+def test_reprocess_re_transcribes_over_an_artifact_from_before_the_run():
+    storage = _TimedStorage({_REL_PATH: _transcript("old run").model_dump_json()}, mtime=_REQUESTED_AT - 86400)
+    state = _build_state(storage)
+    transcriber = MagicMock()
+    transcriber.transcribe_audio.return_value = _transcript("new run")
+
+    with patch("thestill.core.task_handlers.create_transcriber", return_value=transcriber):
+        handle_transcribe(_reprocess_task(), state)
+
+    transcriber.transcribe_audio.assert_called_once()
+    assert Transcript.model_validate_json(storage.files[_REL_PATH]).text == "new run"
+
+
+def test_reprocess_keeps_the_clean_transcript_and_summary_paths():
+    storage = _TimedStorage({}, mtime=_REQUESTED_AT)
+    state = _build_state(storage)
+    transcriber = MagicMock()
+    transcriber.transcribe_audio.return_value = _transcript("new run")
+
+    with patch("thestill.core.task_handlers.create_transcriber", return_value=transcriber):
+        handle_transcribe(_reprocess_task(), state)
+
+    _, kwargs = state.feed_manager.mark_episode_processed.call_args
+    # None leaves the column alone; "" would hide the episode from readers.
+    assert kwargs["clean_transcript_path"] is None
+    assert kwargs["summary_path"] is None
+
+
+def test_reprocess_retry_reuses_the_artifact_this_run_wrote():
+    # A retry after the DB update failed: the provider call already succeeded.
+    storage = _TimedStorage({_REL_PATH: _transcript("this run").model_dump_json()}, mtime=_REQUESTED_AT + 60)
+    state = _build_state(storage)
+
+    with patch("thestill.core.task_handlers.create_transcriber") as create:
+        handle_transcribe(_reprocess_task(), state)
+
+    create.assert_not_called()
+
+
+def test_first_pass_still_clears_later_outputs():
+    storage = _FakeStorage()
+    state = _build_state(storage)
+    transcriber = MagicMock()
+    transcriber.transcribe_audio.return_value = _transcript("fresh")
+
+    with patch("thestill.core.task_handlers.create_transcriber", return_value=transcriber):
+        handle_transcribe(_make_task(), state)
+
+    _, kwargs = state.feed_manager.mark_episode_processed.call_args
+    assert kwargs["clean_transcript_path"] == ""
+    assert kwargs["summary_path"] == ""

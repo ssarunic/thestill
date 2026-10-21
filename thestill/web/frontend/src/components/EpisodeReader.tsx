@@ -1,7 +1,8 @@
 import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense, type RefObject } from 'react'
 import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh } from '../hooks/useApi'
+import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh, useReprocessEpisode } from '../hooks/useApi'
+import { useAuth } from '../contexts/AuthContext'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { usePlayer } from '../contexts/PlayerContext'
 import { useResolvedListening } from '../hooks/useListening'
@@ -36,6 +37,8 @@ import KeyEntitiesStrip from './episode-entities/KeyEntitiesStrip'
 import EntityRail from './episode-entities/EntityRail'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
 import EntityBranchProgress from './EntityBranchProgress'
+import ReprocessDialog from './ReprocessDialog'
+import ReprocessStatus from './ReprocessStatus'
 import type { FailureType, EntityType, EpisodeEntity, EpisodeState, EpisodeTask, MentionLite, SummaryCitation } from '../api/types'
 import { ENTITY_BRANCH_STAGES } from '../constants/stages'
 import { buildPlayerTrack } from '../utils/playerTrack'
@@ -287,8 +290,21 @@ export default function EpisodeReader({
   const episodeTasks = useMemo(() => tasksData?.tasks ?? [], [tasksData])
 
   // The entity branch runs after `summarized`, so no state change marks its
-  // results arriving; the task list does.
-  useEntityBranchRefresh(episode?.id, tasksData?.tasks)
+  // results arriving; the task list does. Same for a reprocess (spec #106)
+  // rewriting the transcript and summary of an episode that stays
+  // `summarized` throughout.
+  const refreshSlugs = useMemo(
+    () => (podcastSlug && episodeSlug ? { podcastSlug, episodeSlug } : undefined),
+    [podcastSlug, episodeSlug],
+  )
+  useEntityBranchRefresh(episode?.id, tasksData?.tasks, refreshSlugs)
+
+  // Spec #106 — admin-only "Reprocess…" once the episode has been through
+  // the pipeline (a summary exists); before that the pipeline button applies.
+  const { isAdmin } = useAuth()
+  const reprocess = useReprocessEpisode(episode?.id)
+  const [reprocessOpen, setReprocessOpen] = useState(false)
+  const canReprocess = isAdmin && Boolean(episode?.has_summary)
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
@@ -529,7 +545,26 @@ export default function EpisodeReader({
             listening={listening}
             onPlayFromStart={handlePlayFromStart}
             onMarkPlayed={handleMarkPlayed}
+            onReprocess={
+              canReprocess
+                ? () => {
+                    reprocess.reset()
+                    setReprocessOpen(true)
+                  }
+                : undefined
+            }
           />
+          {canReprocess && (
+            <ReprocessDialog
+              isOpen={reprocessOpen}
+              episodeTitle={episode.title}
+              duration={episode.duration_formatted}
+              busy={reprocess.isPending}
+              error={reprocess.error?.message ?? null}
+              onConfirm={(request) => reprocess.mutate(request, { onSuccess: () => setReprocessOpen(false) })}
+              onCancel={() => setReprocessOpen(false)}
+            />
+          )}
 
           {episode.is_failed && episode.failed_at_stage && (
             <FailureBanner
@@ -656,6 +691,7 @@ export default function EpisodeReader({
           {/* Spec #76 §3.4 — the entity branch reports here as a one-line
               strip only while a task is running or failed. Spec #28
               "failure isolation": independent of the user chain. */}
+          <ReprocessStatus tasks={episodeTasks} className="mx-4 mt-3 sm:mx-6" />
           <EntityBranchProgress
             episodeId={episode?.id ?? null}
             tasks={episodeTasks}

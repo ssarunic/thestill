@@ -18,7 +18,7 @@ mode; in single-user mode all checks pass. Admin-only endpoints:
 - `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}`
 - `POST /api/commands/episode/{id}/cancel-pipeline`
 - `/api/commands/queue/*` and `/api/commands/dlq*` (queue + DLQ management)
-- `POST /api/episodes/bulk/process` and `POST /api/episodes/{id}/retry`
+- `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry` and `POST /api/episodes/{id}/reprocess`
 - `GET /api/episodes` (corpus-wide browser), `GET /api/episodes/failed` and `GET /api/episodes/{id}/failure` (raw failure reasons)
 - `GET /api/entities/review-queue` and `POST /api/entities/corrections` (global entity-resolution surgery)
 - `GET /api/status` and `GET /api/dashboard/*` (operator dashboards)
@@ -830,6 +830,48 @@ Retry a failed episode. Clears failure state and queues new task.
   "stage": "transcribe"
 }
 ```
+
+When the failed task belonged to a reprocess run, the retry carries its
+`reprocess` metadata on, so the rest of the run still re-transcribes,
+refreshes facts and re-embeds.
+
+### POST /api/episodes/{episode_id}/reprocess
+
+Admin only. Re-run one stage of an already processed episode and every stage
+after it, through the entity branch (spec #106). Readers keep the current
+transcript and summary until the run replaces them.
+
+**Request Body:**
+
+```json
+{ "from_stage": "clean", "refresh_episode_facts": false }
+```
+
+- `from_stage`: `transcribe`, `clean`, `summarize` or `entities` (starts at
+  extract-entities).
+- `refresh_episode_facts`: re-extract the speaker mapping and guests. Used by
+  `transcribe` and `clean`. Podcast facts are never refreshed.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "message": "Episode title queued for reprocessing from clean",
+  "episode_id": "uuid",
+  "task_id": "task-uuid",
+  "from_stage": "clean",
+  "starting_stage": "clean"
+}
+```
+
+`starting_stage` differs from `from_stage` for `transcribe` when the audio is
+gone: the run starts at `downsample` or `download` instead.
+
+**Errors:** 404 unknown episode; 400 when the stage's input is missing (no raw
+transcript, clean transcript or segmented sidecar); 409 when the episode has a
+task queued, running or waiting to retry in any stage; 422 for any other
+`from_stage`.
 
 ---
 

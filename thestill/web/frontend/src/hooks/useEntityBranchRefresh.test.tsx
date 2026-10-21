@@ -134,4 +134,33 @@ describe('useEntityBranchRefresh', () => {
     })
     expect(invalidateSpy).not.toHaveBeenCalled()
   })
+
+  describe('reprocess (spec #106)', () => {
+    const slugs = { podcastSlug: 'the-show', episodeSlug: 'ep-1' }
+    type SlugProps = Props & { slugs?: typeof slugs }
+
+    function renderWithSlugs(initialProps: SlugProps) {
+      return renderHook((props: SlugProps) => useEntityBranchRefresh(props.episodeId, props.tasks, props.slugs), {
+        wrapper: createWrapper(queryClient),
+        initialProps,
+      })
+    }
+
+    it('refetches the transcript and summary as clean and summarize finish', () => {
+      const { rerender } = renderWithSlugs({ episodeId: EP, tasks: [task('clean', 'processing')], slugs })
+      rerender({ episodeId: EP, tasks: [task('clean', 'completed'), task('summarize', 'processing')], slugs })
+      expect(keys()).toEqual([JSON.stringify(['episodes', 'the-show', 'ep-1', 'transcript'])])
+      rerender({ episodeId: EP, tasks: [task('clean', 'completed'), task('summarize', 'completed')], slugs })
+      expect(keys()).toEqual([
+        JSON.stringify(['episodes', 'the-show', 'ep-1', 'transcript']),
+        JSON.stringify(['episodes', 'the-show', 'ep-1', 'summary']),
+      ])
+    })
+
+    it('does nothing for clean without the slugs', () => {
+      const { rerender } = renderWithSlugs({ episodeId: EP, tasks: [task('clean', 'processing')] })
+      rerender({ episodeId: EP, tasks: [task('clean', 'completed')] })
+      expect(invalidateSpy).not.toHaveBeenCalled()
+    })
+  })
 })

@@ -729,6 +729,13 @@ export interface PipelineTaskMetadata {
   target_state?: string
   initiated_at?: string
   initiated_by?: string
+  /** Spec #106 — set on every task of a reprocess run. */
+  reprocess?: {
+    from_stage: ReprocessFromStage
+    refresh_episode_facts: boolean
+    requested_by: string | null
+    requested_at: string
+  }
 }
 
 export interface PipelineTaskRequest {
@@ -979,6 +986,23 @@ export interface EpisodeRetryResponse {
   episode_id: string
   task_id: string | null
   stage: string | null
+}
+
+/** Spec #106 — the stages an admin can reprocess an episode from. */
+export type ReprocessFromStage = 'transcribe' | 'clean' | 'summarize' | 'entities'
+
+export interface EpisodeReprocessRequest {
+  from_stage: ReprocessFromStage
+  refresh_episode_facts?: boolean
+}
+
+export interface EpisodeReprocessResponse {
+  status: string
+  message: string
+  episode_id: string
+  task_id: string
+  from_stage: ReprocessFromStage
+  starting_stage: PipelineStage
 }
 
 // Extend Episode type to include failure info

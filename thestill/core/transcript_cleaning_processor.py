@@ -139,6 +139,7 @@ class TranscriptCleaningProcessor:
         on_stream_chunk: Optional[Callable[[str], None]] = None,
         *,
         language: str,
+        refresh_episode_facts: bool = False,
     ) -> Dict:
         """
         Clean transcript using the two-pass facts-based approach.
@@ -169,6 +170,8 @@ class TranscriptCleaningProcessor:
             save_prompts: Whether to save prompts to debug folder (default: True)
             on_stream_chunk: Optional callback for streaming LLM output chunks
             language: ISO 639-1 language code (e.g., "en", "hr", "de") for language-aware cleaning
+            refresh_episode_facts: Re-extract episode facts even when the file
+                exists (spec #106 reprocess). Podcast facts are never refreshed.
 
         Returns:
             Dict with keys: cleaned_markdown, podcast_facts, episode_facts, processing_time
@@ -242,9 +245,12 @@ class TranscriptCleaningProcessor:
             else None
         )
 
-        # Pass 1: Extract facts if not already present
-        if not episode_facts:
-            logger.info("Pass 1: Extracting episode facts...")
+        # Pass 1: Extract facts if not already present, or when a reprocess
+        # asked for fresh ones (spec #106). The old file is replaced only
+        # once extraction succeeds. Podcast facts are user-edited and are
+        # never refreshed here.
+        if refresh_episode_facts or not episode_facts:
+            logger.info("Pass 1: Extracting episode facts...", refresh=bool(episode_facts))
             episode_facts = facts_extractor.extract_episode_facts(
                 transcript_data=transcript_data,
                 podcast_title=podcast_title,

@@ -41,6 +41,8 @@ interface EpisodeHeaderProps {
   listening?: ListeningSummary | null
   onPlayFromStart?: () => void
   onMarkPlayed?: (played: boolean) => Promise<void>
+  /** Spec #106 — admin-only "Reprocess…" in the ⋯ menu. */
+  onReprocess?: () => void
 }
 
 /**
@@ -61,6 +63,7 @@ export default function EpisodeHeader({
   listening = null,
   onPlayFromStart = () => {},
   onMarkPlayed = () => Promise.resolve(),
+  onReprocess,
 }: EpisodeHeaderProps) {
   const { isCurrent, isPlaying, isLoading, onToggle } = playback
   const minutes = formatMinutes(episode.duration)
@@ -151,6 +154,7 @@ export default function EpisodeHeader({
               onPlayFromStart={onPlayFromStart}
               played={state === 'played'}
               onMarkPlayed={onMarkPlayed}
+              onReprocess={onReprocess}
             />
             {inboxAction}
           </>

@@ -1,6 +1,6 @@
 # Reprocess an Episode From a Chosen Stage
 
-> **Status:** 📝 Draft (2026-10-21)
+> **Status:** 🚧 Phases 1–2 implemented (2026-10-21), unmerged
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Every prompt or provider fix (the v1.27.2 cleaner ad rule, summary profile bumps) only reaches new episodes today. Getting an existing episode onto the fix means SQL on the prod database.
@@ -204,8 +204,11 @@ The changes below apply only when the task carries `reprocess`. First-pass
 behaviour does not change.
 
 - **Transcribe:**
-  - Skip the `_existing_transcript_is_valid` short-cut, so the provider
-    is called.
+  - Skip the `_existing_transcript_is_valid` short-cut for a file written
+    before `requested_at`, so the provider is called. A file written
+    after it came from this run (a retry after a failed DB update) is
+    still reused, as on a first pass. An unreadable modification time
+    counts as older.
   - Write the new raw JSON over the old one only after the provider
     returns, as today.
   - **Don't blank `clean_transcript_path` or `summary_path`.** The old
@@ -250,11 +253,18 @@ behaviour does not change.
   - For Transcribe, a cost warning showing the episode's duration, and a
     confirm button that names the action ("Re-transcribe 1 h 12 min").
 - **After queueing:**
-  - The page keeps polling while the episode has an active task, even
-    when the state is `summarized`.
-  - The existing `EntityBranchProgress` shows the run.
-  - A 409 shows "This episode already has a task running" and links to
-    the queue.
+  - The mutation invalidates the episode's task query. That restarts the
+    task poll, which keeps polling while any task is active, even when
+    the state is `summarized`.
+  - An admin-only status line (`ReprocessStatus`) reports the run while
+    it is in the user chain ("Reprocessing from clean: summarizing").
+    `EntityBranchProgress` takes over in the entity branch.
+  - When a reprocess's `clean` or `summarize` task completes, the
+    transcript or summary query is refetched
+    (`useEntityBranchRefresh`). The state never changes during a
+    reprocess, so the state-diff refresh does not fire.
+  - A refusal (409 and the rest) is shown inside the dialog, which stays
+    open with the choice intact.
 
 ### 5. CLI
 

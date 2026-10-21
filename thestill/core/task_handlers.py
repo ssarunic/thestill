@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Callable, Dict, Generator, Optional, Tuple
 
 from structlog import get_logger
 
+from thestill.core.reprocess_metadata import reprocess_options, reprocess_requested_at
 from thestill.models.transcript import Transcript
 from thestill.utils.exceptions import FatalError, TransientError
 
@@ -99,6 +100,23 @@ logger = get_logger(__name__)
 # =============================================================================
 # Helper Functions (DRY - reduce boilerplate across handlers)
 # =============================================================================
+
+
+def _artifact_predates_reprocess(config, relative_path: str, task: Task) -> bool:
+    """Whether ``relative_path`` was written before this task's reprocess run began.
+
+    An unreadable modification time counts as older: the cost of a wrong
+    answer is one extra provider call, against a reprocess that silently
+    keeps the old artifact.
+    """
+    requested_at = reprocess_requested_at(task.metadata)
+    if requested_at is None:
+        return False
+    try:
+        return config.file_storage.get_modified_time(relative_path) < requested_at.timestamp()
+    except Exception as error:  # pylint: disable=broad-except
+        logger.warning("artifact_mtime_unreadable", path=relative_path, error=str(error))
+        return True
 
 
 def _get_episode_or_fail(task: Task, state: "AppState") -> Tuple[Podcast, Episode]:
@@ -435,7 +453,13 @@ def handle_transcribe(
         # tripped network timeouts that exhaust the retry budget and fail an
         # episode whose transcript was already in hand. If a valid artifact
         # already exists, skip straight to the persist step.
-        if _existing_transcript_is_valid(config, relative_transcript_path):
+        # Spec #106: a reprocess must call the provider again, so the
+        # artifact from the previous run does not count. One this run
+        # already wrote (a retry after a failed DB update) still does.
+        reprocessing = reprocess_options(task.metadata) is not None
+        if _existing_transcript_is_valid(config, relative_transcript_path) and not (
+            reprocessing and _artifact_predates_reprocess(config, relative_transcript_path, task)
+        ):
             logger.info(
                 "Reusing existing transcript artifact; skipping re-transcription",
                 episode_id=episode.id,
@@ -495,12 +519,16 @@ def handle_transcribe(
                 _transcript_to_json(transcript_data),
             )
 
+        # A first pass clears the later outputs: they belong to some other
+        # transcript. A reprocess keeps them (``None`` = leave as is), so
+        # readers see the old clean transcript and summary until the clean
+        # and summarize stages of this run overwrite them in place.
         state.feed_manager.mark_episode_processed(
             str(podcast.rss_url),
             episode.external_id,
             raw_transcript_path=output_db_path,
-            clean_transcript_path="",  # Clear - needs re-cleaning
-            summary_path="",  # Clear - needs re-summarizing
+            clean_transcript_path=None if reprocessing else "",
+            summary_path=None if reprocessing else "",
         )
 
         # Auto-cleanup: delete downsampled audio file after successful transcription
@@ -596,6 +624,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
             output_path=str(cleaned_path),
             path_manager=path_manager,
             language=podcast.language,
+            refresh_episode_facts=bool((reprocess_options(task.metadata) or {}).get("refresh_episode_facts")),
         )
 
         if not cleaning_result:
@@ -750,6 +779,8 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             summary_content=persisted_summary.markdown,
             canonical_language=podcast.language,
             profile=profile,
+            provider=llm_provider.get_provider_name(),
+            model=llm_provider.get_model_name(),
         )
 
         # Update episode state
@@ -815,7 +846,8 @@ def handle_reindex(task: Task, state: "AppState") -> None:
     Skips legacy episodes with no JSON sidecar (same rule as
     ``extract-entities``). Idempotent: re-running on an already-
     chunked episode at the same model is a no-op; pass ``--force``
-    via ``thestill chunks backfill`` to re-embed.
+    via ``thestill chunks backfill`` to re-embed. A spec #106 reprocess
+    run always re-embeds.
 
     Failures here are non-user-facing — flipping the entity-extraction
     status, NOT ``failed_at_stage`` — because the user-visible pipeline
@@ -841,12 +873,17 @@ def handle_reindex(task: Task, state: "AppState") -> None:
         transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
         # Spec #44 — backend-resolved: sqlite-vec locally, pgvector on Postgres.
         writer = make_chunk_writer(state.config, state.embedding_model)
-        inserted = writer.write_episode(episode.id, transcript)
+        # Spec #106: a reprocess has a new transcript, so the existing
+        # chunks are stale. ``force`` embeds first, then swaps the rows in
+        # one transaction; search never sees the episode without chunks.
+        forced = reprocess_options(task.metadata) is not None
+        inserted = writer.write_episode(episode.id, transcript, force=forced)
         logger.info(
             "reindex_completed",
             episode_id=episode.id,
             podcast_slug=podcast.slug,
             chunks_inserted=inserted,
+            forced=forced,
         )
 
 
