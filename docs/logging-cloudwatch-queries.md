@@ -259,6 +259,28 @@ filter message = "llm_usage" and ispresent(episode_id)
 | limit 50
 ```
 
+## Public Page Crawlers
+
+Each public page response (landing, `/top`, podcast, episode and entity pages) logs one `public_shell.served` event with `kind`, `status`, `ua_family` and `ms` (spec #105 §5). `ua_family` names the crawler (`googlebot`, `bingbot`, `oai-searchbot`, `chatgpt-user`, `gptbot`, `claude-searchbot`, `claude-user`, `claudebot`, `perplexitybot`, `perplexity-user`, `ccbot`, `meta-externalagent`, `bytespider`, `applebot`, `duckduckbot`) or falls back to `other-bot`, `preview` or `browser`. The event carries no IP and no full user agent. The family comes from the user agent alone, so a spoofed agent counts as the crawler it claims to be.
+
+### Shell Fetches per Crawler per Day
+
+```sql
+filter message = "public_shell.served"
+| stats count(*) as fetches by bin(1d) as day, ua_family
+| sort day desc, fetches desc
+```
+
+### Crawler Fetches by Page Kind and Status (Last 7 Days)
+
+```sql
+filter message = "public_shell.served" and ua_family not in ["browser", "preview"]
+| stats count(*) as fetches, pct(ms, 95) as p95_ms by ua_family, kind, status
+| sort fetches desc
+```
+
+Training crawlers (`gptbot`, `claudebot`, `ccbot`, `meta-externalagent`, `bytespider`) are disallowed in `robots.txt`, so any fetches from them after the robots change are either a crawler ignoring it or a spoofed agent.
+
 ## Time-Based Analysis
 
 ### Episodes Processed Per Hour

@@ -32,13 +32,16 @@ import html
 import json
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
+import structlog
 from structlog import get_logger
 
+from ..utils.user_agent import crawler_family
 from .middleware.rate_limit import allow_public_request
 from .public_access import TtlCache, get_public_visibility, has_valid_session
 
@@ -61,6 +64,46 @@ _DESCRIPTION_MAX = 160
 
 # Paths a crawler may index. Everything else gets ``noindex``.
 _PUBLIC_STATIC_PATHS = {"": "landing", "top": "top", "terms": "terms", "privacy": "privacy"}
+
+
+def shell_kind(path: str) -> Optional[str]:
+    """``landing``, ``top``, ``podcast``, ``episode`` or ``entity`` for a
+    public content path; ``None`` for everything else."""
+    parts = path.strip("/").split("/")
+    if parts == [""]:
+        return "landing"
+    if parts == ["top"]:
+        return "top"
+    if parts[0] == "podcasts" and len(parts) == 2:
+        return "podcast"
+    if parts[0] == "podcasts" and len(parts) == 4 and parts[2] == "episodes":
+        return "episode"
+    if parts[0] == "entities" and len(parts) == 3:
+        return "entity"
+    return None
+
+
+def log_shell_served(path: str, status: int, user_agent: Optional[str], started: float) -> None:
+    """Spec #105 §5: one line per public shell response, so crawler fetches
+    can be counted per family. No IP and no full user agent: the request
+    context's ``client_ip`` (bound by ``LoggingMiddleware``) is held back
+    for this one event."""
+    kind = shell_kind(path)
+    if kind is None:
+        return
+    client_ip = structlog.contextvars.get_contextvars().get("client_ip")
+    structlog.contextvars.unbind_contextvars("client_ip")
+    try:
+        logger.info(
+            "public_shell.served",
+            kind=kind,
+            status=status,
+            ua_family=crawler_family(user_agent),
+            ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+    finally:
+        if client_ip is not None:
+            structlog.contextvars.bind_contextvars(client_ip=client_ip)
 
 
 @dataclass
@@ -325,7 +368,24 @@ class ShellRenderer:
 # robots.txt and sitemap.xml
 # ---------------------------------------------------------------------------
 
-ROBOTS_PUBLIC = """User-agent: *
+# Spec #105 decision 1: crawlers that collect training data get nothing.
+# Search and user-fetch agents (Bingbot, OAI-SearchBot, ChatGPT-User,
+# Claude-SearchBot, Claude-User, PerplexityBot, Perplexity-User) send
+# readers back, so they fall through to the ``*`` group.
+TRAINING_CRAWLERS = (
+    "GPTBot",
+    "ClaudeBot",
+    "CCBot",
+    "Google-Extended",
+    "Applebot-Extended",
+    "Meta-ExternalAgent",
+    "Bytespider",
+)
+
+ROBOTS_PUBLIC = (
+    "".join(f"User-agent: {agent}\n" for agent in TRAINING_CRAWLERS)
+    + "Disallow: /\n\n"
+    + """User-agent: *
 Allow: /$
 Allow: /top
 Allow: /podcasts/
@@ -345,6 +405,7 @@ Disallow: /api/
 Disallow: /mcp
 Sitemap: {base}/sitemap.xml
 """
+)
 
 ROBOTS_PRIVATE = "User-agent: *\nDisallow: /\n"
 
@@ -382,14 +443,45 @@ class SitemapBuilder:
             if not rows or offset >= total:
                 break
         urls[2:2] = [(f"/podcasts/{slug}", lastmod) for slug, lastmod in sorted(podcasts.items())]
-        # Person and entity pages with enough quotes to be worth indexing
-        # (the same threshold the page uses for noindex).
-        for row in self._state.entity_repository.public_quote_queries().indexable_entities(min_quotes=3):
+        urls.extend((path, None) for path in self._entity_paths())
+        return urls
+
+    def _entity_paths(self) -> List[str]:
+        """Person and entity pages with enough quotes to be worth indexing
+        (the same threshold the page uses for noindex), each listed only if
+        its URL shows that entity: a re-typed entity can share a URL with
+        another one, and the page resolves it to the other."""
+        from .routes.api_entities import url_candidate_ids, url_owner
+
+        repo = self._state.entity_repository
+        rows = []
+        for row in repo.public_quote_queries().indexable_entities(min_quotes=3):
             entity_id = str(row["entity_id"])
             slug = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
             entity_type = row["entity_type"].value if hasattr(row["entity_type"], "value") else row["entity_type"]
-            urls.append((f"/entities/{entity_type}/{slug}", None))
-        return urls
+            rows.append((entity_id, entity_type, slug))
+        # Only a re-typed id (prefix differs from its type) can lose its URL.
+        retyped_slugs = sorted({slug for entity_id, entity_type, slug in rows if entity_id != f"{entity_type}:{slug}"})
+        candidate_ids = [cid for slug in retyped_slugs for cid in url_candidate_ids(slug)]
+        stored = []
+        for start in range(0, len(candidate_ids), _SITEMAP_PAGE):
+            stored.extend(repo.get_entities_by_ids(candidate_ids[start : start + _SITEMAP_PAGE]))
+        by_slug: Dict[str, list] = {}
+        for entity in stored:
+            by_slug.setdefault(entity.id.split(":", 1)[1], []).append(entity)
+        paths, collisions = [], []
+        for entity_id, entity_type, slug in rows:
+            if (
+                entity_id != f"{entity_type}:{slug}"
+                and url_owner(entity_type, slug, by_slug.get(slug, [])) != entity_id
+            ):
+                collisions.append(entity_id)
+                continue
+            paths.append(f"/entities/{entity_type}/{slug}")
+        if collisions:
+            # A data problem to fix (merge or delete the loser), not a crash.
+            logger.warning("sitemap.entity_url_collisions", count=len(collisions), entity_ids=collisions[:20])
+        return paths
 
     def urls(self) -> List[Tuple[str, Optional[str]]]:
         # Keyed on the visibility fingerprint: a takedown drops its URLs on

@@ -27,6 +27,7 @@ Usage:
 """
 
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -97,6 +98,7 @@ from .public_shell import (
     get_shell_renderer,
     get_sitemap_builder,
     inject,
+    log_shell_served,
     render_head,
 )
 from .routes import (
@@ -953,9 +955,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             renderer = get_shell_renderer(state)
             if not renderer.enabled:
                 return FileResponse(str(index_file), headers=no_cache)
+            started = time.perf_counter()
+            user_agent = request.headers.get("user-agent")
             try:
                 tags = renderer.head_for(full_path, request)
             except LookupThrottled:
+                log_shell_served(full_path, 429, user_agent, started)
                 return PlainTextResponse(
                     "Too many requests from your network. Try again in a minute.",
                     status_code=429,
@@ -971,6 +976,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     tags.status_code = 503
                     no_cache = {**no_cache, "Retry-After": "120"}
             html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
+            log_shell_served(full_path, tags.status_code, user_agent, started)
             return HTMLResponse(html_text, status_code=tags.status_code, headers=no_cache)
 
         logger.info("serving_static_frontend", directory=str(static_dir))
