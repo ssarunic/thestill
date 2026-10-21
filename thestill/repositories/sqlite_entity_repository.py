@@ -283,12 +283,15 @@ class SqliteEntityRepository(EntityRepository):
         return [row[0] for row in rows]
 
     def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
-        ids = list(entity_ids)
+        """``BEGIN IMMEDIATE`` takes the writer lock before the predicate is
+        read, so no mention write can be in flight while it is checked."""
+        ids = sorted(set(entity_ids))
         deleted = 0
-        with self._get_connection() as conn:
-            for start in range(0, len(ids), 500):
-                chunk = ids[start : start + 500]
-                marks = ",".join("?" * len(chunk))
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.execute(
                     f"DELETE FROM entities WHERE id IN ({marks}) AND id IN ({_ORPHAN_ENTITIES_SQL})", chunk
                 )

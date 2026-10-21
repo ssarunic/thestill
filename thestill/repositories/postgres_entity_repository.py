@@ -101,6 +101,10 @@ _ORPHAN_ENTITIES_SQL = """
 """
 
 
+# Rows locked per prune transaction: short enough not to stall resolvers.
+_ORPHAN_DELETE_BATCH = 1000
+
+
 class PostgresEntityRepository(EntityRepository):
     """PostgreSQL-backed entity repository. Thread-safe via
     connection-per-operation; the schema is owned by
@@ -208,14 +212,31 @@ class PostgresEntityRepository(EntityRepository):
         return [row["id"] for row in rows]
 
     def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
-        if not entity_ids:
-            return 0
-        with connect(self.dsn) as conn:
-            cursor = conn.execute(
-                f"DELETE FROM entities WHERE id = ANY(%s) AND id IN ({_ORPHAN_ENTITIES_SQL})",
-                (list(entity_ids),),
-            )
-            return cursor.rowcount
+        """Two statements in one transaction, in batches.
+
+        ``FOR UPDATE`` conflicts with the ``KEY SHARE`` lock a mention,
+        override or enrichment write takes on the entity row for its
+        foreign-key check: it waits for an in-flight writer to commit and
+        holds new ones off until this commits (they then fail the FK check
+        and retry, which recreates the row). The ``DELETE`` runs on a fresh
+        READ COMMITTED snapshot, so it sees what those writers committed.
+        One ``DELETE`` alone is not enough: its snapshot predates a writer
+        it waits on, and the cascade would remove that writer's mention.
+        The jsonb anchor and candidate lists take no row lock; a concurrent
+        write there can leave a dangling id, never a lost mention.
+        """
+        ids = sorted(set(entity_ids))
+        deleted = 0
+        for start in range(0, len(ids), _ORPHAN_DELETE_BATCH):
+            chunk = ids[start : start + _ORPHAN_DELETE_BATCH]
+            with connect(self.dsn) as conn:
+                conn.execute("SELECT id FROM entities WHERE id = ANY(%s) ORDER BY id FOR UPDATE", (chunk,))
+                cursor = conn.execute(
+                    f"DELETE FROM entities WHERE id = ANY(%s) AND id IN ({_ORPHAN_ENTITIES_SQL})",
+                    (chunk,),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
         if not entity_ids:

@@ -1441,3 +1441,45 @@ def test_entity_ids_with_mentions(repo):
     repo.insert_mentions([_resolved_mention("topic:a")])
     assert repo.entity_ids_with_mentions(["topic:a", "topic:b", "topic:missing"]) == {"topic:a"}
     assert repo.entity_ids_with_mentions([]) == set()
+
+
+def test_orphan_delete_waits_for_an_uncommitted_mention(repo):
+    """A mention attached in a transaction that has not committed yet must
+    survive a concurrent prune: the prune waits for it, then sees it."""
+    if isinstance(repo, SqliteEntityRepository):
+        pytest.skip("SQLite serializes writers; this race needs Postgres row locks")
+    import threading
+    import time
+
+    import psycopg
+
+    repo.upsert_entity(_bare("topic:racing"))
+    writer = psycopg.connect(PG_DSN)
+    try:
+        writer.execute(
+            "INSERT INTO entity_mentions (entity_id, resolution_status, episode_id, segment_id, start_ms, end_ms,"
+            " surface_form, quote_excerpt, confidence, extractor)"
+            " VALUES (%s, 'resolved', %s, 1, 0, 1000, 'Racing', '… Racing …', 0.9, 'test')",
+            ("topic:racing", EP_1),
+        )
+        result = {}
+        prune = threading.Thread(target=lambda: result.update(deleted=repo.delete_orphan_entities(["topic:racing"])))
+        prune.start()
+        with psycopg.connect(PG_DSN, autocommit=True) as watch:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                waiting = watch.execute(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                ).fetchone()[0]
+                if waiting:
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("the prune never waited on the writer's lock")
+        writer.commit()
+    finally:
+        writer.close()
+    prune.join(10)
+    assert not prune.is_alive()
+    assert result["deleted"] == 0
+    assert repo.entity_ids_with_mentions(["topic:racing"]) == {"topic:racing"}
