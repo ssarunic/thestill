@@ -26,7 +26,7 @@ function read(): boolean {
   return value
 }
 
-export function setFollowPlayback(next: boolean): void {
+function setFollowPlayback(next: boolean): void {
   value = next
   try {
     window.localStorage.setItem(FOLLOW_PLAYBACK_STORAGE_KEY, next ? 'true' : 'false')

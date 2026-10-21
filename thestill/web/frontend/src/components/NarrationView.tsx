@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useNarrateBriefing, useNarration } from '../hooks/useApi'
-import type { NarrationMode, NarrationSummary } from '../api/types'
+import type { NarrationSummary } from '../api/types'
 
 const PRESETS = [
   { slug: 'short', label: 'Short', minutes: 3 },
@@ -252,5 +252,3 @@ export default function NarrationView({
     </div>
   )
 }
-
-export type { NarrationMode }

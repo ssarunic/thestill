@@ -43,7 +43,7 @@ export interface ParsedFilters {
   date_to?: string
 }
 
-export interface OperatorHint {
+interface OperatorHint {
   operator: string
   value: string
   reason: string

@@ -10,7 +10,7 @@ export type ButtonVariant = 'primary' | 'secondary' | 'tonal' | 'success' | 'dan
 // ``primary`` or ``ghost`` variants (the ``secondary`` border would paint).
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon' | 'iconSm' | 'iconLg'
 
-export const variantStyles: Record<ButtonVariant, { base: string; disabled: string }> = {
+const variantStyles: Record<ButtonVariant, { base: string; disabled: string }> = {
   // Navy ``primary`` ramp from tailwind.config.js — the same colour as the
   // sidebar's active item, the logo and the mini player (spec #73 §5.1).
   primary: {
@@ -42,7 +42,7 @@ export const variantStyles: Record<ButtonVariant, { base: string; disabled: stri
   },
 }
 
-export const sizeStyles: Record<ButtonSize, string> = {
+const sizeStyles: Record<ButtonSize, string> = {
   sm: 'min-w-[36px] min-h-[36px] px-2.5 sm:px-3 text-xs gap-1.5 rounded-lg',
   md: 'min-w-[44px] min-h-[44px] px-3 sm:px-4 text-sm gap-2 rounded-lg',
   lg: 'min-w-[48px] min-h-[48px] px-4 sm:px-5 text-base gap-2.5 rounded-lg',

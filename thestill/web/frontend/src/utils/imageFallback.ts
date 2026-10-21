@@ -10,7 +10,7 @@
  * decode it and load the origin directly. Returns null for any URL that is not
  * a recognisable Transistor imgproxy URL.
  */
-export function transistorOrigin(url: string): string | null {
+function transistorOrigin(url: string): string | null {
   try {
     const u = new URL(url)
     if (!u.hostname.endsWith('transistorcdn.com')) return null

@@ -3,7 +3,7 @@ import type { ArrivingItem, Episode, PipelineStage } from '../api/types'
 // Pipeline progress as the user perceives it. Derived from episode state +
 // failure flags so two users sharing an imported episode see consistent
 // progress without storing per-user pipeline state.
-export type ProgressKind = 'failed' | 'processing' | 'ready'
+type ProgressKind = 'failed' | 'processing' | 'ready'
 
 export interface ProgressStatus {
   kind: ProgressKind

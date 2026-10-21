@@ -13,7 +13,7 @@ import { ListeningLabel, ListeningMeter } from '../ListeningProgress'
 import { episodeNumberLabel, episodeTypeLabel, formatEyebrowDate, formatMinutes } from '../../utils/episodeFormat'
 import { listeningState, progressFraction, timeLeftLabel } from '../../utils/listeningFormat'
 
-export interface EpisodePlaybackState {
+interface EpisodePlaybackState {
   /** The player's loaded track is this episode. */
   isCurrent: boolean
   isPlaying: boolean

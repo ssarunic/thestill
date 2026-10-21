@@ -7,7 +7,7 @@ import type { CaptureResult } from 'posthog-js'
 import { routePattern } from './routes'
 
 // Event → the props our code may attach.
-export const EVENT_PROPS: Record<string, readonly string[]> = {
+const EVENT_PROPS: Record<string, readonly string[]> = {
   // The one person update: ``is_admin``, so PostHog's internal-users filter
   // can hide the operator (sign-in events are anonymous and cannot carry it).
   $set: [],

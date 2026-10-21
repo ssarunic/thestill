@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getBriefingSchedule, putBriefingSchedule } from '../api/client'
+import { browserTimezone, getBriefingSchedule, putBriefingSchedule } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import type { BriefingFrequency } from '../api/types'
 
@@ -22,7 +22,8 @@ const WEEKDAYS = [
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h)
 
-const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+// The shared helper returns undefined when Intl cannot name a zone.
+const defaultTimezone = browserTimezone() ?? 'UTC'
 
 // Intl.supportedValuesOf is ES2022; the tsconfig lib predates it, so
 // feature-detect through a typed view instead of widening the lib.
@@ -32,7 +33,7 @@ const intl = Intl as typeof Intl & {
 
 const TIMEZONES: string[] = intl.supportedValuesOf
   ? intl.supportedValuesOf('timeZone')
-  : [browserTimezone]
+  : [defaultTimezone]
 
 interface Draft {
   enabled: boolean
@@ -48,7 +49,7 @@ const DEFAULT_DRAFT: Draft = {
   frequency: 'daily',
   hourLocal: 8,
   weekday: 0,
-  timezone: browserTimezone,
+  timezone: defaultTimezone,
   emailEnabled: false,
 }
 

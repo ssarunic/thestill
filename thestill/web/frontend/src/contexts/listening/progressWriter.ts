@@ -26,8 +26,8 @@ import type { SendResult } from '../../api/listening'
 import type { ListeningEvent, ProgressAck, ProgressBody } from '../../api/types'
 import type { PendingWrite } from './sessionSnapshot'
 
-export const TICK_INTERVAL_MS = 15_000
-export const SEEK_DEBOUNCE_MS = 1_000
+const TICK_INTERVAL_MS = 15_000
+const SEEK_DEBOUNCE_MS = 1_000
 
 export interface Sample {
   episodeId: string
@@ -64,7 +64,7 @@ interface Session {
   held: Hold | null
 }
 
-export function randomId(): string {
+function randomId(): string {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   } catch {

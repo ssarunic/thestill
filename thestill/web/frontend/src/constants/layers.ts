@@ -37,7 +37,6 @@ export const MOBILE_HEADER_HEIGHT = 56
  * needs one today; the reader overlay is recognised by its `role="dialog"`.
  */
 export const MEDIA_HOST_ATTR = 'data-media-host'
-export type MediaHost = 'now-playing'
 
 /**
  * z-index for the media layer given the element its slot lives in: one rung

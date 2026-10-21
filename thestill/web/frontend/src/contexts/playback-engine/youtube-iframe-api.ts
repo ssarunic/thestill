@@ -6,7 +6,7 @@
 // callback is chained rather than clobbered. Ambient types are declared
 // locally — no @types/youtube dependency.
 
-export interface YTPlayerEvent {
+interface YTPlayerEvent {
   data: number
   target: YTPlayer
 }

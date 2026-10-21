@@ -47,7 +47,6 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
         // Refresh inbox so the new row shows up; podcasts list invalidates so
         // an auto-added channel appears once the user follows it.
         queryClient.invalidateQueries({ queryKey: ['inbox'] })
-        queryClient.invalidateQueries({ queryKey: ['inbox', 'unread-count'] })
       } catch (err) {
         setState({
           kind: 'error',
