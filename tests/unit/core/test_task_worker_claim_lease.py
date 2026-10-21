@@ -169,3 +169,32 @@ class TestWorkerGatesFanOutOnClaim:
         queue.supersede_stale_tasks.assert_not_called()
         queue.add_task.assert_not_called()
         worker.repository.clear_episode_failure_for_stages.assert_not_called()
+
+
+class TestHandOffLeavesNoIdleGap:
+    """Spec #106 review: a full-pipeline stage and its successor are queued
+    atomically, so a reprocess never sees the episode idle mid-chain."""
+
+    def test_episode_is_busy_right_after_the_stage_completes(self, db_path):
+        qm = QueueManager(db_path)
+        qm.add_task(episode_id=EPISODE_ID, stage=TaskStage.CLEAN, metadata={"run_full_pipeline": True})
+        task = qm.get_next_task(stage=TaskStage.CLEAN)
+
+        # ``supersede_stale_tasks`` is the first thing after the completion;
+        # a reprocess landing here used to find no active task.
+        seen_during_hand_off = []
+        supersede = qm.supersede_stale_tasks
+
+        def supersede_and_probe(episode_id, stage):
+            seen_during_hand_off.append(qm.add_task_if_episode_idle(EPISODE_ID, TaskStage.TRANSCRIBE))
+            return supersede(episode_id, stage)
+
+        qm.supersede_stale_tasks = supersede_and_probe
+        worker = TaskWorker(queue_manager=qm, task_handlers={TaskStage.CLEAN: MagicMock()}, repository=MagicMock())
+
+        worker._process_task(task)
+
+        assert seen_during_hand_off == [None]  # busy: the successor was already queued
+        assert qm.get_task(task.id).status == TaskStatus.COMPLETED
+        active = [t for t in qm.get_tasks_for_episode(EPISODE_ID) if t.status == TaskStatus.PENDING]
+        assert [(t.stage, t.metadata) for t in active] == [(TaskStage.SUMMARIZE, {"run_full_pipeline": True})]

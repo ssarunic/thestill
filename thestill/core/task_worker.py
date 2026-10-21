@@ -49,7 +49,7 @@ import os
 import signal
 import threading
 import time
-from typing import TYPE_CHECKING, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
 import structlog
 
@@ -779,17 +779,28 @@ class TaskWorker:
                 # this row and a different worker has since reclaimed it, our
                 # completion is rejected here and we MUST NOT run the successor
                 # fan-out (that is the double-enqueue the lease guard prevents).
-                if not self.queue_manager.complete_task(task.id, claim_started_at=self._claim_token(task)):
+                #
+                # The successors are queued in the same transaction as the
+                # completion (spec #106): queued afterwards, the episode looked
+                # idle for a moment between the two and a reprocess could start
+                # a second chain next to this one.
+                #
+                # Feed-scoped (REFRESH_FEED) tasks have no episode and do
+                # their own dynamic DOWNLOAD fan-out inside the handler.
+                successors = self._chain_successors(task) if task.episode_id is not None else []
+                if not self.queue_manager.complete_task(
+                    task.id, claim_started_at=self._claim_token(task), enqueue_next=successors
+                ):
                     logger.warning(
                         "task_completion_skipped_claim_lost",
                         note="row reclaimed by another worker; skipping bookkeeping + successor fan-out",
                     )
                     return
                 logger.info("task_completed_successfully")
+                for next_stage in successors:
+                    logger.info("chain_enqueueing_next_stage", from_stage=task.stage.value, next_stage=next_stage.value)
 
-                # Feed-scoped (REFRESH_FEED) tasks have no episode and do
-                # their own dynamic DOWNLOAD fan-out inside the handler;
-                # skip the episode-chain bookkeeping entirely.
+                # Feed-scoped tasks skip the episode-chain bookkeeping entirely.
                 if task.episode_id is not None:
                     # Auto-resolve any stale DLQ rows for this episode at the
                     # same stage or earlier in the same branch. After a user
@@ -810,9 +821,6 @@ class TaskWorker:
                             task.episode_id,
                             [s.value for s in stages_at_or_before(task.stage)],
                         )
-
-                    # Chain enqueue next stage if running full pipeline
-                    self._maybe_enqueue_next_stage(task)
 
             except FatalError as e:
                 # Fatal error - move to DLQ, no retry
@@ -898,7 +906,26 @@ class TaskWorker:
     }
 
     def _maybe_enqueue_next_stage(self, task: Task) -> None:
-        """Advance the pipeline chain by one step.
+        """Advance the pipeline chain by one step, outside a completion.
+
+        ``_process_task`` passes :meth:`_chain_successors` to
+        ``complete_task`` instead, so the hand-off is atomic.
+        """
+        for next_stage in self._chain_successors(task):
+            logger.info(
+                "chain_enqueueing_next_stage",
+                from_stage=task.stage.value,
+                next_stage=next_stage.value,
+            )
+            self.queue_manager.add_task(
+                episode_id=task.episode_id,
+                stage=next_stage,
+                priority=task.priority,
+                metadata=task.metadata,
+            )
+
+    def _chain_successors(self, task: Task) -> List[TaskStage]:
+        """The stages to queue after ``task`` completes (empty: the chain ends).
 
         The chain is purely linear (spec #28 §0.5):
         ``download → downsample → transcribe → clean → summarize →
@@ -935,7 +962,7 @@ class TaskWorker:
             # Spec #104: a ban (or unfollow) left nobody who wants this
             # episode; the task that was running finishes, nothing follows.
             logger.info("pipeline_chain_stopped_unwanted", stage=task.stage.value, episode_id=task.episode_id)
-            return
+            return []
         if target_reached or not allow_user_chain:
             # Filter to entity-branch successors only. ``target_reached``
             # reflects an explicit early-stop on the user chain; the
@@ -947,20 +974,7 @@ class TaskWorker:
         if not successors:
             log_msg = "pipeline_target_reached" if target_reached else "pipeline_complete"
             logger.info(log_msg, stage=task.stage.value, target_state=target_state)
-            return
-
-        for next_stage in successors:
-            logger.info(
-                "chain_enqueueing_next_stage",
-                from_stage=task.stage.value,
-                next_stage=next_stage.value,
-            )
-            self.queue_manager.add_task(
-                episode_id=task.episode_id,
-                stage=next_stage,
-                priority=task.priority,
-                metadata=task.metadata,
-            )
+        return successors
 
     #: Pipelines started on someone's behalf (a feed refresh, an inbox
     #: delivery, an import). Operator runs (no tag, ``episode-retry``)

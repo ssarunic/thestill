@@ -889,66 +889,134 @@ class QueueManager:
         Returns:
             The created Task object, or the existing one it coalesced into
         """
-        task_id = str(uuid.uuid4())
-        now = now_utc().isoformat()
-        metadata = metadata or {}
-        max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
-        metadata_json = json.dumps(metadata) if metadata else None
-        statuses = coalescing_statuses(stage)
-        existing: list[Optional[Task]] = [None]
+        result: list[Task] = []
 
         def _write() -> None:
+            result.clear()
             with self._get_connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     # Guard inside the write txn so two concurrent requests
                     # can't both see "nothing queued" and both insert.
-                    row = conn.execute(
-                        f"""
-                        SELECT * FROM tasks
-                        WHERE episode_id = ? AND stage = ?
-                          AND status IN ({",".join("?" for _ in statuses)})
-                        ORDER BY created_at
-                        LIMIT 1
-                        """,
-                        (episode_id, stage.value, *statuses),
-                    ).fetchone()
-                    if row is not None:
-                        existing[0] = self._row_to_task(row)
-                        conn.rollback()
-                        return
-                    conn.execute(
-                        """
-                        INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
-                        VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            task_id,
-                            episode_id,
-                            stage.value,
-                            priority,
-                            max_retries,
-                            metadata_json,
-                            now,
-                            now,
-                        ),
-                    )
+                    result.append(self._insert_or_coalesce(conn, episode_id, stage, priority, metadata, max_retries))
                     conn.commit()
                 except Exception:
                     conn.rollback()
                     raise
 
         self._exec_with_lock_retry("add_task", _write)
+        return result[0]
 
-        if existing[0] is not None:
+    def add_task_if_episode_idle(
+        self,
+        episode_id: str,
+        stage: TaskStage,
+        priority: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+        max_retries: Optional[int] = None,
+    ) -> Optional[Task]:
+        """Queue a task only when the episode has no active task in any stage.
+
+        Spec #106: the reprocess guard. The episode-wide check and the insert
+        run inside one ``BEGIN IMMEDIATE`` transaction (which serialises every
+        writer of the database), so two concurrent requests (any stages)
+        cannot both pass the check, and a second same-stage request is
+        refused instead of coalescing into the first (which would drop its
+        options).
+
+        Returns:
+            The new task, or ``None`` when the episode is busy.
+        """
+        result: list[Optional[Task]] = []
+
+        def _write() -> None:
+            result.clear()
+            with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    busy = conn.execute(
+                        f"""
+                        SELECT id FROM tasks
+                        WHERE episode_id = ? AND status IN ({",".join("?" for _ in ACTIVE_TASK_STATUSES)})
+                        LIMIT 1
+                        """,
+                        (episode_id, *ACTIVE_TASK_STATUSES),
+                    ).fetchone()
+                    if busy is not None:
+                        conn.rollback()
+                        logger.info(
+                            "task_enqueue_refused_episode_busy",
+                            episode_id=episode_id,
+                            stage=stage.value,
+                            active_task_id=busy["id"],
+                        )
+                        result.append(None)
+                        return
+                    result.append(self._insert_or_coalesce(conn, episode_id, stage, priority, metadata, max_retries))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+        self._exec_with_lock_retry("add_task_if_episode_idle", _write)
+        return result[0]
+
+    def _insert_or_coalesce(
+        self,
+        conn: sqlite3.Connection,
+        episode_id: str,
+        stage: TaskStage,
+        priority: int,
+        metadata: Optional[Dict[str, Any]],
+        max_retries: Optional[int],
+    ) -> Task:
+        """Insert a pending task, or return the one it coalesces into.
+
+        The caller has opened a ``BEGIN IMMEDIATE`` transaction on ``conn``
+        and commits it.
+        """
+        task_id = str(uuid.uuid4())
+        now = now_utc().isoformat()
+        metadata = metadata or {}
+        max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
+        statuses = coalescing_statuses(stage)
+
+        row = conn.execute(
+            f"""
+            SELECT * FROM tasks
+            WHERE episode_id = ? AND stage = ?
+              AND status IN ({",".join("?" for _ in statuses)})
+            ORDER BY created_at
+            LIMIT 1
+            """,
+            (episode_id, stage.value, *statuses),
+        ).fetchone()
+        if row is not None:
+            existing = self._row_to_task(row)
             logger.info(
                 "task_enqueue_coalesced",
                 episode_id=episode_id,
                 stage=stage.value,
-                existing_task_id=existing[0].id,
-                existing_status=existing[0].status.value,
+                existing_task_id=existing.id,
+                existing_status=existing.status.value,
             )
-            return existing[0]
+            return existing
+        conn.execute(
+            """
+            INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                episode_id,
+                stage.value,
+                priority,
+                max_retries,
+                json.dumps(metadata) if metadata else None,
+                now,
+                now,
+            ),
+        )
 
         logger.info(f"Task queued: {task_id} - {stage.value} for episode {episode_id}")
 
@@ -1330,7 +1398,12 @@ class QueueManager:
                 conn.rollback()
                 raise
 
-    def complete_task(self, task_id: str, claim_started_at: Optional[str] = None) -> bool:
+    def complete_task(
+        self,
+        task_id: str,
+        claim_started_at: Optional[str] = None,
+        enqueue_next: Sequence[TaskStage] = (),
+    ) -> bool:
         """
         Mark a task as completed.
 
@@ -1346,6 +1419,12 @@ class QueueManager:
                 ``started_at``. Without the guard, the revived zombie would
                 complete a claim it no longer owns and double-fire the successor
                 fan-out. ``None`` = legacy unconditional complete.
+            enqueue_next: The pipeline successors to queue for the same
+                episode, inheriting this task's priority and metadata. They
+                are inserted (or coalesced) in the completing transaction, and
+                only when the completion applied. The episode is never seen
+                idle between a stage and its successor, so the spec #106
+                reprocess guard cannot slip a second chain in at the hand-off.
 
         Returns:
             True iff this call actually transitioned the row to ``completed``.
@@ -1354,25 +1433,39 @@ class QueueManager:
 
         def _write() -> int:
             with self._get_connection() as conn:
-                if claim_started_at is not None:
-                    cursor = conn.execute(
-                        """
-                        UPDATE tasks
-                        SET status = 'completed', completed_at = ?, updated_at = ?
-                        WHERE id = ? AND status = 'processing' AND started_at = ?
-                        """,
-                        (now, now, task_id, claim_started_at),
-                    )
-                else:
-                    cursor = conn.execute(
-                        """
-                        UPDATE tasks
-                        SET status = 'completed', completed_at = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (now, now, task_id),
-                    )
-                return cursor.rowcount or 0
+                if enqueue_next:
+                    conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if claim_started_at is not None:
+                        cursor = conn.execute(
+                            """
+                            UPDATE tasks
+                            SET status = 'completed', completed_at = ?, updated_at = ?
+                            WHERE id = ? AND status = 'processing' AND started_at = ?
+                            """,
+                            (now, now, task_id, claim_started_at),
+                        )
+                    else:
+                        cursor = conn.execute(
+                            """
+                            UPDATE tasks
+                            SET status = 'completed', completed_at = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (now, now, task_id),
+                        )
+                    applied = cursor.rowcount or 0
+                    if applied and enqueue_next:
+                        done = self._row_to_task(
+                            conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                        )
+                        for stage in enqueue_next if done.episode_id else ():
+                            self._insert_or_coalesce(conn, done.episode_id, stage, done.priority, done.metadata, None)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return applied
 
         applied = self._exec_with_lock_retry("complete_task", _write)
         won = applied > 0

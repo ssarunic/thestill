@@ -90,18 +90,22 @@ _NO_ACTIVE_SIBLING_SQL = """
 """
 
 
-def _slot_lock_key(target_id: str, stage: str) -> str:
-    return f"tasks:{target_id.lower()}:{stage}"
+def _target_lock_key(target_id: str) -> str:
+    return f"tasks:{target_id.lower()}"
 
 
-def _lock_slot(conn: Any, target_id: str, stage: str) -> None:
-    """Serialise writers of one (episode, stage) slot for this transaction.
+def _lock_target(conn: Any, target_id: str) -> None:
+    """Serialise writers of one episode's (or feed's) task rows for this transaction.
 
     Check-then-insert under READ COMMITTED lets two concurrent requests both see
     "no active task" and both insert. The transaction-scoped advisory lock makes
     the second wait for the first to commit, so its check sees the new row.
+
+    The key is the whole target, not one (target, stage) slot: the spec #106
+    reprocess guard checks every stage of the episode, so a writer of any
+    stage must wait for it (and it for them).
     """
-    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (_slot_lock_key(target_id, stage),))
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (_target_lock_key(target_id),))
 
 
 class PostgresQueueManager:
@@ -128,14 +132,14 @@ class PostgresQueueManager:
         logger.info("PostgresQueueManager initialized")
 
     @staticmethod
-    def _lock_task_slot(conn: Any, task_id: str) -> None:
-        """Take the :func:`_lock_slot` lock for an existing task's slot."""
+    def _lock_task_target(conn: Any, task_id: str) -> None:
+        """Take the :func:`_lock_target` lock for an existing task's episode (or feed)."""
         row = conn.execute(
-            "SELECT COALESCE(episode_id, podcast_id)::text AS target, stage FROM tasks WHERE id = %s",
+            "SELECT COALESCE(episode_id, podcast_id)::text AS target FROM tasks WHERE id = %s",
             (task_id,),
         ).fetchone()
         if row is not None:
-            _lock_slot(conn, row["target"], row["stage"])
+            _lock_target(conn, row["target"])
 
     def _row_to_task(self, row: dict) -> Task:
         """Convert a dict row to a Task object.
@@ -202,48 +206,101 @@ class PostgresQueueManager:
         Returns:
             The created Task object, or the existing one it coalesced into
         """
+        with connect(self.dsn) as conn:
+            _lock_target(conn, episode_id)
+            task = self._insert_or_coalesce(conn, episode_id, stage, priority, metadata, max_retries)
+        return task
+
+    def add_task_if_episode_idle(
+        self,
+        episode_id: str,
+        stage: TaskStage,
+        priority: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+        max_retries: Optional[int] = None,
+    ) -> Optional[Task]:
+        """Queue a task only when the episode has no active task in any stage.
+
+        Spec #106: the reprocess guard. The episode-wide check and the insert
+        run in one transaction under the episode lock, so two concurrent
+        requests (any stages) cannot both pass the check, and a second
+        same-stage request is refused instead of coalescing into the first
+        (which would drop its options).
+
+        Returns:
+            The new task, or ``None`` when the episode is busy.
+        """
+        with connect(self.dsn) as conn:
+            _lock_target(conn, episode_id)
+            busy = conn.execute(
+                "SELECT id FROM tasks WHERE episode_id = %s AND status = ANY(%s) LIMIT 1",
+                (episode_id, list(ACTIVE_TASK_STATUSES)),
+            ).fetchone()
+            if busy is not None:
+                logger.info(
+                    "task_enqueue_refused_episode_busy",
+                    episode_id=episode_id,
+                    stage=stage.value,
+                    active_task_id=as_str(busy["id"]),
+                )
+                return None
+            task = self._insert_or_coalesce(conn, episode_id, stage, priority, metadata, max_retries)
+        return task
+
+    def _insert_or_coalesce(
+        self,
+        conn: Any,
+        episode_id: str,
+        stage: TaskStage,
+        priority: int,
+        metadata: Optional[Dict[str, Any]],
+        max_retries: Optional[int],
+    ) -> Task:
+        """Insert a pending task, or return the one it coalesces into.
+
+        The caller holds :func:`_lock_target` for ``episode_id`` in ``conn``'s
+        transaction.
+        """
         task_id = str(uuid.uuid4())
         now = now_utc()
         metadata = metadata or {}
         max_retries = max_retries if max_retries is not None else self.DEFAULT_MAX_RETRIES
 
-        with connect(self.dsn) as conn:
-            _lock_slot(conn, episode_id, stage.value)
-            existing = conn.execute(
-                """
-                SELECT * FROM tasks
-                WHERE episode_id = %s AND stage = %s AND status = ANY(%s)
-                ORDER BY created_at
-                LIMIT 1
-                """,
-                (episode_id, stage.value, list(coalescing_statuses(stage))),
-            ).fetchone()
-            if existing is not None:
-                task = self._row_to_task(existing)
-                logger.info(
-                    "task_enqueue_coalesced",
-                    episode_id=episode_id,
-                    stage=stage.value,
-                    existing_task_id=task.id,
-                    existing_status=task.status.value,
-                )
-                return task
-            conn.execute(
-                """
-                INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
-                VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s, %s)
-                """,
-                (
-                    task_id,
-                    episode_id,
-                    stage.value,
-                    priority,
-                    max_retries,
-                    Jsonb(metadata) if metadata else None,
-                    now,
-                    now,
-                ),
+        existing = conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE episode_id = %s AND stage = %s AND status = ANY(%s)
+            ORDER BY created_at
+            LIMIT 1
+            """,
+            (episode_id, stage.value, list(coalescing_statuses(stage))),
+        ).fetchone()
+        if existing is not None:
+            task = self._row_to_task(existing)
+            logger.info(
+                "task_enqueue_coalesced",
+                episode_id=episode_id,
+                stage=stage.value,
+                existing_task_id=task.id,
+                existing_status=task.status.value,
             )
+            return task
+        conn.execute(
+            """
+            INSERT INTO tasks (id, episode_id, stage, status, priority, max_retries, metadata, created_at, updated_at)
+            VALUES (%s, %s, %s, 'pending', %s, %s, %s, %s, %s)
+            """,
+            (
+                task_id,
+                episode_id,
+                stage.value,
+                priority,
+                max_retries,
+                Jsonb(metadata) if metadata else None,
+                now,
+                now,
+            ),
+        )
 
         logger.info(f"Task queued: {task_id} - {stage.value} for episode {episode_id}")
 
@@ -585,7 +642,12 @@ class PostgresQueueManager:
         logger.info(f"Task claimed: {task.id} - {task.stage.value} (retry #{task.retry_count})")
         return task
 
-    def complete_task(self, task_id: str, claim_started_at: Optional[str] = None) -> bool:
+    def complete_task(
+        self,
+        task_id: str,
+        claim_started_at: Optional[str] = None,
+        enqueue_next: Sequence[TaskStage] = (),
+    ) -> bool:
         """
         Mark a task as completed.
 
@@ -601,6 +663,13 @@ class PostgresQueueManager:
                 ``started_at``. Without the guard, the revived zombie would
                 complete a claim it no longer owns and double-fire the successor
                 fan-out. ``None`` = legacy unconditional complete.
+            enqueue_next: The pipeline successors to queue for the same
+                episode, inheriting this task's priority and metadata. They
+                are inserted (or coalesced) in the completing transaction,
+                under the episode lock, and only when the completion applied.
+                The episode is never seen idle between a stage and its
+                successor, so the spec #106 reprocess guard cannot slip a
+                second chain in at the hand-off.
 
         Returns:
             True iff this call actually transitioned the row to ``completed``.
@@ -608,6 +677,8 @@ class PostgresQueueManager:
         now = now_utc()
 
         with connect(self.dsn) as conn:
+            if enqueue_next:
+                self._lock_task_target(conn, task_id)
             if claim_started_at is not None:
                 # The lease token is the worker-side ISO string of the claim's
                 # started_at; Postgres casts text → timestamptz for the compare.
@@ -629,6 +700,10 @@ class PostgresQueueManager:
                     (now, now, task_id),
                 )
             applied = cursor.rowcount or 0
+            if applied and enqueue_next:
+                done = self._row_to_task(conn.execute("SELECT * FROM tasks WHERE id = %s", (task_id,)).fetchone())
+                for stage in enqueue_next if done.episode_id else ():
+                    self._insert_or_coalesce(conn, done.episode_id, stage, done.priority, done.metadata, None)
 
         won = applied > 0
 
@@ -1364,7 +1439,7 @@ class PostgresQueueManager:
         now = now_utc()
 
         with connect(self.dsn) as conn:
-            self._lock_task_slot(conn, task_id)
+            self._lock_task_target(conn, task_id)
             cursor = conn.execute(
                 f"""
                 UPDATE tasks t
@@ -1422,16 +1497,16 @@ class PostgresQueueManager:
         now = now_utc()
         with connect(self.dsn) as conn:
             # Sorted so two concurrent retry-alls take the locks in one order.
-            slots = conn.execute(
+            targets = conn.execute(
                 """
-                SELECT DISTINCT COALESCE(episode_id, podcast_id)::text AS target, stage
+                SELECT DISTINCT COALESCE(episode_id, podcast_id)::text AS target
                 FROM tasks WHERE id = ANY(%s)
-                ORDER BY 1, 2
+                ORDER BY 1
                 """,
                 (ids,),
             ).fetchall()
-            for slot in slots:
-                _lock_slot(conn, slot["target"], slot["stage"])
+            for target in targets:
+                _lock_target(conn, target["target"])
             cursor = conn.execute(
                 f"""
                 UPDATE tasks
@@ -1539,7 +1614,7 @@ class PostgresQueueManager:
         now = now_utc()
 
         with connect(self.dsn) as conn:
-            self._lock_task_slot(conn, task_id)
+            self._lock_task_target(conn, task_id)
             superseded = conn.execute(
                 f"""
                 UPDATE tasks t
