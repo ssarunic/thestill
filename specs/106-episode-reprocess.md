@@ -165,9 +165,17 @@ exists.
   - no task for this episode is pending, processing or retry-scheduled
     **in any stage** (409 otherwise).
 - **The episode-wide active-task check is new:**
-  `has_active_task_for_episode`, on both the SQLite and the Postgres
-  queue managers. It also keeps a reprocess from merging into a plain
-  queued task and losing its metadata.
+  `add_task_if_episode_idle`, on both the SQLite and the Postgres
+  queue managers. The check and the insert are one transaction (SQLite
+  `BEGIN IMMEDIATE`; Postgres an advisory lock on the episode, which
+  every task writer of the episode takes), so concurrent requests cannot
+  both pass it. It also keeps a reprocess from merging into a plain
+  queued task and losing its metadata. `has_active_task_for_episode`
+  remains for the dry run.
+- **The pipeline hand-off is atomic:** `complete_task(...,
+  enqueue_next=...)` queues the next stage in the same transaction that
+  completes the current one, so the episode never looks idle between two
+  stages of a running chain.
 - **It queues one task** with this metadata:
 
   ```json
@@ -321,8 +329,10 @@ stage and the task id.
   - each stage's branch on `reprocess` (transcribe skips the short-cut
     and keeps paths, clean refreshes facts, reindex passes `force`);
   - retry copying `reprocess`.
-- **Queue contract tests:** `has_active_task_for_episode` on SQLite and
-  Postgres (`TEST_DATABASE_URL`).
+- **Queue contract tests:** `has_active_task_for_episode`,
+  `add_task_if_episode_idle` (concurrent requests, a second same-stage
+  request) and the atomic hand-off on SQLite and Postgres
+  (`TEST_DATABASE_URL`).
 - **Worker test:** a reprocess task chains clean → summarize → the whole
   entity branch, and successors carry `reprocess`.
 - **Frontend tests:**

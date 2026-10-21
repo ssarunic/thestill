@@ -69,7 +69,8 @@ import {
   markBriefingListened,
   markBriefingOpened,
 } from '../api/client'
-import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeDetailResponse, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import { ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
 
 // Dashboard hooks
 export function useDashboardStats() {
@@ -666,10 +667,12 @@ export interface UseEpisodeTasksOptions {
  *
  * The previous implementation returned `false` from `refetchInterval` the
  * instant a response contained no active task, which is a latch that can
- * only fall open: `TaskWorker` completes a task and only *then* enqueues
- * its successor ([task_worker.py:671-704]), so a poll landing in that
- * non-atomic window sees an empty list while the pipeline is still running
- * — and nothing ever restarts the query.
+ * only fall open: `TaskWorker` used to complete a task and only *then*
+ * enqueue its successor, so a poll landing in that window saw an empty list
+ * while the pipeline was still running — and nothing ever restarted the
+ * query. (The hand-off is one transaction since the spec #106 review, but a
+ * quiet list mid-pipeline is still possible, e.g. work queued by another
+ * path after a pause.)
  *
  * Instead the poll drops to a slow tier and only stops after
  * `IDLE_TICKS_BEFORE_STOP` *consecutive* quiet ticks. Any active task
@@ -738,10 +741,28 @@ const STAGE_REFRESH_TARGETS: Partial<Record<PipelineStage, RefreshTarget>> = {
   summarize: 'summary',
 }
 
+// A failed user-chain stage stamps the episode's failure banner
+// (`is_failed`, read by `FailureBanner`). Entity-branch stages never do.
+const FAILED_TASK_STATUSES = new Set<string>(['failed', 'dead'])
+// The worker marks the task dead *before* it stamps the episode failed, so the
+// first refetch can land in between. Try again until the flag shows, briefly.
+export const FAILURE_REFETCH_ATTEMPTS = 5
+export const FAILURE_REFETCH_DELAY_MS = 2_000
+
+function isUserChainFailure(t: EpisodeTask): boolean {
+  return FAILED_TASK_STATUSES.has(t.status) && !ENTITY_BRANCH_STAGES.has(t.stage) && !FEED_SCOPED_STAGES.has(t.stage)
+}
+
 /**
  * Refetch the entity strip/rail and the Related-episodes rail as the entity
  * branch finishes, and the transcript and summary as a reprocess rewrites
  * them (spec #106).
+ *
+ * Also refetch the episode itself when a user-chain task newly fails. A
+ * reprocess runs on a `summarized` episode, whose 5s poll has stopped, so
+ * without this the failure banner (and its Retry) would not appear until a
+ * window refocus. The refetch repeats until `is_failed` shows or
+ * `FAILURE_REFETCH_ATTEMPTS` run out.
  *
  * The branch runs after `summarize`, so the episode never changes state
  * again: `useEpisodeLiveRefresh`'s state-diff invalidation fires at
@@ -767,9 +788,18 @@ export function useEntityBranchRefresh(
   slugs?: { podcastSlug: string; episodeSlug: string },
 ) {
   const queryClient = useQueryClient()
-  const seenRef = useRef<{ episodeId: string; completed: Set<string> } | null>(null)
+  const seenRef = useRef<{ episodeId: string; completed: Set<string>; failed: Set<string> } | null>(null)
+  const failureRefetchRef = useRef<{ cancelled: boolean } | null>(null)
   const podcastSlug = slugs?.podcastSlug
   const episodeSlug = slugs?.episodeSlug
+
+  // Navigation or unmount ends any failure refetch still waiting.
+  useEffect(
+    () => () => {
+      if (failureRefetchRef.current) failureRefetchRef.current.cancelled = true
+    },
+    [episodeId],
+  )
 
   useEffect(() => {
     if (!episodeId || !tasks) return
@@ -777,9 +807,21 @@ export function useEntityBranchRefresh(
     const completed = tasks.filter(
       (t) => t.status === 'completed' && STAGE_REFRESH_TARGETS[t.stage] !== undefined,
     )
+    const failed = tasks.filter(isUserChainFailure)
     const prev = seenRef.current
-    seenRef.current = { episodeId, completed: new Set(completed.map((t) => t.id)) }
+    seenRef.current = {
+      episodeId,
+      completed: new Set(completed.map((t) => t.id)),
+      failed: new Set(failed.map((t) => t.id)),
+    }
     if (!prev || prev.episodeId !== episodeId) return
+
+    if (podcastSlug && episodeSlug && failed.some((t) => !prev.failed.has(t.id))) {
+      if (failureRefetchRef.current) failureRefetchRef.current.cancelled = true
+      const run = { cancelled: false }
+      failureRefetchRef.current = run
+      void refetchUntilFailed(queryClient, ['episodes', podcastSlug, episodeSlug], run)
+    }
 
     const targets = new Set(
       completed.filter((t) => !prev.completed.has(t.id)).map((t) => STAGE_REFRESH_TARGETS[t.stage]),
@@ -797,6 +839,21 @@ export function useEntityBranchRefresh(
       queryClient.invalidateQueries({ queryKey: ['episodes', episodeId, target] })
     }
   }, [episodeId, tasks, queryClient, podcastSlug, episodeSlug])
+}
+
+async function refetchUntilFailed(
+  queryClient: ReturnType<typeof useQueryClient>,
+  episodeKey: readonly string[],
+  run: { cancelled: boolean },
+): Promise<void> {
+  for (let attempt = 0; attempt < FAILURE_REFETCH_ATTEMPTS; attempt++) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, FAILURE_REFETCH_DELAY_MS))
+    if (run.cancelled) return
+    // Exact: the transcript, summary and other sub-queries share the prefix.
+    await queryClient.invalidateQueries({ queryKey: episodeKey, exact: true })
+    if (run.cancelled) return
+    if (queryClient.getQueryData<EpisodeDetailResponse>(episodeKey)?.episode?.is_failed) return
+  }
 }
 
 // Episode Browser hooks (cross-podcast)

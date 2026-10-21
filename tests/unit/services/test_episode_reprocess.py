@@ -62,7 +62,10 @@ def _config(*, provider: str = "whisper", files: tuple = ()) -> MagicMock:
 def _queue(*, busy: bool = False) -> MagicMock:
     queue = MagicMock()
     queue.has_active_task_for_episode.return_value = busy
-    queue.add_task.return_value.id = "task-1"
+    if busy:
+        queue.add_task_if_episode_idle.return_value = None
+    else:
+        queue.add_task_if_episode_idle.return_value.id = "task-1"
     return queue
 
 
@@ -141,11 +144,20 @@ class TestRefusals:
         assert rejected.value.kind == "missing_input"
 
     def test_busy_episode_queues_nothing(self):
+        # The busy check lives inside the queue's guarded insert, so the
+        # service never calls the coalescing ``add_task``.
         queue = _queue(busy=True)
         with pytest.raises(ReprocessRejected) as rejected:
             _reprocess(_episode(), "clean", queue=queue)
         assert rejected.value.kind == "busy"
         queue.add_task.assert_not_called()
+
+    def test_busy_episode_is_refused_on_a_dry_run_too(self):
+        queue = _queue(busy=True)
+        with pytest.raises(ReprocessRejected) as rejected:
+            _reprocess(_episode(), "clean", queue=queue, dry_run=True)
+        assert rejected.value.kind == "busy"
+        queue.add_task_if_episode_idle.assert_not_called()
 
 
 def test_dry_run_checks_everything_and_queues_nothing():
@@ -153,13 +165,13 @@ def test_dry_run_checks_everything_and_queues_nothing():
     queued = _reprocess(_episode(), "summarize", queue=queue, dry_run=True)
     assert queued.task_id is None
     assert queued.starting_stage == TaskStage.SUMMARIZE
-    queue.add_task.assert_not_called()
+    queue.add_task_if_episode_idle.assert_not_called()
 
 
 def test_queued_metadata_round_trips_through_the_helpers():
     queue = _queue()
     _reprocess(_episode(), "clean", queue=queue, refresh_episode_facts=True, requested_by="user-1")
-    metadata = queue.add_task.call_args.kwargs["metadata"]
+    metadata = queue.add_task_if_episode_idle.call_args.kwargs["metadata"]
     options = reprocess_options(metadata)
     assert options["from_stage"] == "clean"
     assert options["refresh_episode_facts"] is True

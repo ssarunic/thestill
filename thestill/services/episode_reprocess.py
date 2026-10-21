@@ -101,9 +101,9 @@ def queue_reprocess(
     # Episode-wide, not per stage: a request merged into a plain queued
     # task would lose its metadata (the existing row wins), and a request
     # next to a running stage would race it.
-    if queue_manager.has_active_task_for_episode(episode.id):
-        raise ReprocessRejected("busy", "This episode already has a task queued or running")
     if dry_run:
+        if queue_manager.has_active_task_for_episode(episode.id):
+            raise _busy()
         return ReprocessQueued(
             task_id=None,
             episode_id=episode.id,
@@ -122,7 +122,12 @@ def queue_reprocess(
             "requested_at": now_utc().isoformat(),
         },
     }
-    task = queue_manager.add_task(episode.id, starting_stage, metadata=metadata)
+    # The check and the insert are one transaction under the episode lock,
+    # so two concurrent requests can't both pass it (and a second same-stage
+    # request is refused, not coalesced into the first with its options lost).
+    task = queue_manager.add_task_if_episode_idle(episode.id, starting_stage, metadata=metadata)
+    if task is None:
+        raise _busy()
 
     logger.info(
         "episode_reprocess_requested",
@@ -140,6 +145,10 @@ def queue_reprocess(
         from_stage=from_stage,
         starting_stage=starting_stage,
     )
+
+
+def _busy() -> ReprocessRejected:
+    return ReprocessRejected("busy", "This episode already has a task queued or running")
 
 
 def _starting_stage(episode: Episode, stage: TaskStage, config) -> TaskStage:

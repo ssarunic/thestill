@@ -34,6 +34,7 @@ The Postgres cases are skipped (not failed) when no server is reachable:
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -274,3 +275,158 @@ class TestHasActiveTaskForEpisode:
         qm.get_next_task()
         qm.complete_task(done.id)
         assert qm.has_active_task_for_episode(EP) is False
+
+
+def _hold_queue_write_lock(qm, episode_id: str):
+    """Open a transaction that holds the lock the guarded writes take.
+
+    SQLite: ``BEGIN IMMEDIATE`` (the database writer lock). Postgres: the
+    episode's advisory lock. Returns ``(conn, release)``; ``conn`` can write
+    inside the held transaction, ``release()`` commits it.
+    """
+    if isinstance(qm, QueueManager):
+        import sqlite3
+
+        conn = sqlite3.connect(str(qm.db_path), isolation_level=None)
+        conn.execute("BEGIN IMMEDIATE")
+
+        def release() -> None:
+            conn.execute("COMMIT")
+            conn.close()
+
+        return conn, release
+
+    import psycopg
+
+    from thestill.core.postgres_queue_manager import _target_lock_key
+
+    conn = psycopg.connect(PG_DSN)
+    conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (_target_lock_key(episode_id),))
+
+    def release() -> None:
+        conn.commit()
+        conn.close()
+
+    return conn, release
+
+
+def _insert_pending_row(conn, qm, episode_id: str, stage: TaskStage) -> None:
+    """Insert a pending task on a held-lock connection (raw SQL, no guard)."""
+    now = datetime.now(timezone.utc)
+    if isinstance(qm, QueueManager):
+        conn.execute(
+            "INSERT INTO tasks (id, episode_id, stage, status, priority, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'pending', 0, ?, ?)",
+            (str(uuid.uuid4()), episode_id, stage.value, now.isoformat(), now.isoformat()),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO tasks (id, episode_id, stage, status, priority, created_at, updated_at)"
+            " VALUES (%s, %s, %s, 'pending', 0, %s, %s)",
+            (str(uuid.uuid4()), episode_id, stage.value, now, now),
+        )
+
+
+def _all_active(qm, episode_id: str) -> list:
+    live = {TaskStatus.PENDING, TaskStatus.PROCESSING, TaskStatus.RETRY_SCHEDULED}
+    return [t for t in qm.get_tasks_for_episode(episode_id) if t.status in live]
+
+
+class TestAddTaskIfEpisodeIdle:
+    """Spec #106 review — the reprocess guard is one check-and-insert."""
+
+    def test_idle_episode_gets_the_task_with_its_metadata(self, qm):
+        task = qm.add_task_if_episode_idle(EP, TaskStage.CLEAN, metadata={"reprocess": {"from_stage": "clean"}})
+        assert task is not None and task.status == TaskStatus.PENDING
+        assert qm.get_task(task.id).metadata == {"reprocess": {"from_stage": "clean"}}
+
+    def test_an_active_task_in_any_stage_makes_it_busy(self, qm):
+        live = qm.add_task(episode_id=EP, stage=TaskStage.REINDEX)
+        assert qm.add_task_if_episode_idle(EP, TaskStage.CLEAN) is None
+        assert [t.id for t in _all_active(qm, EP)] == [live.id]
+        # Another episode is unaffected.
+        assert qm.add_task_if_episode_idle(EP2, TaskStage.CLEAN) is not None
+
+    def test_second_same_stage_request_is_busy_not_coalesced(self, qm):
+        first = qm.add_task_if_episode_idle(EP, TaskStage.CLEAN, metadata={"reprocess": {"refresh": False}})
+        second = qm.add_task_if_episode_idle(EP, TaskStage.CLEAN, metadata={"reprocess": {"refresh": True}})
+        assert first is not None
+        assert second is None  # reported busy; its options are not silently dropped
+        [active] = _all_active(qm, EP)
+        assert active.id == first.id
+        assert active.metadata == {"reprocess": {"refresh": False}}
+
+    def test_concurrent_requests_for_different_stages_queue_exactly_one(self, qm):
+        stages = [TaskStage.CLEAN, TaskStage.SUMMARIZE] * 4
+        with ThreadPoolExecutor(max_workers=len(stages)) as pool:
+            results = list(pool.map(lambda stage: qm.add_task_if_episode_idle(EP, stage), stages))
+        queued = [r for r in results if r is not None]
+        assert len(queued) == 1
+        assert results.count(None) == len(stages) - 1
+        assert [t.id for t in _all_active(qm, EP)] == [queued[0].id]
+
+    def test_the_check_runs_inside_the_write_lock(self, qm):
+        # Another writer holds the lock and inserts a task for the episode in
+        # a different stage. The guarded call must wait for it and then see
+        # that row; a check outside the lock would have passed and inserted.
+        conn, release = _hold_queue_write_lock(qm, EP)
+        try:
+            _insert_pending_row(conn, qm, EP, TaskStage.SUMMARIZE)
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pending = pool.submit(qm.add_task_if_episode_idle, EP, TaskStage.CLEAN)
+                time.sleep(0.3)
+                assert not pending.done()  # blocked on the lock
+                release()
+                release = None
+                assert pending.result(timeout=10) is None
+        finally:
+            if release is not None:
+                release()
+        assert [t.stage for t in _all_active(qm, EP)] == [TaskStage.SUMMARIZE]
+
+
+class TestCompleteTaskHandOff:
+    """Spec #106 review — a stage and its successor are one transaction."""
+
+    def test_successor_inherits_priority_and_metadata(self, qm):
+        meta = {"run_full_pipeline": True, "reprocess": {"from_stage": "clean"}}
+        task = qm.add_task(episode_id=EP, stage=TaskStage.CLEAN, priority=7, metadata=meta)
+        claimed = qm.get_next_task()
+        assert qm.complete_task(
+            claimed.id, claim_started_at=claimed.started_at.isoformat(), enqueue_next=[TaskStage.SUMMARIZE]
+        )
+        assert qm.get_task(task.id).status == TaskStatus.COMPLETED
+        [successor] = _all_active(qm, EP)
+        assert successor.stage == TaskStage.SUMMARIZE
+        assert successor.priority == 7
+        assert successor.metadata == meta
+
+    def test_lost_claim_queues_no_successor(self, qm):
+        qm.add_task(episode_id=EP, stage=TaskStage.CLEAN, metadata={"run_full_pipeline": True})
+        claimed = qm.get_next_task()
+        assert not qm.complete_task(
+            claimed.id, claim_started_at="1999-01-01T00:00:00+00:00", enqueue_next=[TaskStage.SUMMARIZE]
+        )
+        assert [t.id for t in _all_active(qm, EP)] == [claimed.id]
+
+    def test_successor_coalesces_into_a_queued_copy(self, qm):
+        qm.add_task(episode_id=EP, stage=TaskStage.CLEAN, metadata={"run_full_pipeline": True})
+        claimed = qm.get_next_task()
+        queued = qm.add_task(episode_id=EP, stage=TaskStage.SUMMARIZE)
+        assert qm.complete_task(claimed.id, enqueue_next=[TaskStage.SUMMARIZE])
+        assert [t.id for t in _all_active(qm, EP)] == [queued.id]
+
+    def test_reprocess_racing_the_hand_off_is_always_busy(self, qm):
+        # Both writers wait on the same lock; whichever runs first, the guard
+        # sees either the running stage or its successor, never a gap.
+        qm.add_task(episode_id=EP, stage=TaskStage.CLEAN, metadata={"run_full_pipeline": True})
+        claimed = qm.get_next_task()
+        conn, release = _hold_queue_write_lock(qm, EP)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            hand_off = pool.submit(qm.complete_task, claimed.id, None, [TaskStage.SUMMARIZE])
+            reprocess = pool.submit(qm.add_task_if_episode_idle, EP, TaskStage.CLEAN)
+            time.sleep(0.2)
+            release()
+            assert hand_off.result(timeout=10) is True
+            assert reprocess.result(timeout=10) is None
+        assert [t.stage for t in _all_active(qm, EP)] == [TaskStage.SUMMARIZE]
