@@ -20,7 +20,8 @@ Two-level facts architecture:
 - EpisodeFacts: Episode-specific knowledge (guests, speaker mapping, topics)
 """
 
-from typing import Dict, List
+import re
+from typing import Dict, FrozenSet, List
 
 from pydantic import BaseModel, Field
 
@@ -70,3 +71,32 @@ def strip_role_annotation(name: str) -> str:
     if " (" in name and name.endswith(")"):
         return name.rsplit(" (", 1)[0]
     return name
+
+
+# Words that mark a speaker-mapping role or a guest bio as advertising —
+# "Ad Narrator", "(Sponsor Read)", "Book Promo". Shared by the role
+# linker (ad voices are never guests) and the segmented cleaner (ad
+# voices are never conversation participants).
+AD_WORD = r"(?:ads?|adverts?|advertisements?|advertising|sponsors?|sponsored|sponsorship|promos?|promotions?|promotional|commercials?)"
+_AD_WORD_RE = re.compile(rf"\b{AD_WORD}\b", re.IGNORECASE)
+
+
+def ad_voice_names(speaker_mapping: Dict[str, str]) -> FrozenSet[str]:
+    """Rendered names of the speakers a mapping files as ad voices.
+
+    A speaker is an ad voice when its role annotation or its name holds
+    an ad word: ``"Ad Narrator 2"``, ``"Evan Gershkovich (Ad Narrator)"``.
+    Names are returned as the cleaned transcript renders them (see
+    ``strip_role_annotation``). A rendered name that another speaker
+    carries without an ad role — ``"Lewis Goodall (Ad Narrator)"`` next
+    to ``"Lewis Goodall (Host)"`` — is a participant and is left out.
+    """
+    ad: set = set()
+    other: set = set()
+    for name in speaker_mapping.values():
+        if not name:
+            continue
+        rendered = strip_role_annotation(name).strip()
+        role = name[len(rendered) :]
+        (ad if _AD_WORD_RE.search(role) or _AD_WORD_RE.search(rendered) else other).add(rendered)
+    return frozenset(ad - other)

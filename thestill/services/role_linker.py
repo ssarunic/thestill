@@ -31,6 +31,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from structlog import get_logger
 
 from ..models.entities import EntityRecord, EntityType
+from ..models.facts import AD_WORD
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
 from ..utils.path_manager import PathManager
@@ -94,13 +95,12 @@ _SPEAKER_MAP_RE = re.compile(
 # ad *phrase* counts there ("ad segment", "(ad)", "in an advert",
 # "book promo"), not a lone word a real guest's job title may contain
 # ("Head of Ad Sales").
-_AD_WORD = r"(?:ads?|adverts?|advertisements?|advertising|sponsors?|sponsored|sponsorship|promos?|promotions?|promotional|commercials?)"
-_AD_ROLE_RE = re.compile(rf"\b{_AD_WORD}\b", re.IGNORECASE)
+_AD_ROLE_RE = re.compile(rf"\b{AD_WORD}\b", re.IGNORECASE)
 _AD_BIO_RE = re.compile(
-    rf"\([^)]*\b{_AD_WORD}\b[^)]*\)"
-    rf"|\b{_AD_WORD}\s+(?:segments?|reads?|breaks?|spots?|narrators?|voices?|copy|messages?|sections?)\b"
-    rf"|\bin\s+(?:an?|the)\s+{_AD_WORD}\b"
-    rf"|\b(?:book|podcast|product|sponsor|newspaper)\s+{_AD_WORD}\b",
+    rf"\([^)]*\b{AD_WORD}\b[^)]*\)"
+    rf"|\b{AD_WORD}\s+(?:segments?|reads?|breaks?|spots?|narrators?|voices?|copy|messages?|sections?)\b"
+    rf"|\bin\s+(?:an?|the)\s+{AD_WORD}\b"
+    rf"|\b(?:book|podcast|product|sponsor|newspaper)\s+{AD_WORD}\b",
     re.IGNORECASE,
 )
 

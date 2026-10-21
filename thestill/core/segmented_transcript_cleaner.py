@@ -40,15 +40,16 @@ providers without caching (Ollama / Mistral) have their batch budget
 widened to amortise the repeated prefix.
 """
 
+import re
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, FrozenSet, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator
 from structlog import get_logger
 
 from thestill.core.llm_provider import LLMProvider
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, CleaningProvenance, SegmentKind
-from thestill.models.facts import EpisodeFacts, PodcastFacts, strip_role_annotation
+from thestill.models.facts import EpisodeFacts, PodcastFacts, ad_voice_names, strip_role_annotation
 from thestill.utils.exceptions import ProhibitedContentError
 from thestill.utils.language_config import resolve_language_spec
 from thestill.utils.text_sanitizer import sanitize_text
@@ -61,7 +62,7 @@ logger = get_logger(__name__)
 # facts rendering) so provenance records distinguish outputs of the old
 # and new prompts. Orthogonal to ``AnnotatedTranscript.algorithm_version``,
 # which tracks the sidecar output *contract*.
-CLEANUP_PROMPT_VERSION = "v1"
+CLEANUP_PROMPT_VERSION = "v2"
 
 # Diarization sometimes hands a word or two of one speaker's sentence to
 # a voice that otherwise only appears in the ad break — the Econoclasts
@@ -73,6 +74,20 @@ CLEANUP_PROMPT_VERSION = "v1"
 # fragment under three words, at most this many of them.
 ORPHAN_FRAGMENT_MAX_WORDS = 2
 ORPHAN_SPEAKER_MAX_FRAGMENTS = 3
+# The facts step names a voice "Ad Narrator" on thin evidence, and
+# diarisation splits a few words of cross-talk off a host's run onto
+# whichever voice is nearest — "But we're third." mid-way through a
+# Rest Is Politics host's sentence, "daddy-daddy falling over
+# backwards.", came out as "Ad Narrator 2". An ad voice is never a
+# conversation participant, so a short speech fragment of one that
+# finishes the unfinished sentence of the turn before it, with the same
+# speaker carrying on after it, is that speaker's. A fragment after a
+# full stop is left alone: across the local corpus about half of those
+# are the *other* participant cutting in ("But we're third." / "Yeah,
+# exactly."). Longer ad-voice speech is left alone too: it is as often a
+# mislabelled guest as a missed ad read.
+AD_VOICE_FRAGMENT_MAX_WORDS = 6
+_SENTENCE_END_RE = re.compile(r"[.?!…][\"'”’»)]*\s*$")
 # The kinds a listener hears as the episode. Ad reads, music, and filler
 # are not speech a participant is credited with.
 _SPEECH_KINDS: frozenset = frozenset({"content", "intro", "outro"})
@@ -321,6 +336,14 @@ class SegmentedTranscriptCleaner:
                 fragments=len(reassigned),
                 speakers=sorted({old for old, _new in reassigned}),
             )
+        cleaned, reassigned = _reassign_ad_voice_fragments(cleaned, ad_voice_names(episode_facts.speaker_mapping))
+        if reassigned:
+            logger.info(
+                "ad_voice_fragments_reassigned",
+                episode_id=annotated.episode_id,
+                fragments=len(reassigned),
+                speakers=sorted({old for old, _new in reassigned}),
+            )
 
         # Reassign positional ids so the returned transcript remains
         # 0..N-1 after any filler-drop / ad-merge surgery that Phase D's
@@ -499,13 +522,24 @@ class SegmentedTranscriptCleaner:
             "   'like', 'you know' become kind='filler' with empty "
             "   cleaned_text. Isolated filler words within a content segment "
             "   can be dropped but the segment stays kind='content'.\n"
-            "4. AD DETECTION — when a segment is clearly a sponsor read "
-            "   ('Support for the show comes from', 'promo code', "
-            "   'visit [sponsor].com'), mark it kind='ad_break' and populate "
-            "   sponsor from the known sponsors list when possible. KEEP the "
-            "   full cleaned ad text in cleaned_text — downstream consumers "
-            "   filter by kind, they do not rely on you to redact. Tagging, "
-            "   not obfuscation, is the contract.\n"
+            "4. AD DETECTION — mark kind='ad_break' on:\n"
+            "   - sponsor reads ('Support for the show comes from', "
+            "     'promo code', 'visit [sponsor].com');\n"
+            "   - trailers and promos for another podcast, show, film or "
+            "     book: a produced montage of clips, or a pitch voiced by "
+            "     people who are not in this conversation, usually ending "
+            "     with where to find it ('wherever you get your podcasts', "
+            "     'search for', 'out now').\n"
+            "   Tag every segment of such a span, whatever its speaker "
+            "   label: diarisation often files a promo voice under a host's "
+            "   name. The span ends where the hosts' own conversation "
+            "   resumes. A host recommending or discussing something in the "
+            "   course of the conversation is content, not an ad. Populate "
+            "   sponsor from the known sponsors list when possible; for a "
+            "   promo, use the name of the show or product it promotes. KEEP "
+            "   the full cleaned ad text in cleaned_text — downstream "
+            "   consumers filter by kind, they do not rely on you to redact. "
+            "   Tagging, not obfuscation, is the contract.\n"
             "5. SEGMENT TAGS — also use kind='music' for theme/interstitial "
             "   music spans that the transcriber still produced text for, "
             "   kind='intro' for pre-roll show openings (cold opens, "
@@ -654,6 +688,57 @@ def _reassign_orphan_fragments(
                 }
             )
             reassigned.append((speaker, target))
+    return result, reassigned
+
+
+def _reassign_ad_voice_fragments(
+    segments: List[AnnotatedSegment],
+    ad_voices: FrozenSet[str],
+) -> Tuple[List[AnnotatedSegment], List[Tuple[str, str]]]:
+    """Give a short ad-voice speech fragment to the participant around it.
+
+    A speech segment (see ``_SPEECH_KINDS``) by one of ``ad_voices`` with
+    at most ``AD_VOICE_FRAGMENT_MAX_WORDS`` words is reassigned when the
+    segments directly before and after it — skipping only filler — are
+    speech by the same speaker, that speaker is not an ad voice, and the
+    segment before it stops mid-sentence. Any other segment in between
+    (an ad break, music, another voice) leaves the fragment alone: it may
+    be the tail of an ad read the model did not tag.
+
+    Returns the new segment list and the ``(old_speaker, new_speaker)``
+    pair of every reassigned fragment. Reassigned segments record the
+    original label in ``metadata["speaker_reassigned_from"]``.
+    """
+    if not ad_voices:
+        return segments, []
+
+    def adjacent(index: int, step: int) -> Optional[AnnotatedSegment]:
+        j = index + step
+        while 0 <= j < len(segments) and segments[j].kind == "filler":
+            j += step
+        return segments[j] if 0 <= j < len(segments) else None
+
+    result = list(segments)
+    reassigned: List[Tuple[str, str]] = []
+    for index, segment in enumerate(segments):
+        if segment.speaker not in ad_voices or not _is_speech(segment):
+            continue
+        if len(segment.text.split()) > AD_VOICE_FRAGMENT_MAX_WORDS:
+            continue
+        before, after = adjacent(index, -1), adjacent(index, 1)
+        if before is None or after is None or not (_is_speech(before) and _is_speech(after)):
+            continue
+        if before.speaker is None or before.speaker != after.speaker or before.speaker in ad_voices:
+            continue
+        if _SENTENCE_END_RE.search(before.text):
+            continue
+        result[index] = segment.model_copy(
+            update={
+                "speaker": before.speaker,
+                "metadata": {**segment.metadata, "speaker_reassigned_from": segment.speaker},
+            }
+        )
+        reassigned.append((segment.speaker, before.speaker))
     return result, reassigned
 
 
