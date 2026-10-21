@@ -238,11 +238,13 @@ episodes and indexable entities (a sitemap index past 40k URLs). In
 single-user mode `robots.txt` disallows everything.
 
 **Server-written content (spec #105).** For a signed-out request to a
-public episode, podcast or person/entity page, the shell also writes the
-page's main content inside `#root` (episode: h1, summary lead, the first 6
-quotes, people, links; podcast: description, hosts, the first 10
-summarised episodes; entity: featured quote, who's talking or what they
-said, appearances, Wikipedia and Wikidata facts) and a
+public page, the shell also writes the page's main content inside
+`#root` (episode: h1, summary lead, the first 6 quotes, people, links;
+podcast: description, hosts, the first 10 summarised episodes; entity:
+featured quote, who's talking or what they said, appearances, Wikipedia
+and Wikidata facts; landing: the latest summary lead, who said what,
+recently summarised; `/top`: the chart for the visitor's region, resolved
+as `/api/public/top-podcasts` resolves it) and a
 `<script type="application/json" id="thestill-bootstrap">` data block, both
 built from the same cached payloads as `/api/public`
 (`thestill/web/public_prerender.py`). The app seeds React Query from the

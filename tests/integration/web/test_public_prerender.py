@@ -628,3 +628,75 @@ def test_a_host_with_no_mentions_is_indexed_and_listed(site, app_state):
 
     get_public_visibility(app_state).invalidate()
     assert "quiet-host" not in site.get("/sitemap.xml").text
+
+
+# ---------------------------------------------------------------------------
+# Landing and top (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_landing_has_the_latest_summary_and_fresh_links(site, app_state):
+    _seed_people(app_state)
+    response = site.get("/", headers={"User-Agent": BING})
+    page = _parse(response.text)
+    text = " ".join(_norm(t) for t in page.texts)
+    assert page.tags.count("h1") == 1 and "Read your podcasts." in text
+    assert "Latest summary" in text and "Two hosts argue about chips." in text
+    assert "Recently summarised" in text and EPISODE in page.hrefs
+    by_query = {(q["query"], tuple(q["args"])): q["data"] for q in _bootstrap(page)["queries"]}
+    assert by_query[("recent", (1,))] == _api_body(site, "/api/public/recent-summaries?limit=1")
+    assert by_query[("recent", (6,))] == _api_body(site, "/api/public/recent-summaries?limit=6")
+    assert by_query[("whoSaidWhat", ())] == _api_body(site, "/api/public/who-said-what")
+    assert by_query[("summary", ("public-show", "summarised"))]["content"].startswith("## ")
+    _assert_subset(page)
+    assert len({site.get("/", headers={"User-Agent": ua}).text for ua in USER_AGENTS}) == 1
+
+
+def test_top_shows_the_chart_for_the_visitors_region(site, app_state, monkeypatch):
+    import sqlite3
+
+    from thestill.web.routes import api_public
+
+    from .conftest import seed_top_chart
+
+    seed_top_chart(
+        app_state,
+        "gb",
+        [
+            {"rank": 1, "name": "The Rest Is History", "artist": "Goalhanger", "rss_url": "https://example.com/t"},
+            {"rank": 2, "name": "Chart Two", "artist": "Someone", "rss_url": "https://example.com/u"},
+        ],
+    )
+    with sqlite3.connect(str(app_state.repository.db_path)) as conn:
+        conn.execute(
+            "INSERT INTO top_podcasts_meta (region, source_path, source_mtime, row_count, seeded_at) "
+            "VALUES ('us', 'test', 0, 0, '2026-10-15T00:00:00+00:00')"
+        )
+    lookups: list = []
+
+    async def from_ip(ip):
+        lookups.append(ip)
+        return {"81.2.69.142": "gb"}.get(ip)
+
+    monkeypatch.setattr(api_public, "lookup_country_from_ip", from_ip)
+    monkeypatch.setattr(api_public, "_visitor_country_cache", api_public.TtlCache(60.0))
+    monkeypatch.setattr(api_public, "resolve_client_ip", lambda request: request.headers.get("X-Test-Ip", ""))
+
+    uk = _parse(site.get("/top", headers={"X-Test-Ip": "81.2.69.142"}).text)
+    text = " ".join(_norm(t) for t in uk.texts)
+    assert "Top podcasts" in text and "The Rest Is History" in text and "Goalhanger" in text
+    (entry,) = _bootstrap(uk)["queries"]
+    assert entry["query"] == "top" and entry["args"] == [None, None]
+    assert entry["data"]["region"] == "gb"
+    _assert_subset(uk)
+    # The same request to the API answers with the same chart.
+    body = site.get("/api/public/top-podcasts", headers={"X-Test-Ip": "81.2.69.142"}).json()
+    body.pop("status"), body.pop("timestamp")
+    assert entry["data"] == body
+    assert lookups == ["81.2.69.142"]  # one lookup, cached for the API call
+    # A visitor elsewhere gets the US chart (empty here), as the page would.
+    us = _parse(site.get("/top", headers={"X-Test-Ip": "198.51.100.7"}).text)
+    assert _bootstrap(us)["queries"][0]["data"]["region"] == "us"
+    # ?region= is a filtered view: header only, nothing seeded.
+    filtered = _parse(site.get("/top?region=gb", headers={"X-Test-Ip": "81.2.69.142"}).text)
+    assert filtered.tags.count("h1") == 1 and _bootstrap(filtered)["queries"] == []
