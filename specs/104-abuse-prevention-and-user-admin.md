@@ -1,8 +1,8 @@
 # Abuse Prevention and User Administration
 
-> **Status:** 🚧 Merged in PRs #370–#373 (2026-10-19), awaiting deploy (see [Implementation notes](#implementation-notes))
+> **Status:** ✅ Deployed in v1.26.0 (2026-10-19) (see [Implementation notes](#implementation-notes))
 > **Created:** 2026-10-17
-> **Updated:** 2026-10-19
+> **Updated:** 2026-10-21
 > **Priority:** High. Signup is open to any Google account, and one user can make the server transcribe as many feeds as they like.
 > **Author:** Product & Engineering
 > **Related:** [#06 authentication](06-authentication.md) (lists per-user quotas as a goal), [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md) (leaves the follow limit open), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md), [#63 universal-follower-gate](63-universal-follower-gate.md) (why a follow costs money), [#78 remote-mcp-access](78-remote-mcp-access.md), [#95 product-analytics](95-product-analytics.md) (the admin `/analytics` page this sits beside)

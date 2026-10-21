@@ -1,8 +1,8 @@
 # Sign-in Page
 
-> **Status:** 🚧 Merged in PR #353 (2026-10-16), awaiting deploy
+> **Status:** ✅ Deployed in v1.23.0 (2026-10-16). Since then: a `summary` intent (PR #357) and the spec #104 refusal messages on `/login`
 > **Created:** 2026-10-16
-> **Updated:** 2026-10-16
+> **Updated:** 2026-10-21
 > **Priority:** High. The public pages (spec #94) put "Sign in" in front of every visitor, and today it means four different things.
 > **Author:** Product & Engineering
 > **Related:** [#94 public-pages](94-public-pages.md) (the buttons this page serves), [#80 share-to-thestill](80-share-to-thestill.md) (`next` through login)

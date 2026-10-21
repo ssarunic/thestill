@@ -1,6 +1,6 @@
 # Content Popularity
 
-> **Status:** ✅ Phases 0–2 implemented (2026-10-18)
+> **Status:** ✅ Phases 0–2 deployed in v1.26.0 (2026-10-19)
 > **Created:** 2026-10-17
 > **Priority:** Medium. Phase 0 needs no migration and can ship with the next deploy.
 > **Author:** Product & Engineering
