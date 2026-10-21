@@ -156,8 +156,9 @@ What this does and does not mean:
   gets today's head-only shell.
 - No `llms.txt` and no AI-specific markup. There is no evidence any
   answer engine relies on them.
-- No change to which pages are indexable or listed in the sitemap.
-  Entity quality thresholds are an open question, not part of this spec.
+- No change to which episode and podcast pages are indexable. The
+  stricter entity rule (decision 3) is the one exception, and it lands
+  before Phase 2.
 
 ## Options
 
@@ -315,7 +316,7 @@ holds anything that sits behind sign-in, a click or a later page.
 
 | Page | In the fallback | Out |
 |---|---|---|
-| Episode | Show link, date, duration; h1; hosts and guests (links); Listen-on links; the summary lead (gist and key takeaways, exactly as `_summary_lead` cuts it) and the "Also:" titles of the held-back sections; the first quote page (up to 12, each with speaker link and a `#t=` episode link); mentioned entities by type with counts; the first ~80 words of the publisher description; 3 "More from" links | Full summary; transcript; quote pages after the first; the speaker filter; the linked-quote card (a fragment the server never sees) |
+| Episode | Show link, date, duration; h1; hosts and guests (links); Listen-on links; the summary lead (gist and key takeaways, exactly as `_summary_lead` cuts it) and the "Also:" titles of the held-back sections; the first 6 quotes (decision 2; each with speaker link and a `#t=` episode link); mentioned entities by type with counts; the first ~80 words of the publisher description; 3 "More from" links | Full summary; transcript; quote pages after the first; the speaker filter; the linked-quote card (a fragment the server never sees) |
 | Podcast | h1, author, category; the publisher description, clipped as on the page; hosts and recurring guests (links); Listen-on links; the first 10 summarised episodes with their one-line `summary_preview` (links) | Later episode pages; Follow (a sign-in link only) |
 | Entity | h1, headline or description; the featured quote; Who's talking or Topics; the first quote page per stream shown on load; Appears on and Guest on lists; Most discussed on; Related; the Wikidata facts shown in the rail | Quote pages after the first; the `?about=` filtered views |
 | Landing | Masthead copy; the latest summary lead; Who said what this week (up to 3 quotes); Fresh this week (6 links) | Nothing extra |
@@ -332,9 +333,13 @@ excerpts" and "the publisher's show in text form":
   publisher's platforms. They are already public through
   `/api/public/.../quotes` and allowed in `robots.txt`. The fallback
   makes them readable without JavaScript but does not make more of them
-  public. Twelve excerpts of about 20–40 words, from an episode that runs
+  public. Six excerpts of about 20–40 words, from an episode that runs
   close to an hour, are the kind of short quoting that keeps relations
-  with podcasters workable. All 53 would not be.
+  with podcasters workable. All 53 would not be. To keep the parity rule
+  without a flash, the public episode page's first quote page also drops
+  from 12 to 6 for everyone (the rest stay behind "More quotes"), so the
+  fallback, the bootstrap and the page agree. This is the one visible
+  change for readers.
 - **Publisher description: clipped.** Show notes are often long (762
   words in the sample) and appear word for word on Apple, Spotify and
   the publisher's site. The full text adds duplicate content and no
@@ -493,7 +498,7 @@ rates.
 
 | Phase | Scope | Ships alone? |
 |---|---|---|
-| 0 | Baseline: `public_shell.served` log line and `ua_family`; CloudWatch queries; Bing Webmaster Tools site verified (import from Search Console) and sitemap submitted; a "Search & AI referrals" PostHog insight; the measured word count and Bing numbers recorded in this spec | Yes, no behaviour change |
+| 0 | Baseline: `public_shell.served` log line and `ua_family`; CloudWatch queries; `robots.txt` blocks AI training crawlers (decision 1); sitemap submitted in Bing Webmaster Tools (already verified, decision 4); a "Search & AI referrals" PostHog insight; the measured word count and Bing numbers recorded in this spec | Yes, no behaviour change |
 | 1 | Episode pages: payload functions out of the episode, summary, quotes and episode-list handlers; `public_prerender.py` with the episode builder; body marker in `index.html`; bootstrap block; `main.tsx` handoff (seed, viewer hint, awaited chunks); global cap, shedding and runtime switch; `markdown-it-py` pin; `Vary` on the shell | Yes |
 | 2 | Podcast and entity pages: `public_podcast_payload` and episode list builder; entity builder on `public_entity_payload` and the first quote pages | Yes |
 | 3 | Landing and `/top`: builders over `recent-summaries`, `who-said-what` and the top chart (region resolved as the API does, so the fallback matches what that visitor's chart shows) | Yes |
@@ -561,7 +566,7 @@ additions to `test_public_shell.py`):
   quote are present for the episode fixture.
 - **Budget.** With a fixture summary that has Timeline and Drama
   sections, neither section's text appears in the fallback or the
-  bootstrap. At most 12 quotes. The description is clipped. No transcript
+  bootstrap. At most 6 quotes. The description is clipped. No transcript
   text other than quote excerpts appears.
 - **Query strings.** `?speaker=x`, `?view=transcript` and `?about=y`
   render only the header block.
@@ -611,8 +616,8 @@ against three production URLs, failing below the Phase 1 threshold.
 | Risk | Effect | Mitigation |
 |---|---|---|
 | Fallback drifts from the React page | Looks like cloaking; misleading snippets | One payload for both; UA-blind; subset and key-block tests; Playwright text comparison |
-| More of the corpus is easy to scrape and train on | Quotes and summaries in plain HTML reach crawlers that skip JSON APIs | Budget keeps transcripts and later quote pages out; robots policy for training crawlers (open question 1); takedown flags apply |
-| Thin or wrong entity pages become more visible | 4,843 of 5,767 URLs are entities, and data quality varies. For example, `/entities/person/altruist` is the custodian firm Altruist typed as a person, with a painting as its image from the Wikidata link. Bing may judge the site by its weakest pages | Entity fallback ships in Phase 2, after episode pages show results. Open question 3 asks whether to raise the `indexable` threshold first |
+| More of the corpus is easy to scrape and train on | Quotes and summaries in plain HTML reach crawlers that skip JSON APIs | Budget keeps transcripts and later quote pages out; `robots.txt` blocks training crawlers (decision 1); takedown flags apply |
+| Thin or wrong entity pages become more visible | 4,843 of 5,767 URLs are entities, and data quality varies. For example, `/entities/person/altruist` is the custodian firm Altruist typed as a person, with a painting as its image from the Wikidata link. Bing may judge the site by its weakest pages | Entity fallback ships in Phase 2, after episode pages show results, and after the stricter `indexable` rule (decision 3) |
 | Crawl bursts | CPU, Postgres and storage reads; threadpool starvation | Payload caches; global cap with shedding; runtime switch; per-IP bucket unchanged |
 | Handoff regressions | Blank frame, double content, layout shift for people | Awaited chunks; Playwright handoff test; CLS budget |
 | A stale cached HTML meets a new bundle | Seeder misreads the payload | `v` version field; seeder ignores unknown versions and refetches |
@@ -630,32 +635,88 @@ An old bundle meeting a new shell ignores the marker content after its
 first commit and fetches as today. A new bundle meeting an old shell
 finds no bootstrap block and fetches as today.
 
+## Decisions
+
+Decided by the product owner on 2026-10-21.
+
+1. **AI training crawlers: blocked; search and user-fetch agents stay
+   allowed.** Ships in Phase 0 as a `robots.txt` change. Disallow `/` for
+   GPTBot, ClaudeBot, CCBot, Google-Extended, Applebot-Extended,
+   Meta-ExternalAgent and Bytespider. Keep Bingbot, OAI-SearchBot,
+   ChatGPT-User, PerplexityBot, Perplexity-User, Claude-SearchBot and
+   Claude-User under the existing `User-agent: *` rules. Training
+   crawlers send no visitors, and the quotes are the publishers' words.
+   A test asserts each name appears in the right group.
+2. **Quote count: 6.** It halves the verbatim text in the HTML. The
+   public episode page's first quote page drops to 6 for everyone so the
+   fallback, the bootstrap and the page agree (see the content budget).
+   The cost is about 130 fewer words per episode fallback (an estimated
+   470–570 words on the sample instead of 600–700), still above the
+   Phase 1 bar of 400.
+3. **Entity `indexable` rule: stricter, before Phase 2.** See below.
+   The rule is proposed. The thresholds get confirmed against a
+   production count before they ship.
+4. **Bing Webmaster Tools: already set up**, owned by the product
+   owner's Google account. Phase 0 submits the sitemap there and records
+   the baseline.
+
+### Proposed entity rule (decision 3)
+
+Today an entity page is indexable (`index` robots meta and a sitemap
+entry) when its said plus about quotes reach 3. A random sample of 120
+live entity payloads (2026-10-21) shows that bar passes 98% of the
+4,843 entity URLs, so it filters almost nothing. The sample also shows
+why a Wikidata link is the wrong test:
+
+- **Guest pages are the most valuable entity pages and mostly lack a
+  QID.** 14 of the 17 sampled people with a guest or host role have no
+  Wikidata link (Alex Kendall, Andrew McAfee, Jay Parikh, David
+  Krakauer…). Search Console already shows guest-name queries such as
+  "dhaval adjodah" landing on thestill. Requiring a QID would drop them.
+- **Wrong-type pages often have a QID.** `person/adolescence`,
+  `person/person` ("Individual being", 19 episodes),
+  `person/nancy-grace-roman-space-telescope` and
+  `person/harry-flashman` (fictional) all link to Wikidata and all pass
+  the quote bar.
+- **The thin tail is generic topics.** Most pages at 3–4 quotes are
+  topics such as commerce, healthy-diet or public-relations.
+
+Proposed rule: a page is indexable when it passes the **value** test
+and the **type** test.
+
+- **Value** (any one):
+  - the entity speaks: 5 or more quotes said, or a guest or host role;
+  - it is discussed in depth: 10 or more quotes about it;
+  - it is discussed widely: 2 or more episodes and 5 or more quotes in
+    total.
+- **Type**: a person page whose entity has a Wikidata QID must have
+  `wikidata_instance_of` containing Q5 (human). A topic, company or
+  product page whose entity is Q5 fails the same way. A manual
+  `noindex` list covers what the rule misses.
+
+On the sample the value test keeps 77 of 120 pages (64%), so about
+3,100 of today's 4,843 entity URLs. Every kept guest page stays. The
+dropped pages are mostly 3–4-quote generic topics and one-episode
+mentions. Non-indexable pages stay reachable by link but get
+`noindex` and leave the sitemap.
+
+The sitemap and the page must use the same predicate. The sample found
+3 URLs (2.5%, so about 120 site-wide) listed in the sitemap whose own
+page reports 0 quotes and `indexable: false`
+(`topic/islam`, `topic/theoretical-physics`, `product/medication`).
+`indexable_entities_sql` and `_build_entity_payload` count differently.
+One function should decide both (FM-6, one definition).
+
 ## Open questions
 
-1. **AI training crawlers.** `robots.txt` today allows every user agent.
-   Should training-only crawlers (GPTBot, ClaudeBot, CCBot,
-   Google-Extended, Applebot-Extended, Meta-ExternalAgent, Bytespider) be
-   disallowed, while search and user-fetch agents (Bingbot,
-   OAI-SearchBot, ChatGPT-User, PerplexityBot, Perplexity-User,
-   Claude-SearchBot, Claude-User) stay allowed? Recommendation: yes.
-   Training crawlers send no visitors, and the quotes are the
-   publishers' words. The goal of this spec is answer engines that link
-   back.
-2. **Quote count.** Twelve (what the page shows on load) or fewer, such
-   as 6? Fewer still meets the parity rule and halves the verbatim text
-   in the HTML. Recommendation: 12, then revisit if a podcaster objects.
-3. **Entity pages before Phase 2.** Should the `indexable` threshold
-   (≥ 3 quality quotes) go up, or require a Wikidata link or a reviewed
-   type, before entity fallbacks ship? This interacts with the spec #100
-   quote gate and the open alias-quality work.
-4. **Snippet controls.** Should quotes carry `data-nosnippet`, or pages a
+1. **Snippet controls.** Should quotes carry `data-nosnippet`, or pages a
    `max-snippet` limit, so search results and AI answers cite the page
    but quote less of the publisher's text? Bing also documents
    `noarchive` and `nocache` values that limit how Copilot uses a page.
    This needs checking against Bing's current documentation before
    relying on it. Default: no controls in Phase 1. Measure first.
-5. **IndexNow.** Adopt in Phase 4? It is cheap and Bing-specific (also
+2. **IndexNow.** Adopt in Phase 4? It is cheap and Bing-specific (also
    Yandex, Seznam, Naver). It needs a key file at the root and one
    outbound call per new summary.
-6. **Bing Webmaster Tools access.** Is the site already verified there?
-   Who owns the account? Phase 0 depends on it.
+3. **Entity rule thresholds.** Confirm the decision 3 numbers against a
+   production count by type before shipping.
