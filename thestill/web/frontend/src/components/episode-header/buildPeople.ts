@@ -57,10 +57,12 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
   // music and intros can carry a preserved speaker and would otherwise
   // both surface a chip and shift the palette away from the viewer's
   // colours (see buildSpeakerColorMap's contract).
+  const renderedSpeakers: (string | null)[] = []
   const speakerLabels: { label: string; segmentId: number }[] = []
   const seenSpeakers = new Set<string>()
   for (const segment of segments ?? []) {
     if (segment.kind !== 'content' && segment.kind !== 'filler') continue
+    renderedSpeakers.push(segment.speaker)
     const label = segment.speaker?.trim()
     if (!label || PLACEHOLDER_SPEAKER.test(label) || ROLE_ONLY_SPEAKER.test(roleStem(label))) continue
     const key = normalizePersonName(label)
@@ -69,9 +71,11 @@ export function buildPeople(entities: EpisodeEntity[], segments: AnnotatedSegmen
     speakerLabels.push({ label, segmentId: segment.id })
   }
 
-  // One colour map, transcript speakers first so a person heard in the
-  // episode keeps the colour the transcript gives their label.
-  const colors = buildSpeakerColorMap([...speakerLabels.map((s) => s.label), ...people.map((p) => p.entity.canonical_name)])
+  // One colour map, fed every speaker row exactly as the transcript feeds
+  // its own (placeholders and role labels included, though they get no
+  // chip), then the entity people, so a person heard in the episode keeps
+  // the colour the transcript gives their label.
+  const colors = buildSpeakerColorMap([...renderedSpeakers, ...people.map((p) => p.entity.canonical_name)])
   const covered = new Set<string>()
   const chips: PersonChip[] = []
 

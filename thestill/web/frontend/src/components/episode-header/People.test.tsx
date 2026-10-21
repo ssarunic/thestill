@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom'
 import People from './People'
 import { buildPeople, normalizePersonName } from './buildPeople'
 import type { AnnotatedSegment, EpisodeEntity } from '../../api/types'
+import { buildSpeakerColorMap } from '../../utils/speakerColors'
 
 function person(id: string, name: string, speaker_kind: EpisodeEntity['speaker_kind'], salience: number, type: EpisodeEntity['entity']['type'] = 'person'): EpisodeEntity {
   return {
@@ -67,6 +68,14 @@ describe('buildPeople (spec #76 §3.5)', () => {
     ]
     const chips = buildPeople([], labels.map((label, i) => segment(i, label)))
     expect(chips.map((c) => c.name)).toEqual(['Host 1', 'Clipper Jones', 'Donald Trump (Archival Audio)'])
+  })
+
+  it('colours chips as the transcript does, even when labels before them get no chip', () => {
+    const rendered = [segment(0, 'Ad Narrator 1'), segment(1, 'SPEAKER_00'), segment(2, 'Alice'), segment(3, 'Bob')]
+    const transcriptColors = buildSpeakerColorMap(rendered.map((s) => s.speaker))
+    const chips = buildPeople([], rendered)
+    expect(chips.map((c) => c.name)).toEqual(['Alice', 'Bob'])
+    expect(chips.map((c) => c.color)).toEqual([transcriptColors.get('Alice'), transcriptColors.get('Bob')])
   })
 
   it('caps entity people at eight and keeps Jim and James apart', () => {
