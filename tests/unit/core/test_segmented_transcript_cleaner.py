@@ -33,10 +33,11 @@ from thestill.core.segmented_transcript_cleaner import (
     CleanupPatchBatch,
     SegmentedTranscriptCleaner,
     _apply_speaker_mapping,
+    _reassign_ad_voice_fragments,
     _reassign_orphan_fragments,
 )
 from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTranscript, WordSpan
-from thestill.models.facts import EpisodeFacts, PodcastFacts
+from thestill.models.facts import EpisodeFacts, PodcastFacts, ad_voice_names
 
 
 class FakeProvider(MockLLMProvider):
@@ -813,3 +814,159 @@ class TestOrphanFragmentReassignment:
         assert [s.speaker for s in cleaned.segments] == ["Yanis", "Yanis", "Yanis"]
         assert cleaned.segments[1].metadata["speaker_reassigned_from"] == "Evan"
         assert "Evan" not in cleaned.to_blended_markdown()
+
+
+class TestAdVoiceFragmentReassignment:
+    """A few words of cross-talk filed under an ad voice go back to the speaker whose sentence they finish."""
+
+    AD = frozenset({"Ad Narrator 2"})
+
+    def test_a_sentence_finished_under_an_ad_voice_goes_back_to_its_speaker(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="I don't think you want to be doing the Mark Rutte"),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text="daddy-daddy falling over backwards."),
+            _segment(seg_id=2, speaker="Rory", text="We've gone far beyond that."),
+        ]
+        result, reassigned = _reassign_ad_voice_fragments(segments, self.AD)
+        assert reassigned == [("Ad Narrator 2", "Rory")]
+        assert result[1].speaker == "Rory"
+        assert result[1].metadata == {"speaker_reassigned_from": "Ad Narrator 2"}
+        assert segments[1].speaker == "Ad Narrator 2"
+
+    def test_a_fragment_after_a_full_stop_is_someone_cutting_in(self) -> None:
+        # Alastair's "Yeah, exactly" answers the fragment, so it is not his.
+        segments = [
+            _segment(seg_id=0, speaker="Alastair", text="Europe is now the second economic power."),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text="But we're third."),
+            _segment(seg_id=2, speaker="Alastair", text="Yeah, exactly."),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    @pytest.mark.parametrize(
+        "before, fragment, after",
+        [
+            ("هل ستأتي غدا؟", "نعم سآتي بالتأكيد", "حسنا، أراك غدا."),
+            ("明日来ますか。", "はい、行きます", "では、また明日。"),
+            ("你明天来吗？", "我会来的", "好的，明天见。"),
+            ("Θα έρθεις αύριο;", "Ναι, θα έρθω", "Ωραία, τα λέμε."),
+            ("Θα έρθεις αύριο\u037e", "Ναι, θα έρθω", "Ωραία, τα λέμε."),
+            ("Kommst du morgen?»", "Ja, sicher", "Gut, bis morgen."),
+            ("「明日来ますか」。", "はい", "では。"),
+        ],
+    )
+    def test_sentence_ends_in_other_scripts_count_as_full_stops(self, before: str, fragment: str, after: str) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Host", text=before),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text=fragment),
+            _segment(seg_id=2, speaker="Host", text=after),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_clean_keeps_an_arabic_reply_with_its_own_speaker(self) -> None:
+        provider = FakeProvider()
+        provider.patch_factory = lambda target_ids: []
+        cleaner = SegmentedTranscriptCleaner(provider)
+        annotated = _annotated(
+            [
+                _segment(seg_id=0, speaker="A", text="هل ستأتي إلى الاجتماع غدا؟"),
+                _segment(seg_id=1, speaker="B", text="نعم سآتي بالتأكيد"),
+                _segment(seg_id=2, speaker="A", text="حسنا، أراك غدا في المكتب."),
+            ]
+        )
+        facts = EpisodeFacts(episode_title="t", speaker_mapping={"A": "Host (Host)", "B": "Ad Narrator 2"})
+        cleaned = cleaner.clean(annotated=annotated, podcast_facts=None, episode_facts=facts, language="ar")
+        assert [s.speaker for s in cleaned.segments] == ["Host", "Ad Narrator 2", "Host"]
+
+    def test_different_speakers_either_side_leave_it_alone(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="and the thing about the"),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text="frigate deal"),
+            _segment(seg_id=2, speaker="Alastair", text="is that it buys time."),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_a_long_ad_voice_turn_is_left_alone(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="and what they told me was"),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text="that there are a lot of regional models in China now"),
+            _segment(seg_id=2, speaker="Rory", text="which surprised me."),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_an_ad_break_between_them_leaves_it_alone(self) -> None:
+        # The fragment may be the untagged tail of the ad read before it.
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="and after the break we"),
+            _segment(seg_id=1, speaker="Ad Narrator 2", text="Visit acme.com today.", kind="ad_break"),
+            _segment(seg_id=2, speaker="Ad Narrator 2", text="Guaranteed human"),
+            _segment(seg_id=3, speaker="Rory", text="are back."),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_filler_between_is_skipped(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="and the price is"),
+            _segment(seg_id=1, speaker="Rory", text="", kind="filler"),
+            _segment(seg_id=2, speaker="Ad Narrator 2", text="far too high,"),
+            _segment(seg_id=3, speaker="Rory", text="I think."),
+        ]
+        result, reassigned = _reassign_ad_voice_fragments(segments, self.AD)
+        assert reassigned == [("Ad Narrator 2", "Rory")]
+        assert result[2].speaker == "Rory"
+
+    def test_only_ad_voices_are_reassigned(self) -> None:
+        segments = [
+            _segment(seg_id=0, speaker="Rory", text="as Trump put it"),
+            _segment(seg_id=1, speaker="Archival Audio 1", text="read my lips"),
+            _segment(seg_id=2, speaker="Rory", text="and nobody believed it."),
+        ]
+        assert _reassign_ad_voice_fragments(segments, self.AD) == (segments, [])
+
+    def test_clean_reads_ad_voices_from_the_speaker_mapping(self) -> None:
+        provider = FakeProvider()
+        provider.patch_factory = lambda target_ids: []
+        cleaner = SegmentedTranscriptCleaner(provider)
+        annotated = _annotated(
+            [
+                _segment(seg_id=0, speaker="A", text="I don't think you want to be doing the Mark Rutte"),
+                _segment(seg_id=1, speaker="B", text="daddy-daddy falling over backwards."),
+                _segment(seg_id=2, speaker="A", text="We've gone far beyond that, and we need a plan."),
+                _segment(seg_id=3, speaker="B", text="This episode is brought to you by Acme.", kind="ad_break"),
+            ]
+        )
+        facts = EpisodeFacts(episode_title="t", speaker_mapping={"A": "Rory Stewart (Host)", "B": "Ad Narrator 2"})
+        cleaned = cleaner.clean(annotated=annotated, podcast_facts=None, episode_facts=facts, language="en")
+        assert [s.speaker for s in cleaned.segments] == [
+            "Rory Stewart",
+            "Rory Stewart",
+            "Rory Stewart",
+            "Ad Narrator 2",
+        ]
+
+
+class TestAdVoiceNames:
+    def test_ad_role_or_ad_name_marks_an_ad_voice(self) -> None:
+        mapping = {
+            "SPEAKER_00": "Rory Stewart (Host)",
+            "SPEAKER_01": "Ad Narrator 1",
+            "SPEAKER_02": "Evan Gershkovich (Ad Narrator)",
+            "SPEAKER_03": "Donald Trump (Archival Audio)",
+            "SPEAKER_04": "Adam Smith (Guest)",
+            "SPEAKER_05": "",
+        }
+        assert ad_voice_names(mapping) == {"Ad Narrator 1", "Evan Gershkovich"}
+
+    def test_a_name_also_mapped_as_a_participant_is_not_an_ad_voice(self) -> None:
+        mapping = {"SPEAKER_00": "Lewis Goodall (Host)", "SPEAKER_07": "Lewis Goodall (Ad Narrator)"}
+        assert ad_voice_names(mapping) == frozenset()
+
+
+class TestAdDetectionPrompt:
+    def test_prompt_covers_promos_for_other_shows(self) -> None:
+        provider = FakeProvider()
+        SegmentedTranscriptCleaner(provider).clean(
+            _annotated([_segment(seg_id=0)]), podcast_facts=None, episode_facts=_facts(), language="en"
+        )
+        system = next(m["content"] for m in provider.calls[0]["messages"] if m["role"] == "system")
+        assert "trailers and promos for another podcast" in system
+        assert "whatever its speaker" in system

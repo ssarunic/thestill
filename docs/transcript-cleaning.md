@@ -54,7 +54,7 @@ Each segment is tagged with a kind; rendering policy lives at the consumer layer
 
 - `content` — the default narrative bucket
 - `filler` — um/uh/you-know noise; dropped from rendered output
-- `ad_break` — sponsor reads, tagged with the sponsor name; full ad text is kept
+- `ad_break` — sponsor reads and trailers or promos for other podcasts, shows, films or books, tagged with the sponsor or the promoted show's name; every segment of a promo span is tagged whatever its speaker label; full ad text is kept
 - `music` — theme or interstitial music the transcriber produced text for
 - `intro` / `outro` — pre-roll openings and post-roll sign-offs
 
@@ -143,6 +143,7 @@ LLMs occasionally emit raw control characters — the motivating incident was Ge
 - **Control-character stripping at the schema boundary**: every patch's `cleaned_text` and `sponsor` pass through a Pydantic validator that strips C0/C1 control characters (tab, newline, and carriage return pass through). Stripping is never silent — it logs a `llm_control_chars_stripped` warning so a provider regression stays visible.
 - **Per-batch prohibited-content fallback**: if the provider refuses a batch on content grounds (e.g. Gemini `PROHIBITED_CONTENT`, raised as `ProhibitedContentError`), the batch falls back to its raw ASR text — no speaker mapping, no ad tagging — instead of failing the whole episode. The fallback is logged as `segmented_cleanup_prohibited_content`.
 - **Orphan speaker fragments**: diarization sometimes hands a word or two of one speaker's sentence to a voice that otherwise only appears in the ad break. After patching, a speaker whose whole speech (`content`, `intro`, `outro` segments) is at most three fragments of under three words each is treated as a stray: each fragment takes the speaker of the nearest preceding speech segment (else the following one) and records the original label in `metadata.speaker_reassigned_from`. Ad, music, and filler segments keep their speaker. Logged as `orphan_speaker_fragments_reassigned`.
+- **Ad-voice cross-talk**: the facts step labels a voice "Ad Narrator" on thin evidence, and diarization can split the end of a host's sentence onto it ("I don't think you want to be doing the Mark Rutte" / *Ad Narrator 2:* "daddy-daddy falling over backwards."). A speech segment of at most six words by a speaker the mapping files as an ad voice goes to the surrounding speaker when that speaker's turns sit directly before and after it (skipping filler) and the turn before stops mid-sentence. A fragment after a full stop is left alone, since it is often the other participant cutting in. So is longer ad-voice speech, which is as often a mislabelled guest as a missed ad. Logged as `ad_voice_fragments_reassigned`.
 
 ## Tips for Best Results
 
