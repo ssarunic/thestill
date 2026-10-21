@@ -63,6 +63,28 @@ logger = get_logger(__name__)
 _TYPE_PRIORITY = {t.value: i for i, t in enumerate(EntityType)}
 
 
+# Entity rows nothing refers to (see ``EntityRepository.find_orphan_entity_ids``).
+# Shared by the listing and the guarded delete, so both apply one definition.
+_ORPHAN_ENTITIES_SQL = """
+            WITH anchored AS (
+                SELECT value AS id FROM podcasts, json_each(podcasts.host_entity_ids)
+                UNION SELECT value FROM podcasts, json_each(podcasts.recurring_entity_ids)
+                UNION SELECT value FROM episodes, json_each(episodes.guest_entity_ids)
+                    WHERE episodes.guest_entity_ids != '[]'
+                UNION SELECT value FROM entity_mentions, json_each(entity_mentions.candidate_entity_ids)
+                    WHERE entity_mentions.candidate_entity_ids IS NOT NULL
+            )
+            SELECT e.id FROM entities e
+            WHERE e.wikidata_qid IS NULL
+              AND e.aliases = '[]'
+              AND NOT e.public_hidden
+              AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM mention_overrides o WHERE o.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM entity_enrichment x WHERE x.entity_id = e.id)
+              AND e.id NOT IN (SELECT id FROM anchored WHERE id IS NOT NULL)
+"""
+
+
 class SqliteEntityRepository(EntityRepository):
     """Phase-0 typed stub for ``entities`` / ``entity_mentions`` tables.
 
@@ -241,6 +263,40 @@ class SqliteEntityRepository(EntityRepository):
         with self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
             return cursor.rowcount > 0
+
+    def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
+        ids = list(entity_ids)
+        found: Set[str] = set()
+        with self._get_connection() as conn:
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                marks = ",".join("?" * len(chunk))
+                rows = conn.execute(
+                    f"SELECT DISTINCT entity_id FROM entity_mentions WHERE entity_id IN ({marks})", chunk
+                ).fetchall()
+                found.update(row[0] for row in rows)
+        return found
+
+    def find_orphan_entity_ids(self) -> List[str]:
+        with self._get_connection() as conn:
+            rows = conn.execute(f"{_ORPHAN_ENTITIES_SQL} ORDER BY e.id").fetchall()
+        return [row[0] for row in rows]
+
+    def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
+        """``BEGIN IMMEDIATE`` takes the writer lock before the predicate is
+        read, so no mention write can be in flight while it is checked."""
+        ids = sorted(set(entity_ids))
+        deleted = 0
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            marks = ",".join("?" * len(chunk))
+            with self._get_connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.execute(
+                    f"DELETE FROM entities WHERE id IN ({marks}) AND id IN ({_ORPHAN_ENTITIES_SQL})", chunk
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def list_episode_ids_with_pending_mentions(
         self, *, podcast_id: Optional[str] = None, limit: Optional[int] = None

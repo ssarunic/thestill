@@ -4819,6 +4819,43 @@ def entity_merge(ctx, keeper, loser, dry_run):
     click.echo(f"\n🎉 1 {label}")
 
 
+@entity_group.command("prune-orphans")
+@click.option("--apply", is_flag=True, help="Delete the orphans (default: report only).")
+@click.option("--show", type=int, default=20, show_default=True, help="How many ids to list.")
+@click.pass_context
+@require_config
+@log_command
+def entity_prune_orphans(ctx, apply, show):
+    """Delete entity rows nothing refers to.
+
+    An orphan has no mention, no Wikidata QID, no aliases, no enrichment
+    and no override, is not hidden, and is no host, recurring voice, guest
+    or mention candidate. Older resolver runs stored one for every
+    unresolvable name, and an empty row can take a re-typed entity's public
+    URL. Reports by default; ``--apply`` deletes.
+    """
+    from collections import Counter
+
+    repo = ctx.obj.entity_repository
+    orphans = repo.find_orphan_entity_ids()
+    by_type = Counter(entity_id.split(":", 1)[0] for entity_id in orphans)
+    summary = ", ".join(f"{kind} {count}" for kind, count in sorted(by_type.items())) or "none"
+    click.echo(f"{len(orphans)} orphan entit{'y' if len(orphans) == 1 else 'ies'} ({summary})")
+    for entity_id in orphans[:show]:
+        click.echo(f"  {entity_id}")
+    if len(orphans) > show:
+        click.echo(f"  … and {len(orphans) - show} more")
+    if not apply:
+        if orphans:
+            click.echo("\nReport only. Re-run with --apply to delete them.")
+        return
+    deleted = repo.delete_orphan_entities(orphans)
+    kept = len(orphans) - deleted
+    click.echo(
+        f"\n✓ {deleted} deleted" + (f" ({kept} gained a reference since the listing and were kept)" if kept else "")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Spec #28 §1.13 — host / guest / recurring anchor metadata + override layer
 # ---------------------------------------------------------------------------

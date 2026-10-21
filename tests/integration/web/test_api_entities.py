@@ -464,6 +464,40 @@ class TestEntitySummaryEndpoint:
         # Another type's page must not borrow it.
         assert client.get("/api/entities/topic/abraham-pais").status_code == 404
 
+    def test_an_empty_row_does_not_hide_the_retyped_entity(self, client, app_state):
+        """Two rows can claim one URL: an empty leftover holding the URL's
+        own prefix, and the re-typed entity the mentions point at. The page
+        shows the one with mentions; with mentions on both, the prefix wins."""
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, _ = _seed_corpus(db_path)
+        repo = SqliteEntityRepository(db_path=str(db_path))
+        repo.upsert_entity(
+            EntityRecord(id="company:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI", aliases=[])
+        )
+        repo.upsert_entity(
+            EntityRecord(
+                id="topic:mistral-ai",
+                type=EntityType.COMPANY,
+                canonical_name="Mistral AI",
+                wikidata_qid="Q119718658",
+                aliases=[],
+            )
+        )
+        _insert_resolved(
+            db_path,
+            [_musk_mention(episode_id, segment_id=9, quote="Mistral shipped a model.", entity_id="topic:mistral-ai")],
+        )
+        resp = client.get("/api/entities/company/mistral-ai")
+        assert resp.status_code == 200
+        assert resp.json()["entity"]["id"] == "topic:mistral-ai"
+
+        # Once the prefix-holder has mentions of its own, it keeps its URL.
+        _insert_resolved(
+            db_path,
+            [_musk_mention(episode_id, segment_id=10, quote="Mistral again.", entity_id="company:mistral-ai")],
+        )
+        assert client.get("/api/entities/company/mistral-ai").json()["entity"]["id"] == "company:mistral-ai"
+
     def test_rejects_invalid_entity_type(self, client):
         resp = client.get("/api/entities/celebrity/foo")
         assert resp.status_code == 400

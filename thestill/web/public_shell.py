@@ -451,7 +451,7 @@ class SitemapBuilder:
         (the same threshold the page uses for noindex), each listed only if
         its URL shows that entity: a re-typed entity can share a URL with
         another one, and the page resolves it to the other."""
-        from .routes.api_entities import url_candidate_ids, url_owner
+        from .routes.api_entities import url_candidate_ids, url_candidates, url_owner
 
         repo = self._state.entity_repository
         rows = []
@@ -460,7 +460,8 @@ class SitemapBuilder:
             slug = entity_id.split(":", 1)[1] if ":" in entity_id else entity_id
             entity_type = row["entity_type"].value if hasattr(row["entity_type"], "value") else row["entity_type"]
             rows.append((entity_id, entity_type, slug))
-        # Only a re-typed id (prefix differs from its type) can lose its URL.
+        # An indexable row has mentions, so one with the URL's own prefix
+        # always owns its URL; only a re-typed row can lose it.
         retyped_slugs = sorted({slug for entity_id, entity_type, slug in rows if entity_id != f"{entity_type}:{slug}"})
         candidate_ids = [cid for slug in retyped_slugs for cid in url_candidate_ids(slug)]
         stored = []
@@ -469,14 +470,14 @@ class SitemapBuilder:
         by_slug: Dict[str, list] = {}
         for entity in stored:
             by_slug.setdefault(entity.id.split(":", 1)[1], []).append(entity)
+        with_mentions = repo.entity_ids_with_mentions([entity.id for entity in stored])
         paths, collisions = [], []
         for entity_id, entity_type, slug in rows:
-            if (
-                entity_id != f"{entity_type}:{slug}"
-                and url_owner(entity_type, slug, by_slug.get(slug, [])) != entity_id
-            ):
-                collisions.append(entity_id)
-                continue
+            if entity_id != f"{entity_type}:{slug}":
+                candidates = url_candidates(entity_type, slug, by_slug.get(slug, []))
+                if not candidates or url_owner(candidates, with_mentions) != entity_id:
+                    collisions.append(entity_id)
+                    continue
             paths.append(f"/entities/{entity_type}/{slug}")
         if collisions:
             # A data problem to fix (merge or delete the loser), not a crash.

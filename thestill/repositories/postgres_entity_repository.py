@@ -79,6 +79,32 @@ _MENTION_CONTEXT_SELECT = """
 """
 
 
+# Entity rows nothing refers to (see ``EntityRepository.find_orphan_entity_ids``).
+# Shared by the listing and the guarded delete, so both apply one definition.
+_ORPHAN_ENTITIES_SQL = """
+            WITH anchored AS (
+                SELECT jsonb_array_elements_text(host_entity_ids) AS id FROM podcasts
+                UNION SELECT jsonb_array_elements_text(recurring_entity_ids) FROM podcasts
+                UNION SELECT jsonb_array_elements_text(guest_entity_ids) FROM episodes
+                    WHERE guest_entity_ids <> '[]'::jsonb
+                UNION SELECT jsonb_array_elements_text(candidate_entity_ids) FROM entity_mentions
+                    WHERE candidate_entity_ids IS NOT NULL AND jsonb_typeof(candidate_entity_ids) = 'array'
+            )
+            SELECT e.id FROM entities e
+            WHERE e.wikidata_qid IS NULL
+              AND e.aliases = '[]'::jsonb
+              AND NOT e.public_hidden
+              AND NOT EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM mention_overrides o WHERE o.entity_id = e.id)
+              AND NOT EXISTS (SELECT 1 FROM entity_enrichment x WHERE x.entity_id = e.id)
+              AND e.id NOT IN (SELECT id FROM anchored WHERE id IS NOT NULL)
+"""
+
+
+# Rows locked per prune transaction: short enough not to stall resolvers.
+_ORPHAN_DELETE_BATCH = 1000
+
+
 class PostgresEntityRepository(EntityRepository):
     """PostgreSQL-backed entity repository. Thread-safe via
     connection-per-operation; the schema is owned by
@@ -169,6 +195,48 @@ class PostgresEntityRepository(EntityRepository):
                 (entity_id,),
             ).fetchone()
         return _row_to_entity(row) if row else None
+
+    def entity_ids_with_mentions(self, entity_ids: Sequence[str]) -> Set[str]:
+        if not entity_ids:
+            return set()
+        with connect(self.dsn) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT entity_id FROM entity_mentions WHERE entity_id = ANY(%s)",
+                (list(entity_ids),),
+            ).fetchall()
+        return {row["entity_id"] for row in rows}
+
+    def find_orphan_entity_ids(self) -> List[str]:
+        with connect(self.dsn) as conn:
+            rows = conn.execute(f"{_ORPHAN_ENTITIES_SQL} ORDER BY e.id").fetchall()
+        return [row["id"] for row in rows]
+
+    def delete_orphan_entities(self, entity_ids: Sequence[str]) -> int:
+        """Two statements in one transaction, in batches.
+
+        ``FOR UPDATE`` conflicts with the ``KEY SHARE`` lock a mention,
+        override or enrichment write takes on the entity row for its
+        foreign-key check: it waits for an in-flight writer to commit and
+        holds new ones off until this commits (they then fail the FK check
+        and retry, which recreates the row). The ``DELETE`` runs on a fresh
+        READ COMMITTED snapshot, so it sees what those writers committed.
+        One ``DELETE`` alone is not enough: its snapshot predates a writer
+        it waits on, and the cascade would remove that writer's mention.
+        The jsonb anchor and candidate lists take no row lock; a concurrent
+        write there can leave a dangling id, never a lost mention.
+        """
+        ids = sorted(set(entity_ids))
+        deleted = 0
+        for start in range(0, len(ids), _ORPHAN_DELETE_BATCH):
+            chunk = ids[start : start + _ORPHAN_DELETE_BATCH]
+            with connect(self.dsn) as conn:
+                conn.execute("SELECT id FROM entities WHERE id = ANY(%s) ORDER BY id FOR UPDATE", (chunk,))
+                cursor = conn.execute(
+                    f"DELETE FROM entities WHERE id = ANY(%s) AND id IN ({_ORPHAN_ENTITIES_SQL})",
+                    (chunk,),
+                )
+                deleted += cursor.rowcount
+        return deleted
 
     def get_entities_by_ids(self, entity_ids: List[str]) -> List[EntityRecord]:
         if not entity_ids:
