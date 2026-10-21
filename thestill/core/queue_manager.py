@@ -468,6 +468,59 @@ def _chunked(items: Sequence[str], size: int) -> List[List[str]]:
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
 
+# Upper bound on how many of a brand-new podcast's discovered episodes one
+# refresh inspects for the initial-backfill cap. Far above any real back
+# catalog, so the whole catalog is excluded in a single pass; the default
+# orphan-query limit (25) would leak everything past the first page once the
+# podcast stops counting as brand-new.
+_INITIAL_BACKFILL_SCAN_LIMIT = 10_000
+
+
+def _discovered_episodes_to_enqueue(
+    podcast_id: str, repository: Any, config: Any, initiated_by: str
+) -> List[Tuple[str, Optional[str]]]:
+    """Pick the discovered-but-unqueued episodes a refresh should enqueue.
+
+    Shared by both queue managers' ``enqueue_discovered_episodes``.
+
+    Initial-backfill cap: a brand-new podcast (no processed episode yet)
+    discovers its ENTIRE back catalog in one refresh, but only the most-recent
+    ``inbox_seed_on_follow`` should ever auto-process; the remainder are marked
+    ``auto_process_excluded``. The cap runs BEFORE the follower gate on purpose:
+    an unfollowed feed is still refreshed for browsing (refresh-on-open, chart
+    pages), and if that first refresh skipped the marking, the back catalog
+    stayed eligible — so the first refresh after a follow (once the
+    follow-seed episodes made the podcast "established") enqueued all of it.
+
+    Spec #74 — spec #63's "processed = followed" invariant: an unfollowed feed
+    never drives the paid pipeline, so nothing is returned for it.
+    """
+    if repository.has_processed_episodes(podcast_id):
+        to_enqueue = repository.get_discovered_unqueued_episodes(podcast_id)
+    else:
+        discovered = repository.get_discovered_unqueued_episodes(podcast_id, limit=_INITIAL_BACKFILL_SCAN_LIMIT)
+        cap = max(
+            0,
+            getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id),
+        )
+        to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
+        skipped = [eid for eid, _ in discovered[cap:]]
+        if skipped:
+            for chunk in _chunked(skipped, _SQL_PARAM_CHUNK):
+                repository.mark_episodes_auto_process_excluded(chunk)
+            logger.info(
+                "refresh_feed_initial_backfill_capped",
+                podcast_id=podcast_id,
+                cap=cap,
+                excluded=len(skipped),
+            )
+
+    if not repository.has_followers(podcast_id):
+        logger.info("refresh_enqueue_skipped_unfollowed", podcast_id=podcast_id, initiated_by=initiated_by)
+        return []
+    return to_enqueue
+
+
 def _no_active_sibling_sql(row: str) -> str:
     """SQL predicate: the task aliased ``row`` has no active sibling.
 
@@ -1109,8 +1162,10 @@ class QueueManager:
         Initial-backfill cap: a brand-new podcast discovers its ENTIRE back
         catalog in one refresh, but only the most-recent few should auto-process
         on subscribe; the remainder are marked ``auto_process_excluded`` so this
-        sweep never enqueues them. An established podcast skips the cap, so every
-        genuinely-new episode (and any real crash-orphan) flows through.
+        sweep never enqueues them — even while nobody follows the feed yet. An
+        established podcast skips the cap, so every genuinely-new episode (and
+        any real crash-orphan) flows through. See
+        ``_discovered_episodes_to_enqueue``.
 
         Args:
             podcast_id: Feed whose discovered episodes to enqueue.
@@ -1123,35 +1178,8 @@ class QueueManager:
         Returns:
             Number of episodes for which a first-stage task was enqueued.
         """
-        # Spec #74 — spec #63's "processed = followed" invariant, enforced at
-        # the one point every refresh path funnels through. An unfollowed
-        # feed may still be *refreshed* (its episode list stays current for
-        # browsing) but never drives the paid pipeline. Re-checked per call,
-        # so a follow that lands before the next refresh takes effect then.
-        if not repository.has_followers(podcast_id):
-            logger.info("refresh_enqueue_skipped_unfollowed", podcast_id=podcast_id, initiated_by=initiated_by)
-            return 0
-
         provider = getattr(config, "transcription_provider", "")
-        discovered = repository.get_discovered_unqueued_episodes(podcast_id)
-
-        if not repository.has_processed_episodes(podcast_id):
-            cap = max(
-                0,
-                getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id),
-            )
-            to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
-            skipped = [eid for eid, _ in discovered[cap:]]
-            if skipped:
-                repository.mark_episodes_auto_process_excluded(skipped)
-                logger.info(
-                    "refresh_feed_initial_backfill_capped",
-                    podcast_id=podcast_id,
-                    cap=cap,
-                    excluded=len(skipped),
-                )
-        else:
-            to_enqueue = discovered
+        to_enqueue = _discovered_episodes_to_enqueue(podcast_id, repository, config, initiated_by)
 
         enqueued = 0
         for episode_id, audio_url in to_enqueue:
