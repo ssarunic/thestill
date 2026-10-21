@@ -382,21 +382,6 @@ class ElevenLabsTranscriber(Transcriber):
         # Spec #35 — caller persists the returned Transcript via FileStorage.
         return transcript
 
-    def _log_error(self, e: Exception) -> None:
-        """Log error with unwrapped cause details."""
-        error_msg = str(e)
-        if hasattr(e, "__cause__") and e.__cause__ is not None:
-            cause = e.__cause__
-            error_msg = f"{error_msg} - Cause: {cause}"
-            if isinstance(cause, requests.exceptions.HTTPError):
-                if hasattr(cause, "response") and cause.response is not None:
-                    try:
-                        error_detail = cause.response.json()
-                        error_msg = f"{error_msg} - Details: {error_detail}"
-                    except Exception:
-                        error_msg = f"{error_msg} - Response: {cause.response.text[:500]}"
-        logger.error("Transcription error", error=error_msg)
-
     def _build_request_data(
         self,
         language: str,
@@ -963,46 +948,6 @@ class ElevenLabsTranscriber(Transcriber):
             return
         self.pending_ops_repository.delete(transcription_id)
         logger.debug("Removed pending operation", transcription_id=transcription_id)
-
-    def resume_pending_operations(self) -> List[Dict[str, Any]]:
-        """Resume any in-flight ElevenLabs jobs by polling for completion.
-
-        Called on startup. Errors per-operation are logged and skipped so
-        one bad row doesn't block the rest of the queue.
-        """
-        if not self.pending_ops_repository:
-            return []
-
-        results: List[Dict[str, Any]] = []
-        for op in self.pending_ops_repository.list_by_provider("elevenlabs"):
-            try:
-                transcription_id = op.operation_id
-                logger.info("Found pending operation", transcription_id=transcription_id)
-                response_data = self._poll_for_transcript(transcription_id)
-
-                if response_data:
-                    transcript = self._format_response(
-                        response_data,
-                        op.payload.get("audio_path", ""),
-                        time.time(),  # original start time unrecoverable post-restart
-                        op.payload.get("language"),
-                    )
-                    results.append(
-                        {
-                            "episode_id": op.episode_id,
-                            "podcast_slug": op.payload.get("podcast_slug"),
-                            "episode_slug": op.payload.get("episode_slug"),
-                            "transcript": transcript,
-                        }
-                    )
-                    self.pending_ops_repository.delete(transcription_id)
-                    logger.info("Resumed and completed", transcription_id=transcription_id)
-                else:
-                    logger.warning("Could not retrieve transcript", transcription_id=transcription_id)
-            except Exception as e:
-                logger.error("Error resuming operation", operation_id=op.operation_id, error=str(e))
-
-        return results
 
     def list_pending_operations(self) -> List[Dict[str, Any]]:
         """Pending ElevenLabs jobs as legacy-shaped dicts.

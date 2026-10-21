@@ -101,10 +101,9 @@ _PODCAST_COLS_P = """p.id, p.created_at, p.rss_url, p.title, p.slug, p.descripti
        p.last_processed, p.last_processed_at, p.etag, p.last_modified, p.updated_at"""
 
 
-# Shared by ``_save_episode_row`` (single insert) and ``save()``'s batched
-# re-insert (spec #69 Phase 8.4) so the column list can't drift between the
-# two paths. ``duration`` is a ``text`` column in the typed schema, so the
-# int model field is stringified on write (pydantic coerces it back on read).
+# Used by ``save()``'s batched re-insert (spec #69 Phase 8.4). ``duration`` is
+# a ``text`` column in the typed schema, so the int model field is stringified
+# on write (pydantic coerces it back on read).
 _EPISODE_INSERT_SQL = """
     INSERT INTO episodes (
         id, podcast_id, created_at, updated_at, external_id, title, slug, description,
@@ -1007,10 +1006,6 @@ class PodcastsMixin(CategoryCacheMixin):
 
             logger.debug(f"Saved podcast: {podcast.title} ({len(podcast.episodes)} episodes)")
             return podcast
-
-    def _save_episode_row(self, conn: psycopg.Connection, podcast_id: str, episode: Episode, now: datetime) -> None:
-        """Insert episode into database (PG port of ``_save_episode``)."""
-        conn.execute(_EPISODE_INSERT_SQL, _episode_insert_params(podcast_id, episode, now))
 
     def touch_last_processed_at(self, podcast_id: str, when: datetime) -> None:
         """Record the wall-clock time an episode was last processed.

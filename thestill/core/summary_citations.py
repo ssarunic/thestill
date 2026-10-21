@@ -148,12 +148,6 @@ def summary_citations_key(summary_key: str) -> str:
     return f"{summary_key}.citations.json"
 
 
-def summary_citations_path(summary_path: Path) -> Path:
-    """Return the local-style path for a summary citations sidecar."""
-
-    return summary_path.with_suffix(".citations.json")
-
-
 def parse_timestamp_label(label: str) -> Optional[float]:
     """Parse ``MM:SS`` or ``HH:MM:SS`` into seconds."""
 

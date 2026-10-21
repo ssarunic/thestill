@@ -221,20 +221,8 @@ def _is_ad_voice(*, role: Optional[str], bio: Optional[str], speaker_role: Optio
     return bool(bio and _AD_BIO_RE.search(bio))
 
 
-def _split_name_and_bio(text: str) -> Tuple[str, Optional[str]]:
-    """Split ``"Name - bio fragment"`` into ``(name, bio)``.
-
-    Splits on the first ``" - "`` so multi-dash bios don't get
-    truncated. Trailing parenthetical role markers (e.g. ``"Sarah Paine
-    (Guest)"``) are stripped from the name — the bracket content is
-    redundant once we're writing into a typed role column.
-    """
-    name, bio, _role = _split_bullet(text)
-    return name, bio
-
-
 def _split_bullet(text: str) -> Tuple[str, Optional[str], Optional[str]]:
-    """``_split_name_and_bio`` that also returns the stripped bracket, so
+    """Split a guest bullet into name, bio and the stripped bracket, so
     ``"Evan Gershkovich (Ad Narrator) - Journalist"`` gives
     ``("Evan Gershkovich", "Journalist", "Ad Narrator")``."""
     text = text.strip()

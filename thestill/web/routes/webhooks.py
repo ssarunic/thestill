@@ -41,7 +41,6 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel
 from structlog import get_logger
 
 from ...webhook import get_tracker
@@ -81,33 +80,6 @@ def _get_webhook_secret(state: AppState) -> str:
 def _get_require_metadata(state: AppState) -> bool:
     """Get require_metadata setting from config."""
     return state.config.elevenlabs_webhook_require_metadata
-
-
-class ElevenLabsWebhookPayload(BaseModel):
-    """ElevenLabs speech-to-text webhook payload."""
-
-    # Transcript data
-    language_code: Optional[str] = None
-    language_probability: Optional[float] = None
-    text: Optional[str] = None
-    words: Optional[List[Dict[str, Any]]] = None
-    transcription_id: Optional[str] = None
-
-    # Metadata we sent with the request
-    webhook_metadata: Optional[Dict[str, Any]] = None
-
-    class Config:
-        extra = "allow"
-
-
-class WebhookResultSummary(BaseModel):
-    """Summary of a webhook result for list endpoint."""
-
-    transcription_id: str
-    received_at: str
-    has_text: bool
-    language: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
 
 
 def _get_webhook_data_dir(state: AppState) -> Path:

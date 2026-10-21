@@ -41,19 +41,6 @@ router = APIRouter()
 _analytics_cache = TtlCache(600.0, max_size=8)
 
 
-class DashboardStats(BaseModel):
-    """Dashboard statistics response."""
-
-    podcasts_tracked: int
-    episodes_total: int
-    episodes_processed: int
-    episodes_pending: int
-    storage_path: str
-    audio_files_count: int
-    transcripts_available: int
-    pipeline: dict
-
-
 class ActivityItem(BaseModel):
     """Recent activity item."""
 
@@ -62,13 +49,6 @@ class ActivityItem(BaseModel):
     podcast_title: str
     action: str  # e.g., "summarized", "transcribed"
     timestamp: datetime
-
-
-class ActivityResponse(BaseModel):
-    """Recent activity response."""
-
-    items: List[ActivityItem]
-    count: int
 
 
 @router.get("/stats")

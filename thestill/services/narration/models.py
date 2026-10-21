@@ -14,7 +14,6 @@
 
 """Data models for narrated-digest generation (spec #33)."""
 
-import dataclasses
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -60,9 +59,6 @@ class QuoteCandidate:
     start_seconds: float
     duration_seconds: float
     score: float = 0.0
-
-    def with_id(self, new_id: str) -> "QuoteCandidate":
-        return dataclasses.replace(self, quote_id=new_id)
 
 
 @dataclass

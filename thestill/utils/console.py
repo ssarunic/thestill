@@ -82,13 +82,3 @@ class ConsoleOutput:
         if not self.quiet:
             sys.stdout.write(f"⏳ {message}\n")
             sys.stdout.flush()
-
-    def progress_complete(self, message: str) -> None:
-        """Print a progress completion message with checkmark.
-
-        Args:
-            message: The completion message to print
-        """
-        if not self.quiet:
-            sys.stdout.write(f"✓ {message}\n")
-            sys.stdout.flush()
