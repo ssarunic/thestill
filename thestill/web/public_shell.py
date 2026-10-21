@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from xml.sax.saxutils import escape as xml_escape
 
+import structlog
 from structlog import get_logger
 
 from ..utils.user_agent import crawler_family
@@ -84,17 +85,25 @@ def shell_kind(path: str) -> Optional[str]:
 
 def log_shell_served(path: str, status: int, user_agent: Optional[str], started: float) -> None:
     """Spec #105 §5: one line per public shell response, so crawler fetches
-    can be counted per family. No IP and no full user agent."""
+    can be counted per family. No IP and no full user agent: the request
+    context's ``client_ip`` (bound by ``LoggingMiddleware``) is held back
+    for this one event."""
     kind = shell_kind(path)
     if kind is None:
         return
-    logger.info(
-        "public_shell.served",
-        kind=kind,
-        status=status,
-        ua_family=crawler_family(user_agent),
-        ms=round((time.perf_counter() - started) * 1000, 1),
-    )
+    client_ip = structlog.contextvars.get_contextvars().get("client_ip")
+    structlog.contextvars.unbind_contextvars("client_ip")
+    try:
+        logger.info(
+            "public_shell.served",
+            kind=kind,
+            status=status,
+            ua_family=crawler_family(user_agent),
+            ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+    finally:
+        if client_ip is not None:
+            structlog.contextvars.bind_contextvars(client_ip=client_ip)
 
 
 @dataclass

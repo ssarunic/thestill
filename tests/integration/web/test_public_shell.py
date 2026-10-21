@@ -22,6 +22,7 @@ import urllib.robotparser
 from pathlib import Path
 
 import pytest
+import structlog
 from fastapi.testclient import TestClient
 
 from thestill.web import public_shell
@@ -168,8 +169,10 @@ def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
     events = []
 
     class _Recorder:
+        # Runs the real context merge, so fields bound by LoggingMiddleware
+        # (request_id, client_ip, ...) show up exactly as the formatter sees them.
         def info(self, event, **fields):
-            events.append((event, fields))
+            events.append((event, structlog.contextvars.merge_contextvars(None, "info", dict(fields))))
 
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
@@ -184,7 +187,9 @@ def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
         ("episode", 200, "bingbot"),
         ("podcast", 404, "browser"),
     ]
-    assert all(set(f) == {"kind", "status", "ua_family", "ms"} for f in served)
+    for fields in served:
+        assert {"kind", "status", "ua_family", "ms", "request_id"} <= set(fields)
+        assert "client_ip" not in fields and "user_agent" not in fields
 
 
 def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkeypatch):
