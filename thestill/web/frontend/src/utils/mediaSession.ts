@@ -11,7 +11,7 @@ export interface MediaSessionTrackInfo {
   artworkUrl?: string | null
 }
 
-export function supportsMediaSession(): boolean {
+function supportsMediaSession(): boolean {
   return typeof navigator !== 'undefined' && 'mediaSession' in navigator
 }
 

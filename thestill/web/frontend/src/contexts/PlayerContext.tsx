@@ -42,7 +42,7 @@ import { YouTubeEngine } from './playback-engine/youtube-engine'
 // ---------------------------------------------------------------------------
 
 export type MediaKind = 'audio' | 'video'
-export type Presentation = 'hidden' | 'theater' | 'floating' | 'native-pip'
+type Presentation = 'hidden' | 'theater' | 'floating' | 'native-pip'
 export type VideoPreference = 'shown' | 'audio-only'
 export type RenditionKind = 'audio' | 'video'
 export type { EngineKind } from './playback-engine/types'

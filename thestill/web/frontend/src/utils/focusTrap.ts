@@ -2,7 +2,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 // Elements a focus trap cycles through. Mirrors what a browser considers
 // tabbable closely enough for a dialog panel's controls.
-export const FOCUSABLE_SELECTOR =
+const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 /**

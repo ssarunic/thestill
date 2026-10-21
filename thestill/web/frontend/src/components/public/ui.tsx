@@ -410,7 +410,7 @@ export function EntityGroups<T extends { name: string; type: PublicEntityType; s
   )
 }
 
-export function GuestLine({ guests }: { guests: { name: string; slug: string; type: PublicEntityType }[] }) {
+function GuestLine({ guests }: { guests: { name: string; slug: string; type: PublicEntityType }[] }) {
   if (!guests.length) return null
   return (
     <div className="ts-eprow-guests">

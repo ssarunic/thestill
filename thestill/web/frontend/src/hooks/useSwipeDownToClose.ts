@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 
 // Swipe-down on a phone sheet's drag handle closes it past this travel.
-export const SWIPE_CLOSE_PX = 80
+const SWIPE_CLOSE_PX = 80
 
 export interface SwipeHandleProps {
   onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void

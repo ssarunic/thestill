@@ -15,7 +15,7 @@ import { QueryClient } from '@tanstack/react-query'
  *     ticks.
  *   - `useEpisodeTasks` — 2s → 15s → 60s → stop cadence.
  *   - `useQueueTasks` — 5s/15s operator queue view.
- *   - `useInbox` / `useInboxInfinite` — caller-supplied conditional poll
+ *   - `useInboxInfinite` — caller-supplied conditional poll
  *     while an item is mid-pipeline.
  *
  * Everything else is fetch-on-mount + invalidate-on-mutation, with a 60s

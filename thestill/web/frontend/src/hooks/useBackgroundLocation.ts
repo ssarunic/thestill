@@ -5,7 +5,7 @@ import { useLocation, type Location } from 'react-router-dom'
 // state. The presence of that state is what selects overlay rendering; the
 // URL itself never changes shape.
 
-export interface BackgroundLocationState {
+interface BackgroundLocationState {
   backgroundLocation?: Location
 }
 

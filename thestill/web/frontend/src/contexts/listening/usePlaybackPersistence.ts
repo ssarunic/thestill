@@ -34,7 +34,7 @@ export interface PlayerPort {
   rewindToStart(): void
 }
 
-export type PersistedEngineEvent = 'play' | 'pause' | 'timeupdate' | 'seeked' | 'ended'
+type PersistedEngineEvent = 'play' | 'pause' | 'timeupdate' | 'seeked' | 'ended'
 
 export interface PlaybackPersistence {
   onEngineEvent(event: PersistedEngineEvent): void

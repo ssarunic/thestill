@@ -19,7 +19,6 @@ import type {
   PipelineStage,
   PipelineTaskRequest,
   PipelineTaskResponse,
-  PipelineTaskStatusResponse,
   EpisodeTasksResponse,
   AllEpisodesResponse,
   EpisodeFilters,
@@ -31,15 +30,12 @@ import type {
   QueueTasksResponse,
   BumpTaskResponse,
   CancelTaskResponse,
-  EpisodeFailure,
-  FailedEpisodesResponse,
   EpisodeRetryResponse,
   EpisodeReprocessRequest,
   EpisodeReprocessResponse,
   RunPipelineRequest,
   RunPipelineResponse,
   CancelPipelineResponse,
-  ExtendedEpisodeTasksResponse,
   NarrateBriefingRequest,
   NarrateBriefingResponse,
   NarrationDetail,
@@ -69,7 +65,6 @@ import type {
   InboxEntryResponse,
   SendToInboxResponse,
   ArrivingResponse,
-  InboxUnreadCountResponse,
   ImportRequest,
   ImportResponse,
   McpTokenInfoResponse,
@@ -309,10 +304,6 @@ export async function queuePipelineTask(
   return response.json()
 }
 
-export async function getPipelineTaskStatus(taskId: string): Promise<PipelineTaskStatusResponse> {
-  return fetchApi<PipelineTaskStatusResponse>(`/commands/task/${taskId}`)
-}
-
 export async function getEpisodeTasks(episodeId: string): Promise<EpisodeTasksResponse> {
   return fetchApi<EpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
 }
@@ -457,14 +448,6 @@ export async function cancelQueueTask(taskId: string): Promise<CancelTaskRespons
 // Episode Failure API
 // ============================================================================
 
-export async function getFailedEpisodes(limit: number = 100): Promise<FailedEpisodesResponse> {
-  return fetchApi<FailedEpisodesResponse>(`/episodes/failed?limit=${limit}`)
-}
-
-export async function getEpisodeFailure(episodeId: string): Promise<EpisodeFailure> {
-  return fetchApi<EpisodeFailure>(`/episodes/${episodeId}/failure`)
-}
-
 export async function retryFailedEpisode(episodeId: string): Promise<EpisodeRetryResponse> {
   const response = await fetch(`${API_BASE}/episodes/${episodeId}/retry`, {
     method: 'POST',
@@ -534,10 +517,6 @@ export async function cancelPipeline(episodeId: string): Promise<CancelPipelineR
   }
 
   return response.json()
-}
-
-export async function getEpisodeTasksExtended(episodeId: string): Promise<ExtendedEpisodeTasksResponse> {
-  return fetchApi<ExtendedEpisodeTasksResponse>(`/commands/episode/${episodeId}/tasks`)
 }
 
 // ============================================================================
@@ -694,10 +673,6 @@ export async function getInbox(
   if (options.q) params.set('q', options.q)
   const qs = params.toString()
   return fetchApi<InboxListResponse>(`/inbox${qs ? `?${qs}` : ''}`)
-}
-
-export async function getInboxUnreadCount(): Promise<InboxUnreadCountResponse> {
-  return fetchApi<InboxUnreadCountResponse>('/inbox/unread-count')
 }
 
 // View-driven read tracking: only ever transitions unread → read, and a

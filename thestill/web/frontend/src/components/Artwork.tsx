@@ -2,8 +2,6 @@ import { useState } from 'react'
 import SmartImage from './SmartImage'
 import { ARTWORK_ROLE, LANDSCAPE_MIN_RATIO, type ArtworkRole } from './artworkRoles'
 
-export type { ArtworkRole } from './artworkRoles'
-
 interface ArtworkProps {
   /** Candidate URLs, most preferred first; broken ones advance down the chain. */
   sources: (string | null | undefined)[]

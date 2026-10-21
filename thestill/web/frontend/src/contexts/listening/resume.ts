@@ -2,7 +2,7 @@
 import type { ListeningSummary } from '../../api/types'
 
 // A stored position this close to the top is not worth resuming.
-export const MIN_RESUME_SECONDS = 2
+const MIN_RESUME_SECONDS = 2
 
 export interface ResumeDecision {
   // Engine-time seek for the new source, or null to start at the top.

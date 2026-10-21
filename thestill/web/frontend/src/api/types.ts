@@ -28,7 +28,7 @@ export interface DashboardStats {
   }
 }
 
-export interface NarrationLatestSummary {
+interface NarrationLatestSummary {
   narration_id: string
   briefing_id: string | null
   generated_at: string | null
@@ -43,7 +43,7 @@ export interface NarrationLatestSummary {
 // thestill/models/analytics.py; served by GET /api/dashboard/analytics.
 export type AnalyticsRange = '7d' | '28d' | '90d'
 
-export interface AnalyticsStepStat {
+interface AnalyticsStepStat {
   key: string
   label: string  // the server owns step names (thestill/models/analytics.py STEPS)
   horizon_hours: number
@@ -53,13 +53,13 @@ export interface AnalyticsStepStat {
   median_hours: number | null
 }
 
-export interface AnalyticsActivationGroup {
+interface AnalyticsActivationGroup {
   source: string
   signups: number
   steps: AnalyticsStepStat[]
 }
 
-export interface AnalyticsCohortCell {
+interface AnalyticsCohortCell {
   week: number
   eligible: number
   active: number
@@ -83,7 +83,7 @@ export interface AnalyticsPodcastStat {
   change: string  // server-formatted: +n, −n, 0, new or —
 }
 
-export interface AnalyticsEpisodeStat {
+interface AnalyticsEpisodeStat {
   episode_id: string
   slug: string
   title: string
@@ -97,7 +97,7 @@ export interface AnalyticsEpisodeStat {
   public_views: number
 }
 
-export interface AnalyticsCategoryStat {
+interface AnalyticsCategoryStat {
   category: string
   shows: number
   shows_read: number
@@ -108,7 +108,7 @@ export interface AnalyticsCategoryStat {
   change: string
 }
 
-export interface AnalyticsContentReport {
+interface AnalyticsContentReport {
   podcasts: AnalyticsPodcastStat[]  // union of the top N by readers and by followers
   episodes: AnalyticsEpisodeStat[]
   categories: AnalyticsCategoryStat[]
@@ -219,7 +219,7 @@ export interface PodcastsResponse {
   next_offset: number | null
 }
 
-export interface PodcastDetail {
+interface PodcastDetail {
   id: string
   index: number
   title: string
@@ -268,7 +268,7 @@ export interface PodcastDetailResponse {
 // (transcript) time t to asset time t + offset — the same convention the
 // karaoke word payload's `playback_time_offset_seconds` already uses, but
 // carried per-asset because renditions of the "same" content drift.
-export interface PlaybackAsset {
+interface PlaybackAsset {
   url: string
   mime_type?: string | null
   duration?: number | null
@@ -282,7 +282,7 @@ export interface PlaybackAsset {
 // iframe engine is built from `video_id` (no fetchable url), and there is
 // no `timeline_offset` — a static offset cannot model YouTube's dynamic
 // ad insertion, so seeks onto this rendition are best-effort by design.
-export interface YoutubeAsset {
+interface YoutubeAsset {
   video_id: string
   watch_url: string
   title?: string | null
@@ -441,7 +441,7 @@ export interface ProgressAck {
 
 // The episode fields needed to start or restore playback — a subset of
 // EpisodeDetail under the same keys.
-export interface TrackEpisode {
+interface TrackEpisode {
   id: string
   slug: string
   title: string
@@ -468,7 +468,7 @@ export type TranscriptType = 'cleaned' | 'raw'
 // SegmentedTranscriptViewer renders from.
 export type SegmentKind = 'content' | 'filler' | 'ad_break' | 'music' | 'intro' | 'outro'
 
-export interface WordSpan {
+interface WordSpan {
   start_segment_id: number
   start_word_index: number
   end_segment_id: number
@@ -489,7 +489,7 @@ export interface AnnotatedSegment {
   metadata: Record<string, unknown>
 }
 
-export interface CleaningProvenance {
+interface CleaningProvenance {
   provider: string
   model: string
   prompt_version: string
@@ -527,7 +527,7 @@ export interface WordTimestamp {
   e: number
 }
 
-export interface SegmentWords {
+interface SegmentWords {
   segment_id: number
   words: WordTimestamp[]
 }
@@ -614,13 +614,6 @@ export interface RefreshTaskStatus {
     podcast_filter?: string
   } | null
   error: string | null
-}
-
-export interface RefreshError {
-  error: string
-  started_at: string | null
-  progress: number
-  message: string
 }
 
 // Add Podcast API Types
@@ -716,7 +709,7 @@ export type PipelineStage =
   | 'compute-related'
   | 'enrich-entities'
   | 'refresh-feed'
-export type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
+type PipelineTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
 // Extended pipeline task status to include new states
 export type ExtendedPipelineTaskStatus =
@@ -724,7 +717,7 @@ export type ExtendedPipelineTaskStatus =
   | 'retry_scheduled'
   | 'dead'
 
-export interface PipelineTaskMetadata {
+interface PipelineTaskMetadata {
   run_full_pipeline?: boolean
   target_state?: string
   initiated_at?: string
@@ -750,21 +743,6 @@ export interface PipelineTaskResponse {
   stage: PipelineStage
   episode_id: string
   episode_title: string
-}
-
-export interface PipelineTaskStatusResponse {
-  task_id: string
-  // Feed-scoped (REFRESH_FEED) tasks are podcast-scoped: episode_id is null
-  // and podcast_id is set. Episode-scoped tasks are the inverse.
-  episode_id: string | null
-  podcast_id: string | null
-  stage: PipelineStage
-  status: PipelineTaskStatus
-  error_message: string | null
-  created_at: string | null
-  updated_at: string | null
-  started_at: string | null
-  completed_at: string | null
 }
 
 // Named (spec #68) so the reader can own one task query and pass the rows to
@@ -823,11 +801,7 @@ export interface EpisodeFilters {
   sort_order?: 'asc' | 'desc'
 }
 
-export interface BulkProcessRequest {
-  episode_ids: string[]
-}
-
-export interface BulkProcessTaskInfo {
+interface BulkProcessTaskInfo {
   episode_id: string
   task_id: string
   stage: PipelineStage
@@ -875,10 +849,6 @@ export interface DLQActionResponse {
   message: string
   task_id: string
   new_status: string
-}
-
-export interface DLQBulkRetryRequest {
-  task_ids?: string[]
 }
 
 export interface DLQBulkRetryResponse {
@@ -958,28 +928,6 @@ export interface CancelTaskResponse {
 // Episode Failure Types
 // ============================================================================
 
-export interface EpisodeFailure {
-  status: string
-  episode_id: string
-  episode_title: string
-  episode_slug: string
-  podcast_title: string
-  podcast_slug: string
-  is_failed: boolean
-  failed_at_stage: string | null
-  failure_reason: string | null
-  failure_type: FailureType | null
-  failed_at: string | null
-  last_successful_state: EpisodeState
-  can_retry: boolean
-}
-
-export interface FailedEpisodesResponse {
-  status: string
-  episodes: EpisodeFailure[]
-  count: number
-}
-
 export interface EpisodeRetryResponse {
   status: string
   message: string
@@ -1005,37 +953,9 @@ export interface EpisodeReprocessResponse {
   starting_stage: PipelineStage
 }
 
-// Extend Episode type to include failure info
-export interface EpisodeWithFailure extends Episode {
-  is_failed?: boolean
-  failed_at_stage?: string | null
-  failure_reason?: string | null
-  failure_type?: FailureType | null
-  failed_at?: string | null
-}
-
 // ============================================================================
 // Full Pipeline Types
 // ============================================================================
-
-export interface ExtendedPipelineTask {
-  id: string
-  episode_id: string
-  stage: PipelineStage
-  status: ExtendedPipelineTaskStatus
-  priority: number
-  error_message: string | null
-  error_type: 'transient' | 'fatal' | null
-  retry_count: number
-  max_retries: number
-  next_retry_at: string | null
-  last_error: string | null
-  created_at: string | null
-  updated_at: string | null
-  started_at: string | null
-  completed_at: string | null
-  metadata: PipelineTaskMetadata | null
-}
 
 export interface RunPipelineRequest {
   podcast_slug: string
@@ -1060,24 +980,11 @@ export interface CancelPipelineResponse {
   cancelled_tasks: number
 }
 
-// Extended episode tasks response with retry info
-export interface ExtendedEpisodeTasksResponse {
-  episode_id: string
-  tasks: ExtendedPipelineTask[]
-  pipeline_status?: {
-    is_running: boolean
-    target_state: string | null
-    current_stage: PipelineStage | null
-    completed_stages: PipelineStage[]
-    pending_stages: PipelineStage[]
-  }
-}
-
 // ============================================================================
 // Narration Types (spec #33, keyed by briefing since digest retirement)
 // ============================================================================
 
-export type NarrationMode = 'narrated' | 'fallback'
+type NarrationMode = 'narrated' | 'fallback'
 
 export interface NarrationSummary {
   narration_id: string
@@ -1124,7 +1031,7 @@ export interface NarrationDetail {
 // Spec #28 §4 — Search types (corpus + quick typeahead)
 // ============================================================================
 
-export type SearchMode = 'lexical' | 'semantic' | 'hybrid'
+type SearchMode = 'lexical' | 'semantic' | 'hybrid'
 
 export interface SearchResult {
   episode_id: string
@@ -1251,7 +1158,7 @@ export interface QuickQuoteItem {
 
 export type QuickSearchItem = QuickEpisodeItem | QuickEntityItem | QuickQuoteItem
 
-export type QuickGroupType = 'episode' | 'person' | 'company' | 'topic' | 'quote'
+type QuickGroupType = 'episode' | 'person' | 'company' | 'topic' | 'quote'
 
 export interface QuickGroup {
   type: QuickGroupType
@@ -1282,7 +1189,7 @@ export interface QuickSearchOptions {
 export type EntityType = 'person' | 'company' | 'product' | 'topic'
 export type SpeakerKind = 'host' | 'guest' | 'recurring' | 'unknown'
 
-export interface EntityRef {
+interface EntityRef {
   id: string
   type: EntityType
   canonical_name: string
@@ -1324,7 +1231,7 @@ export interface EpisodeEntitiesResponse {
   entities: EpisodeEntity[]
 }
 
-export interface EntityCooccurrenceRef {
+interface EntityCooccurrenceRef {
   entity: EntityRef
   episode_count: number
   last_seen_at: string | null
@@ -1377,13 +1284,13 @@ export interface GuestEpisodeRef {
 }
 
 // Spec #45 Tier 0 — Wikidata/Wikipedia enrichment surfaced on the entity page.
-export interface EntityFact {
+interface EntityFact {
   label: string
   value: string
   url?: string | null
 }
 
-export interface EntityAffiliation {
+interface EntityAffiliation {
   qid?: string | null
   label: string
   relation: string
@@ -1391,7 +1298,7 @@ export interface EntityAffiliation {
   entity_type?: EntityType | null
 }
 
-export interface EntityEnrichment {
+interface EntityEnrichment {
   image_url?: string | null
   image_attribution?: string | null
   image_license?: string | null
@@ -1402,7 +1309,7 @@ export interface EntityEnrichment {
   affiliations: EntityAffiliation[]
 }
 
-export interface MostDiscussedRef {
+interface MostDiscussedRef {
   podcast_id: string
   podcast_slug: string | null
   podcast_title: string
@@ -1442,7 +1349,7 @@ export interface EntitySummaryResponse {
 // State is per-user; two users following the same podcast keep independent
 // state on the same episode.
 
-export type InboxSource = 'follow_new' | 'follow_seed' | 'ad_hoc' | 'import'
+type InboxSource = 'follow_new' | 'follow_seed' | 'ad_hoc' | 'import'
 export type InboxState = 'unread' | 'read' | 'saved' | 'dismissed'
 
 export interface InboxEntry {
@@ -1456,7 +1363,7 @@ export interface InboxEntry {
 }
 
 // Minimal podcast subset rendered alongside each inbox row.
-export interface InboxPodcastSummary {
+interface InboxPodcastSummary {
   id: string
   title: string
   slug: string
@@ -1479,16 +1386,6 @@ export interface InboxListResponse {
   count: number
   // Cursor for the next page — pass back as ``before=`` to fetch older rows.
   next_before: string | null
-}
-
-export interface InboxUnreadCountResponse {
-  status: string
-  timestamp: string
-  unread_count: number
-}
-
-export interface InboxStateRequest {
-  state: InboxState
 }
 
 // Spec #88 — GET /api/inbox/{episode_id}: null when never delivered.
@@ -1586,7 +1483,7 @@ export interface BriefingUpcoming {
 
 // Spec #55: a lazy latest request can be accepted but deferred while the
 // followed-podcast pipeline drains. The same endpoint returns either shape.
-export interface BriefingPendingResponse {
+interface BriefingPendingResponse {
   status: string
   timestamp: string
   briefing_pending: {
@@ -1651,7 +1548,7 @@ export interface BriefingScriptResponse {
 // (frequency, weekday for weekly) the user's briefing is auto-generated.
 export type BriefingFrequency = 'daily' | 'weekly'
 
-export interface BriefingSchedule {
+interface BriefingSchedule {
   frequency: BriefingFrequency
   hour_local: number
   weekday: number | null // 0=Mon … 6=Sun; set iff weekly
@@ -1688,7 +1585,7 @@ export interface ImportRequest {
 
 // Parent podcast surfaced for the post-import "Follow this channel" CTA.
 // Null when the import fell back to the synthetic audio-imports row.
-export interface ImportParent {
+interface ImportParent {
   id: string
   title: string
   slug: string
@@ -1715,7 +1612,7 @@ export interface ImportPayload {
   episode_failed: boolean
 }
 
-export type ImportOutcome = 'new_episode' | 'added_existing' | 'already_in_inbox'
+type ImportOutcome = 'new_episode' | 'added_existing' | 'already_in_inbox'
 
 export interface ImportResponse {
   status: string
@@ -1727,7 +1624,7 @@ export interface ImportResponse {
 // GET returns the caller's token *state* (never the plaintext); POST
 // returns the full connector URL exactly once.
 export type McpTokenScope = 'read' | 'follows' | 'pipeline'
-export type McpTokenState = 'none' | 'active' | 'expiring' | 'expired' | 'revoked'
+type McpTokenState = 'none' | 'active' | 'expiring' | 'expired' | 'revoked'
 
 export interface McpTokenInfo {
   enabled: boolean

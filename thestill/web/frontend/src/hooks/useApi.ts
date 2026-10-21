@@ -6,7 +6,6 @@ import {
   useMutation,
   useQueryClient,
   type InfiniteData,
-  type UseQueryOptions,
 } from '@tanstack/react-query'
 import {
   getDashboardStats,
@@ -23,7 +22,6 @@ import {
   getEpisodeSummary,
   startRefresh,
   getRefreshStatus,
-  addPodcast,
   getMcpToken,
   createOrRotateMcpToken,
   revokeMcpToken,
@@ -38,8 +36,6 @@ import {
   getQueueTasks,
   bumpQueueTask,
   cancelQueueTask,
-  getFailedEpisodes,
-  getEpisodeFailure,
   retryFailedEpisode,
   reprocessEpisode,
   runPipeline,
@@ -69,7 +65,7 @@ import {
   markBriefingListened,
   markBriefingOpened,
 } from '../api/client'
-import type { AnalyticsRange, RefreshRequest, AddPodcastRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeDetailResponse, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { AnalyticsRange, RefreshRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeDetailResponse, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
 import { ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
 
 // Dashboard hooks
@@ -94,13 +90,6 @@ export function useAnalytics(range: AnalyticsRange) {
     queryKey: ['dashboard', 'analytics', range],
     queryFn: () => getAnalytics(range),
     staleTime: 5 * 60_000,
-  })
-}
-
-export function useRecentActivity(limit = 10) {
-  return useQuery({
-    queryKey: ['dashboard', 'activity', limit],
-    queryFn: () => getRecentActivity(limit),
   })
 }
 
@@ -178,14 +167,6 @@ export function useInvalidateEpisodesWhenRefreshSettles(
       queryClient.invalidateQueries({ queryKey: ['podcasts', podcastSlug, 'episodes'] })
     }
   }, [refreshPending, podcastSlug, queryClient])
-}
-
-export function usePodcastEpisodes(podcastSlug: string, limit = 20) {
-  return useQuery({
-    queryKey: ['podcasts', podcastSlug, 'episodes', limit],
-    queryFn: () => getPodcastEpisodes(podcastSlug, limit),
-    enabled: !!podcastSlug,
-  })
 }
 
 export function usePodcastEpisodesInfinite(podcastSlug: string, limit = 20) {
@@ -593,24 +574,6 @@ export function useStartRefresh() {
   })
 }
 
-// Add Podcast hooks
-export function useAddPodcast() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: (request: AddPodcastRequest) => addPodcast(request),
-    onSuccess: () => {
-      // Start polling the status
-      queryClient.invalidateQueries({ queryKey: ['commands', 'add', 'status'] })
-    },
-    onSettled: () => {
-      // When add completes, invalidate podcasts list to show new podcast
-      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-    },
-  })
-}
-
 // Pipeline Task hooks (Queue-based)
 export function useQueuePipelineTask(podcastSlug: string, episodeSlug: string) {
   const queryClient = useQueryClient()
@@ -1000,22 +963,6 @@ export function useCancelQueueTask() {
 // Episode Failure hooks
 // ============================================================================
 
-export function useFailedEpisodes(limit = 100) {
-  return useQuery({
-    queryKey: ['episodes', 'failed', limit],
-    queryFn: () => getFailedEpisodes(limit),
-    refetchInterval: 10000, // Poll every 10 seconds
-  })
-}
-
-export function useEpisodeFailure(episodeId: string | null) {
-  return useQuery({
-    queryKey: ['episodes', episodeId, 'failure'],
-    queryFn: () => getEpisodeFailure(episodeId!),
-    enabled: !!episodeId,
-  })
-}
-
 export function useRetryFailedEpisode() {
   const queryClient = useQueryClient()
 
@@ -1186,26 +1133,6 @@ export function useEntityEpisodeMentions(entityType: EntityType, idSlug: string,
   })
 }
 
-export interface UseInboxOptions extends GetInboxOptions {
-  /**
-   * Forwarded to react-query so callers can poll while imports are still
-   * working through the pipeline. Pass a function that inspects the query
-   * to decide whether to keep polling.
-   */
-  refetchInterval?: UseQueryOptions<
-    Awaited<ReturnType<typeof getInbox>>
-  >['refetchInterval']
-}
-
-export function useInbox({ refetchInterval, ...options }: UseInboxOptions = {}) {
-  return useQuery({
-    queryKey: ['inbox', options.state ?? null, options.limit ?? null, options.before ?? null],
-    queryFn: () => getInbox(options),
-    staleTime: 15_000,
-    refetchInterval,
-  })
-}
-
 export interface UseInboxInfiniteOptions extends Omit<GetInboxOptions, 'before'> {
   /** Conditional poll while imports work through the pipeline (see Inbox.tsx). */
   refetchInterval?:
@@ -1219,7 +1146,7 @@ export interface UseInboxInfiniteOptions extends Omit<GetInboxOptions, 'before'>
 /**
  * Cursor-paged inbox (spec #69 Phase 3 rode-along fix): the server caps
  * each page at 50 and returns a ``next_before`` cursor, but the page-less
- * `useInbox` call meant anything older than the newest 50 was unreachable.
+ * inbox query it replaced left anything older than the newest 50 unreachable.
  * Pages chain on ``before`` = previous page's ``next_before``.
  */
 export function useInboxInfinite({ refetchInterval, ...options }: UseInboxInfiniteOptions = {}) {
@@ -1235,7 +1162,7 @@ export function useInboxInfinite({ refetchInterval, ...options }: UseInboxInfini
   })
 }
 
-export function useMarkInboxRead() {
+function useMarkInboxRead() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (episodeId: string) => markInboxRead(episodeId),
@@ -1262,7 +1189,6 @@ export function useInboxEntry(episodeId: string | null | undefined) {
 
 function invalidateInbox(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['inbox'] })
-  queryClient.invalidateQueries({ queryKey: ['inbox', 'unread-count'] })
 }
 
 // Spec #88 — "Send to my inbox". The episode query is refreshed too: a send

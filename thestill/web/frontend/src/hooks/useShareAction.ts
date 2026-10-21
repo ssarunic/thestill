@@ -4,8 +4,8 @@ import { track } from '../analytics/client'
 
 /**
  * Share a link: the native Web Share sheet where the browser has one, a
- * clipboard copy (with a toast) elsewhere. Shared by ShareButton and the
- * episode page's More menu (spec #90) so the two cannot drift.
+ * clipboard copy (with a toast) elsewhere. Used by the episode page's More
+ * menu (`EpisodeMoreMenu`, spec #90).
  */
 export function useShareAction(title: string, url: string, kind: 'episode' = 'episode') {
   const { showToast } = useToast()

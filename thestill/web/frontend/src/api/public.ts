@@ -4,7 +4,7 @@
 
 export type PublicEntityType = 'person' | 'company' | 'product' | 'topic'
 
-export interface PublicEntityRef {
+interface PublicEntityRef {
   name: string
   type: PublicEntityType
   slug: string

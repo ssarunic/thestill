@@ -3,15 +3,15 @@
 // switch / YouTube entry so it survives reloads and engine switches.
 // Pure helpers only; the React side lives in hooks/usePlayerRatePreference.
 
-export const RATE_OPTIONS: readonly number[] = [0.8, 1, 1.2, 1.5, 2]
+const RATE_OPTIONS: readonly number[] = [0.8, 1, 1.2, 1.5, 2]
 export const PLAYER_RATE_STORAGE_KEY = 'thestill:player:rate'
-export const DEFAULT_RATE = 1
+const DEFAULT_RATE = 1
 
 // Sanity bounds: what both engines accept without complaint.
 const MIN_RATE = 0.25
 const MAX_RATE = 4
 
-export function isValidRate(rate: unknown): rate is number {
+function isValidRate(rate: unknown): rate is number {
   return typeof rate === 'number' && Number.isFinite(rate) && rate >= MIN_RATE && rate <= MAX_RATE
 }
 

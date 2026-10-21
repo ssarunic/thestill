@@ -15,7 +15,7 @@ interface Props {
   isActive: boolean
 }
 
-export const KaraokeWord = memo(function KaraokeWord({ word, read, isActive }: Props) {
+const KaraokeWord = memo(function KaraokeWord({ word, read, isActive }: Props) {
   return (
     <span
       data-karaoke-word=""

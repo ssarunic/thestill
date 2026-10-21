@@ -1,7 +1,7 @@
 import Button, { CheckIcon, PlusIcon } from './Button'
 import type { ButtonSize } from './Button'
 
-export type FollowStatus = 'idle' | 'pending' | 'done' | 'error'
+type FollowStatus = 'idle' | 'pending' | 'done' | 'error'
 
 interface FollowButtonProps {
   status: FollowStatus
