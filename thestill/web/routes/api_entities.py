@@ -33,7 +33,7 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Dict, List, Literal, Optional
+from typing import Annotated, Dict, Iterable, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
@@ -42,7 +42,7 @@ from structlog import get_logger
 from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
 from ...core.wikidata_client import WikidataClient
 from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
-from ...models.entities import MentionRole
+from ...models.entities import EntityRecord, MentionRole
 from ...models.user import User
 from ...repositories.entity_repository import MentionContext
 from ..dependencies import AppState, get_app_state, require_admin
@@ -456,14 +456,37 @@ def _entity_id_from_path(entity_repository, entity_type: str, id_slug: str) -> s
         raise HTTPException(status_code=400, detail=f"Invalid entity type: {entity_type}")
     prefix = f"{entity_type}:"
     bare_slug = id_slug[len(prefix) :] if id_slug.startswith(prefix) else id_slug
-    entity_id = f"{entity_type}:{bare_slug}"
-    if entity_repository.get_entity(entity_id) is not None:
-        return entity_id
-    retyped = [f"{other}:{bare_slug}" for other in sorted(_VALID_TYPES) if other != entity_type]
-    for entity in entity_repository.get_entities_by_ids(retyped):
-        if entity.type.value == entity_type:
+    candidates = entity_repository.get_entities_by_ids(url_candidate_ids(bare_slug))
+    owner = url_owner(entity_type, bare_slug, candidates)
+    if owner is None:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {entity_type}:{bare_slug}")
+    return owner
+
+
+def url_candidate_ids(bare_slug: str) -> List[str]:
+    """Every stored id that could own an ``/entities/<type>/<bare_slug>`` URL."""
+    return [f"{entity_type}:{bare_slug}" for entity_type in sorted(_VALID_TYPES)]
+
+
+def url_owner(entity_type: str, bare_slug: str, candidates: Iterable[EntityRecord]) -> Optional[str]:
+    """The id ``/entities/<entity_type>/<bare_slug>`` shows, given the stored
+    entities among :func:`url_candidate_ids`.
+
+    The id with the URL's own prefix wins whenever it exists; otherwise the
+    first re-typed id (by prefix) whose current type matches. Two entities
+    can claim one URL after a re-type (``person:islam``, a fighter's given
+    name re-typed to topic, next to ``topic:islam``), so the sitemap asks
+    this same function and lists only the owner (spec #42 FM-6).
+    """
+    by_id = {entity.id: entity for entity in candidates}
+    exact = f"{entity_type}:{bare_slug}"
+    if exact in by_id:
+        return exact
+    for other in sorted(_VALID_TYPES):
+        entity = by_id.get(f"{other}:{bare_slug}")
+        if other != entity_type and entity is not None and entity.type.value == entity_type:
             return entity.id
-    raise HTTPException(status_code=404, detail=f"Entity not found: {entity_id}")
+    return None
 
 
 def _citation_row(ctx: MentionContext) -> CitationRow:

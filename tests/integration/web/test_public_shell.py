@@ -141,6 +141,78 @@ def test_robots_allows_public_and_blocks_private(site):
     assert "Sitemap: https://thestill.test/sitemap.xml" in body
 
 
+def test_robots_blocks_training_crawlers_but_not_search_or_user_fetches(site):
+    """Spec #105 decision 1."""
+    parser = urllib.robotparser.RobotFileParser()
+    parser.parse(site.get("/robots.txt").text.splitlines())
+    page = "https://thestill.test/podcasts/a/episodes/b"
+    for agent in public_shell.TRAINING_CRAWLERS:
+        assert not parser.can_fetch(agent, page), agent
+        assert not parser.can_fetch(agent, "https://thestill.test/"), agent
+    for agent in (
+        "Bingbot",
+        "OAI-SearchBot",
+        "ChatGPT-User",
+        "Claude-SearchBot",
+        "Claude-User",
+        "PerplexityBot",
+        "Perplexity-User",
+    ):
+        assert parser.can_fetch(agent, page), agent
+        assert not parser.can_fetch(agent, "https://thestill.test/inbox"), agent
+
+
+def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
+    """Spec #105 §5: kind, status and crawler family; no IP, no user agent."""
+    _seed(app_state)
+    events = []
+
+    class _Recorder:
+        def info(self, event, **fields):
+            events.append((event, fields))
+
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    monkeypatch.setattr(public_shell, "logger", _Recorder())
+    bing = "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)"
+    site.get("/podcasts/public-show/episodes/summarised", headers={"User-Agent": bing})
+    site.get("/podcasts/unknown-show", headers={"User-Agent": "Mozilla/5.0 (Macintosh) Chrome/129.0 Safari/537.36"})
+    site.get("/inbox")
+    served = [fields for event, fields in events if event == "public_shell.served"]
+    assert [(f["kind"], f["status"], f["ua_family"]) for f in served] == [
+        ("episode", 200, "bingbot"),
+        ("podcast", 404, "browser"),
+    ]
+    assert all(set(f) == {"kind", "status", "ua_family", "ms"} for f in served)
+
+
+def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkeypatch):
+    """Two entities can claim one URL after a re-type; the page shows the one
+    with the URL's own prefix, so only that one may be listed."""
+    from thestill.models.entities import EntityRecord, EntityType
+    from thestill.repositories import public_quotes
+
+    repo = app_state.entity_repository
+    for entity_id, kind in (
+        ("topic:islam", EntityType.TOPIC),
+        ("person:islam", EntityType.TOPIC),  # a given name, re-typed to topic
+        ("company:abraham-pais", EntityType.PERSON),  # re-typed, no rival
+    ):
+        repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
+    rows = [
+        {"entity_id": "person:islam", "entity_type": "topic", "quotes": 15},
+        {"entity_id": "topic:islam", "entity_type": "topic", "quotes": 4},
+        {"entity_id": "company:abraham-pais", "entity_type": "person", "quotes": 5},
+    ]
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "indexable_entities", lambda self, min_quotes=3: rows)
+    body = site.get("/sitemap.xml").text
+    assert body.count("https://thestill.test/entities/topic/islam</loc>") == 1
+    assert "https://thestill.test/entities/person/abraham-pais</loc>" in body
+    # The loser is dropped, not listed under its stale prefix either.
+    assert "/entities/person/islam" not in body
+
+
 def test_sitemap_lists_exactly_the_public_pages(site, app_state):
     _seed(app_state)
     body = site.get("/sitemap.xml").text
