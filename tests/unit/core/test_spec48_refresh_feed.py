@@ -575,6 +575,106 @@ def test_handler_established_podcast_skips_cap(db: str) -> None:
     assert _excluded_count(db) == 0
 
 
+def _mark_processed(db: str, episode_id: str) -> None:
+    con = sqlite3.connect(db)
+    con.execute("UPDATE episodes SET raw_transcript_path='raw/x.json' WHERE id=?", (episode_id,))
+    con.commit()
+    con.close()
+
+
+def test_handler_unfollowed_refresh_caps_backfill_before_follow(db: str) -> None:
+    """A brand-new feed first refreshed while nobody follows it (refresh-on-open
+    from a chart page) still gets its back catalog excluded. Otherwise, once the
+    follow-seed episodes make the podcast "established", the next refresh would
+    enqueue the whole catalog instead of only the seeded N."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM podcast_followers WHERE podcast_id = ?", (PODCAST_ID,))
+    con.commit()
+    con.close()
+    repo0 = SqlitePodcastRepository(db)
+    qm0 = QueueManager(db)
+    _add_discovered_episodes(repo0, 4)  # 5 total
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    handle_refresh_feed(
+        Task(id="a" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
+        state,
+    )
+
+    # Unfollowed: nothing enqueued, but the back catalog is already excluded.
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 0
+    assert _excluded_count(db) == 3
+
+    # Follow → follow-seed enqueues the 2 most-recent, one finishes transcribing.
+    _add_follower(db, PODCAST_ID)
+    seeded = repo0.get_recent_unqueued_unprocessed_episodes(PODCAST_ID, 2)
+    assert len(seeded) == 2
+    for eid, url in seeded:
+        qm0.enqueue_full_pipeline(episode_id=eid, audio_url=url, transcription_provider="", initiated_by="seed")
+    _mark_processed(db, seeded[0][0])
+    assert repo0.has_processed_episodes(PODCAST_ID) is True
+
+    handle_refresh_feed(
+        Task(id="b" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
+        state,
+    )
+
+    # Still only the 2 seeded episodes — the older 3 never enter the queue.
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+
+
+def test_handler_initial_backfill_excludes_catalog_beyond_orphan_page(db: str) -> None:
+    """The cap marks the WHOLE back catalog in one pass, not just the orphan
+    query's default page of 25 — otherwise the remainder leaks into the queue
+    once the podcast becomes established."""
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    base = datetime(2026, 2, 1)
+    repo0.save_refresh_batch(
+        [],
+        [
+            Episode(
+                id=f"bbbbbbbb-0000-0000-0000-{n:012d}",
+                podcast_id=PODCAST_ID,
+                external_id=f"big-{n}",
+                title=f"Big {n}",
+                description="",
+                pub_date=base + timedelta(days=n),
+                audio_url=f"https://example.com/big{n}.mp3",
+                duration=60,
+            )
+            for n in range(39)
+        ],
+    )  # 40 total with Ep 1
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    handle_refresh_feed(
+        Task(id="c" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
+        state,
+    )
+
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _excluded_count(db) == 38
+
+    # Established now → a later refresh finds no leftover backlog to enqueue.
+    _mark_processed(db, "bbbbbbbb-0000-0000-0000-000000000038")
+    handle_refresh_feed(
+        Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
+        state,
+    )
+    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+
+
 def test_due_query_excludes_unfollowed_podcast(db: str) -> None:
     """Spec #63 — the scheduler must not poll ANY feed nobody follows
     (matches get_podcasts_for_refresh eligibility), regardless of
