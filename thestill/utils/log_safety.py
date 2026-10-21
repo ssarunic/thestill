@@ -45,10 +45,16 @@ _REDACT_KEY_SUBSTRINGS: tuple = (
     "api-key",
     "apikey",
     "client_secret",
-    "code",  # OAuth authorization code — short-lived but powerful
-    "state",  # OAuth CSRF token
     "session",
 )
+
+# Matched as whole words of the key (split on anything not a letter or
+# digit), so ``codec`` and ``circuit_state`` are not caught by substring.
+# ``code`` is an OAuth authorization code: ``code``, ``oauth_code``.
+_REDACT_KEY_WORDS = frozenset({"code"})
+# OAuth CSRF state: the bare key or one qualified as OAuth/CSRF, never a
+# state machine's ``from_state`` / ``circuit_state``.
+_STATE_QUALIFIERS = frozenset({"oauth", "csrf"})
 
 # Replacement token. Deliberately visually distinct so "it was redacted"
 # is obvious when skimming logs.
@@ -60,9 +66,25 @@ _REDACTED = "[redacted]"
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
 
 
+def _key_words(key: str) -> set:
+    return {w for w in re.split(r"[^a-z0-9]+", key.lower()) if w}
+
+
 def _is_sensitive_key(key: str) -> bool:
     k = key.lower()
-    return any(needle in k for needle in _REDACT_KEY_SUBSTRINGS)
+    if any(needle in k for needle in _REDACT_KEY_SUBSTRINGS):
+        return True
+    words = _key_words(key)
+    if words & _REDACT_KEY_WORDS:
+        return True
+    return "state" in words and (k == "state" or bool(words & _STATE_QUALIFIERS))
+
+
+def _is_safe_number(key: str, value: Any) -> bool:
+    """A count or status number under a compound key is never a secret:
+    ``status_code=200``, ``input_tokens=1200``, ``token_revoked=True``.
+    A bare key (``code``, ``token``) stays redacted whatever its value."""
+    return isinstance(value, (bool, int, float)) and len(_key_words(key)) > 1
 
 
 def sanitize_control_chars(value: Any) -> Any:
@@ -87,7 +109,7 @@ def redact_mapping(mapping: Mapping[str, Any]) -> dict:
         if not isinstance(key, str):
             out[key] = value
             continue
-        if _is_sensitive_key(key):
+        if _is_sensitive_key(key) and not _is_safe_number(key, value):
             out[key] = _REDACTED
         elif isinstance(value, Mapping):
             out[key] = redact_mapping(value)
