@@ -16,6 +16,7 @@ from tests.unit.analytics_fakes import RecordingSink
 from thestill.models.podcast import Episode, Podcast
 from thestill.models.user import User
 from thestill.repositories.sqlite_public_page_view_repository import SqlitePublicPageViewRepository
+from thestill.services.abuse.errors import AccountDisabledError, SignupRefusedError
 from thestill.utils.config import Config
 from thestill.utils.sqlite_ext import connect
 from thestill.web.app import create_app
@@ -215,6 +216,107 @@ def test_analytics_can_never_fail_a_sign_in(client, sink, app_state, monkeypatch
     _stub_oauth(app_state, monkeypatch, SimpleNamespace(email="odd@example.com"), ["state-x"])
     _sign_in_round_trip(client, "state-x")  # asserts the 302
     assert [c["event"].name for c in sink.captured] == ["login_started"]
+
+
+def _start_sign_in(client, app_state, monkeypatch, state="state-1", next_path="/entities/person/x"):
+    """A login that mints ``state``; the caller plays Google's reply."""
+    user = app_state.auth_service.user_repository.save(User(email="new@example.com"))
+    _stub_oauth(app_state, monkeypatch, user, [state])
+    client.get("/api/auth/google/login", params={"next": next_path}, follow_redirects=False)
+
+
+def test_cancel_on_google_ends_on_login_and_closes_the_attempt(client, sink, app_state, monkeypatch):
+    from thestill.web.analytics_request import login_flow_key
+
+    _start_sign_in(client, app_state, monkeypatch)
+    back = client.get(
+        "/api/auth/google/callback", params={"error": "access_denied", "state": "state-1"}, follow_redirects=False
+    )
+
+    # A page that explains it, not a raw validation error, and the retry
+    # still returns to where sign-in started.
+    assert back.status_code == 302
+    assert back.headers["location"] == "/login?error=cancelled&next=%2Fentities%2Fperson%2Fx"
+    assert AUTH_COOKIE_NAME not in back.cookies
+    assert client.cookies.get("oauth_state") is None
+
+    started, cancelled = sink.captured
+    assert (started["event"].name, cancelled["event"].name) == ("login_started", "login_cancelled")
+    assert cancelled["event"].reason == "access_denied"
+    assert cancelled["visitor_key"] == started["visitor_key"] == login_flow_key("test" * 16, "state-1")
+    assert cancelled["user"] is None
+
+
+@pytest.mark.parametrize(
+    ("params", "reason"),
+    [
+        ({"error": "temporarily_unavailable"}, "temporarily_unavailable"),
+        ({"error": "<script>alert(1)</script>"}, "other"),
+        ({}, "missing_code"),
+    ],
+)
+def test_other_google_replies_are_bucketed_and_shown_as_failed(client, sink, app_state, monkeypatch, params, reason):
+    _start_sign_in(client, app_state, monkeypatch)
+    back = client.get("/api/auth/google/callback", params={**params, "state": "state-1"}, follow_redirects=False)
+
+    assert back.status_code == 302
+    assert back.headers["location"].startswith("/login?error=failed&")
+    assert sink.captured[-1]["event"].name == "login_cancelled"
+    assert sink.captured[-1]["event"].reason == reason
+    assert "script" not in str(sink.captured[-1]["event"].properties())
+
+
+def test_a_failed_exchange_ends_on_login_with_one_failed_event(client, sink, app_state, monkeypatch):
+    _start_sign_in(client, app_state, monkeypatch)
+
+    async def broken(code, redirect_uri, signup_source=None):
+        raise RuntimeError("token endpoint said no: secret detail")
+
+    monkeypatch.setattr(app_state.auth_service, "handle_google_callback", broken)
+    back = client.get("/api/auth/google/callback", params={"code": "c", "state": "state-1"}, follow_redirects=False)
+
+    assert back.status_code == 302
+    assert back.headers["location"] == "/login?error=failed&next=%2Fentities%2Fperson%2Fx"
+    assert "secret detail" not in back.text
+    started, failed = sink.captured
+    assert (failed["event"].name, failed["event"].reason) == ("login_failed", "error")
+    assert failed["visitor_key"] == started["visitor_key"]
+
+
+def test_a_state_mismatch_signs_nobody_in_and_is_counted_against_the_attempt(client, sink, app_state, monkeypatch):
+    _start_sign_in(client, app_state, monkeypatch)
+    back = client.get("/api/auth/google/callback", params={"code": "c", "state": "forged"}, follow_redirects=False)
+
+    assert back.status_code == 302
+    assert back.headers["location"].startswith("/login?error=failed")
+    assert AUTH_COOKIE_NAME not in back.cookies
+    started, failed = sink.captured
+    assert (failed["event"].name, failed["event"].reason) == ("login_failed", "state_mismatch")
+    assert failed["visitor_key"] == started["visitor_key"]
+
+
+@pytest.mark.parametrize(
+    ("error", "notice"),
+    [(AccountDisabledError("banned"), "account_disabled"), (SignupRefusedError("closed"), "signups_closed")],
+)
+def test_refusals_are_counted_as_failed_sign_ins(client, sink, app_state, monkeypatch, error, notice):
+    _start_sign_in(client, app_state, monkeypatch)
+
+    async def refuse(code, redirect_uri, signup_source=None):
+        raise error
+
+    monkeypatch.setattr(app_state.auth_service, "handle_google_callback", refuse)
+    back = client.get("/api/auth/google/callback", params={"code": "c", "state": "state-1"}, follow_redirects=False)
+
+    assert back.headers["location"] == f"/login?error={notice}&next=%2Fentities%2Fperson%2Fx"
+    assert (sink.captured[-1]["event"].name, sink.captured[-1]["event"].reason) == ("login_failed", notice)
+
+
+def test_a_reply_with_no_attempt_in_this_browser_sends_nothing(client, sink):
+    back = client.get("/api/auth/google/callback", params={"error": "access_denied"}, follow_redirects=False)
+    assert back.status_code == 302
+    assert back.headers["location"] == "/login?error=cancelled"
+    assert sink.captured == []
 
 
 # -- spec #103 Phase 2: per-page daily counter -------------------------------
