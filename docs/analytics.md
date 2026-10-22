@@ -28,7 +28,7 @@ else.
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
 | `login_cancelled` | server, OAuth callback, when Google returns no code | `reason`: `access_denied` (Cancel on Google's screen), `admin_policy_enforced`, `server_error`, `temporarily_unavailable`, `other`, `missing_code` |
-| `login_failed` | server, OAuth callback, when Google signed the reader in but thestill did not | `reason`: `state_mismatch`, `account_disabled`, `signups_closed`, `error` |
+| `login_failed` | server, OAuth callback, when Google signed the reader in but thestill did not | `reason`: `account_disabled`, `signups_closed`, `error` |
 | `search` | server, `/api/search/corpus` (not in-episode expansion) | `result_count`, `mode` |
 | `mcp_tool_call` | server, remote MCP | `tool`, `ok` |
 
@@ -42,9 +42,11 @@ an HMAC of the OAuth `state` (`login_flow_key`), so they form a funnel
 without a cookie and without ever joining the account's person or the
 visitor's public page views. Each attempt ends in at most one of
 `login_completed`, `login_cancelled` or `login_failed`; a `login_started`
-with none of them is a reader who closed the tab or went back. The two
-unhappy outcomes are keyed by the browser's state cookie, so a callback
-with no attempt in that browser sends nothing. Remote MCP calls carrying `Sec-GPC: 1` send
+with none of them is a reader who closed the tab or went back. An outcome
+is only recorded when the callback's `state` matches the browser's state
+cookie. A callback with no attempt in that browser, or a stale one from an
+older tab after a newer sign-in replaced the cookie, sends nothing and
+leaves the current attempt open. Remote MCP calls carrying `Sec-GPC: 1` send
 nothing.
 
 Not built yet: `export` (no spec #91 export routes exist) and

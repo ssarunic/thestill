@@ -354,7 +354,7 @@ counts as a view and not as a visitor.
 | `login_started` | server, `/api/auth/google/login` | `from_kind`: the public page kind parsed from `next`, or `none` |
 | `login_completed` | server, OAuth callback | `next_kind` (whether the user is new is in `users`, not here) |
 | `login_cancelled` | server, OAuth callback without a code (added 2026-10-22) | `reason`: Google's `error`, bucketed (`access_denied` = Cancel); see docs/analytics.md |
-| `login_failed` | server, OAuth callback that did not sign the reader in (added 2026-10-22) | `reason`: `state_mismatch`, `account_disabled`, `signups_closed`, `error` |
+| `login_failed` | server, OAuth callback that did not sign the reader in (added 2026-10-22) | `reason`: `account_disabled`, `signups_closed`, `error`; a callback whose `state` doesn't match the cookie records nothing |
 | `search` | server, search route | `result_count`, `mode`; **never** the query text |
 | `export` | server, #91 export routes | `artifact`, `format` |
 | `share` | client, copy link / Web Share | `kind` |

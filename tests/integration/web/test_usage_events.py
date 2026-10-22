@@ -283,16 +283,46 @@ def test_a_failed_exchange_ends_on_login_with_one_failed_event(client, sink, app
     assert failed["visitor_key"] == started["visitor_key"]
 
 
-def test_a_state_mismatch_signs_nobody_in_and_is_counted_against_the_attempt(client, sink, app_state, monkeypatch):
+def test_a_state_mismatch_signs_nobody_in_and_ends_nothing(client, sink, app_state, monkeypatch):
     _start_sign_in(client, app_state, monkeypatch)
     back = client.get("/api/auth/google/callback", params={"code": "c", "state": "forged"}, follow_redirects=False)
 
     assert back.status_code == 302
-    assert back.headers["location"].startswith("/login?error=failed")
+    assert back.headers["location"] == "/login?error=failed"
     assert AUTH_COOKIE_NAME not in back.cookies
-    started, failed = sink.captured
-    assert (failed["event"].name, failed["event"].reason) == ("login_failed", "state_mismatch")
-    assert failed["visitor_key"] == started["visitor_key"]
+    # The attempt this browser started is still open: cookies kept, no outcome.
+    assert client.cookies.get("oauth_state") == "state-1"
+    assert [c["event"].name for c in sink.captured] == ["login_started"]
+
+
+@pytest.mark.parametrize(
+    "stale_reply",
+    [{"code": "c", "state": "state-a"}, {"error": "access_denied", "state": "state-a"}],
+    ids=["older-tab-signs-in", "older-tab-cancels"],
+)
+def test_a_stale_tab_never_ends_the_newer_attempt(client, sink, app_state, monkeypatch, stale_reply):
+    """Two sign-in tabs share one cookie jar: B replaces A's state and return
+    path, so A's callback (sign-in or cancel) is stale and must leave B able
+    to finish where B started."""
+    from thestill.web.analytics_request import login_flow_key
+
+    user = app_state.auth_service.user_repository.save(User(email="new@example.com"))
+    _stub_oauth(app_state, monkeypatch, user, ["state-a", "state-b"])
+    client.get("/api/auth/google/login", params={"next": "/entities/person/x"}, follow_redirects=False)
+    client.get("/api/auth/google/login", params={"next": "/top"}, follow_redirects=False)
+
+    stale = client.get("/api/auth/google/callback", params=stale_reply, follow_redirects=False)
+    assert stale.headers["location"].startswith("/login?error=")
+    assert "next=" not in stale.headers["location"]  # B's return path is not A's
+    assert AUTH_COOKIE_NAME not in stale.cookies
+
+    done = client.get("/api/auth/google/callback", params={"code": "c", "state": "state-b"}, follow_redirects=False)
+    assert done.status_code == 302 and done.headers["location"] == "/top"
+    assert AUTH_COOKIE_NAME in done.cookies
+
+    names = [c["event"].name for c in sink.captured]
+    assert names == ["login_started", "login_started", "login_completed"]
+    assert sink.captured[-1]["visitor_key"] == login_flow_key("test" * 16, "state-b")
 
 
 @pytest.mark.parametrize(

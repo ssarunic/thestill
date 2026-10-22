@@ -74,7 +74,7 @@ class LoginCompleted(_Event):
 GoogleLoginError = Literal[
     "access_denied", "admin_policy_enforced", "server_error", "temporarily_unavailable", "other", "missing_code"
 ]
-LoginFailureReason = Literal["state_mismatch", "account_disabled", "signups_closed", "error"]
+LoginFailureReason = Literal["account_disabled", "signups_closed", "error"]
 
 
 class LoginCancelled(_Event):

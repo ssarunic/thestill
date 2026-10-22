@@ -307,30 +307,35 @@ def _google_error_reason(error: Optional[str]) -> str:
     return error if error in _GOOGLE_ERRORS else "other"
 
 
-def _back_to_login(notice: str, next_path: Optional[str]) -> RedirectResponse:
-    """End a sign-in attempt on /login with a notice, keeping the return path.
-
-    The attempt's state and return-path cookies are spent either way.
-    """
+def _login_notice(notice: str, next_path: Optional[str] = None) -> RedirectResponse:
+    """Send the reader to /login with a notice, keeping the return path."""
     query = {"error": notice}
     if next_path:
         query["next"] = next_path
-    response = RedirectResponse(url=f"/login?{urlencode(query)}", status_code=302)
+    return RedirectResponse(url=f"/login?{urlencode(query)}", status_code=302)
+
+
+def _back_to_login(notice: str, next_path: Optional[str]) -> RedirectResponse:
+    """End this browser's current sign-in attempt on /login with a notice.
+
+    Its state and return-path cookies are spent. Only for a callback whose
+    state matches the cookie: a stale one must not end a newer attempt.
+    """
+    response = _login_notice(notice, next_path)
     response.delete_cookie(key="oauth_state")
     response.delete_cookie(key=NEXT_COOKIE)
     return response
 
 
-def _capture_attempt_end(app_state: AppState, request: Request, event, stored_state: Optional[str]) -> None:
+def _capture_attempt_end(app_state: AppState, request: Request, event, state: str) -> None:
     """Record how a sign-in attempt ended, under its ``login_started`` id.
 
-    Keyed by this browser's own state cookie rather than the query: the
-    cookie is the attempt this browser started. Without it there is no
-    attempt to attribute the outcome to, so nothing is sent.
+    ``state`` must already be verified against this browser's cookie, so
+    the outcome lands on the attempt it belongs to and nobody can mint
+    outcomes for attempts that never started.
     """
-    if stored_state:
-        key = login_flow_key(app_state.config.jwt_secret_key, stored_state)
-        capture_event(app_state, request, event, anonymous_key=key)
+    key = login_flow_key(app_state.config.jwt_secret_key, state)
+    capture_event(app_state, request, event, anonymous_key=key)
 
 
 @router.get("/google/callback")
@@ -349,7 +354,8 @@ async def google_callback(
     notice and one usage event under the attempt's id: ``login_cancelled``
     when Google sends the reader back without a code (Cancel on its screen
     is ``access_denied``), ``login_failed`` when Google signed them in but
-    thestill did not.
+    thestill did not. A stale callback, from an older tab after a newer
+    sign-in replaced the state cookie, gets the notice but ends nothing.
 
     Args:
         code: Authorization code from Google (absent when Google reports an error)
@@ -375,20 +381,28 @@ async def google_callback(
     # (spec #95; signup_source_for is total, so it cannot fail the login).
     next_path = safe_next_path(request.cookies.get(NEXT_COOKIE))
 
+    # Only the attempt this browser is waiting for may end here. With two
+    # sign-in tabs, the newer one replaces the state and return-path
+    # cookies, so the older tab's callback is stale: it gets a notice but
+    # leaves the newer attempt's cookies alone and records nothing.
+    current = bool(stored_state) and stored_state == state
+
     # Google came back without a code: nothing to verify or exchange. Show
     # /login rather than a raw validation error.
     if error or not code:
         reason = _google_error_reason(error)
-        logger.info("oauth_callback_cancelled", reason=reason)
-        _capture_attempt_end(app_state, request, LoginCancelled(reason=reason), stored_state)
-        return _back_to_login("cancelled" if reason == "access_denied" else "failed", next_path)
+        notice = "cancelled" if reason == "access_denied" else "failed"
+        logger.info("oauth_callback_cancelled", reason=reason, current_attempt=current)
+        if not current:
+            return _login_notice(notice)
+        _capture_attempt_end(app_state, request, LoginCancelled(reason=reason), state)
+        return _back_to_login(notice, next_path)
 
     # Verify state parameter for CSRF protection. No auth cookie is set on
     # this path, so a friendly redirect is as safe as a bare 400.
-    if not stored_state or stored_state != state:
+    if not current:
         logger.warning("OAuth state mismatch - possible CSRF attack")
-        _capture_attempt_end(app_state, request, LoginFailed(reason="state_mismatch"), stored_state)
-        return _back_to_login("failed", next_path)
+        return _login_notice("failed")
 
     try:
         redirect_uri = _get_redirect_uri(request, app_state)
@@ -435,13 +449,13 @@ async def google_callback(
         # Spec #104 — not an auth failure: /login explains it.
         refusal = "account_disabled" if isinstance(e, AccountDisabledError) else "signups_closed"
         logger.info("oauth_callback_refused", error=refusal)
-        _capture_attempt_end(app_state, request, LoginFailed(reason=refusal), stored_state)
+        _capture_attempt_end(app_state, request, LoginFailed(reason=refusal), state)
         return _back_to_login(refusal, next_path)
     except Exception as e:
         # Don't leak upstream error messages to the client.
         # Log the type + message server-side; the reader gets a generic notice.
         logger.error("oauth_callback_error", error_type=type(e).__name__, error=str(e))
-        _capture_attempt_end(app_state, request, LoginFailed(reason="error"), stored_state)
+        _capture_attempt_end(app_state, request, LoginFailed(reason="error"), state)
         return _back_to_login("failed", next_path)
 
 
