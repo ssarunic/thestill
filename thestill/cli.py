@@ -479,8 +479,24 @@ def set_podcast_visibility(ctx, podcast_id, public):
     if not podcast:
         click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
         ctx.exit(1)
+    # Spec #105 Phase 4: tell IndexNow which URLs appeared or went away.
+    # The public episode list is read on whichever side of the change has it.
+    from .services.indexnow import IndexNow
+
+    indexnow = IndexNow(ctx.obj.config)
+    before = _public_page_paths(ctx.obj.repository, podcast) if indexnow.enabled and not public else []
     ctx.obj.repository.set_podcast_public_pages(str(podcast.id), public)
     click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
+    if indexnow.enabled:
+        paths = _public_page_paths(ctx.obj.repository, podcast) if public else before
+        status = indexnow.submit(paths or [f"/podcasts/{podcast.slug}"])
+        click.echo(f"  IndexNow: {len(paths) or 1} URLs, {'HTTP ' + str(status) if status else 'not sent'}.")
+
+
+def _public_page_paths(repository, podcast) -> list:
+    """The show's public page and its public episode pages."""
+    rows, _ = repository.list_public_episode_rows(podcast_id=str(podcast.id), limit=9_999)
+    return [f"/podcasts/{podcast.slug}"] + [f"/podcasts/{podcast.slug}/episodes/{r['slug']}" for r in rows]
 
 
 @main.command("backfill-summary-previews")

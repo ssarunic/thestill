@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -596,6 +597,9 @@ class Config(BaseModel):
     # a request gets today's head-only shell).
     public_prerender_enabled: bool = True
     prerender_max_concurrent: int = 4
+    # Spec #105 Phase 4 — IndexNow key (8-128 letters, digits or dashes),
+    # served at /<key>.txt; empty turns the pings off.
+    indexnow_key: str = ""
     # OpenAPI docs / redoc. On in dev; on in prod only if explicitly enabled.
     enable_docs: bool = False
     # Spec #95 Layer B — product usage events to PostHog Cloud (EU). Off
@@ -982,6 +986,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "public_pages_enabled": _env_bool("PUBLIC_PAGES_ENABLED", True),
         "public_prerender_enabled": _env_bool("PUBLIC_PRERENDER_ENABLED", True),
         "prerender_max_concurrent": max(1, _env_int("PRERENDER_MAX_CONCURRENT", 4)),
+        "indexnow_key": os.getenv("INDEXNOW_KEY", "").strip(),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         # Product usage events (spec #95 Layer B)
         "posthog_project_key": os.getenv("POSTHOG_PROJECT_KEY", "").strip(),
@@ -1055,6 +1060,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
     # costly path reads; a typo must stop the boot, not each request.
     from ..services.abuse.settings_registry import SIGNUP_MODES, SPEND_BREAKER_ACTIONS, normalize_allowlist_entry
 
+    if config_data["indexnow_key"] and not re.fullmatch(r"[A-Za-z0-9-]{8,128}", config_data["indexnow_key"]):
+        raise ValueError("INDEXNOW_KEY must be 8-128 letters, digits or dashes")
     if config_data["signup_mode"] not in SIGNUP_MODES:
         raise ValueError(f"SIGNUP_MODE must be one of {', '.join(SIGNUP_MODES)}; got {config_data['signup_mode']!r}")
     try:

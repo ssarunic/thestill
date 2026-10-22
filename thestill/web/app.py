@@ -930,6 +930,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 return PlainTextResponse("Not found", status_code=404)
             return Response(body, media_type="application/xml", headers={"Cache-Control": "public, max-age=3600"})
 
+        # Spec #105 Phase 4 — the IndexNow key file proves we own the host.
+        if config.indexnow_key:
+            indexnow_key = config.indexnow_key
+
+            @app.api_route(f"/{indexnow_key}.txt", methods=["GET", "HEAD"], include_in_schema=False)
+            def indexnow_key_file():
+                return PlainTextResponse(indexnow_key, headers={"Cache-Control": "public, max-age=86400"})
+
         # Catch-all route for SPA - must be after API routes. A plain ``def``
         # so the shell's repository lookups run in the threadpool, never on
         # the event loop.

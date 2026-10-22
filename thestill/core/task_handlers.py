@@ -813,6 +813,30 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         # only on the actual NULL → set transition.
         if state.repository.mark_episode_published(episode.id):
             state.inbox_service.fanout_on_publish(episode.id, podcast.id)
+            _ping_indexnow_on_publish(state, podcast, episode.id)
+
+
+def _ping_indexnow_on_publish(state: "AppState", podcast, episode_id: str) -> None:
+    """Spec #105 Phase 4: a newly published episode with a public page goes
+    to IndexNow with its show, so Bing sees it before the next sitemap
+    crawl. Best-effort and off without ``INDEXNOW_KEY``."""
+    from ..services.indexnow import IndexNow
+
+    indexnow = IndexNow(state.config)
+    if not indexnow.enabled:
+        return
+    try:
+        found = state.repository.get_episode(episode_id)
+        episode = found[1] if found else None
+        if not (episode and episode.slug and podcast.slug and (episode.summary_preview or "").strip()):
+            return
+        if not state.repository.is_podcast_public(str(podcast.id)):
+            return
+        indexnow.submit_in_background(
+            [f"/podcasts/{podcast.slug}/episodes/{episode.slug}", f"/podcasts/{podcast.slug}"]
+        )
+    except Exception:  # noqa: BLE001 - a ping never fails the summarize task
+        logger.warning("indexnow_publish_ping_failed", episode_id=episode_id, exc_info=True)
 
 
 def handle_reindex(task: Task, state: "AppState") -> None:
