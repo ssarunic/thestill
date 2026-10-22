@@ -6,7 +6,7 @@ Thestill is an automated podcast transcription and summarization pipeline built 
 
 ## Language and Toolchain
 
-**Python Version**: 3.10+ (`requires-python = ">=3.10"`; `.python-version` pins 3.12.0 and CI runs 3.12)
+**Python Version**: 3.11+ (`requires-python = ">=3.11"`; `.python-version` pins 3.12.0 and CI runs 3.12)
 **Package Manager**: uv with a committed `uv.lock` (CI installs with `uv sync --frozen`); hatchling remains the build backend
 **Key Dependencies**: fastapi, uvicorn, pydantic, click, openai, anthropic, google-genai, mcp, structlog, authlib/PyJWT, feedparser, yt-dlp. Local Whisper/WhisperX live in the optional `[local-transcription]` extra, not in core dependencies.
 
@@ -65,7 +65,7 @@ line_length = 120
 multi_line_output = 3
 
 [tool.mypy]
-python_version = "3.9"  # note: lags the 3.10 floor in requires-python
+python_version = "3.9"  # note: lags the 3.11 floor in requires-python
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
