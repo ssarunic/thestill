@@ -134,9 +134,11 @@ test('Top Podcasts restores scroll position and filters on Back', async ({ page 
   await row.click()
   await expect(page).toHaveURL(/\/podcasts\/show-gb-20/)
 
-  // A real detail page sits at the top. Force the window there so the Back
-  // restoration has real work to do (and native restoration can't cheat).
-  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }))
+  // The detail page starts at the top on its own, so the Back restoration has
+  // real work to do. Wait for it to render rather than scrolling the window
+  // here: the URL changes before the lazy page commits, and a scroll in that
+  // gap is recorded against the list's entry and clobbers its offset.
+  await expect(page.getByText('Detail Show').first()).toBeVisible()
   await page.waitForFunction(() => window.scrollY === 0)
 
   // Back to the list.

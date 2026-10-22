@@ -168,6 +168,12 @@ test.describe('navigation contract', () => {
       const before = await page.evaluate(() => window.scrollY)
       expect(before).toBeGreaterThan(200)
 
+      // Keep the document tall across the navigation. A destination that
+      // renders short while it loads lets the browser clamp the offset to 0,
+      // which hid a missing scroll-to-top for every signed-in page until the
+      // hook moved out of Layout (beneath <Routes location> a PUSH reads as
+      // POP).
+      await page.addStyleTag({ content: 'body { min-height: 20000px }' })
       await link.click()
       await expect(page).not.toHaveURL(new RegExp(`${route.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`))
       // Destination starts at the top.

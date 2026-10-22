@@ -779,9 +779,12 @@ enforced structurally where possible and checked in Playwright
 new link out of a page cannot quietly break them:
 
 - **Fresh navigation starts at the top; Back/Forward restores the position.**
-  `useScrollRestoration` is mounted once in `Layout` and handles every
+  `useScrollRestoration` is mounted once per app (in `App`, above the page
+  `<Routes>`; in `PublicLayout` for the public site) and handles every
   window-scrolled route: scroll to top on a push to a new pathname, restore the
-  recorded offset on a pop, leave same-page search-param pushes alone. Pages
+  recorded offset on a pop, leave same-page search-param pushes alone. Never
+  mount it beneath a `<Routes location={...}>`: React Router reports every
+  navigation there as a pop, so fresh pages keep the previous offset. Pages
   must not call `window.scrollTo(0, 0)` on mount and must not opt in
   individually. A surface with its own scroll container (the inbox reader
   overlay) owns that container's behaviour (`useReadingPosition`).
@@ -789,7 +792,7 @@ new link out of a page cannot quietly break them:
   `{ replace: true }` for filter updates), never only in component state, so
   Back returns to the same view.
 - **Opening an overlay never moves the page beneath it** (spec #52:
-  `backgroundLocation` present → the layout hook stays out of the way).
+  `backgroundLocation` present → the scroll hook stays out of the way).
 - **When you add a link out of a page**, run the check: scroll down, follow the
   link, press Back, confirm the position is kept. Add the route to the
   navigation-contract spec's table if it is not there yet.

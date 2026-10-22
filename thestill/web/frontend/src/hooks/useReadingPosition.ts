@@ -12,7 +12,7 @@ const POSITION_EXPIRY_DAYS = 30
 // History entries (``location.key``) the reader has already been mounted on
 // in this session. Coming back to one of them via Back/Forward is a return
 // and restores the saved position; a fresh entry starts at the top. Same
-// per-entry convention as ``useScrollRestoration`` in ``Layout``.
+// per-entry convention as ``useScrollRestoration`` in ``App``.
 const seenEntries = new Set<string>()
 
 // A browser-level back/forward document load restores the reader's saved
@@ -147,7 +147,7 @@ export function useReadingPosition(
     //   check is what separates a return from a first visit). Fresh entries
     //   start the container at the top.
     // - Page mode (window): in-session Back is ``useScrollRestoration`` in
-    //   ``Layout``'s job (exact offset, retry loop), and so is scrolling a
+    //   ``App``'s job (exact offset, retry loop), and so is scrolling a
     //   fresh page to the top. This hook only restores the cross-session
     //   position on a browser-level back/forward document load.
     const ownsScroll = !!scrollContainerRef
