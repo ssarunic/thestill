@@ -62,6 +62,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# The empty pair inside ``#root`` in ``index.html``: replaced for signed-out
+# requests to a public page, left empty otherwise.
 BODY_MARKER_RE = re.compile(r"<!--thestill:body-->.*?<!--/thestill:body-->", re.S)
 BOOTSTRAP_ID = "thestill-bootstrap"
 #: Format version of the data block; the app ignores any other.

@@ -410,3 +410,12 @@ def test_a_failed_lookup_is_503_for_crawlers_not_a_page(site, app_state, monkeyp
     assert "<!--thestill:head-->" in response.text or "<title>" in response.text
     # Signed-in app paths need no lookup and keep working.
     assert site.get("/inbox").status_code == 200
+
+
+def test_served_pages_carry_no_template_comments(site, app_state):
+    """Every comment in index.html ships in every page; only the markers
+    the server replaces may be there (and an empty body pair)."""
+    _seed(app_state)
+    for path in ("/", "/podcasts/public-show/episodes/summarised", "/inbox"):
+        comments = set(re.findall(r"<!--(.*?)-->", site.get(path).text, re.S))
+        assert comments <= {"thestill:body", "/thestill:body"}, (path, comments)

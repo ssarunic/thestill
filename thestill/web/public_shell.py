@@ -64,6 +64,8 @@ logger = get_logger(__name__)
 SITE_NAME = "Thestill"
 DEFAULT_TITLE = "Thestill — read your podcasts"
 DEFAULT_DESCRIPTION = "Podcast summaries you can read in three minutes, with every quote attributed and timed."
+# ``index.html`` marks the per-page head with these comments and says
+# nothing else there: every comment in the template ships in every page.
 MARKER_RE = re.compile(r"<!--thestill:head-->.*?<!--/thestill:head-->", re.S)
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,110}$")
 _ENTITY_TYPES = ("person", "company", "product", "topic")
