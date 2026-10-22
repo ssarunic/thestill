@@ -138,6 +138,8 @@ class HeadTags:
     index: bool = False
     status_code: int = 200
     extra: List[Tuple[str, str]] = field(default_factory=list)
+    #: With a 301 ``status_code``: where the page lives now.
+    redirect_path: Optional[str] = None
 
 
 class LookupThrottled(Exception):
@@ -260,11 +262,21 @@ class ShellRenderer:
 
     def _cached(self, key: str, request: "Request", build) -> HeadTags:
         """Cached tags for ``key``; a miss costs an anonymous caller one
-        public-bucket token (a signed-in user is never refused the app)."""
+        public-bucket token (a signed-in user is never refused the app).
+
+        A redirect is not kept: it is decided again from the entity payload
+        on every request, so an undone re-type cannot leave this cache
+        pointing the old URL at a page that now points back."""
         cache_key = (key, get_public_visibility(self._state).fingerprint())
-        if not self._cache.peek(cache_key) and not has_valid_session(request) and not allow_public_request(request):
+        found, tags = self._cache.lookup(cache_key)
+        if found:
+            return tags
+        if not has_valid_session(request) and not allow_public_request(request):
             raise LookupThrottled()
-        return self._cache.get_or_compute(cache_key, build)
+        tags = build()
+        if tags.redirect_path is None:
+            self._cache.put(cache_key, tags)
+        return tags
 
     @staticmethod
     def is_lookup_path(path: str) -> bool:
@@ -359,7 +371,7 @@ class ShellRenderer:
 
         from .public_access import CacheMiss, cache_only
         from .public_prerender import get_prerenderer
-        from .routes.api_public import public_entity_payload
+        from .routes.api_public import current_entity_path, public_entity_payload
 
         # The entity payload (quote counts decide noindex) is the costly part
         # of this page. Cached, it is free; uncached, it is built under the
@@ -381,6 +393,11 @@ class ShellRenderer:
                         payload = public_entity_payload(self._state, entity_type, slug)
         except HTTPException:
             return HeadTags(status_code=404)
+        # A re-typed entity answers at its old type's URL too; send that URL
+        # on, or the two copies split the page in search.
+        moved_to = current_entity_path(self._state, entity_type, slug, payload)
+        if moved_to:
+            return HeadTags(status_code=301, redirect_path=moved_to)
         entity = payload["entity"]
         enrichment = payload.get("enrichment") or {}
         name = entity["name"]
