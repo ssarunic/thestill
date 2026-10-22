@@ -932,6 +932,25 @@ def public_entity_payload(state: AppState, entity_type: str, slug: str) -> Dict[
     )
 
 
+def current_entity_path(state: AppState, entity_type: str, slug: str, payload: Dict[str, Any]) -> Optional[str]:
+    """The URL a re-typed entity lives at now, when ``entity_type/slug``
+    names it under a type it no longer has (``company/suno`` for the product
+    Suno). ``None`` when the URL is already current, or when the current
+    URL shows another entity (an empty leftover row holding that id), so
+    the old URL stays the only one that shows this entity."""
+    entity = payload["entity"]
+    if entity["type"] == entity_type and entity["slug"] == slug:
+        return None
+    visibility = get_public_visibility(state)
+    try:
+        current = _public_entity_id(state, visibility, entity["type"], entity["slug"])
+    except HTTPException:
+        return None
+    if current != _public_entity_id(state, visibility, entity_type, slug):
+        return None
+    return f"/entities/{entity['type']}/{entity['slug']}"
+
+
 @router.get("/entities/{entity_type}/{slug}")
 def get_public_entity(
     entity_type: str,

@@ -138,6 +138,8 @@ class HeadTags:
     index: bool = False
     status_code: int = 200
     extra: List[Tuple[str, str]] = field(default_factory=list)
+    #: With a 301 ``status_code``: where the page lives now.
+    redirect_path: Optional[str] = None
 
 
 class LookupThrottled(Exception):
@@ -359,7 +361,7 @@ class ShellRenderer:
 
         from .public_access import CacheMiss, cache_only
         from .public_prerender import get_prerenderer
-        from .routes.api_public import public_entity_payload
+        from .routes.api_public import current_entity_path, public_entity_payload
 
         # The entity payload (quote counts decide noindex) is the costly part
         # of this page. Cached, it is free; uncached, it is built under the
@@ -381,6 +383,11 @@ class ShellRenderer:
                         payload = public_entity_payload(self._state, entity_type, slug)
         except HTTPException:
             return HeadTags(status_code=404)
+        # A re-typed entity answers at its old type's URL too; send that URL
+        # on, or the two copies split the page in search.
+        moved_to = current_entity_path(self._state, entity_type, slug, payload)
+        if moved_to:
+            return HeadTags(status_code=301, redirect_path=moved_to)
         entity = payload["entity"]
         enrichment = payload.get("enrichment") or {}
         name = entity["name"]

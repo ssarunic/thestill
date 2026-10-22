@@ -35,7 +35,7 @@ from typing import Optional
 import structlog
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
@@ -995,6 +995,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 if renderer.is_lookup_path(full_path):
                     tags.status_code = 503
                     no_cache = {**no_cache, "Retry-After": "120"}
+            if tags.redirect_path:
+                # no-cache so a browser rechecks it: a re-type can be undone.
+                log_shell_served(full_path, tags.status_code, user_agent, started)
+                query = f"?{request.url.query}" if request.url.query else ""
+                return RedirectResponse(tags.redirect_path + query, status_code=tags.status_code, headers=no_cache)
             html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
             # Spec #105: anonymous requests to a public page also get its
             # main content as HTML plus a data block. Signed-in requests
