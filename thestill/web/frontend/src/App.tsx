@@ -8,6 +8,7 @@ import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 import { useAuth } from './contexts/AuthContext'
 import AnalyticsBridge from './analytics/AnalyticsBridge'
+import { PublicApp } from './publicEntry'
 
 // Lazy load pages for code splitting
 const Status = lazy(() => import('./pages/Dashboard'))
@@ -32,8 +33,6 @@ const TopPodcasts = lazy(() => import('./pages/TopPodcasts'))
 const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
-// Spec #94 — the signed-out public site, its own chunk (no player, no inbox).
-const PublicApp = lazy(() => import('./PublicApp'))
 const LegalPage = lazy(() => import('./pages/public/LegalPage'))
 const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 

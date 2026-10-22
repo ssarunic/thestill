@@ -13,7 +13,10 @@
     <!--/thestill:head-->
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Spec #105: for signed-out requests to a public page, the server
+         writes the page's main content and a data block here; React
+         replaces it on mount. -->
+    <div id="root"><!--thestill:body--><!--/thestill:body--></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

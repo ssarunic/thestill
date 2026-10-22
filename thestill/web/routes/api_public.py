@@ -229,18 +229,45 @@ def _episode_items(
     return [_episode_list_item(row, _ordered(refs, guest_ids[row["id"]]), with_podcast=with_podcast) for row in rows]
 
 
+# Spec #105 §4: one cache per payload serves the API route, the page
+# shell's head tags and its server-written body. Keyed on the visibility
+# fingerprint like every public cache, so a takedown reaches all three on
+# the same refresh.
+_PAYLOAD_TTL_SECONDS = 120.0
+_PAYLOAD_CACHE_MAX = 1024
+_podcast_row_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_episode_lookup_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_podcast_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_podcast_episodes_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_episode_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_summary_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+
+
 def _public_podcast_row(state: AppState, visibility: PublicVisibility, podcast_slug: str) -> Dict[str, Any]:
     _check_slug(podcast_slug, "Podcast")
-    row = state.repository.get_podcast_row_by_slug(podcast_slug)
+    row = _podcast_row_cache.get_or_compute(
+        (podcast_slug, visibility.fingerprint()), lambda: state.repository.get_podcast_row_by_slug(podcast_slug)
+    )
     if not row or not visibility.podcast_is_public(row["id"]):
         raise _not_found("Podcast")
     return row
 
 
-def _public_episode(state: AppState, visibility: PublicVisibility, podcast_slug: str, episode_slug: str):
+def public_podcast_row(state: AppState, podcast_slug: str) -> Dict[str, Any]:
+    """The podcast row behind a public show page, else a 404 (one cached
+    query: the page shell's head tags use it without building a payload)."""
+    return _public_podcast_row(state, get_public_visibility(state), podcast_slug)
+
+
+def public_episode_models(state: AppState, podcast_slug: str, episode_slug: str):
+    """``(podcast, episode)`` for a public episode page, else a 404."""
+    visibility = get_public_visibility(state)
     _check_slug(podcast_slug, "Episode")
     _check_slug(episode_slug, "Episode")
-    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    result = _episode_lookup_cache.get_or_compute(
+        (podcast_slug, episode_slug, visibility.fingerprint()),
+        lambda: state.repository.get_episode_by_slug(podcast_slug, episode_slug),
+    )
     if not result:
         raise _not_found("Episode")
     podcast, episode = result
@@ -254,6 +281,142 @@ def _public_episode(state: AppState, visibility: PublicVisibility, podcast_slug:
 # ---------------------------------------------------------------------------
 
 
+def _build_podcast_payload(state: AppState, visibility: PublicVisibility, row: Dict[str, Any]) -> Dict[str, Any]:
+    info = PodcastWithIndex(index=0, **row)
+    anchors = state.entity_repository.get_podcast_anchors(info.id)
+    refs = _entity_refs(state, visibility, [*anchors.get("hosts", []), *anchors.get("recurring", [])])
+    _, summarised = state.repository.list_public_episode_rows(podcast_id=info.id, limit=1)
+    return {
+        "podcast": {
+            "slug": info.slug,
+            "title": info.title,
+            "description": info.description,
+            "author": info.author,
+            "image_url": info.image_url,
+            "explicit": info.explicit,
+            "copyright": info.copyright,
+            "website_url": info.website_url,
+            "primary_category": info.primary_category,
+            "episodes_count": info.episodes_count,
+            "summarised_count": summarised,
+            "latest_pub_date": _iso(info.last_processed),
+            "apple_url": info.apple_url,
+            "spotify_url": info.spotify_url,
+            "youtube_url": info.youtube_url,
+            "hosts": _ordered(refs, anchors.get("hosts", [])),
+            "recurring": _ordered(refs, anchors.get("recurring", [])),
+        }
+    }
+
+
+def public_podcast_payload(state: AppState, podcast_slug: str) -> Dict[str, Any]:
+    """A public show: metadata, platform links, hosts, summarised-episode count."""
+    visibility = get_public_visibility(state)
+    row = _public_podcast_row(state, visibility, podcast_slug)
+    return _podcast_cache.get_or_compute(
+        (str(row["id"]), visibility.fingerprint()), lambda: _build_podcast_payload(state, visibility, row)
+    )
+
+
+def public_podcast_episodes_payload(
+    state: AppState, podcast_slug: str, limit: int = 10, offset: int = 0
+) -> Dict[str, Any]:
+    """A show's summarised episodes, newest first (only these have public pages)."""
+    visibility = get_public_visibility(state)
+    row = _public_podcast_row(state, visibility, podcast_slug)
+
+    def build() -> Dict[str, Any]:
+        rows, total = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=limit, offset=offset)
+        items = _episode_items(state, visibility, rows, with_podcast=False)
+        next_offset = offset + len(items) if offset + len(items) < total else None
+        return {"episodes": items, "total": total, "offset": offset, "limit": limit, "next_offset": next_offset}
+
+    return _podcast_episodes_cache.get_or_compute((str(row["id"]), limit, offset, visibility.fingerprint()), build)
+
+
+def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+    anchors = state.entity_repository.get_podcast_anchors(podcast.id)
+    host_ids = list(anchors.get("hosts", [])) + list(anchors.get("recurring", []))
+    episode_ids = state.entity_repository.get_episode_anchors(episode.id)
+    guest_ids = [i for i in episode_ids if i not in set(host_ids)]
+    refs = _entity_refs(state, visibility, [*host_ids, *guest_ids])
+    platform_links = [
+        {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
+    ]
+    return {
+        "episode": {
+            "slug": episode.slug,
+            "title": episode.title,
+            "description": episode.description,
+            "pub_date": _iso(episode.pub_date),
+            "duration_formatted": _duration(episode.duration),
+            "image_url": episode.image_url or podcast.image_url,
+            "explicit": episode.explicit,
+            "episode_number": episode.episode_number,
+            "season_number": episode.season_number,
+            "website_url": episode.website_url,
+            "audio_url": str(episode.audio_url) if episode.audio_url else None,
+            "platform_links": platform_links,
+            "has_transcript": bool(episode.clean_transcript_path),
+            "hosts": _ordered(refs, host_ids),
+            "guests": _ordered(refs, guest_ids),
+            "podcast": {
+                "slug": podcast.slug,
+                "title": podcast.title,
+                "author": podcast.author,
+                "image_url": podcast.image_url,
+                "apple_url": getattr(podcast, "apple_url", None),
+                "spotify_url": getattr(podcast, "spotify_url", None),
+                "youtube_url": getattr(podcast, "youtube_url", None),
+            },
+        }
+    }
+
+
+def public_episode_payload(state: AppState, podcast_slug: str, episode_slug: str) -> Dict[str, Any]:
+    """A public episode: header, publisher description, platform links, who's in it."""
+    visibility = get_public_visibility(state)
+    podcast, episode = public_episode_models(state, podcast_slug, episode_slug)
+    return _episode_cache.get_or_compute(
+        (str(episode.id), visibility.fingerprint()),
+        lambda: _build_episode_payload(state, visibility, podcast, episode),
+    )
+
+
+def _build_summary_payload(state: AppState, podcast, episode, lang: Optional[str]) -> Dict[str, Any]:
+    podcast_language = normalize_language_code(podcast.language)
+    canonical = normalize_language_code(
+        state.podcast_service.get_recorded_summary_language(episode), default=podcast_language
+    )
+    available = state.podcast_service.get_available_summary_languages(episode, canonical_language=canonical)
+    requested = normalize_language_code(lang, default=canonical) if lang else canonical
+    if requested != canonical and requested not in available:
+        raise _not_found("Summary language")
+    summary = state.podcast_service.get_summary_for_episode(episode, language=requested, canonical_language=canonical)
+    if not summary or summary.startswith("N/A"):
+        raise _not_found("Summary")
+    lead, more_sections = _summary_lead(summary)
+    return {
+        "content": lead,
+        "more_sections": more_sections,
+        "language": requested,
+        "canonical_language": canonical,
+        "available_languages": available or [canonical],
+    }
+
+
+def public_episode_summary_payload(
+    state: AppState, podcast_slug: str, episode_slug: str, lang: Optional[str] = None
+) -> Dict[str, Any]:
+    """The lead of the stored summary, in a stored language only (spec #94 cost guard)."""
+    visibility = get_public_visibility(state)
+    podcast, episode = public_episode_models(state, podcast_slug, episode_slug)
+    return _summary_cache.get_or_compute(
+        (str(episode.id), (lang or "").lower(), episode.summary_path, visibility.fingerprint()),
+        lambda: _build_summary_payload(state, podcast, episode, lang),
+    )
+
+
 @router.get("/podcasts/{podcast_slug}")
 def get_public_podcast(
     podcast_slug: str,
@@ -262,36 +425,9 @@ def get_public_podcast(
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """A public show: metadata, platform links, hosts, summarised-episode count."""
-    visibility = get_public_visibility(state)
-    row = _public_podcast_row(state, visibility, podcast_slug)
-    info = PodcastWithIndex(index=0, **row)
-    anchors = state.entity_repository.get_podcast_anchors(info.id)
-    refs = _entity_refs(state, visibility, [*anchors.get("hosts", []), *anchors.get("recurring", [])])
-    _, summarised = state.repository.list_public_episode_rows(podcast_id=info.id, limit=1)
+    payload = public_podcast_payload(state, podcast_slug)
     apply_public_cache_headers(request, response)
-    return api_response(
-        {
-            "podcast": {
-                "slug": info.slug,
-                "title": info.title,
-                "description": info.description,
-                "author": info.author,
-                "image_url": info.image_url,
-                "explicit": info.explicit,
-                "copyright": info.copyright,
-                "website_url": info.website_url,
-                "primary_category": info.primary_category,
-                "episodes_count": info.episodes_count,
-                "summarised_count": summarised,
-                "latest_pub_date": _iso(info.last_processed),
-                "apple_url": info.apple_url,
-                "spotify_url": info.spotify_url,
-                "youtube_url": info.youtube_url,
-                "hosts": _ordered(refs, anchors.get("hosts", [])),
-                "recurring": _ordered(refs, anchors.get("recurring", [])),
-            }
-        }
-    )
+    return api_response(payload)
 
 
 @router.get("/podcasts/{podcast_slug}/episodes")
@@ -304,15 +440,9 @@ def list_public_podcast_episodes(
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """A show's summarised episodes, newest first (only these have public pages)."""
-    visibility = get_public_visibility(state)
-    row = _public_podcast_row(state, visibility, podcast_slug)
-    rows, total = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=limit, offset=offset)
+    payload = public_podcast_episodes_payload(state, podcast_slug, limit=limit, offset=offset)
     apply_public_cache_headers(request, response)
-    items = _episode_items(state, visibility, rows, with_podcast=False)
-    next_offset = offset + len(items) if offset + len(items) < total else None
-    return api_response(
-        {"episodes": items, "total": total, "offset": offset, "limit": limit, "next_offset": next_offset}
-    )
+    return api_response(payload)
 
 
 @router.get("/podcasts/{podcast_slug}/episodes/{episode_slug}")
@@ -328,47 +458,9 @@ def get_public_episode(
     ``has_transcript`` only says a transcript exists (behind sign-in); the
     transcript itself is never served here.
     """
-    visibility = get_public_visibility(state)
-    podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
-    anchors = state.entity_repository.get_podcast_anchors(podcast.id)
-    host_ids = list(anchors.get("hosts", [])) + list(anchors.get("recurring", []))
-    episode_ids = state.entity_repository.get_episode_anchors(episode.id)
-    guest_ids = [i for i in episode_ids if i not in set(host_ids)]
-    refs = _entity_refs(state, visibility, [*host_ids, *guest_ids])
-    platform_links = [
-        {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
-    ]
+    payload = public_episode_payload(state, podcast_slug, episode_slug)
     apply_public_cache_headers(request, response)
-    return api_response(
-        {
-            "episode": {
-                "slug": episode.slug,
-                "title": episode.title,
-                "description": episode.description,
-                "pub_date": _iso(episode.pub_date),
-                "duration_formatted": _duration(episode.duration),
-                "image_url": episode.image_url or podcast.image_url,
-                "explicit": episode.explicit,
-                "episode_number": episode.episode_number,
-                "season_number": episode.season_number,
-                "website_url": episode.website_url,
-                "audio_url": str(episode.audio_url) if episode.audio_url else None,
-                "platform_links": platform_links,
-                "has_transcript": bool(episode.clean_transcript_path),
-                "hosts": _ordered(refs, host_ids),
-                "guests": _ordered(refs, guest_ids),
-                "podcast": {
-                    "slug": podcast.slug,
-                    "title": podcast.title,
-                    "author": podcast.author,
-                    "image_url": podcast.image_url,
-                    "apple_url": getattr(podcast, "apple_url", None),
-                    "spotify_url": getattr(podcast, "spotify_url", None),
-                    "youtube_url": getattr(podcast, "youtube_url", None),
-                },
-            }
-        }
-    )
+    return api_response(payload)
 
 
 @router.get("/podcasts/{podcast_slug}/episodes/{episode_slug}/summary")
@@ -387,30 +479,7 @@ def get_public_episode_summary(
     jump into). Only the gist and key takeaways are served; ``more_sections``
     names the sections a signed-in reader also gets.
     """
-    visibility = get_public_visibility(state)
-    podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
-    podcast_language = normalize_language_code(podcast.language)
-    canonical = normalize_language_code(
-        state.podcast_service.get_recorded_summary_language(episode), default=podcast_language
-    )
-    available = state.podcast_service.get_available_summary_languages(episode, canonical_language=canonical)
-    requested = normalize_language_code(lang, default=canonical) if lang else canonical
-    if requested != canonical and requested not in available:
-        raise _not_found("Summary language")
-    summary = state.podcast_service.get_summary_for_episode(episode, language=requested, canonical_language=canonical)
-    if not summary or summary.startswith("N/A"):
-        raise _not_found("Summary")
-    lead, more_sections = _summary_lead(summary)
-    result = etag_json_response(
-        request,
-        {
-            "content": lead,
-            "more_sections": more_sections,
-            "language": requested,
-            "canonical_language": canonical,
-            "available_languages": available or [canonical],
-        },
-    )
+    result = etag_json_response(request, public_episode_summary_payload(state, podcast_slug, episode_slug, lang))
     apply_public_cache_headers(request, result)
     return result
 
@@ -843,38 +912,19 @@ def list_public_entity_quotes(
     )
 
 
-@router.get("/podcasts/{podcast_slug}/episodes/{episode_slug}/quotes")
-def list_public_episode_quotes(
-    podcast_slug: str,
-    episode_slug: str,
-    request: Request,
-    response: Response,
-    q: Optional[int] = Query(None, ge=0, le=60 * 60 * 12, description="Start second of a linked quote"),
-    speaker: Optional[str] = Query(None, max_length=120, description="Only quotes by this person (slug)"),
-    page: int = Query(1, ge=1, le=200),
-    state: AppState = Depends(get_app_state),
-) -> dict:
-    """Quotes from one episode in episode order, a page at a time, plus who
-    speaks in it and the entities it mentions.
+# Spec #105 decision 2: an episode's first quote page is 6 for everyone,
+# so the server-written page, its data block and the page agree.
+_EPISODE_QUOTE_PAGE = 6
+_EPISODE_QUOTES_MAX = 1000
+_episode_quote_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=256)
 
-    With ``q``, the quote starting within 5 seconds of it is returned as
-    ``linked`` wherever it falls in the episode.
-    """
-    visibility = get_public_visibility(state)
-    _podcast, episode = _public_episode(state, visibility, podcast_slug, episode_slug)
-    every = _episode_quote_cache.get_or_compute(
-        (str(episode.id), visibility.fingerprint()), lambda: _all_episode_quotes(state, str(episode.id))
+
+def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -> Dict[str, Any]:
+    """Every public quote in one episode, in episode order (a few hundred at
+    most), and the entities it mentions, capped per type."""
+    rows, _ = state.entity_repository.public_quote_queries().quotes(
+        QuoteFilter(episode_id=str(episode.id)), order="episode", limit=_EPISODE_QUOTES_MAX
     )
-    shown = [item for item in every if not speaker or item["speaker"]["slug"] == speaker]
-    start = (page - 1) * _QUOTE_PAGE
-    linked = None
-    if q is not None:
-        near = [item for item in every if abs(item["start_seconds"] - q) <= 5]
-        linked = min(near, key=lambda item: abs(item["start_seconds"] - q)) if near else None
-    speakers: Dict[str, Dict[str, Any]] = {}
-    for item in every:
-        entry = speakers.setdefault(item["speaker"]["slug"], {**item["speaker"], "quotes": 0})
-        entry["quotes"] += 1
     hidden = visibility.hidden_entity_ids()
     # Grouped by type on the page (people, companies, products, topics, as
     # in the signed-in reader), so the cap is per type, in the reader's
@@ -894,30 +944,66 @@ def list_public_episode_quotes(
                 "count": row.mention_count,
             }
         )
+    return {"every": [_quote_item(r) for r in rows], "mentioned": mentioned}
+
+
+def public_episode_quotes_payload(
+    state: AppState,
+    podcast_slug: str,
+    episode_slug: str,
+    q: Optional[int] = None,
+    speaker: Optional[str] = None,
+    page: int = 1,
+) -> Dict[str, Any]:
+    """One page of an episode's quotes, plus who speaks in it and the
+    entities it mentions."""
+    visibility = get_public_visibility(state)
+    _podcast, episode = public_episode_models(state, podcast_slug, episode_slug)
+    quote_set = _episode_quote_cache.get_or_compute(
+        (str(episode.id), visibility.fingerprint()), lambda: _episode_quote_set(state, visibility, episode)
+    )
+    every = quote_set["every"]
+    shown = [item for item in every if not speaker or item["speaker"]["slug"] == speaker]
+    start = (page - 1) * _EPISODE_QUOTE_PAGE
+    linked = None
+    if q is not None:
+        near = [item for item in every if abs(item["start_seconds"] - q) <= 5]
+        linked = min(near, key=lambda item: abs(item["start_seconds"] - q)) if near else None
+    speakers: Dict[str, Dict[str, Any]] = {}
+    for item in every:
+        entry = speakers.setdefault(item["speaker"]["slug"], {**item["speaker"], "quotes": 0})
+        entry["quotes"] += 1
+    return {
+        "quotes": shown[start : start + _EPISODE_QUOTE_PAGE],
+        "total": len(shown),
+        "page": page,
+        "next_page": page + 1 if start + _EPISODE_QUOTE_PAGE < len(shown) else None,
+        "linked": linked,
+        "speakers": sorted(speakers.values(), key=lambda s: -s["quotes"]),
+        "mentioned": quote_set["mentioned"],
+    }
+
+
+@router.get("/podcasts/{podcast_slug}/episodes/{episode_slug}/quotes")
+def list_public_episode_quotes(
+    podcast_slug: str,
+    episode_slug: str,
+    request: Request,
+    response: Response,
+    q: Optional[int] = Query(None, ge=0, le=60 * 60 * 12, description="Start second of a linked quote"),
+    speaker: Optional[str] = Query(None, max_length=120, description="Only quotes by this person (slug)"),
+    page: int = Query(1, ge=1, le=200),
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """Quotes from one episode in episode order, a page at a time, plus who
+    speaks in it and the entities it mentions.
+
+    With ``q``, the quote starting within 5 seconds of it is returned as
+    ``linked`` wherever it falls in the episode.
+    """
+    payload = public_episode_quotes_payload(state, podcast_slug, episode_slug, q=q, speaker=speaker, page=page)
     apply_public_cache_headers(request, response)
-    return api_response(
-        {
-            "quotes": shown[start : start + _QUOTE_PAGE],
-            "total": len(shown),
-            "page": page,
-            "next_page": page + 1 if start + _QUOTE_PAGE < len(shown) else None,
-            "linked": linked,
-            "speakers": sorted(speakers.values(), key=lambda s: -s["quotes"]),
-            "mentioned": mentioned,
-        }
-    )
-
-
-_EPISODE_QUOTES_MAX = 1000
-_episode_quote_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=256)
-
-
-def _all_episode_quotes(state: AppState, episode_id: str) -> List[Dict[str, Any]]:
-    """Every public quote in one episode, in episode order (a few hundred at most)."""
-    rows, _ = state.entity_repository.public_quote_queries().quotes(
-        QuoteFilter(episode_id=episode_id), order="episode", limit=_EPISODE_QUOTES_MAX
-    )
-    return [_quote_item(r) for r in rows]
+    return api_response(payload)
 
 
 _TRENDING_TTL_SECONDS = 1800.0
@@ -1018,7 +1104,7 @@ def _counted_object_id(state: AppState, path: str, kind: str) -> Optional[str]:
         if kind == "podcast":
             return str(_public_podcast_row(state, visibility, parts[1])["id"])
         if kind == "episode":
-            return str(_public_episode(state, visibility, parts[1], parts[3])[1].id)
+            return str(public_episode_models(state, parts[1], parts[3])[1].id)
         if kind == "entity":
             entity_id = _entity_id_from_path(state.entity_repository, parts[1], parts[2])
             return entity_id if visibility.entity_is_public(entity_id) else None

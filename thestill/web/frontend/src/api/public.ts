@@ -209,6 +209,29 @@ export const publicApi = {
   },
 }
 
+/**
+ * Spec #105 — every public React Query key, in one place. The hooks read
+ * through these, and the server's data block names a factory here plus its
+ * arguments (``{query: 'episode', args: [show, episode]}``), so the seeded
+ * key is always the key the hook reads.
+ */
+export const publicKeys = {
+  podcast: (slug: string) => ['public', 'podcast', slug] as const,
+  podcastEpisodes: (slug: string) => ['public', 'podcast-episodes', slug] as const,
+  episode: (podcastSlug: string, episodeSlug: string) => ['public', 'episode', podcastSlug, episodeSlug] as const,
+  summary: (podcastSlug: string, episodeSlug: string) => ['public', 'summary', podcastSlug, episodeSlug] as const,
+  episodeQuotes: (podcastSlug: string, episodeSlug: string, q: number | null, speaker: string | null) =>
+    ['public', 'episode-quotes', podcastSlug, episodeSlug, q, speaker ?? ''] as const,
+  recent: (limit: number) => ['public', 'recent', limit] as const,
+  top: (region?: string, category?: string) => ['public', 'top', region ?? '', category ?? ''] as const,
+  entity: (type: string, slug: string) => ['public', 'entity', type, slug] as const,
+  entityQuotes: (type: string, slug: string, kind: 'said' | 'about', about: string | null) =>
+    ['public', 'entity-quotes', type, slug, kind, about ?? ''] as const,
+  whoSaidWhat: () => ['public', 'who-said-what'] as const,
+}
+
+export type PublicQueryName = keyof typeof publicKeys
+
 /** "mm:ss" or "h:mm:ss" for a start second. */
 export function formatTimestamp(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds))

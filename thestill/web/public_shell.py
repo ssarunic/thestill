@@ -14,9 +14,10 @@
 
 """Per-page ``<head>`` for the SPA shell, robots.txt and sitemap.xml (spec #94 §3-4).
 
-The body of every page is still rendered in the browser; crawlers and link
-unfurlers get real titles, descriptions, canonical URLs, Open Graph tags and
-JSON-LD from here. ``index.html`` carries a marker block that is replaced
+Crawlers and link unfurlers get real titles, descriptions, canonical URLs,
+Open Graph tags and JSON-LD from here; the page's main content for
+signed-out requests comes from :mod:`thestill.web.public_prerender`
+(spec #105). ``index.html`` carries a marker block that is replaced
 per request; every value is HTML-escaped, and JSON-LD is serialised with
 ``<``, ``>``, ``&`` and the two JS line separators escaped so no title can
 close the script element.
@@ -83,11 +84,19 @@ def shell_kind(path: str) -> Optional[str]:
     return None
 
 
-def log_shell_served(path: str, status: int, user_agent: Optional[str], started: float) -> None:
+def log_shell_served(
+    path: str,
+    status: int,
+    user_agent: Optional[str],
+    started: float,
+    prerendered: str = "false",
+    cache: Optional[str] = None,
+) -> None:
     """Spec #105 §5: one line per public shell response, so crawler fetches
     can be counted per family. No IP and no full user agent: the request
     context's ``client_ip`` (bound by ``LoggingMiddleware``) is held back
-    for this one event."""
+    for this one event. The user agent is read here, after the response is
+    built, and nowhere on the way to it (§2.1)."""
     kind = shell_kind(path)
     if kind is None:
         return
@@ -99,6 +108,8 @@ def log_shell_served(path: str, status: int, user_agent: Optional[str], started:
             kind=kind,
             status=status,
             ua_family=crawler_family(user_agent),
+            prerendered=prerendered,
+            cache=cache,
             ms=round((time.perf_counter() - started) * 1000, 1),
         )
     finally:
@@ -125,6 +136,11 @@ class LookupThrottled(Exception):
     """The caller's public rate-limit bucket is empty (answer 429)."""
 
 
+class LookupShed(Exception):
+    """An uncached lookup found every prerender slot taken (spec #105 §4):
+    answer 503 with ``Retry-After`` rather than build it."""
+
+
 def _clip(text: Optional[str], limit: int = _DESCRIPTION_MAX) -> str:
     text = re.sub(r"\s+", " ", (text or "").strip())
     if len(text) <= limit:
@@ -146,17 +162,23 @@ def _drop_empty(value: Any) -> Any:
     return value
 
 
-def json_ld_script(data: Dict[str, Any]) -> str:
-    """A JSON-LD ``<script>`` that no string inside ``data`` can break out of."""
-    body = json.dumps(_drop_empty(data), ensure_ascii=False, separators=(",", ":"))
-    body = (
+def safe_json(data: Any) -> str:
+    """JSON for a ``<script>`` data block that no string inside ``data`` can
+    break out of: ``<``, ``>``, ``&`` and the two JS line separators are
+    escaped (the JSON-LD block and the spec #105 bootstrap block)."""
+    body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return (
         body.replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
         .replace(" ", "\\u2028")
         .replace(" ", "\\u2029")
     )
-    return f'<script type="application/ld+json">{body}</script>'
+
+
+def json_ld_script(data: Dict[str, Any]) -> str:
+    """A JSON-LD ``<script>`` that no string inside ``data`` can break out of."""
+    return f'<script type="application/ld+json">{safe_json(_drop_empty(data))}</script>'
 
 
 def render_head(tags: HeadTags, base_url: Optional[str]) -> str:
@@ -270,12 +292,23 @@ class ShellRenderer:
         return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
 
     def _podcast_or_episode(self, parts: List[str]) -> HeadTags:
+        """Head tags from the cached slug lookups the public API shares
+        (spec #105, FM-6). Deliberately not the full payloads: those are
+        built for the page body only, under the prerender concurrency cap,
+        so a shed request costs one lookup."""
+        from fastapi import HTTPException
+
+        from .routes.api_public import public_episode_models, public_podcast_row
+
         state = self._state
-        visibility = get_public_visibility(state)
+        try:
+            if len(parts) == 2:
+                row = public_podcast_row(state, parts[1])
+            else:
+                podcast, episode = public_episode_models(state, parts[1], parts[3])
+        except HTTPException:
+            return HeadTags(status_code=404)
         if len(parts) == 2:
-            row = state.repository.get_podcast_row_by_slug(parts[1])
-            if not row or not visibility.podcast_is_public(row["id"]):
-                return HeadTags(status_code=404)
             _, summarised = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=1)
             title = row.get("title") or ""
             return HeadTags(
@@ -293,12 +326,6 @@ class ShellRenderer:
                     "author": {"@type": "Person", "name": row.get("author")} if row.get("author") else None,
                 },
             )
-        result = state.repository.get_episode_by_slug(parts[1], parts[3])
-        if not result:
-            return HeadTags(status_code=404)
-        podcast, episode = result
-        if not visibility.episode_is_public(podcast.id, episode):
-            return HeadTags(status_code=404)
         return HeadTags(
             title=f"{episode.title} · {podcast.title} · {SITE_NAME}",
             description=_first_sentence(episode.summary_preview) or DEFAULT_DESCRIPTION,
@@ -322,10 +349,28 @@ class ShellRenderer:
     def _entity(self, entity_type: str, slug: str) -> HeadTags:
         from fastapi import HTTPException
 
+        from .public_access import CacheMiss, cache_only
+        from .public_prerender import get_prerenderer
         from .routes.api_public import public_entity_payload
 
+        # The entity payload (quote counts decide noindex) is the costly part
+        # of this page. Cached, it is free; uncached, it is built under the
+        # prerender cap like the page body (spec #105 §4), and over the cap
+        # the page is shed with a 503 instead of guessing ``noindex``. With
+        # the prerender switch off the cap does not apply, as before #105.
+        prerenderer = get_prerenderer(self._state)
         try:
-            payload = public_entity_payload(self._state, entity_type, slug)
+            if not prerenderer.enabled():
+                payload = public_entity_payload(self._state, entity_type, slug)
+            else:
+                try:
+                    with cache_only():
+                        payload = public_entity_payload(self._state, entity_type, slug)
+                except CacheMiss:
+                    with prerenderer.slot() as acquired:
+                        if not acquired:
+                            raise LookupShed() from None
+                        payload = public_entity_payload(self._state, entity_type, slug)
         except HTTPException:
             return HeadTags(status_code=404)
         entity = payload["entity"]

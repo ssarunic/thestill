@@ -33,7 +33,9 @@ from __future__ import annotations
 import threading
 import time
 import weakref
-from typing import TYPE_CHECKING, Any, Callable, Dict, Hashable, Optional, Set, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, Callable, Dict, Hashable, Iterator, Optional, Set, Tuple
 
 from fastapi import HTTPException, Request, Response, status
 
@@ -80,6 +82,24 @@ class _TtlValue:
 
 _ALL_CACHES: "weakref.WeakSet[TtlCache]" = weakref.WeakSet()
 
+_CACHE_ONLY: ContextVar[bool] = ContextVar("public_cache_only", default=False)
+
+
+class CacheMiss(Exception):
+    """A :class:`TtlCache` lookup missed inside :func:`cache_only`."""
+
+
+@contextmanager
+def cache_only() -> Iterator[None]:
+    """Within this block a cache miss raises :class:`CacheMiss` instead of
+    loading. The page shell (spec #105 §4) builds from cached payloads
+    first, and only an uncached build counts against its concurrency cap."""
+    token = _CACHE_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CACHE_ONLY.reset(token)
+
 
 class TtlCache:
     """Values computed at most once per TTL per key, bounded and thread-safe.
@@ -101,6 +121,8 @@ class TtlCache:
             hit = self._entries.get(key)
             if hit and time.monotonic() - hit[0] <= self._ttl:
                 return hit[1]
+        if _CACHE_ONLY.get():
+            raise CacheMiss()
         value = loader()
         with self._lock:
             if len(self._entries) >= self._max_size:

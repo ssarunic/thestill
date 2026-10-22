@@ -389,6 +389,8 @@ runtime: `thestill settings set alerts '{"queue_backlog": 1000}'`.
 | `TRUSTED_PROXIES` | Comma-separated proxy IPs or CIDR ranges (e.g. `172.16.0.0/12`) whose `X-Forwarded-*` headers are honored. Without it, every request behind a reverse proxy looks like the proxy: one shared rate-limit bucket, no IP region detection. The EC2 compose file sets it to Docker's bridge range | - (empty) |
 | `PUBLIC_BASE_URL` | Operator-declared external base URL (OAuth callbacks, email links) | - |
 | `PUBLIC_PAGES_ENABLED` | Serve the signed-out public pages, `/api/public`, `robots.txt` and `sitemap.xml` in multi-user mode (spec #94); `false` restores the sign-in wall | `true` |
+| `PUBLIC_PRERENDER_ENABLED` | Write each public page's main content into the HTML for signed-out requests, so crawlers that do not run JavaScript can read it (spec #105). Env default of the `public_prerender_enabled` runtime switch: `thestill settings set public_prerender_enabled false` turns it off without a deploy | `true` |
+| `PRERENDER_MAX_CONCURRENT` | Uncached server-written pages built at once per process; past it a request gets the head-only shell (logged as `public_prerender.shed`) | `4` |
 | `ENABLE_DOCS` | Expose FastAPI docs endpoints (`/docs`, `/redoc`) | `false` |
 | `MAX_AUDIO_BYTES` | Upper bound on downloaded audio size | `2147483648` (2 GiB) |
 | `MAX_WEBHOOK_BODY_BYTES` | Upper bound on webhook request bodies | `1048576` (1 MiB) |

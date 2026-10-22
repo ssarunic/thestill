@@ -70,6 +70,9 @@ dependencies = [
     # Imported directly by mcp/registration.py to validate tool arguments
     # (mcp 1.x did this inside its decorator); also a dependency of mcp.
     "jsonschema>=4.20.0",
+    # Spec #105: summary leads in the server-written public pages. Already
+    # in the lock through rich; pinned because the web shell imports it.
+    "markdown-it-py>=3.0.0",
     "tenacity>=8.2.0",
     "python-slugify>=8.0.0",
     "requests-toolbelt>=1.0.0",

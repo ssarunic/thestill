@@ -187,6 +187,11 @@ SETTINGS: Dict[str, SettingSpec] = {
             "Panic mode: non-admin writes return 503 and every feature above is paused.",
             lambda _c: False,
         ),
+        _switch(
+            "public_prerender_enabled",
+            "Off: public pages send the head-only shell, with no server-written content (spec #105).",
+            lambda c: bool(c.public_prerender_enabled),
+        ),
         SettingSpec(
             "quota_overrides",
             "Per-user quota limits that replace the env defaults: {user_id: {quota: limit}}. Edit with "
