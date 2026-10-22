@@ -262,11 +262,21 @@ class ShellRenderer:
 
     def _cached(self, key: str, request: "Request", build) -> HeadTags:
         """Cached tags for ``key``; a miss costs an anonymous caller one
-        public-bucket token (a signed-in user is never refused the app)."""
+        public-bucket token (a signed-in user is never refused the app).
+
+        A redirect is not kept: it is decided again from the entity payload
+        on every request, so an undone re-type cannot leave this cache
+        pointing the old URL at a page that now points back."""
         cache_key = (key, get_public_visibility(self._state).fingerprint())
-        if not self._cache.peek(cache_key) and not has_valid_session(request) and not allow_public_request(request):
+        found, tags = self._cache.lookup(cache_key)
+        if found:
+            return tags
+        if not has_valid_session(request) and not allow_public_request(request):
             raise LookupThrottled()
-        return self._cache.get_or_compute(cache_key, build)
+        tags = build()
+        if tags.redirect_path is None:
+            self._cache.put(cache_key, tags)
+        return tags
 
     @staticmethod
     def is_lookup_path(path: str) -> bool:

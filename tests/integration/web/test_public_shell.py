@@ -331,6 +331,28 @@ def test_a_retyped_entity_moves_its_old_url_to_the_current_one(site, app_state):
     assert 'rel="canonical" href="https://thestill.test/entities/product/nvidia"' in _head(current.text)
 
 
+def test_an_undone_retype_never_loops_the_two_urls(site, app_state):
+    """The re-type is undone and only the payload cache expires (the URL
+    and shell caches are still warm): the company URL must answer itself,
+    not a cached 301 to the product URL that now points back."""
+    from tests.integration.web.test_public_api import _seed_people
+    from thestill.models.entities import EntityRecord, EntityType
+    from thestill.web.routes import api_public
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="company:nvidia", type=EntityType.PRODUCT, canonical_name="Nvidia"))
+    assert site.get("/entities/company/nvidia", follow_redirects=False).status_code == 301
+    assert site.get("/entities/product/nvidia", follow_redirects=False).status_code == 200
+    repo.upsert_entity(EntityRecord(id="company:nvidia", type=EntityType.COMPANY, canonical_name="Nvidia"))
+    api_public._entity_cache.clear()  # noqa: SLF001 - the payload TTL running out
+    assert site.get("/entities/company/nvidia", follow_redirects=False).status_code == 200
+    # The product URL may serve its cached page until the shell TTL runs
+    # out; if it redirects, it is to the company URL, which answers itself.
+    back = site.get("/entities/product/nvidia", follow_redirects=False)
+    assert back.status_code == 200 or back.headers["location"] == "/entities/company/nvidia"
+
+
 def test_a_retyped_entity_keeps_its_old_url_when_the_current_one_shows_another(site, app_state):
     """``product/nvidia`` belongs to a ``product:nvidia`` row with mentions of
     its own, so redirecting there would show a different entity."""
