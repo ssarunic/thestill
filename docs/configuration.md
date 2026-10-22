@@ -314,6 +314,9 @@ The env vars below are *defaults*. An operator overrides them at runtime,
 without a redeploy, with `thestill settings set <key> <value>`; every server
 process picks the change up within 15 seconds. `thestill settings get`
 shows each value and whether it comes from `env` or `runtime`.
+Two runtime settings have no env variable: `entity_noindex`, a list of
+entity ids (`["person:altruist"]`) kept out of search whatever the
+indexing rule of spec #105 says, and `quota_overrides` (below).
 
 | Variable | Description | Default |
 |----------|-------------|---------|

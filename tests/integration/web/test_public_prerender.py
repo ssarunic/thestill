@@ -506,3 +506,125 @@ def test_an_uncached_entity_page_over_the_cap_is_a_503_not_a_build(site, app_sta
     finally:
         for _ in range(held):
             prerenderer._slots.release()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# Podcast and entity pages (Phase 2)
+# ---------------------------------------------------------------------------
+
+SHOW = "/podcasts/public-show"
+
+
+def _api_body(site, url: str) -> Dict[str, Any]:
+    body = site.get(url).json()
+    body.pop("status"), body.pop("timestamp")
+    return body
+
+
+def test_podcast_page_has_its_content_in_the_html(site, app_state):
+    _seed_people(app_state)
+    response = site.get(SHOW, headers={"User-Agent": BING})
+    assert response.status_code == 200
+    page = _parse(response.text)
+    text = " ".join(_norm(t) for t in page.texts)
+    assert page.tags.count("h1") == 1 and "Public Show" in text
+    assert "A show about chips." in text
+    assert "Latest episodes" in text and "Episode 1" in text and "Two hosts argue about chips." in text
+    by_query = {q["query"]: q for q in _bootstrap(page)["queries"]}
+    assert by_query["podcast"]["data"] == _api_body(site, "/api/public/podcasts/public-show")
+    assert by_query["podcastEpisodes"]["data"] == _api_body(
+        site, "/api/public/podcasts/public-show/episodes?limit=10&offset=0"
+    )
+    _assert_subset(page)
+
+
+@pytest.mark.parametrize("path", ["/entities/person/scott-galloway", "/entities/company/nvidia"])
+def test_entity_pages_have_their_content_in_the_html(site, app_state, path):
+    _seed_people(app_state)
+    response = site.get(path, headers={"User-Agent": BING})
+    assert response.status_code == 200
+    page = _parse(response.text)
+    text = " ".join(_norm(t) for t in page.texts)
+    payload = _api_body(site, "/api/public" + path)
+    assert page.tags.count("h1") == 1 and payload["entity"]["name"] in text
+    assert payload["featured_quote"]["text"] in text
+    by_query = {(q["query"], tuple(q["args"][2:3])): q for q in _bootstrap(page)["queries"]}
+    assert by_query[("entity", ())]["data"] == payload
+    if path.startswith("/entities/person"):
+        assert "What they said" in text
+        said = _api_body(site, f"/api/public{path}/quotes?kind=said&page=1")
+        assert by_query[("entityQuotes", ("said",))]["data"] == said
+    else:
+        assert "Who's talking" in text and "Latest on" in text
+    _assert_subset(page)
+
+
+@pytest.mark.parametrize("path", [SHOW, "/entities/person/scott-galloway", "/entities/company/nvidia"])
+def test_podcast_and_entity_pages_are_ua_blind(site, app_state, path):
+    _seed_people(app_state)
+    assert len({site.get(path, headers={"User-Agent": ua}).text for ua in USER_AGENTS}) == 1
+
+
+@pytest.mark.parametrize("path", [SHOW + "?x=1", "/entities/company/nvidia?about=x"])
+def test_podcast_and_entity_query_strings_get_the_header_block(site, app_state, path):
+    _seed_people(app_state)
+    page = _parse(site.get(path).text)
+    assert page.tags.count("h1") == 1
+    assert len(_bootstrap(page)["queries"]) == 1
+    assert "Latest episodes" not in " ".join(page.texts) and "Who's talking" not in " ".join(page.texts)
+
+
+def test_a_hidden_show_leaves_the_entity_fallbacks_on_the_next_refresh(site, app_state):
+    from thestill.web.public_access import get_public_visibility
+
+    _seed_people(app_state)
+    assert "deepest moat" in _root(site.get("/entities/company/nvidia").text)
+    app_state.repository.set_podcast_public_pages("11111111-1111-1111-1111-111111111111", False)
+    # The hidden sets refresh every 60 s; invalidate() is that refresh.
+    get_public_visibility(app_state).invalidate()
+    root = _root(site.get("/entities/company/nvidia").text)
+    assert "deepest moat" not in root and "Public Show" not in root
+    assert site.get(EPISODE).status_code == 404
+
+
+def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_config):  # noqa: F811
+    from thestill.repositories.factory import make_repositories
+    from thestill.services.abuse.wiring import build_abuse_services
+    from thestill.web.public_access import EntityIndexFacts, entity_is_indexable
+
+    app_state.abuse = build_abuse_services(app_config, make_repositories(app_config))
+    _seed_people(app_state)
+    _add_quotes(app_state, 6)  # Scott Galloway now has 7 quotes said
+    head = site.get("/entities/person/scott-galloway").text.split("</head>", 1)[0]
+    assert "noindex" not in head
+    assert "/entities/person/scott-galloway</loc>" in site.get("/sitemap.xml").text
+    app_state.abuse.settings.set("entity_noindex", ["person:scott-galloway"], actor=Actor.cli())
+    from thestill.web.public_access import clear_public_caches
+
+    clear_public_caches()
+    head = site.get("/entities/person/scott-galloway").text.split("</head>", 1)[0]
+    assert 'name="robots" content="noindex"' in head
+    assert "/entities/person/scott-galloway</loc>" not in site.get("/sitemap.xml").text
+    assert not entity_is_indexable(
+        EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, False), ["person:scott-galloway"]
+    )
+
+
+def test_a_host_with_no_mentions_is_indexed_and_listed(site, app_state):
+    """A role qualifies a page on its own, so the sitemap must consider
+    role-bearing entities with no transcript mentions (review of #410)."""
+    from thestill.models.entities import EntityRecord, EntityType
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="person:quiet-host", type=EntityType.PERSON, canonical_name="Quiet Host"))
+    repo.set_podcast_hosts("11111111-1111-1111-1111-111111111111", ["person:quiet-host"])
+    page = site.get("/api/public/entities/person/quiet-host").json()
+    assert page["indexable"] is True and page["roles"]["hosts"]
+    assert "https://thestill.test/entities/person/quiet-host</loc>" in site.get("/sitemap.xml").text
+    # Hidden, it is neither.
+    repo.set_entity_public_hidden("person:quiet-host", True)
+    from thestill.web.public_access import get_public_visibility
+
+    get_public_visibility(app_state).invalidate()
+    assert "quiet-host" not in site.get("/sitemap.xml").text

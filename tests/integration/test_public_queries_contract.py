@@ -197,8 +197,14 @@ def test_quote_queries(repos):
     (top,) = queries.trending(since=days_ago(7))
     assert str(top["about_id"]) == "company:acme" and int(top["speakers"]) == 2 and int(top["shows"]) == 1
 
-    indexable = {str(r["entity_id"]): int(r["quotes"]) for r in queries.indexable_entities(min_quotes=1)}
-    assert indexable == {"company:acme": 2, "person:alice": 2, "person:bob": 1}
+    facts = {
+        str(r["entity_id"]): (int(r["said"]), int(r["about"]), int(r["episodes"])) for r in queries.entity_index_facts()
+    }
+    assert {k: v for k, v in facts.items() if k in ("company:acme", "person:alice", "person:bob")} == {
+        "company:acme": (0, 2, 1),
+        "person:alice": (1, 1, 1),
+        "person:bob": (1, 0, 1),
+    }
 
     presence = queries.presence("company:acme")
     assert [str(r["episode_id"]) for r in presence] == [EP_SUMMARISED]

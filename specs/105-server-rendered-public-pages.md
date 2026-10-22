@@ -1,6 +1,6 @@
 # Server-Rendered Content for Public Pages
 
-> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phase 1 (episode pages) implemented 2026-10-21; Phases 2–4 open
+> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phases 1 (episode pages) and 2 (podcast and entity pages, decision 3 entity rule) implemented 2026-10-21; Phases 3–4 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Google already indexes the public pages. This spec is for Bing, DuckDuckGo and AI answer engines, which today see an empty page body.
@@ -670,6 +670,42 @@ finds no bootstrap block and fetches as today.
   app against the dev database): 579–731 words of body text, 27–35 KB raw,
   6–9 KB gzipped, 114–171 ms uncached and 3–7 ms cached, identical bytes
   for Bingbot and Chrome.
+
+### Phase 2 (2026-10-21)
+
+- Podcast and entity builders on `public_podcast_payload`,
+  `public_entity_payload` and the new cached
+  `public_entity_quotes_payload` (first page of each stream the page
+  loads). Entity quote streams keep the page's "two per episode" fold;
+  the rest stays behind "+N more from this episode".
+- Decision 3 is `public_access.entity_is_indexable` over an
+  `EntityIndexFacts` record. The page builds the record from its payload;
+  the sitemap from one SQL pass (`PublicQuoteQueries.entity_index_facts`,
+  which replaced `indexable_entities`) plus roles from public episodes'
+  guests and public shows' anchors; a role holder with no resolved
+  mention (so absent from that SQL) is a candidate too, judged by the
+  same rule and checked for URL ownership like a re-typed row. Thresholds
+  are module constants
+  (`INDEX_MIN_SAID` 5, `INDEX_MIN_ABOUT` 10, `INDEX_WIDE_EPISODES` 2,
+  `INDEX_WIDE_QUOTES` 5).
+- The type test applies only when Wikidata's `instance of` is known:
+  locally 1,568 person entities with a QID have none fetched yet, and
+  failing them would drop pages for want of data, not because they are
+  wrong.
+- The manual list is the runtime setting `entity_noindex`
+  (`thestill settings set entity_noindex '["person:altruist"]'`).
+- Local dev database (71 public episodes, so a small sample): 348 entity
+  URLs under the old rule, 210 under the new one (60%; persons 181 → 130,
+  companies 101 → 55, products 35 → 14, topics 31 → 11). The type test
+  removed 11, among them `person:americans`, `person:child`,
+  `person:muse-band` and `product:claude-ai`. **The production count by
+  type (open question 3) is still to be checked**; after deploy,
+  `curl -s https://thestill.me/sitemap.xml | grep -o '/entities/[a-z]*/' | sort | uniq -c`
+  gives it.
+- Local measurements: 10 indexable entity pages 180–673 words (bar 150),
+  174–565 ms uncached (the existing entity payload cost), 2–7 ms cached;
+  5 podcast pages 197–435 words (bar 200; the local shows have few
+  summarised episodes, production shows list 10).
 
 ## Decisions
 

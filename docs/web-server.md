@@ -225,15 +225,24 @@ Episodes summarised before spec #94 need
 
 **Page shell.** The SPA catch-all injects per-page `<title>`, description,
 canonical, Open Graph and JSON-LD into `index.html`, and answers 404 +
-`noindex` for unknown or hidden pages. Person and entity pages are
-`noindex` until they have three quotes. `/robots.txt` allows the public
+`noindex` for unknown or hidden pages. A person or entity page is indexed
+(and listed in the sitemap) when it passes one rule, shared by the page
+and the sitemap (spec #105 decision 3, `entity_is_indexable`): it speaks
+(5+ quotes said, or a guest or host role), is discussed in depth (10+
+quotes about it) or widely (2+ episodes and 5+ quotes), and its Wikidata
+type agrees with its page type (a person must be a human, Q5, when
+Wikidata says what it is). `thestill settings set entity_noindex
+'["person:altruist"]'` keeps listed pages out of search. `/robots.txt` allows the public
 paths and blocks the signed-in app; `/sitemap.xml` lists public shows,
 episodes and indexable entities (a sitemap index past 40k URLs). In
 single-user mode `robots.txt` disallows everything.
 
 **Server-written content (spec #105).** For a signed-out request to a
-public episode page, the shell also writes the page's main content inside
-`#root` (h1, summary lead, the first 6 quotes, people, links) and a
+public episode, podcast or person/entity page, the shell also writes the
+page's main content inside `#root` (episode: h1, summary lead, the first 6
+quotes, people, links; podcast: description, hosts, the first 10
+summarised episodes; entity: featured quote, who's talking or what they
+said, appearances, Wikipedia and Wikidata facts) and a
 `<script type="application/json" id="thestill-bootstrap">` data block, both
 built from the same cached payloads as `/api/public`
 (`thestill/web/public_prerender.py`). The app seeds React Query from the

@@ -66,7 +66,7 @@ BOOTSTRAP_ID = "thestill-bootstrap"
 BOOTSTRAP_VERSION = 1
 
 #: Page kinds that get server-written content.
-PRERENDER_KINDS = frozenset({"episode"})
+PRERENDER_KINDS = frozenset({"episode", "podcast", "entity"})
 
 _DESCRIPTION_WORDS = 80
 _MORE_FROM = 3
@@ -105,12 +105,60 @@ UI_STRINGS = frozenset(
         "Companies mentioned",
         "Products",
         "Topics",
+        # Podcast page.
+        "Podcast",
+        "Explicit",
+        "summarised episodes",
+        "latest",
+        "Listen on",
+        "Hosted by",
+        "Latest episodes",
+        "Website",
+        # Entity pages.
+        "Person",
+        "Company",
+        "Product",
+        "Topic",
+        "Host of",
+        "Heard on",
+        "Discussed on",
+        "show",
+        "shows",
+        "episode",
+        "episodes",
+        "since",
+        "in the last 30 days",
+        "Who's talking",
+        "quote",
+        "quotes",
+        "What they said",
+        "Appears on",
+        "Host",
+        "Recurring",
+        "Guest on",
+        "What others say about",
+        "Latest on",
+        "No quotes yet.",
+        "Hosts often go unnamed in their own show.",
+        "About",
+        "(from Wikipedia)",
+        "Read on Wikipedia ↗",
+        "Facts",
+        "(Wikidata)",
+        "People",
+        "Most discussed on",
+        "Often discussed with: people",
+        "Often discussed with: companies",
+        "Often discussed with: products",
+        "Often discussed with: topics",
+        "ep",
+        "more from this episode",
     }
 )
 
-#: Derived values: counts ("12", "3×"), timestamps ("30:34", "1:02:07").
+#: Derived values: counts ("12", "3×", "+2", "4 ep"), timestamps ("30:34", "1:02:07").
 UI_PATTERNS: Tuple[re.Pattern, ...] = (
-    re.compile(r"^\d+×?$"),
+    re.compile(r"^\+?\d+(?:×| ep)?$"),
     re.compile(r"^\d+:\d{2}(?::\d{2})?$"),
 )
 
@@ -120,7 +168,16 @@ _MENTIONED_TITLES = {
     "product": "Products",
     "topic": "Topics",
 }
+_RELATED_TITLES = {
+    "person": "Often discussed with: people",
+    "company": "Often discussed with: companies",
+    "product": "Often discussed with: products",
+    "topic": "Often discussed with: topics",
+}
+_TYPE_LABEL = {"person": "Person", "company": "Company", "product": "Product", "topic": "Topic"}
 _TYPE_ORDER = ("person", "company", "product", "topic")
+_ABOUT_WORDS = 60
+_PER_EPISODE_GROUP = 2
 _PLATFORM_LABEL = {"apple": "Apple Podcasts", "spotify": "Spotify", "youtube": "YouTube"}
 
 
@@ -364,30 +421,53 @@ def _listen_on(links: List[Tuple[str, Optional[str]]]) -> str:
     return el("div", el("div", *items, class_="ts-listen-row"), class_="ts-listen") if items else ""
 
 
-def _quote(quote: Dict[str, Any]) -> str:
-    """One quote as the page shows it in an episode stream: the text, the
-    speaker and an ``#t=`` link (never ``?t=``)."""
+def _quote(
+    quote: Dict[str, Any],
+    *,
+    show_speaker: bool = True,
+    show_show: bool = False,
+    show_date: bool = False,
+    featured: bool = False,
+) -> str:
+    """One quote as ``QuoteCard`` shows it: the text, then speaker, show and
+    date as the page's variant does, and an ``#t=`` link (never ``?t=``)."""
     href = f"{episode_path(quote['podcast']['slug'], quote['episode']['slug'])}#t={int(quote['start_seconds'])}"
-    return el(
-        "figure",
-        el("blockquote", text(f"“{quote['text']}”"), class_="ts-quote-text"),
-        el(
-            "figcaption",
+    meta: List[str] = []
+    if show_speaker:
+        meta.append(
             el(
                 "a",
                 text(quote["speaker"]["name"]),
                 href=entity_path({"type": "person", "slug": quote["speaker"]["slug"]}),
-            ),
-            " ",
-            text("·"),
-            " ",
-            text("at"),
-            " ",
-            el("a", text(_timestamp(quote["start_seconds"])), href=href),
-            class_="ts-quote-meta",
-        ),
-        class_="ts-quote ts-quote-stream",
+            )
+        )
+    if show_show:
+        meta.append(el("a", text(quote["podcast"]["title"]), href=f"/podcasts/{quote['podcast']['slug']}"))
+    if show_date and quote["episode"].get("pub_date"):
+        meta.append(_date(quote["episode"]["pub_date"]))
+    meta.append(text("at") + " " + el("a", text(_timestamp(quote["start_seconds"])), href=href))
+    body = text(quote["text"]) if featured else text(f"\u201c{quote['text']}\u201d")
+    return el(
+        "figure",
+        el("blockquote", body, class_="ts-quote-text"),
+        el("figcaption", *_separated(meta), class_="ts-quote-meta"),
+        class_=f"ts-quote ts-quote-{'featured' if featured else 'stream'}",
     )
+
+
+def _separated(parts: List[str]) -> List[str]:
+    """``parts`` with `` · `` between them."""
+    out: List[str] = []
+    for i, part in enumerate(parts):
+        if i:
+            out.append(" " + text("·") + " ")
+        out.append(part)
+    return out
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    """``<span>3</span> shows``: the count and the word as separate nodes."""
+    return el("span", text(count)) + " " + text(one if count == 1 else many)
 
 
 def _entity_groups(items: List[Dict[str, Any]], titles: Dict[str, str], count: Callable[[Dict[str, Any]], str]) -> str:
@@ -565,6 +645,359 @@ def episode_fallback(state: "AppState", podcast_slug: str, episode_slug: str, he
     return Fallback(_chrome(page_path, el("article", hero, body, class_="ts-container")), queries)
 
 
+def _episode_row(item: Dict[str, Any], podcast_slug: str, podcast_title: Optional[str] = None) -> str:
+    """``EpisodeRow``: date, duration, title, gist and guests."""
+    meta: List[str] = []
+    if podcast_title:
+        meta.append(el("a", text(podcast_title), href=f"/podcasts/{podcast_slug}"))
+    if item.get("pub_date"):
+        meta.append(_date(item["pub_date"]))
+    if item.get("duration_formatted"):
+        meta.append(el("span", text(item["duration_formatted"])))
+    return el(
+        "article",
+        el("p", *_separated(meta), class_="ts-meta"),
+        el("h3", el("a", text(item["title"]), href=episode_path(podcast_slug, item["slug"])), class_="ts-eprow-title"),
+        el("p", text(item["summary_preview"]), class_="ts-eprow-desc") if item.get("summary_preview") else "",
+        _people_line(item.get("guests") or [], limit=len(item.get("guests") or [])),
+        class_="ts-eprow",
+    )
+
+
+def podcast_fallback(state: "AppState", podcast_slug: str, header_only: bool) -> Fallback:
+    from .routes import api_public as api
+
+    podcast_payload = api.public_podcast_payload(state, podcast_slug)
+    show = podcast_payload["podcast"]
+    queries = [query("podcast", [podcast_slug], podcast_payload)]
+    page_path = f"/podcasts/{podcast_slug}"
+
+    eyebrow = [text("Podcast")]
+    if show["author"]:
+        eyebrow += [" " + text("·") + " ", el("span", text(show["author"]))]
+    if show["explicit"]:
+        eyebrow += [" " + text("·") + " ", text("Explicit")]
+    hero_parts = [el("p", *eyebrow, class_="ts-eyebrow"), el("h1", text(show["title"]), class_="ts-page-title")]
+    if header_only:
+        hero = el("section", el("div", *hero_parts, class_="ts-hero-body"), class_="ts-hero")
+        return Fallback(_chrome(page_path, el("article", hero, class_="ts-container")), queries)
+
+    if show["description"]:
+        hero_parts.append(el("p", text(clip_words(show["description"])), class_="ts-standfirst ts-description"))
+    meta = [_plural(show["summarised_count"], "summarised episodes", "summarised episodes")]
+    if show["latest_pub_date"]:
+        meta.append(text("latest") + " " + _date(show["latest_pub_date"]))
+    hero_parts.append(el("p", *_separated(meta), class_="ts-meta"))
+    hero = el("section", el("div", *hero_parts, class_="ts-hero-body"), class_="ts-hero")
+
+    main: List[str] = []
+    listen = _listen_on(
+        [("apple", show["apple_url"]), ("spotify", show["spotify_url"]), ("youtube", show["youtube_url"])]
+    )
+    if listen:
+        main.append(el("section", el("span", text("Listen on"), class_="ts-rail-label"), listen))
+    people = [*show["hosts"], *show["recurring"]][:_WITH_PEOPLE]
+    if people:
+        links = [el("li", el("a", text(p["name"]), href=entity_path(p))) for p in people]
+        main.append(
+            el("section", el("span", text("Hosted by"), class_="ts-rail-label"), el("ul", *links), class_="ts-section")
+        )
+    listing = _try(lambda: api.public_podcast_episodes_payload(state, podcast_slug))
+    if listing is not None:
+        queries.append(query("podcastEpisodes", [podcast_slug], listing, page_param=0))
+        if listing["episodes"]:
+            rows = [_episode_row(item, podcast_slug) for item in listing["episodes"]]
+            main.append(_section("Latest episodes", el("div", *rows), class_="ts-section"))
+
+    rail: List[str] = []
+    website = _safe_href(show["website_url"])
+    if website and not website.startswith("/"):
+        label = re.sub(r"/$", "", re.sub(r"^https?://", "", website, flags=re.I))
+        rail.append(
+            _section("Website", _external(website, label, class_="ts-link"), level="h3", class_="ts-rail-module")
+        )
+
+    body = el("div", el("div", *main, class_="ts-stack"), el("aside", *rail, class_="ts-rail"), class_="ts-columns")
+    return Fallback(_chrome(page_path, el("article", hero, body, class_="ts-container")), queries)
+
+
+def _quote_stream(quotes: List[Dict[str, Any]], show_speaker: bool) -> str:
+    """``QuoteStream``: quotes grouped by episode, two per group shown (the
+    rest sit behind "+N more from this episode")."""
+    groups: List[List[Dict[str, Any]]] = []
+    for quote in quotes:
+        key = (quote["podcast"]["slug"], quote["episode"]["slug"])
+        if groups and (groups[-1][0]["podcast"]["slug"], groups[-1][0]["episode"]["slug"]) == key:
+            groups[-1].append(quote)
+        else:
+            groups.append([quote])
+    out = []
+    for group in groups:
+        first = group[0]
+        head_meta = [el("span", text(first["podcast"]["title"]))]
+        if first["episode"].get("pub_date"):
+            head_meta.append(_date(first["episode"]["pub_date"]))
+        head = el(
+            "a",
+            el("span", *_separated(head_meta), class_="ts-meta"),
+            " ",
+            el("span", text(first["episode"]["title"]), class_="ts-ep-head-title"),
+            href=episode_path(first["podcast"]["slug"], first["episode"]["slug"]),
+            class_="ts-ep-head",
+        )
+        cards = [_quote(q, show_speaker=show_speaker) for q in group[:_PER_EPISODE_GROUP]]
+        more = ""
+        if len(group) > _PER_EPISODE_GROUP:
+            more = el(
+                "p",
+                el("span", text(f"+{len(group) - _PER_EPISODE_GROUP}")),
+                " ",
+                text("more from this episode"),
+                class_="ts-meta",
+            )
+        out.append(el("div", head, *cards, more, class_="ts-ep-group"))
+    return el("div", *out, class_="ts-quote-list")
+
+
+def entity_fallback(state: "AppState", entity_type: str, slug: str, header_only: bool) -> Fallback:
+    from .routes import api_public as api
+
+    payload = api.public_entity_payload(state, entity_type, slug)
+    queries = [query("entity", [entity_type, slug], payload)]
+    page_path = f"/entities/{entity_type}/{slug}"
+    entity = payload["entity"]
+    name = entity["name"]
+    is_person = entity_type == "person"
+    enrichment = payload.get("enrichment") or {}
+    headline = enrichment.get("headline") or entity.get("description")
+    host_of = payload["roles"]["hosts"][0] if payload["roles"]["hosts"] else None
+
+    eyebrow = [text(_TYPE_LABEL.get(entity["type"], "Topic"))]
+    if host_of:
+        eyebrow += [
+            " " + text("·") + " ",
+            el("a", text("Host of") + " " + el("span", text(host_of["title"])), href=f"/podcasts/{host_of['slug']}"),
+        ]
+    hero_parts = [el("p", *eyebrow, class_="ts-eyebrow"), el("h1", text(name), class_="ts-page-title")]
+    if header_only:
+        hero = el("section", el("div", *hero_parts, class_="ts-hero-body"), class_="ts-hero")
+        return Fallback(_chrome(page_path, el("article", hero, class_="ts-container")), queries)
+
+    if headline:
+        hero_parts.append(el("p", text(headline), class_="ts-standfirst"))
+    stats = payload["stats"]
+    if stats["episodes"] > 0:
+        meta = [
+            text("Heard on" if is_person else "Discussed on") + " " + _plural(stats["shows"], "show", "shows"),
+            _plural(stats["episodes"], "episode", "episodes"),
+        ]
+        if not is_person and stats["last_30_days"] > 0:
+            meta.append(el("span", text(stats["last_30_days"])) + " " + text("in the last 30 days"))
+        if is_person and stats["since"]:
+            meta.append(text("since") + " " + _date(stats["since"]))
+        hero_parts.append(el("p", *_separated(meta), class_="ts-meta"))
+    hero = el("section", el("div", *hero_parts, class_="ts-hero-body"), class_="ts-hero")
+
+    parts: List[str] = [hero]
+    featured = payload.get("featured_quote")
+    if featured:
+        parts.append(
+            el(
+                "div",
+                _quote(featured, show_speaker=not is_person, show_show=True, show_date=True, featured=True),
+                class_="ts-featured",
+            )
+        )
+
+    main: List[str] = []
+    counts = payload["quote_counts"]
+    if not is_person and payload["speakers"]:
+        rows = []
+        for person in payload["speakers"]:
+            rows.append(
+                el(
+                    "li",
+                    el(
+                        "a", text(person["name"]), href=f"/entities/person/{person['slug']}", class_="ts-personrow-name"
+                    ),
+                    (
+                        el("p", text(f"\u201c{person['quote']}\u201d"), class_="ts-personrow-quote")
+                        if person["quote"]
+                        else ""
+                    ),
+                    el(
+                        "p",
+                        *_separated(
+                            [_plural(person["quotes"], "quote", "quotes"), _plural(person["shows"], "show", "shows")]
+                        ),
+                        class_="ts-personrow-counts",
+                    ),
+                    class_="ts-personrow",
+                )
+            )
+        main.append(_section("Who's talking", el("ul", *rows), class_="ts-section"))
+    if is_person and counts["said"] > 0:
+        said = _try(lambda: api.public_entity_quotes_payload(state, entity_type, slug, "said"))
+        if said is not None:
+            queries.append(query("entityQuotes", [entity_type, slug, "said", None], said, page_param=1))
+            main.append(
+                _section("What they said", _quote_stream(said["quotes"], show_speaker=False), class_="ts-section")
+            )
+    roles = payload["roles"]
+    if is_person and (roles["hosts"] or roles["recurring"] or roles["guest_episodes"]):
+        tiles = [
+            el(
+                "li",
+                el("a", text(r["title"]), href=f"/podcasts/{r['slug']}", class_="ts-showtile-title"),
+                " ",
+                el(
+                    "span",
+                    text(role),
+                    *(
+                        [" " + text("·") + " ", _plural(r["count"], "episode", "episodes")]
+                        if r["count"] is not None
+                        else []
+                    ),
+                    class_="ts-showtile-meta",
+                ),
+                class_="ts-showtile",
+            )
+            for role, items in (("Host", roles["hosts"]), ("Recurring", roles["recurring"]))
+            for r in items
+        ]
+        section = [el("ul", *tiles, class_="ts-tiles")] if tiles else []
+        if roles["guest_episodes"]:
+            guest_rows = []
+            for g in roles["guest_episodes"]:
+                meta = [el("span", text(g["podcast_title"]))]
+                if g.get("published_at"):
+                    meta.append(_date(g["published_at"]))
+                guest_rows.append(
+                    el(
+                        "li",
+                        el(
+                            "a",
+                            el("span", *_separated(meta), class_="ts-meta"),
+                            " ",
+                            el("span", text(g["episode_title"])),
+                            href=episode_path(g["podcast_slug"], g["episode_slug"]),
+                        ),
+                    )
+                )
+            section += [el("h3", text("Guest on"), class_="ts-rail-label"), el("ul", *guest_rows, class_="ts-related")]
+        main.append(_section("Appears on", _join(section), class_="ts-section"))
+    if counts["about"] > 0:
+        about = _try(lambda: api.public_entity_quotes_payload(state, entity_type, slug, "about"))
+        if about is not None:
+            queries.append(query("entityQuotes", [entity_type, slug, "about", None], about, page_param=1))
+            heading = (
+                text("What others say about") + " " + el("span", text(name))
+                if is_person
+                else text("Latest on") + " " + el("span", text(name))
+            )
+            main.append(
+                el(
+                    "section",
+                    el("h2", heading, class_="ts-h2"),
+                    _quote_stream(about["quotes"], show_speaker=True),
+                    class_="ts-section",
+                )
+            )
+    if counts["said"] + counts["about"] == 0:
+        note = [text("No quotes yet.")]
+        if roles["hosts"]:
+            note += [" ", text("Hosts often go unnamed in their own show.")]
+        main.append(el("p", *note, class_="ts-muted"))
+
+    rail: List[str] = []
+    if enrichment.get("wikipedia_extract"):
+        extract = [el("p", text(clip_words(enrichment["wikipedia_extract"], _ABOUT_WORDS)), class_="ts-about")]
+        if enrichment.get("wikipedia_url"):
+            extract.append(_external(enrichment["wikipedia_url"], "Read on Wikipedia ↗", class_="ts-link"))
+        rail.append(
+            el(
+                "section",
+                el(
+                    "h3",
+                    text("About"),
+                    " ",
+                    el("span", text("(from Wikipedia)"), class_="ts-rail-source"),
+                    class_="ts-rail-label",
+                ),
+                *extract,
+                class_="ts-rail-module",
+            )
+        )
+    if enrichment.get("facts"):
+        rows = [
+            el(
+                "div",
+                el("dt", text(f["label"])),
+                el("dd", _external(f["url"], f["value"]) if f.get("url") else text(f["value"])),
+            )
+            for f in enrichment["facts"]
+        ]
+        rail.append(
+            el(
+                "section",
+                el(
+                    "h3",
+                    text("Facts"),
+                    " ",
+                    el("span", text("(Wikidata)"), class_="ts-rail-source"),
+                    class_="ts-rail-label",
+                ),
+                el("dl", *rows, class_="ts-facts-list"),
+                class_="ts-rail-module",
+            )
+        )
+    if not is_person:
+        people: List[Dict[str, Any]] = []
+        for aff in enrichment.get("affiliations") or []:
+            ref = aff.get("ref")
+            if not ref or ref.get("type") != "person":
+                continue
+            existing = next((p for p in people if p["slug"] == ref["slug"]), None)
+            if existing is None:
+                people.append({"slug": ref["slug"], "label": aff["label"], "relations": [aff["relation"]]})
+            elif aff["relation"] not in existing["relations"]:
+                existing["relations"].append(aff["relation"])
+        if people:
+            rows = [
+                el(
+                    "li",
+                    el("a", text(p["label"]), href=f"/entities/person/{p['slug']}"),
+                    " ",
+                    el("span", *_separated([text(r) for r in p["relations"]]), class_="ts-related-count"),
+                )
+                for p in people
+            ]
+            rail.append(_section("People", el("ul", *rows, class_="ts-related"), level="h3", class_="ts-rail-module"))
+        if payload["most_discussed_on"]:
+            rows = [
+                el(
+                    "li",
+                    el("a", text(show["title"]), href=f"/podcasts/{show['slug']}"),
+                    *(
+                        [" ", el("span", text(show["count"]), class_="ts-related-count")]
+                        if show["count"] is not None
+                        else []
+                    ),
+                )
+                for show in payload["most_discussed_on"]
+            ]
+            rail.append(
+                _section("Most discussed on", el("ul", *rows, class_="ts-related"), level="h3", class_="ts-rail-module")
+            )
+    if len(payload["related"]) >= 3:
+        rail.append(_entity_groups(payload["related"], _RELATED_TITLES, lambda item: f"{item['episode_count']} ep"))
+
+    parts.append(
+        el("div", el("div", *main, class_="ts-stack"), el("aside", *rail, class_="ts-rail"), class_="ts-columns")
+    )
+    return Fallback(_chrome(page_path, el("article", *parts, class_="ts-container")), queries)
+
+
 def build_fallback(state: "AppState", path: str, header_only: bool) -> Optional[Fallback]:
     """The fallback for a public content path, or None for a kind that has
     none. Raises ``HTTPException`` (404) when the page is not public."""
@@ -574,6 +1007,10 @@ def build_fallback(state: "AppState", path: str, header_only: bool) -> Optional[
     parts = path.strip("/").split("/")
     if kind == "episode":
         return episode_fallback(state, parts[1], parts[3], header_only)
+    if kind == "podcast":
+        return podcast_fallback(state, parts[1], header_only)
+    if kind == "entity":
+        return entity_fallback(state, parts[1], parts[2], header_only)
     return None
 
 
