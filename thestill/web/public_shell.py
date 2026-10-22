@@ -287,55 +287,57 @@ class ShellRenderer:
         return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
 
     def _podcast_or_episode(self, parts: List[str]) -> HeadTags:
-        """Head tags from the same cached payloads as the public API and the
-        server-written body (spec #105, FM-6)."""
+        """Head tags from the cached slug lookups the public API shares
+        (spec #105, FM-6). Deliberately not the full payloads: those are
+        built for the page body only, under the prerender concurrency cap,
+        so a shed request costs one lookup."""
         from fastapi import HTTPException
 
-        from .routes.api_public import public_episode_models, public_episode_payload, public_podcast_payload
+        from .routes.api_public import public_episode_models, public_podcast_row
 
+        state = self._state
         try:
             if len(parts) == 2:
-                podcast = public_podcast_payload(self._state, parts[1])["podcast"]
+                row = public_podcast_row(state, parts[1])
             else:
-                episode = public_episode_payload(self._state, parts[1], parts[3])["episode"]
-                _, model = public_episode_models(self._state, parts[1], parts[3])
+                podcast, episode = public_episode_models(state, parts[1], parts[3])
         except HTTPException:
             return HeadTags(status_code=404)
         if len(parts) == 2:
-            title = podcast["title"] or ""
+            _, summarised = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=1)
+            title = row.get("title") or ""
             return HeadTags(
                 title=f"{title} — episode summaries · {SITE_NAME}",
-                description=_first_sentence(podcast["description"]) or DEFAULT_DESCRIPTION,
+                description=_first_sentence(row.get("description")) or DEFAULT_DESCRIPTION,
                 canonical_path=f"/podcasts/{parts[1]}",
-                image=podcast["image_url"],
-                index=podcast["summarised_count"] > 0,
+                image=row.get("image_url"),
+                index=summarised > 0,
                 json_ld={
                     "@context": "https://schema.org",
                     "@type": "PodcastSeries",
                     "name": title,
-                    "description": _clip(podcast["description"], 300),
-                    "image": podcast["image_url"],
-                    "author": {"@type": "Person", "name": podcast["author"]} if podcast["author"] else None,
+                    "description": _clip(row.get("description"), 300),
+                    "image": row.get("image_url"),
+                    "author": {"@type": "Person", "name": row.get("author")} if row.get("author") else None,
                 },
             )
-        show = episode["podcast"]
         return HeadTags(
-            title=f"{episode['title']} · {show['title']} · {SITE_NAME}",
-            description=_first_sentence(model.summary_preview) or DEFAULT_DESCRIPTION,
+            title=f"{episode.title} · {podcast.title} · {SITE_NAME}",
+            description=_first_sentence(episode.summary_preview) or DEFAULT_DESCRIPTION,
             canonical_path=f"/podcasts/{parts[1]}/episodes/{parts[3]}",
             og_type="article",
-            image=episode["image_url"],
+            image=episode.image_url or podcast.image_url,
             index=True,
             json_ld={
                 "@context": "https://schema.org",
                 "@type": "PodcastEpisode",
-                "name": episode["title"],
-                "description": _clip(model.summary_preview, 300),
-                "datePublished": episode["pub_date"],
+                "name": episode.title,
+                "description": _clip(episode.summary_preview, 300),
+                "datePublished": episode.pub_date.isoformat() if episode.pub_date else None,
                 "associatedMedia": (
-                    {"@type": "MediaObject", "contentUrl": episode["audio_url"]} if episode["audio_url"] else None
+                    {"@type": "MediaObject", "contentUrl": str(episode.audio_url)} if episode.audio_url else None
                 ),
-                "partOfSeries": {"@type": "PodcastSeries", "name": show["title"]},
+                "partOfSeries": {"@type": "PodcastSeries", "name": podcast.title},
             },
         )
 

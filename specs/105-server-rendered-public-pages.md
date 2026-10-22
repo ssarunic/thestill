@@ -643,8 +643,10 @@ finds no bootstrap block and fetches as today.
   `public_podcast_episodes_payload`, `public_episode_payload`,
   `public_episode_summary_payload`, `public_episode_quotes_payload`, plus
   `public_episode_models` for the slug lookup), each with its own 120 s
-  `TtlCache` of 1,024 entries. The route, the head tags and the fallback all
-  call them.
+  `TtlCache` of 1,024 entries. The route and the fallback call them. The
+  head tags use only the cached slug lookups they share
+  (`public_episode_models`, `public_podcast_row`), so a request shed by
+  the cap costs one lookup, not a payload build.
 - `TtlCache` gained a cache-only mode (`public_access.cache_only`): the
   shell first builds from cache and only an uncached build takes one of the
   `PRERENDER_MAX_CONCURRENT` slots, so a cached page is never shed.

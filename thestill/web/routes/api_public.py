@@ -253,6 +253,12 @@ def _public_podcast_row(state: AppState, visibility: PublicVisibility, podcast_s
     return row
 
 
+def public_podcast_row(state: AppState, podcast_slug: str) -> Dict[str, Any]:
+    """The podcast row behind a public show page, else a 404 (one cached
+    query: the page shell's head tags use it without building a payload)."""
+    return _public_podcast_row(state, get_public_visibility(state), podcast_slug)
+
+
 def public_episode_models(state: AppState, podcast_slug: str, episode_slug: str):
     """``(podcast, episode)`` for a public episode page, else a 404."""
     visibility = get_public_visibility(state)

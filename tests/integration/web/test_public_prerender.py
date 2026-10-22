@@ -448,3 +448,30 @@ def test_an_old_build_without_the_marker_still_works(site, app_state, static_dir
     index.write_text(index.read_text().replace("<!--thestill:body--><!--/thestill:body-->", ""))
     response = site.get(EPISODE)
     assert response.status_code == 200 and '<div id="root"></div>' in response.text
+
+
+@pytest.mark.parametrize("path", [EPISODE, "/podcasts/public-show"])
+def test_a_shed_request_builds_no_payload(site, app_state, monkeypatch, path):
+    """Over the cap, the page costs its head lookup only: every payload
+    build happens under a slot (review of PR #409)."""
+    from thestill.web.routes import api_public
+
+    _seed_people(app_state)
+    built: List[str] = []
+    for name in ("_build_podcast_payload", "_build_episode_payload", "_build_summary_payload", "_episode_quote_set"):
+        real = getattr(api_public, name)
+        monkeypatch.setattr(
+            api_public, name, lambda *a, _real=real, _name=name, **k: (built.append(_name), _real(*a, **k))[1]
+        )
+    prerenderer = public_prerender.get_prerenderer(app_state)
+    held = 0
+    while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
+        held += 1
+    try:
+        response = site.get(path)
+    finally:
+        for _ in range(held):
+            prerenderer._slots.release()  # noqa: SLF001
+    assert response.status_code == 200 and _marker_is_empty(response.text)
+    assert "Public Show" in response.text.split("</head>", 1)[0]
+    assert built == []
