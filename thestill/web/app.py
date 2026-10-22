@@ -993,7 +993,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             # keep the head-only shell.
             outcome = Outcome(None, "false")
             if tags.status_code == 200 and not has_valid_session(request):
-                outcome = get_prerenderer(state).render(full_path, request.url.query)
+                outcome = get_prerenderer(state).render(full_path, request.url.query, request)
             html_text = inject_body(html_text, outcome.body)
             log_shell_served(
                 full_path, tags.status_code, user_agent, started, prerendered=outcome.prerendered, cache=outcome.cache

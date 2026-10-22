@@ -1,6 +1,6 @@
 # Server-Rendered Content for Public Pages
 
-> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phases 1 (episode pages) and 2 (podcast and entity pages, decision 3 entity rule) implemented 2026-10-21; Phases 3–4 open
+> **Status:** 🚧 Phase 0 deployed in v1.28.0 (PR #395, 2026-10-21); 7-day baseline pending. Phases 1–3 (episode, podcast, entity, landing and `/top` pages; decision 3 entity rule) implemented 2026-10-21; Phase 4 open
 > **Created:** 2026-10-21
 > **Updated:** 2026-10-21
 > **Priority:** Medium. Google already indexes the public pages. This spec is for Bing, DuckDuckGo and AI answer engines, which today see an empty page body.
@@ -706,6 +706,22 @@ finds no bootstrap block and fetches as today.
   174–565 ms uncached (the existing entity payload cost), 2–7 ms cached;
   5 podcast pages 197–435 words (bar 200; the local shows have few
   summarised episodes, production shows list 10).
+
+### Phase 3 (2026-10-21)
+
+- Landing and `/top` builders over `public_recent_summaries_payload`,
+  `public_who_said_what_payload` and the new cached
+  `public_top_chart_payload` (300 s). The shell resolves the chart region
+  as the API does (the visitor's country by IP, else the US) through
+  `shell_visitor_country`, which reads the same per-IP cache; an uncached
+  IP counts as an uncached build, so the lookup sits under the cap.
+- `/top` leaves out the standfirst's first sentence: the page names the
+  country in the browser's locale ("for United Kingdom"), which the
+  server cannot reproduce.
+- Local: landing 667 words, 18 KB raw, 221 ms uncached; `/top` 1,332
+  words, 74 KB raw and 16.5 KB gzipped for 100 chart rows (the data block
+  carries the API payload, artwork and Apple links included), over the
+  episode-page budget, which was set for episode pages.
 
 ## Decisions
 

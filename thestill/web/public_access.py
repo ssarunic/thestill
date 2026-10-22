@@ -91,6 +91,11 @@ class CacheMiss(Exception):
     """A :class:`TtlCache` lookup missed inside :func:`cache_only`."""
 
 
+def in_cache_only() -> bool:
+    """True inside :func:`cache_only` (for lookups that are not a TtlCache)."""
+    return _CACHE_ONLY.get()
+
+
 @contextmanager
 def cache_only() -> Iterator[None]:
     """Within this block a cache miss raises :class:`CacheMiss` instead of

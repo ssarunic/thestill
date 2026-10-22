@@ -40,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from structlog import get_logger
@@ -56,6 +57,7 @@ from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state
 from ..middleware import resolve_client_ip
 from ..public_access import (
+    CacheMiss,
     EntityIndexFacts,
     PublicVisibility,
     TtlCache,
@@ -64,6 +66,7 @@ from ..public_access import (
     entity_noindex_ids,
     get_public_visibility,
     has_valid_session,
+    in_cache_only,
     instance_of_list,
     public_rate_limit,
 )
@@ -495,6 +498,17 @@ def get_public_episode_summary(
 _recent_cache = TtlCache(_RECENT_TTL_SECONDS, max_size=_RECENT_MAX * 2)
 
 
+def public_recent_summaries_payload(state: AppState, limit: int = 6) -> Dict[str, Any]:
+    """Newest public summaries across the corpus (the landing page feed)."""
+    visibility = get_public_visibility(state)
+
+    def build() -> List[Dict[str, Any]]:
+        rows, _ = state.repository.list_public_episode_rows(limit=limit, order_by="published_at")
+        return _episode_items(state, visibility, rows, with_podcast=True)
+
+    return {"episodes": _recent_cache.get_or_compute((limit, visibility.fingerprint()), build)}
+
+
 @router.get("/recent-summaries")
 def list_recent_summaries(
     request: Request,
@@ -503,15 +517,9 @@ def list_recent_summaries(
     state: AppState = Depends(get_app_state),
 ) -> dict:
     """Newest public summaries across the corpus (the landing page feed)."""
-    visibility = get_public_visibility(state)
-
-    def build() -> List[Dict[str, Any]]:
-        rows, _ = state.repository.list_public_episode_rows(limit=limit, order_by="published_at")
-        return _episode_items(state, visibility, rows, with_podcast=True)
-
-    items = _recent_cache.get_or_compute((limit, visibility.fingerprint()), build)
+    payload = public_recent_summaries_payload(state, limit)
     apply_public_cache_headers(request, response)
-    return api_response({"episodes": items})
+    return api_response(payload)
 
 
 # A visitor's country by IP, kept a day per address so a returning visitor
@@ -532,6 +540,70 @@ async def visitor_country(request: Request) -> Optional[str]:
     return country
 
 
+_TOP_TTL_SECONDS = 300.0
+_top_cache = TtlCache(_TOP_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+
+
+def public_top_chart_payload(
+    state: AppState,
+    region: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 100,
+    country: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The chart for one region: ``region``, else ``country`` (the visitor's,
+    by IP) when it has a chart, else the US. Rows link to a show page only
+    when the show is public."""
+    visibility = get_public_visibility(state)
+    available = state.repository.get_top_podcast_regions()
+    preferred = country if country in available else _DEFAULT_TOP_REGION
+    resolved = _resolve_region(region, preferred, available)
+    category_clean = category.strip() if category and category.strip() else None
+
+    def build() -> Dict[str, Any]:
+        rows = state.repository.get_top_podcasts(resolved, limit=limit, q=None, category=category_clean, user_id=None)
+        hidden_slugs = visibility.hidden_podcast_slugs()
+        return {
+            "region": resolved,
+            "available_regions": available,
+            "available_categories": state.repository.get_top_podcast_categories(resolved),
+            "top_podcasts": [
+                {
+                    "rank": row.get("rank"),
+                    "name": row.get("name"),
+                    "artist": row.get("artist"),
+                    "image_url": row.get("image_url"),
+                    "category": row.get("category"),
+                    "apple_url": row.get("apple_url"),
+                    "podcast_slug": row.get("podcast_slug") if row.get("podcast_slug") not in hidden_slugs else None,
+                }
+                for row in rows
+            ],
+        }
+
+    return _top_cache.get_or_compute((resolved, category_clean, limit, visibility.fingerprint()), build)
+
+
+def shell_visitor_country(request: Request) -> Optional[str]:
+    """:func:`visitor_country` for the page shell, which runs in a worker
+    thread: the cached answer, else one lookup (an uncached build, so a
+    miss inside ``cache_only`` raises :class:`CacheMiss`)."""
+    if request.query_params.get("region"):
+        return None
+    ip = resolve_client_ip(request)
+    hit, country = _visitor_country_cache.lookup(ip)
+    if hit:
+        return country
+    if in_cache_only():
+        raise CacheMiss()
+    try:
+        country = anyio.from_thread.run(lookup_country_from_ip, ip)
+    except RuntimeError:  # not on an AnyIO worker thread
+        return None
+    _visitor_country_cache.put(ip, country)
+    return country
+
+
 @router.get("/top-podcasts")
 def list_public_top_podcasts(
     request: Request,
@@ -544,38 +616,13 @@ def list_public_top_podcasts(
 ) -> dict:
     """The chart for one region: ``?region=``, else the visitor's country by
     IP, else the US. Rows link to a show page only when the show is public."""
-    visibility = get_public_visibility(state)
-    available = state.repository.get_top_podcast_regions()
-    preferred = country if country in available else _DEFAULT_TOP_REGION
-    resolved = _resolve_region(region, preferred, available)
-    category_clean = category.strip() if category and category.strip() else None
-    rows = state.repository.get_top_podcasts(resolved, limit=limit, q=None, category=category_clean, user_id=None)
-    hidden_slugs = visibility.hidden_podcast_slugs()
-    items = [
-        {
-            "rank": row.get("rank"),
-            "name": row.get("name"),
-            "artist": row.get("artist"),
-            "image_url": row.get("image_url"),
-            "category": row.get("category"),
-            "apple_url": row.get("apple_url"),
-            "podcast_slug": row.get("podcast_slug") if row.get("podcast_slug") not in hidden_slugs else None,
-        }
-        for row in rows
-    ]
+    payload = public_top_chart_payload(state, region=region, category=category, limit=limit, country=country)
     apply_public_cache_headers(request, response)
     if not region:
         # Picked from the visitor's IP: a shared cache must not hand this
         # country's chart to someone in another.
         response.headers["Cache-Control"] = "private, max-age=300"
-    return api_response(
-        {
-            "region": resolved,
-            "available_regions": available,
-            "available_categories": state.repository.get_top_podcast_categories(resolved),
-            "top_podcasts": items,
-        }
-    )
+    return api_response(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -1056,10 +1103,15 @@ def get_who_said_what(
     most distinct named speakers across the most shows in the last 7 days
     (30 if the week is quiet), with up to three quotes from different
     speakers on different shows."""
-    visibility = get_public_visibility(state)
-    payload = _trending_cache.get_or_compute(visibility.fingerprint(), lambda: _pick_trending(state))
+    payload = public_who_said_what_payload(state)
     apply_public_cache_headers(request, response)
     return api_response(payload)
+
+
+def public_who_said_what_payload(state: AppState) -> Dict[str, Any]:
+    """The landing's "Who said what this week" (cached half an hour)."""
+    visibility = get_public_visibility(state)
+    return _trending_cache.get_or_compute(visibility.fingerprint(), lambda: _pick_trending(state))
 
 
 def _pick_trending(state: AppState) -> Dict[str, Any]:

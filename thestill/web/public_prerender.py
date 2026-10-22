@@ -56,6 +56,8 @@ from .public_access import CacheMiss, cache_only
 from .public_shell import safe_json, shell_kind
 
 if TYPE_CHECKING:
+    from fastapi import Request
+
     from .dependencies import AppState
 
 logger = get_logger(__name__)
@@ -66,7 +68,7 @@ BOOTSTRAP_ID = "thestill-bootstrap"
 BOOTSTRAP_VERSION = 1
 
 #: Page kinds that get server-written content.
-PRERENDER_KINDS = frozenset({"episode", "podcast", "entity"})
+PRERENDER_KINDS = frozenset({"episode", "podcast", "entity", "landing", "top"})
 
 _DESCRIPTION_WORDS = 80
 _MORE_FROM = 3
@@ -153,6 +155,31 @@ UI_STRINGS = frozenset(
         "Often discussed with: topics",
         "ep",
         "more from this episode",
+        # Landing and top pages.
+        "Read your podcasts.",
+        "Latest summary",
+        "Read the whole summary →",
+        "Who said what this week:",
+        "Who said what this month:",
+        "See all →",
+        "Discussed by",
+        "speakers on",
+        "show.",
+        "shows.",
+        "What you get when you sign in",
+        "Your inbox",
+        "Every new episode of the shows you follow, summarised the morning it drops.",
+        "Your briefing",
+        "One page across all your shows each morning, narrated if you like.",
+        "Your knowledge base",
+        "Search every mention of anything across every show you follow, and ask Claude about it.",
+        "thestill turns every episode you follow into a summary you can read in three minutes, with every quote "
+        "attributed and timed, and a morning briefing across all of them.",
+        "Recently summarised",
+        "Updated daily",
+        "Shows with summaries open on thestill.",
+        "Read summaries",
+        "Apple Podcasts ↗",
     }
 )
 
@@ -998,13 +1025,169 @@ def entity_fallback(state: "AppState", entity_type: str, slug: str, header_only:
     return Fallback(_chrome(page_path, el("article", *parts, class_="ts-container")), queries)
 
 
-def build_fallback(state: "AppState", path: str, header_only: bool) -> Optional[Fallback]:
+_OUTCOMES = (
+    ("Your inbox", "Every new episode of the shows you follow, summarised the morning it drops."),
+    ("Your briefing", "One page across all your shows each morning, narrated if you like."),
+    (
+        "Your knowledge base",
+        "Search every mention of anything across every show you follow, and ask Claude about it.",
+    ),
+)
+_LANDING_STANDFIRST = (
+    "thestill turns every episode you follow into a summary you can read in three minutes, with every quote "
+    "attributed and timed, and a morning briefing across all of them."
+)
+
+
+def landing_fallback(state: "AppState", header_only: bool) -> Fallback:
+    from .routes import api_public as api
+
+    hero = el(
+        "section",
+        el("h1", text("Read your podcasts."), class_="ts-page-title"),
+        el("p", text(_LANDING_STANDFIRST), class_="ts-standfirst"),
+        class_="ts-hero",
+    )
+    queries: List[Dict[str, Any]] = []
+    if header_only:
+        return Fallback(_chrome("/", el("article", hero, class_="ts-container")), queries)
+
+    main: List[str] = []
+    latest = api.public_recent_summaries_payload(state, 1)
+    queries.append(query("recent", [1], latest))
+    if latest["episodes"] and latest["episodes"][0].get("podcast"):
+        episode = latest["episodes"][0]
+        show = episode["podcast"]
+        href = episode_path(show["slug"], episode["slug"])
+        summary = _try(lambda: api.public_episode_summary_payload(state, show["slug"], episode["slug"]))
+        if summary is not None:
+            queries.append(query("summary", [show["slug"], episode["slug"]], summary))
+            lead = el("div", render_markdown(summary["content"]), class_="ts-summary")
+        else:
+            lead = el("p", text(episode["summary_preview"]), class_="ts-standfirst")
+        main.append(
+            el(
+                "section",
+                el("h2", text("Latest summary"), class_="ts-h2"),
+                el("p", _date(episode["pub_date"]), class_="ts-meta"),
+                el("p", el("a", text(show["title"]), href=f"/podcasts/{show['slug']}"), class_="ts-link"),
+                el("h3", el("a", text(episode["title"]), href=href), class_="ts-eprow-title"),
+                lead,
+                el("p", el("a", text("Read the whole summary →"), href=href, class_="ts-link")),
+                class_="ts-section",
+            )
+        )
+
+    trending = api.public_who_said_what_payload(state)
+    queries.append(query("whoSaidWhat", [], trending))
+    if trending["entity"] and trending["quotes"]:
+        subject = trending["entity"]
+        when = "this week" if trending["days"] == 7 else "this month"
+        main.append(
+            el(
+                "section",
+                el(
+                    "h2",
+                    text(f"Who said what {when}:") + " " + el("span", text(subject["name"])),
+                    class_="ts-h2",
+                ),
+                el("p", el("a", text("See all →"), href=entity_path(subject), class_="ts-link")),
+                el(
+                    "p",
+                    text("Discussed by")
+                    + " "
+                    + el("span", text(trending["speakers"]))
+                    + " "
+                    + text("speakers on")
+                    + " "
+                    + _plural(trending["shows"], "show.", "shows."),
+                    class_="ts-muted",
+                ),
+                el(
+                    "div",
+                    *(_quote(q, show_show=True, show_date=True) for q in trending["quotes"]),
+                    class_="ts-quote-list",
+                ),
+                class_="ts-section",
+            )
+        )
+
+    outcomes = [el("div", el("dt", text(title)), el("dd", text(body))) for title, body in _OUTCOMES]
+    main.append(_section("What you get when you sign in", el("dl", *outcomes), class_="ts-section"))
+
+    fresh = api.public_recent_summaries_payload(state, 6)
+    queries.append(query("recent", [6], fresh))
+    rows = [
+        _episode_row(item, item["podcast"]["slug"], item["podcast"]["title"])
+        for item in fresh["episodes"]
+        if item.get("podcast")
+    ]
+    if rows:
+        main.append(_section("Recently summarised", el("div", *rows), class_="ts-section"))
+
+    return Fallback(
+        _chrome("/", el("article", hero, el("div", *main, class_="ts-stack"), class_="ts-container")), queries
+    )
+
+
+def top_fallback(state: "AppState", header_only: bool, country: Optional[str]) -> Fallback:
+    from .routes import api_public as api
+
+    hero = el(
+        "section",
+        el("p", text("Updated daily"), class_="ts-eyebrow"),
+        el("h1", text("Top podcasts"), class_="ts-page-title"),
+        # The page names the chart's country in the browser's locale; the
+        # server cannot, so it keeps only the sentence that does not.
+        el("p", text("Shows with summaries open on thestill."), class_="ts-standfirst"),
+        class_="ts-hero",
+    )
+    if header_only:
+        return Fallback(_chrome("/top", el("article", hero, class_="ts-container")), [])
+    chart = api.public_top_chart_payload(state, country=country)
+    rows = []
+    for row in chart["top_podcasts"]:
+        byline = [text(v) for v in (row.get("artist"), row.get("category")) if v]
+        inner = [
+            el("span", text(row["rank"]), class_="ts-meta"),
+            " ",
+            el("span", text(row["name"]), class_="ts-ep-head-title"),
+            " ",
+            el("span", *_separated(byline), class_="ts-meta"),
+        ]
+        if row.get("podcast_slug"):
+            inner += [" ", el("span", text("Read summaries"), class_="ts-link")]
+            item = el("a", *inner, href=f"/podcasts/{row['podcast_slug']}", class_="ts-ep-head")
+        elif _safe_href(row.get("apple_url")):
+            inner += [" ", el("span", text("Apple Podcasts ↗"), class_="ts-link")]
+            item = el("a", *inner, href=_safe_href(row["apple_url"]), rel="noopener", class_="ts-ep-head")
+        else:
+            item = el("div", *inner, class_="ts-ep-head")
+        rows.append(el("li", item, class_="ts-eprow"))
+    body = el("ol", *rows) if rows else ""
+    return Fallback(
+        _chrome("/top", el("article", hero, body, class_="ts-container")),
+        [query("top", [None, None], chart)],
+    )
+
+
+def build_fallback(
+    state: "AppState", path: str, header_only: bool, request: Optional["Request"] = None
+) -> Optional[Fallback]:
     """The fallback for a public content path, or None for a kind that has
     none. Raises ``HTTPException`` (404) when the page is not public."""
     kind = shell_kind(path)
     if kind not in PRERENDER_KINDS:
         return None
     parts = path.strip("/").split("/")
+    if kind == "landing":
+        return landing_fallback(state, header_only)
+    if kind == "top":
+        from .routes.api_public import shell_visitor_country
+
+        # Same region rule as the API: the chart this visitor's page shows.
+        country = shell_visitor_country(request) if request is not None and not header_only else None
+        return top_fallback(state, header_only, country)
     if kind == "episode":
         return episode_fallback(state, parts[1], parts[3], header_only)
     if kind == "podcast":
@@ -1079,7 +1262,7 @@ class Prerenderer:
             if acquired:
                 self._slots.release()
 
-    def render(self, path: str, query_string: str) -> Outcome:
+    def render(self, path: str, query_string: str, request: Optional["Request"] = None) -> Outcome:
         kind = shell_kind(path)
         if kind not in PRERENDER_KINDS or not self.enabled():
             return Outcome(None, "false")
@@ -1087,14 +1270,14 @@ class Prerenderer:
         try:
             try:
                 with cache_only():
-                    fallback = build_fallback(self._state, path, header_only)
+                    fallback = build_fallback(self._state, path, header_only, request)
                 cache = "hit"
             except CacheMiss:
                 with self.slot() as acquired:
                     if not acquired:
                         self.log_shed(kind)
                         return Outcome(None, "shed", "miss")
-                    fallback = build_fallback(self._state, path, header_only)
+                    fallback = build_fallback(self._state, path, header_only, request)
                 cache = "miss"
         except HTTPException:
             return Outcome(None, "false")  # gone since the head lookup
