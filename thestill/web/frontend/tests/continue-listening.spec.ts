@@ -7,8 +7,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { EPISODE_PATH, EPISODE_TITLE, mockEpisodeApi } from './episode-hero-fixture'
 
-// 60 s of 8 kHz 8-bit mono silence (~480 KB) — small enough to buffer fully,
-// so seeks land without range requests.
+// 60 s of 8 kHz 8-bit mono silence (~480 KB).
 function silentWav(seconds: number, rate = 8000): Buffer {
   const samples = seconds * rate
   const buffer = Buffer.alloc(44 + samples)
@@ -29,11 +28,26 @@ function silentWav(seconds: number, rate = 8000): Buffer {
   return buffer
 }
 
+// Served with byte ranges, like a podcast CDN. Without them the media is not
+// seekable until fully buffered, so the restore's seek at loadedmetadata was
+// usually dropped: the bar came back at 0:00 and the test passed only when
+// playback climbed back past the mark inside the poll window.
 async function servePlayableAudio(page: Page) {
   const wav = silentWav(60)
-  await page.route('https://example.com/a.mp3', (route) =>
-    route.fulfill({ status: 200, contentType: 'audio/wav', body: wav }),
-  )
+  await page.route('https://example.com/a.mp3', (route) => {
+    const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers()['range'] ?? '')
+    if (!range) {
+      return route.fulfill({ status: 200, contentType: 'audio/wav', headers: { 'Accept-Ranges': 'bytes' }, body: wav })
+    }
+    const start = Number(range[1])
+    const end = range[2] ? Number(range[2]) : wav.length - 1
+    return route.fulfill({
+      status: 206,
+      contentType: 'audio/wav',
+      headers: { 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${wav.length}` },
+      body: wav.subarray(start, end + 1),
+    })
+  })
 }
 
 const seekValue = async (page: Page) =>
