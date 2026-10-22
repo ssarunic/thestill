@@ -95,6 +95,7 @@ from .public_shell import (
     ROBOTS_PRIVATE,
     ROBOTS_PUBLIC,
     HeadTags,
+    LookupShed,
     LookupThrottled,
     ShellTemplate,
     get_shell_renderer,
@@ -970,6 +971,13 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     status_code=429,
                     headers={"Retry-After": "60", **no_cache},
                 )
+            except LookupShed:
+                # Spec #105 §4: over the build cap. 503 asks a crawler to
+                # come back; a browser still gets the shell and the app.
+                get_prerenderer(state).log_shed("entity")
+                log_shell_served(full_path, 503, user_agent, started, prerendered="shed", cache="miss")
+                html_text = inject(shell_template.text(), render_head(HeadTags(), state.config.public_base_url or None))
+                return HTMLResponse(html_text, status_code=503, headers={**no_cache, "Retry-After": "120"})
             except Exception as exc:
                 # A lookup failure must not take the app shell down, but a
                 # crawler must not read it as a real page either: 503 asks

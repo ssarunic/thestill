@@ -475,3 +475,34 @@ def test_a_shed_request_builds_no_payload(site, app_state, monkeypatch, path):
     assert response.status_code == 200 and _marker_is_empty(response.text)
     assert "Public Show" in response.text.split("</head>", 1)[0]
     assert built == []
+
+
+def test_an_uncached_entity_page_over_the_cap_is_a_503_not_a_build(site, app_state, monkeypatch):
+    """The entity head needs the full entity payload (quote counts decide
+    noindex); uncached and over the cap, it is shed, never built."""
+    from thestill.web.routes import api_public
+
+    _seed_people(app_state)
+    built: List[str] = []
+    real = api_public._build_entity_payload
+    monkeypatch.setattr(api_public, "_build_entity_payload", lambda *a, **k: (built.append("entity"), real(*a, **k))[1])
+    prerenderer = public_prerender.get_prerenderer(app_state)
+    held = 0
+    while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
+        held += 1
+    try:
+        shed = site.get("/entities/person/scott-galloway")
+        assert shed.status_code == 503 and shed.headers["Retry-After"] == "120"
+        assert built == []
+        # Once cached, the head costs nothing and is served even at the cap.
+        for _ in range(held):
+            prerenderer._slots.release()  # noqa: SLF001
+        held = 0
+        assert site.get("/entities/person/scott-galloway").status_code == 200
+        while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001
+            held += 1
+        assert site.get("/entities/person/scott-galloway").status_code == 200
+        assert built == ["entity"]
+    finally:
+        for _ in range(held):
+            prerenderer._slots.release()  # noqa: SLF001

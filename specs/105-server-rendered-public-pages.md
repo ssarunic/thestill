@@ -646,7 +646,11 @@ finds no bootstrap block and fetches as today.
   `TtlCache` of 1,024 entries. The route and the fallback call them. The
   head tags use only the cached slug lookups they share
   (`public_episode_models`, `public_podcast_row`), so a request shed by
-  the cap costs one lookup, not a payload build.
+  the cap costs one lookup, not a payload build. An entity page's head
+  needs the full entity payload (its quote counts decide `noindex`), so
+  an uncached one is built under the same cap, and over it the page
+  answers 503 with `Retry-After: 120` rather than guessing `noindex`;
+  with the switch off the cap does not apply.
 - `TtlCache` gained a cache-only mode (`public_access.cache_only`): the
   shell first builds from cache and only an uncached build takes one of the
   `PRERENDER_MAX_CONCURRENT` slots, so a cached page is never shed.

@@ -136,6 +136,11 @@ class LookupThrottled(Exception):
     """The caller's public rate-limit bucket is empty (answer 429)."""
 
 
+class LookupShed(Exception):
+    """An uncached lookup found every prerender slot taken (spec #105 §4):
+    answer 503 with ``Retry-After`` rather than build it."""
+
+
 def _clip(text: Optional[str], limit: int = _DESCRIPTION_MAX) -> str:
     text = re.sub(r"\s+", " ", (text or "").strip())
     if len(text) <= limit:
@@ -344,10 +349,28 @@ class ShellRenderer:
     def _entity(self, entity_type: str, slug: str) -> HeadTags:
         from fastapi import HTTPException
 
+        from .public_access import CacheMiss, cache_only
+        from .public_prerender import get_prerenderer
         from .routes.api_public import public_entity_payload
 
+        # The entity payload (quote counts decide noindex) is the costly part
+        # of this page. Cached, it is free; uncached, it is built under the
+        # prerender cap like the page body (spec #105 §4), and over the cap
+        # the page is shed with a 503 instead of guessing ``noindex``. With
+        # the prerender switch off the cap does not apply, as before #105.
+        prerenderer = get_prerenderer(self._state)
         try:
-            payload = public_entity_payload(self._state, entity_type, slug)
+            if not prerenderer.enabled():
+                payload = public_entity_payload(self._state, entity_type, slug)
+            else:
+                try:
+                    with cache_only():
+                        payload = public_entity_payload(self._state, entity_type, slug)
+                except CacheMiss:
+                    with prerenderer.slot() as acquired:
+                        if not acquired:
+                            raise LookupShed() from None
+                        payload = public_entity_payload(self._state, entity_type, slug)
         except HTTPException:
             return HeadTags(status_code=404)
         entity = payload["entity"]

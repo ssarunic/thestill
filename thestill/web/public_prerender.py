@@ -42,9 +42,10 @@ from __future__ import annotations
 import html
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 
 from fastapi import HTTPException
@@ -626,6 +627,21 @@ class Prerenderer:
             logger.warning("public_prerender.switch_unreadable", exc_info=True)
             return False
 
+    @staticmethod
+    def log_shed(kind: str) -> None:
+        logger.info("public_prerender.shed", kind=kind)
+
+    @contextmanager
+    def slot(self) -> Iterator[bool]:
+        """One of the uncached-build slots, never waited for: yields False
+        when all are taken (the caller sheds)."""
+        acquired = self._slots.acquire(blocking=False)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self._slots.release()
+
     def render(self, path: str, query_string: str) -> Outcome:
         kind = shell_kind(path)
         if kind not in PRERENDER_KINDS or not self.enabled():
@@ -637,13 +653,11 @@ class Prerenderer:
                     fallback = build_fallback(self._state, path, header_only)
                 cache = "hit"
             except CacheMiss:
-                if not self._slots.acquire(blocking=False):
-                    logger.info("public_prerender.shed", kind=kind)
-                    return Outcome(None, "shed", "miss")
-                try:
+                with self.slot() as acquired:
+                    if not acquired:
+                        self.log_shed(kind)
+                        return Outcome(None, "shed", "miss")
                     fallback = build_fallback(self._state, path, header_only)
-                finally:
-                    self._slots.release()
                 cache = "miss"
         except HTTPException:
             return Outcome(None, "false")  # gone since the head lookup
