@@ -26,18 +26,24 @@ interface Provider {
 // One row per sign-in method; Microsoft, Apple and email slot in here.
 const PROVIDERS: Provider[] = [{ id: 'google', label: 'Continue with Google', icon: <GoogleG /> }]
 
-// Spec #104 — why the server sent the reader back here instead of signing
-// them in. ``account_disabled`` also shows for a disabled session that
-// landed here without the query parameter.
-const REFUSALS = {
+// Why the server sent the reader back here instead of signing them in.
+// Spec #104 refusals carry the operator contact; ``account_disabled`` also
+// shows for a disabled session that landed here without the query
+// parameter. ``cancelled`` (Cancel on Google's screen) and ``failed`` (any
+// other unfinished sign-in) just invite another try.
+const NOTICES = {
   account_disabled: 'This account has been disabled.',
   signups_closed: 'Signups are paused right now.',
+  cancelled: 'Sign-in was cancelled. You can try again below.',
+  failed: "Sign-in didn't finish. Please try again.",
 } as const
 
-type Refusal = keyof typeof REFUSALS
+type Notice = keyof typeof NOTICES
 
-function parseRefusal(raw: string | null, accountDisabled: boolean): Refusal | null {
-  if (raw === 'account_disabled' || raw === 'signups_closed') return raw
+const WITH_CONTACT: ReadonlySet<Notice> = new Set<Notice>(['account_disabled', 'signups_closed'])
+
+function parseNotice(raw: string | null, accountDisabled: boolean): Notice | null {
+  if (raw !== null && Object.prototype.hasOwnProperty.call(NOTICES, raw)) return raw as Notice
   return accountDisabled ? 'account_disabled' : null
 }
 
@@ -49,7 +55,7 @@ export default function Login() {
   // Spec #94 — where to return after sign-in (validated client- and server-side).
   const next = safeNextPath(params.get('next'))
   const intent = parseIntent(params.get('intent'))
-  const refusal = parseRefusal(params.get('error'), accountDisabled)
+  const notice = parseNotice(params.get('error'), accountDisabled)
 
   // Already signed in, or single-user mode: nothing to do here.
   useEffect(() => {
@@ -73,10 +79,10 @@ export default function Login() {
           thestill
         </Link>
         <h1 className="ts-login-title">Sign in to thestill</h1>
-        {refusal ? (
+        {notice ? (
           <p className="ts-login-refusal" role="alert">
-            {REFUSALS[refusal]}
-            {adminContactEmail && (
+            {NOTICES[notice]}
+            {WITH_CONTACT.has(notice) && adminContactEmail && (
               <>
                 {' '}
                 Contact{' '}

@@ -27,6 +27,8 @@ else.
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
+| `login_cancelled` | server, OAuth callback, when Google returns no code | `reason`: `access_denied` (Cancel on Google's screen), `admin_policy_enforced`, `server_error`, `temporarily_unavailable`, `other`, `missing_code` |
+| `login_failed` | server, OAuth callback, when Google signed the reader in but thestill did not | `reason`: `account_disabled`, `signups_closed`, `error` |
 | `search` | server, `/api/search/corpus` (not in-episode expansion) | `result_count`, `mode` |
 | `mcp_tool_call` | server, remote MCP | `tool`, `ok` |
 
@@ -35,10 +37,16 @@ strings. Signed-in events carry the internal user UUID and the person
 property `is_admin`; anonymous events carry a visitor key that rotates at
 midnight UTC (none under Global Privacy Control) and never create a person.
 
-The two sign-in events are anonymous and share one id per sign-in attempt,
+The sign-in events are anonymous and share one id per sign-in attempt,
 an HMAC of the OAuth `state` (`login_flow_key`), so they form a funnel
 without a cookie and without ever joining the account's person or the
-visitor's public page views. Remote MCP calls carrying `Sec-GPC: 1` send
+visitor's public page views. Each attempt ends in at most one of
+`login_completed`, `login_cancelled` or `login_failed`; a `login_started`
+with none of them is a reader who closed the tab or went back. An outcome
+is only recorded when the callback's `state` matches the browser's state
+cookie. A callback with no attempt in that browser, or a stale one from an
+older tab after a newer sign-in replaced the cookie, sends nothing and
+leaves the current attempt open. Remote MCP calls carrying `Sec-GPC: 1` send
 nothing.
 
 Not built yet: `export` (no spec #91 export routes exist) and
@@ -136,6 +144,7 @@ project, filter every insight on `app = thestill`.
 | Top referrers | Trends, `public_page_view`, breakdown `referrer_host`, total |
 | Sign-in starts by page | Trends, `login_started`, breakdown `from_kind` |
 | Sign-in completion | Funnel `login_started` → `login_completed`, by `from_kind` |
+| Sign-in outcomes | SQL: group by `distinct_id` over `login_*` events; completed, cancelled (by `reason`), failed (by `reason`), or abandoned when only `login_started` is present |
 | WAU / MAU | Trends, any event, unique users, weekly and monthly |
 | Feature use | Trends, `search` + `share` + `entity_open`, weekly |
 | MCP calls by tool | Trends, `mcp_tool_call`, breakdown `tool`, and `ok = false` share |

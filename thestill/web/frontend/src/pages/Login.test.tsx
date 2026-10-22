@@ -74,4 +74,24 @@ describe('Login (spec #102)', () => {
     renderAt('/login?error=%3Cscript%3E')
     expect(screen.queryByRole('alert')).toBeNull()
   })
+
+  it('invites another try after a cancelled or unfinished sign-in, without the operator contact', () => {
+    auth.adminContactEmail = 'ops@thestill.me'
+    const { unmount } = renderAt('/login?error=cancelled&next=%2Fpodcasts%2Fx%2Fepisodes%2Fy')
+    expect(screen.getByRole('alert')).toHaveTextContent('Sign-in was cancelled. You can try again below.')
+    expect(screen.queryByRole('link', { name: 'ops@thestill.me' })).toBeNull()
+
+    // The retry still returns to the page sign-in started from.
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
+    expect(auth.login).toHaveBeenCalledWith('/podcasts/x/episodes/y')
+    unmount()
+
+    renderAt('/login?error=failed')
+    expect(screen.getByRole('alert')).toHaveTextContent("Sign-in didn't finish. Please try again.")
+  })
+
+  it('ignores error codes that only look like notices', () => {
+    renderAt('/login?error=toString')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

@@ -68,6 +68,32 @@ class LoginCompleted(_Event):
     next_kind: PageKindOrNone
 
 
+# Google's OAuth ``error`` values worth telling apart; anything else is
+# ``other`` so a raw query string never reaches PostHog. ``missing_code`` is
+# a callback with neither a code nor an error.
+GoogleLoginError = Literal[
+    "access_denied", "admin_policy_enforced", "server_error", "temporarily_unavailable", "other", "missing_code"
+]
+LoginFailureReason = Literal["account_disabled", "signups_closed", "error"]
+
+
+class LoginCancelled(_Event):
+    """Google sent the reader back without signing them in.
+
+    ``access_denied`` is the reader pressing Cancel on Google's screen.
+    """
+
+    name: Literal["login_cancelled"] = "login_cancelled"
+    reason: GoogleLoginError
+
+
+class LoginFailed(_Event):
+    """Google signed the reader in, but thestill did not finish the sign-in."""
+
+    name: Literal["login_failed"] = "login_failed"
+    reason: LoginFailureReason
+
+
 class Search(_Event):
     """A corpus search; never the query text."""
 
@@ -82,7 +108,7 @@ class McpToolCall(_Event):
     ok: bool
 
 
-AnalyticsEvent = Union[PublicPageView, LoginStarted, LoginCompleted, Search, McpToolCall]
+AnalyticsEvent = Union[PublicPageView, LoginStarted, LoginCompleted, LoginCancelled, LoginFailed, Search, McpToolCall]
 
 
 class AnalyticsSink(Protocol):
