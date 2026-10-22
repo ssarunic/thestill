@@ -545,9 +545,21 @@ class SitemapBuilder:
             )
             if entity_is_indexable(facts, noindex):
                 rows.append((entity_id, entity_type, slug))
-        # An indexable row has mentions, so one with the URL's own prefix
-        # always owns its URL; only a re-typed row can lose it.
-        retyped_slugs = sorted({slug for entity_id, entity_type, slug in rows if entity_id != f"{entity_type}:{slug}"})
+        # A role qualifies a page on its own, so a host or guest with no
+        # resolved mention (absent from the facts above) is a candidate too.
+        role_only = self._role_only_rows(role_ids, {entity_id for entity_id, _, _ in rows}, noindex)
+        rows.extend(role_only)
+        # A row from the facts has mentions, so one with the URL's own
+        # prefix owns its URL; a re-typed row or a role-only row (no
+        # mentions) can lose it to another entity.
+        unsure = {entity_id for entity_id, _, _ in role_only}
+        retyped_slugs = sorted(
+            {
+                slug
+                for entity_id, entity_type, slug in rows
+                if entity_id != f"{entity_type}:{slug}" or entity_id in unsure
+            }
+        )
         candidate_ids = [cid for slug in retyped_slugs for cid in url_candidate_ids(slug)]
         stored = []
         for start in range(0, len(candidate_ids), _SITEMAP_PAGE):
@@ -558,7 +570,7 @@ class SitemapBuilder:
         with_mentions = repo.entity_ids_with_mentions([entity.id for entity in stored])
         paths, collisions = [], []
         for entity_id, entity_type, slug in rows:
-            if entity_id != f"{entity_type}:{slug}":
+            if entity_id != f"{entity_type}:{slug}" or entity_id in unsure:
                 candidates = url_candidates(entity_type, slug, by_slug.get(slug, []))
                 if not candidates or url_owner(candidates, with_mentions) != entity_id:
                     collisions.append(entity_id)
@@ -568,6 +580,30 @@ class SitemapBuilder:
             # A data problem to fix (merge or delete the loser), not a crash.
             logger.warning("sitemap.entity_url_collisions", count=len(collisions), entity_ids=collisions[:20])
         return paths
+
+    def _role_only_rows(self, role_ids: Set[str], seen: Set[str], noindex: Set[str]) -> List[Tuple[str, str, str]]:
+        """``(entity_id, type, slug)`` for public role holders the facts query
+        did not return (no resolved mention), judged by the same rule."""
+        repo = self._state.entity_repository
+        hidden = get_public_visibility(self._state).hidden_entity_ids()
+        missing = sorted(role_ids - seen - hidden)
+        rows = []
+        for start in range(0, len(missing), _SITEMAP_PAGE):
+            for entity in repo.get_entities_by_ids(missing[start : start + _SITEMAP_PAGE]):
+                entity_type = str(entity.type.value if hasattr(entity.type, "value") else entity.type)
+                facts = EntityIndexFacts(
+                    entity_id=entity.id,
+                    entity_type=entity_type,
+                    said=0,
+                    about=0,
+                    episodes=0,
+                    has_role=True,
+                    wikidata_qid=entity.wikidata_qid,
+                    instance_of=instance_of_list(entity.wikidata_instance_of),
+                )
+                if entity_is_indexable(facts, noindex):
+                    rows.append((entity.id, entity_type, entity.id.split(":", 1)[1] if ":" in entity.id else entity.id))
+        return rows
 
     def urls(self) -> List[Tuple[str, Optional[str]]]:
         # Keyed on the visibility fingerprint: a takedown drops its URLs on

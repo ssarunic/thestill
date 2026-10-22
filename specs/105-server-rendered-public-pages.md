@@ -682,7 +682,10 @@ finds no bootstrap block and fetches as today.
   `EntityIndexFacts` record. The page builds the record from its payload;
   the sitemap from one SQL pass (`PublicQuoteQueries.entity_index_facts`,
   which replaced `indexable_entities`) plus roles from public episodes'
-  guests and public shows' anchors. Thresholds are module constants
+  guests and public shows' anchors; a role holder with no resolved
+  mention (so absent from that SQL) is a candidate too, judged by the
+  same rule and checked for URL ownership like a re-typed row. Thresholds
+  are module constants
   (`INDEX_MIN_SAID` 5, `INDEX_MIN_ABOUT` 10, `INDEX_WIDE_EPISODES` 2,
   `INDEX_WIDE_QUOTES` 5).
 - The type test applies only when Wikidata's `instance of` is known:

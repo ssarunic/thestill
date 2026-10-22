@@ -608,3 +608,23 @@ def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_con
     assert not entity_is_indexable(
         EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, False), ["person:scott-galloway"]
     )
+
+
+def test_a_host_with_no_mentions_is_indexed_and_listed(site, app_state):
+    """A role qualifies a page on its own, so the sitemap must consider
+    role-bearing entities with no transcript mentions (review of #410)."""
+    from thestill.models.entities import EntityRecord, EntityType
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="person:quiet-host", type=EntityType.PERSON, canonical_name="Quiet Host"))
+    repo.set_podcast_hosts("11111111-1111-1111-1111-111111111111", ["person:quiet-host"])
+    page = site.get("/api/public/entities/person/quiet-host").json()
+    assert page["indexable"] is True and page["roles"]["hosts"]
+    assert "https://thestill.test/entities/person/quiet-host</loc>" in site.get("/sitemap.xml").text
+    # Hidden, it is neither.
+    repo.set_entity_public_hidden("person:quiet-host", True)
+    from thestill.web.public_access import get_public_visibility
+
+    get_public_visibility(app_state).invalidate()
+    assert "quiet-host" not in site.get("/sitemap.xml").text
