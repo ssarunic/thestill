@@ -22,15 +22,14 @@ description = "Automated podcast transcription and summarization pipeline"
 authors = [{name = "Sasa Sarunic", email = "ssarunic@gmail.com"}]
 license = {text = "Apache-2.0"}
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
     "fastapi>=0.104.1",
