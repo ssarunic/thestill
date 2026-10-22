@@ -9,6 +9,7 @@ import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 import { useAuth } from './contexts/AuthContext'
 import AnalyticsBridge from './analytics/AnalyticsBridge'
 import { PublicApp } from './publicEntry'
+import { useScrollRestoration } from './hooks/useScrollRestoration'
 
 // Lazy load pages for code splitting
 const Status = lazy(() => import('./pages/Dashboard'))
@@ -45,6 +46,14 @@ function PageLoader() {
   )
 }
 
+// App-wide window scroll (top on a new page, restore on Back). Outside the
+// page ``<Routes>`` like AnalyticsBridge: beneath a ``<Routes location>``
+// every navigation reads as POP, so a fresh page kept the old offset.
+function ScrollRestoration() {
+  useScrollRestoration()
+  return null
+}
+
 function App() {
   const location = useLocation()
 
@@ -73,6 +82,7 @@ function App() {
     <PlayerProvider>
     {/* Spec #95 — outside the page Routes, so it sees the real URL. */}
     <AnalyticsBridge />
+    <ScrollRestoration />
     <Routes location={backgroundLocation ?? location}>
       {/* Login page - outside protected routes */}
       <Route path="/login" element={

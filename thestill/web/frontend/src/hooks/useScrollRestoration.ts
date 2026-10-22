@@ -2,7 +2,9 @@ import { useEffect, useRef } from 'react'
 import { useLocation, useNavigationType } from 'react-router-dom'
 import { useBackgroundLocation } from './useBackgroundLocation'
 
-// Window scroll behaviour for every route, mounted once in ``Layout``:
+// Window scroll behaviour for every route, mounted once per app: in ``App``
+// above the page ``<Routes>`` for the signed-in app, in ``PublicLayout`` for
+// the public site.
 //
 //   PUSH to a new pathname  → start at the top
 //   POP (Back/Forward)      → restore the offset recorded for that entry
@@ -14,10 +16,16 @@ import { useBackgroundLocation } from './useBackgroundLocation'
 // on Back it fires before the page has re-rendered, so it lands at the top.
 // Recording is keyed by ``location.key`` (unique per history entry) so
 // Back/Forward restore while a fresh navigation to the same page starts at
-// the top. Living in ``Layout`` rather than per page is what makes the
+// the top. Living once per app rather than per page is what makes the
 // convention hold for detail pages too (the 2026-09-07 People-row bug, PR
 // #197, was a page that had opted out without noticing) — see
 // docs/code-guidelines.md "Navigation invariants".
+//
+// It must not sit beneath a ``<Routes location={...}>``: React Router reports
+// every navigation to that subtree as POP, so a fresh page would never go to
+// the top. The signed-in page routes always get a ``location`` (the spec #52
+// background-location pattern), which is why ``App`` hosts this and not
+// ``Layout`` — from there, entity links kept the previous page's offset.
 //
 // The spec #52 reader overlay pushes an episode URL over the inbox while the
 // inbox stays mounted and the body is scroll-locked: while a background

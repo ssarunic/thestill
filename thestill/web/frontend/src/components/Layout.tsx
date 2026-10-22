@@ -10,7 +10,6 @@ import { abovePlayer } from '../constants/layers'
 import { useAuth } from '../contexts/AuthContext'
 import { MAIN_NAV_ITEMS, ADMIN_NAV_ITEMS, SETTINGS_NAV_ITEM, visibleNavItems } from '../constants/navigation'
 import { useIsNavActive } from '../hooks/useBackgroundLocation'
-import { useScrollRestoration } from '../hooks/useScrollRestoration'
 
 interface NavItemProps {
   to: string
@@ -66,9 +65,6 @@ function useScreenSize(): ScreenSize {
 }
 
 function LayoutContent() {
-  // App-wide scroll behaviour for every route (top on new page, restore on
-  // Back); pages no longer opt in individually.
-  useScrollRestoration()
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false)
   const [isCommandBarOpen, setIsCommandBarOpen] = useState(false)
