@@ -13,8 +13,8 @@ PR.
 
 Prime directive: **a finding is a claim, not an instruction.** Adopt it only
 when you have shown it is true against the current code. Reject it with a
-reason a reviewer can check. Never merge, never push to `main`, never
-force-push.
+reason a reviewer can check. Merge only under §6's conditions, never push to
+`main`, never force-push.
 
 ## 0. Tooling and access
 
@@ -60,7 +60,7 @@ The Codex reviewer is the bot `chatgpt-codex-connector[bot]`.
 4. Ignore the bot's issue comments (the "Codex Review Summary" status table,
    the "connect your account" notice) and its 👀 / 👍 reactions.
 
-If no PR has an unanswered finding, report "nothing to answer" and stop.
+If no PR has an unanswered finding, skip to §6.
 
 ## 2. Judge each finding
 
@@ -136,15 +136,42 @@ Wait for the PR's checks on your new head (`gh pr checks <n> --watch`, up to
 - Red for a reason that is also red on `main` or on the PR's previous head:
   not yours. Note it in the PR comment and leave it.
 
-Never merge the PR. Merging stays with a person or the session that owns the
-PR.
+## 6. Merge PRs that passed review clean
 
-## 6. Report
+The owner's standing rule (2026-10-23): a PR is merged into `main` once
+Codex has reviewed it, it has no P0, P1 or P2 finding, and CI is green.
+Check every open PR from §1's list (not only the ones you touched), and merge
+it with `gh pr merge <n> --merge --match-head-commit <head sha>` when **all**
+of these hold:
+
+- Authored by `ssarunic`, not a draft, no `hold` label, and no reviewer has
+  requested changes.
+- Codex has reviewed it: a review by the Codex bot, or its 👍 reaction on the
+  PR (`gh api repos/ssarunic/thestill/issues/<n>/reactions`). The bot's
+  "Codex Review Summary" status comment alone is not a review.
+- No finding on the PR, at any commit, carries a P0, P1 or P2 badge. A PR
+  that had one waits for a person even after the fix, because nothing reviews
+  the fix. Say so in the report.
+- Every P3 finding has been answered (§4).
+- CI on the head commit is fully green: no failed, cancelled or pending
+  check.
+- `gh pr view <n> --json mergeable,mergeStateStatus` shows `MERGEABLE` and
+  `CLEAN`. If it is `BEHIND`, update the branch with
+  `gh api -X PUT repos/ssarunic/thestill/pulls/<n>/update-branch` (a merge
+  commit, never a rebase or force-push), wait for CI on the new head, and
+  check again. If it conflicts, leave it open and report it.
+
+After merging, delete the remote branch only when the PR was opened from a
+branch no local worktree uses. If unsure, leave it.
+
+## 7. Report
 
 End with a summary that stands on its own:
 
 - Per PR: the findings, each with its outcome and one-line reason, plus the
   SHAs pushed and the CI result.
+- PRs merged (number, title, merge SHA), and PRs that were otherwise ready
+  but left open, with the condition from §6 they failed.
 - Anything that blocked you (a missing tool or permission, an API error, a
   push rejected twice), quoted verbatim.
 - If anything was pushed or needs a human, send a push notification naming
