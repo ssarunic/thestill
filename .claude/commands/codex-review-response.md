@@ -123,8 +123,13 @@ new commits** onto `origin/<branch>`, rerun the tests and push once more. If tha
 do not push. Reply on the findings that the fix is ready but the branch kept
 moving, and include the diff in the reply.
 
-Do not comment `@codex review` after pushing. A fresh review of your own fix
-can loop. §1 step 5 is the only time you trigger Codex.
+When this run adopted a P0, P1 or P2 finding and pushed its fix, comment
+`@codex review` once after the push, so Codex reviews the fix and the
+person who merges sees the result. Do not trigger Codex after fixing
+only P3 findings. Stop at three re-review rounds per PR (count the
+`@codex review` comments from a login other than the bot). After the third,
+leave the PR for a person and say so in the PR comment. Apart from that,
+§1 step 5 is the only time you trigger Codex.
 
 ## 4. Answer
 
