@@ -55,8 +55,10 @@ export default function Episode() {
   const readFullSummary = useSignIn('summary', episodeHref)
   // A response cached from before the cut has no ``more_sections``.
   const moreSections = summary.data?.more_sections ?? []
-  // The signed-in reader opens on the transcript with ?view=transcript.
-  const transcriptPath = `${episodeHref}?view=transcript`
+  // The signed-in reader opens on the transcript with ?view=transcript; a
+  // visitor who came from a quote lands on its line (?t=, see
+  // episodeTimestampPath).
+  const transcriptPath = `${episodeHref}?view=transcript${linkedSeconds != null ? `&t=${linkedSeconds}` : ''}`
   const readTranscript = useSignIn('transcript', transcriptPath)
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]

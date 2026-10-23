@@ -2,15 +2,32 @@
 // ui.tsx so React fast refresh stays component-only).
 import { useLocation } from 'react-router-dom'
 import { episodePath, type PublicEntityType, type PublicQuote } from '../../api/public'
+import { deepLinkParam } from '../../hooks/useDeepLinkSeek'
 import { signInPath, type SignInIntent } from '../../utils/signIn'
 
 /** Spec #102 — the sign-in page link for an action on this page. Buttons
  * keep their usual names (Follow, Transcript); signed out, they lead to
  * /login, which offers the providers and returns to ``next`` (default:
- * this page). */
+ * this page, fragment included so a quote's ``#t=`` or a person's
+ * ``#about=`` survives sign-in). */
 export function useSignIn(intent?: SignInIntent, next?: string): string {
   const location = useLocation()
-  return signInPath(next ?? location.pathname + location.search, intent)
+  return signInPath(next ?? returnPath(location.pathname, location.search, location.hash), intent)
+}
+
+const EPISODE_PATH_RE = /^\/podcasts\/[^/]+\/episodes\/[^/]+\/?$/
+
+/** Where sign-in brings a visitor back to. An episode opened from a quote
+ * (``#t=``) comes back as ``?view=transcript&t=``: the signed-in reader
+ * opens the summary unless ``view=transcript`` is set, and scrolls only the
+ * transcript to ``t``. */
+export function returnPath(pathname: string, search: string, hash: string): string {
+  const seconds = deepLinkParam('', hash, 't')
+  if (seconds == null || !EPISODE_PATH_RE.test(pathname)) return pathname + search + hash
+  const params = new URLSearchParams(search)
+  params.set('view', 'transcript')
+  params.set('t', seconds)
+  return `${pathname}?${params.toString()}`
 }
 
 const TYPE_LABEL: Record<PublicEntityType, string> = {
