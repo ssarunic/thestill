@@ -32,7 +32,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   // In multi-user mode, require authentication
   if (!isAuthenticated) {
     // Spec #94 — come back here after signing in.
-    const next = encodeURIComponent(location.pathname + location.search)
+    const next = encodeURIComponent(location.pathname + location.search + location.hash)
     return <Navigate to={`/login?next=${next}`} replace />
   }
 

@@ -7,10 +7,11 @@ import { signInPath, type SignInIntent } from '../../utils/signIn'
 /** Spec #102 — the sign-in page link for an action on this page. Buttons
  * keep their usual names (Follow, Transcript); signed out, they lead to
  * /login, which offers the providers and returns to ``next`` (default:
- * this page). */
+ * this page, fragment included so a quote's ``#t=`` or a person's
+ * ``#about=`` survives sign-in). */
 export function useSignIn(intent?: SignInIntent, next?: string): string {
   const location = useLocation()
-  return signInPath(next ?? location.pathname + location.search, intent)
+  return signInPath(next ?? location.pathname + location.search + location.hash, intent)
 }
 
 const TYPE_LABEL: Record<PublicEntityType, string> = {

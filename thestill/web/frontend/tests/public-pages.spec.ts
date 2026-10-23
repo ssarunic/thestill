@@ -115,6 +115,15 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await expect(page.getByText('Linked quote')).toBeVisible()
   await expect(page.getByText('one sign-in away')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute('href', /^\/login\?.*intent=transcript/)
+  // Sign-in comes back to the quoted line, not the top of the episode.
+  await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute(
+    'href',
+    `/login?next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}&intent=transcript`,
+  )
+  await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+    'href',
+    `/login?next=${encodeURIComponent('/podcasts/public-show/episodes/chips#t=460')}`,
+  )
   // Only the lead is served; the rest of the summary is one sign-in away.
   await expect(page.getByText('Two hosts argue about chips.')).toBeVisible()
   await expect(page.getByText('Also: Timeline · Best Quotes')).toBeVisible()

@@ -14,7 +14,7 @@ const Login = lazy(() => import('./pages/Login'))
 
 function SignInRedirect() {
   const location = useLocation()
-  return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />
+  return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`} replace />
 }
 
 export default function PublicApp() {
