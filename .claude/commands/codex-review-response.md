@@ -41,8 +41,9 @@ reason a reviewer can check. Merge only under §6's conditions, never push to
 
 The Codex reviewer is the bot `chatgpt-codex-connector[bot]`.
 
-1. Open PRs: `gh pr list --state open --json
-   number,title,headRefName,headRepositoryOwner,isDraft,author`. Skip drafts,
+1. Open PRs: `gh pr list --state open --limit 500 --json
+   number,title,headRefName,headRepositoryOwner,isDraft,author` (without
+   `--limit`, `gh` stops at 30). Skip drafts,
    Dependabot PRs (`app/dependabot`), and PRs whose head repository is not
    `ssarunic` (forks: you cannot push).
 2. For each PR, list the review comments:
@@ -54,18 +55,28 @@ The Codex reviewer is the bot `chatgpt-codex-connector[bot]`.
      `in_reply_to_id` is the finding's `id`) by a login other than the Codex
      bot. Skip answered findings.
 3. Codex can also put findings in a review body with no inline comments
-   (`gh api repos/ssarunic/thestill/pulls/<n>/reviews`, author is the bot,
+   (`gh api repos/ssarunic/thestill/pulls/<n>/reviews --paginate`, author is
+   the bot,
    `body` contains a `P0`–`P3` badge). Treat that body as one finding. It is
    answered when a PR comment contains `<!-- codex-response review=<id> -->`.
 4. Ignore the bot's issue comments (the "Codex Review Summary" status table,
-   the "connect your account" notice) and its 👀 / 👍 reactions.
+   a "### Summary" of a Codex task, the "connect your account" notice) and
+   its 👀 reactions. None of them is a review.
+5. Codex does not always start on its own. For a PR with no review by the
+   bot, no 👍 from it, and no `@codex review` comment yet, post
+   `gh pr comment <n> --body "@codex review"`, once per PR. Its findings
+   arrive within about 15 minutes, so the next run answers them.
 
 If no PR has an unanswered finding, skip to §6.
 
 ## 2. Judge each finding
 
-Check out the PR branch: `git fetch origin <branch> && git checkout -B
-<branch> origin/<branch>`. Read the finding, the lines it points at
+Work on each PR in its own temporary worktree, never in the main checkout:
+a local run shares that checkout with other sessions, and switching or
+resetting its branch would throw away their work.
+`git fetch origin <branch> && d=$(mktemp -d) && git worktree add --detach
+"$d" origin/<branch>`, then work in `$d` and remove it with
+`git worktree remove "$d"` when the PR is done. Read the finding, the lines it points at
 (`path`, `line`, `commit_id`), and enough of the code around them to judge it.
 The finding may be against an older commit; judge it against the branch head.
 
@@ -102,14 +113,14 @@ For each adopted finding, on the PR branch:
    (`fix(<area>): <what>` plus a short body). One commit per finding, or one
    for several findings that share a fix. No attribution lines.
 
-Then push: `git push origin <branch>`. If the push is rejected because the
-branch moved, fetch, rebase **only your own new commits** onto
-`origin/<branch>`, rerun the tests and push once more. If that fails too,
+Then push: `git push origin HEAD:<branch>` (the worktree is detached). If
+the push is rejected because the branch moved, fetch, rebase **only your own
+new commits** onto `origin/<branch>`, rerun the tests and push once more. If that fails too,
 do not push. Reply on the findings that the fix is ready but the branch kept
 moving, and include the diff in the reply.
 
 Do not comment `@codex review` after pushing. A fresh review of your own fix
-can loop.
+can loop. §1 step 5 is the only time you trigger Codex.
 
 ## 4. Answer
 
@@ -131,8 +142,9 @@ Wait for the PR's checks on your new head (`gh pr checks <n> --watch`, up to
 
 - Green: done.
 - Red because of your commit: fix it and push again, at most twice. If it is
-  still red, revert your commit with `git revert` (never a force-push), push,
-  and say so in the PR comment.
+  still red, revert every commit you made in this run, newest first, with
+  `git revert` (never a force-push and never someone else's commit), push,
+  and say so in a follow-up PR comment.
 - Red for a reason that is also red on `main` or on the PR's previous head:
   not yours. Note it in the PR comment and leave it.
 
@@ -147,7 +159,7 @@ of these hold:
 - Authored by `ssarunic`, not a draft, no `hold` label, and no reviewer has
   requested changes.
 - Codex has reviewed it: a review by the Codex bot, or its 👍 reaction on the
-  PR (`gh api repos/ssarunic/thestill/issues/<n>/reactions`). The bot's
+  PR (`gh api repos/ssarunic/thestill/issues/<n>/reactions --paginate`). The bot's
   "Codex Review Summary" status comment alone is not a review.
 - No finding on the PR, at any commit, carries a P0, P1 or P2 badge. A PR
   that had one waits for a person even after the fix, because nothing reviews
