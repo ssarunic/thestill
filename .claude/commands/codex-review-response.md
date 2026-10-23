@@ -63,9 +63,13 @@ The Codex reviewer is the bot `chatgpt-codex-connector[bot]`.
    a "### Summary" of a Codex task, the "connect your account" notice) and
    its 👀 reactions. None of them is a review.
 5. Codex does not always start on its own. For a PR with no review by the
-   bot, no 👍 from it, and no `@codex review` comment yet, post
-   `gh pr comment <n> --body "@codex review"`, once per PR. Its findings
-   arrive within about 15 minutes, so the next run answers them.
+   bot, no 👍 from it, and no `@codex review` comment **by a login other than
+   the bot** (its own summary comment quotes the phrase), post
+   `gh pr comment <n> --body "@codex review"`, once per PR. If the bot's only
+   answer to the last trigger was a refusal ("reached your Codex usage
+   limits", "connect your account"), post it again, at most once every 24
+   hours. Findings arrive within about 15 minutes, so the next run answers
+   them.
 
 If no PR has an unanswered finding, skip to §6.
 
