@@ -25,9 +25,11 @@ export default function FollowPrompt({ podcastSlug, podcastTitle, className = ''
   const { data: followCount } = useFollowCount()
   const [dismissed, setDismissed] = usePersistedBoolean(DISMISSED_KEY, false)
   const { mutate: follow, isPending, isError } = useFollowPodcast()
-  const [followed, setFollowed] = useState(false)
+  // The slug, not a flag: the reader stays mounted across episodes, and a
+  // confirmation must not carry over to a show that was never followed.
+  const [followedSlug, setFollowedSlug] = useState<string | null>(null)
 
-  if (followed) {
+  if (followedSlug === podcastSlug) {
     return (
       <div
         role="status"
@@ -61,7 +63,7 @@ export default function FollowPrompt({ podcastSlug, podcastTitle, className = ''
           icon={<PlusIcon />}
           isLoading={isPending}
           onClick={() =>
-            follow({ podcastSlug, source: 'episode_prompt' }, { onSuccess: () => setFollowed(true) })
+            follow({ podcastSlug, source: 'episode_prompt' }, { onSuccess: () => setFollowedSlug(podcastSlug) })
           }
         >
           Follow

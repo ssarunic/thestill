@@ -48,6 +48,20 @@ describe('FollowPrompt', () => {
     expect(screen.getByRole('link', { name: 'inbox' })).toHaveAttribute('href', '/inbox')
   })
 
+  it('confirms only the show it followed when the reader moves to another show', () => {
+    mutate.mockImplementation((_vars, opts) => opts.onSuccess())
+    const { rerender } = setup(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Follow' }))
+    ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 1 })
+    rerender(
+      <MemoryRouter>
+        <FollowPrompt podcastSlug="hard-fork" podcastTitle="Hard Fork" />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/Following Hard Fork/)).toBeNull()
+  })
+
   it('"Not now" hides it on this browser for good', () => {
     const { unmount } = setup(0)
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
