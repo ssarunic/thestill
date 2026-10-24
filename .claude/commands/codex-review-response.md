@@ -101,6 +101,10 @@ Decide exactly one outcome:
   needs production data to judge. Also use it when the finding is real but
   out of this PR's scope. Say what a person has to decide.
 
+Before adopting anything, count the PR's re-review rounds (§3). If it has
+used all three, a finding you would adopt is **Needs a human** instead, with
+the proposed diff in the reply; write no test, commit or push for it.
+
 A P3 or style finding is adopted under the same test. Being cheap to fix is no
 reason to adopt it.
 
@@ -139,9 +143,8 @@ person posts by hand do not count. The cap stops a fix → finding → fix loop,
 so once a PR has used its three rounds:
 
 - do not trigger Codex on it again;
-- do not push fixes for new findings on it either. Judge and answer them as
-  usual, but mark a finding you would adopt **Needs a human** and put the
-  proposed diff in the reply;
+- do not fix new findings on it either (§2 routes them to **Needs a
+  human**);
 - say in the PR comment that the PR has used its re-review rounds and is
   left for a person.
 
