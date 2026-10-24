@@ -123,13 +123,29 @@ new commits** onto `origin/<branch>`, rerun the tests and push once more. If tha
 do not push. Reply on the findings that the fix is ready but the branch kept
 moving, and include the diff in the reply.
 
-When this run adopted a P0, P1 or P2 finding and pushed its fix, comment
-`@codex review` once after the push, so Codex reviews the fix and the
-person who merges sees the result. Do not trigger Codex after fixing
-only P3 findings. Stop at three re-review rounds per PR (count the
-`@codex review` comments from a login other than the bot). After the third,
-leave the PR for a person and say so in the PR comment. Apart from that,
-§1 step 5 is the only time you trigger Codex.
+When this run adopted a P0, P1 or P2 finding and pushed its fix, ask Codex
+to review the fix with one PR comment after the push:
+
+```text
+@codex review
+
+<!-- codex-rereview -->
+```
+
+Do not trigger Codex after fixing only P3 findings. A PR gets at most
+**three re-review rounds**: count the PR comments that contain
+`<!-- codex-rereview -->`. The §1 step 5 trigger and any `@codex review` a
+person posts by hand do not count. The cap stops a fix → finding → fix loop,
+so once a PR has used its three rounds:
+
+- do not trigger Codex on it again;
+- do not push fixes for new findings on it either. Judge and answer them as
+  usual, but mark a finding you would adopt **Needs a human** and put the
+  proposed diff in the reply;
+- say in the PR comment that the PR has used its re-review rounds and is
+  left for a person.
+
+Apart from re-review rounds, §1 step 5 is the only time you trigger Codex.
 
 ## 4. Answer
 
@@ -159,8 +175,9 @@ Wait for the PR's checks on your new head (`gh pr checks <n> --watch`, up to
 
 ## 6. Merge PRs that passed review clean
 
-The owner's standing rule (2026-10-23): a PR is merged into `main` once
-Codex has reviewed it, it has no P0, P1 or P2 finding, and CI is green.
+The owner's standing rule (2026-10-23, amended 2026-10-24): a PR is merged
+into `main` once Codex has reviewed it, it has no P0 or P1 finding, every P2
+finding was fixed and Codex has reviewed the fix clean, and CI is green.
 Check every open PR from §1's list (not only the ones you touched), and merge
 it with `gh pr merge <n> --merge --match-head-commit <head sha>` when **all**
 of these hold:
@@ -170,9 +187,15 @@ of these hold:
 - Codex has reviewed it: a review by the Codex bot, or its 👍 reaction on the
   PR (`gh api repos/ssarunic/thestill/issues/<n>/reactions --paginate`). The bot's
   "Codex Review Summary" status comment alone is not a review.
-- No finding on the PR, at any commit, carries a P0, P1 or P2 badge. A PR
-  that had one waits for a person even after the fix, because nothing reviews
-  the fix. Say so in the report.
+- No finding on the PR, at any commit, carries a P0 or P1 badge. A PR that
+  had one waits for a person even after the fix. Say so in the report.
+- Every P2 finding is answered **Adopted** or **Already fixed**, and Codex
+  has reviewed the fix clean: its 👍 reaction on the PR is newer than the
+  latest `<!-- codex-rereview -->` comment, that comment is newer than the
+  last push of a code change (a §6 branch update that only merges `main`
+  does not count), and no finding has arrived since. A P2 answered
+  **Rejected** or **Needs a human**, or a fix Codex has not re-reviewed, waits
+  for a person. Say so in the report.
 - Every P3 finding has been answered (§4).
 - CI on the head commit is fully green: no failed, cancelled or pending
   check.
