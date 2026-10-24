@@ -96,7 +96,7 @@ export default function TopPodcasts() {
     const key = podcast.rss_url
     setAdding((prev) => ({ ...prev, [key]: 'pending' }))
     try {
-      await addPodcast({ url: podcast.rss_url })
+      await addPodcast({ url: podcast.rss_url, source: 'top_podcasts' })
       setAdding((prev) => ({ ...prev, [key]: 'done' }))
     } catch {
       setAdding((prev) => ({ ...prev, [key]: 'error' }))

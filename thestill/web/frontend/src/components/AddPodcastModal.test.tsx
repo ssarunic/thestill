@@ -171,7 +171,7 @@ describe('AddPodcastModal', () => {
     await waitFor(() => {
       expect(screen.getByText('Following')).toBeInTheDocument()
     })
-    expect(mockAddPodcast).toHaveBeenCalledWith({ url: 'https://example.com/feed' })
+    expect(mockAddPodcast).toHaveBeenCalledWith({ url: 'https://example.com/feed', source: 'add_podcast' })
     // Modal stays open after a list-Follow.
     expect(onClose).not.toHaveBeenCalled()
   })

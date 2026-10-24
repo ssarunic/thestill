@@ -29,9 +29,9 @@ import sqlite3
 import threading
 from collections import Counter
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from structlog import get_logger
@@ -42,7 +42,9 @@ from ...core.queue_manager import is_feed_scoped_stage, starting_stage_for
 from ...models.podcast import EpisodeState
 from ...models.user import User
 from ...services.abuse.errors import AbusePreventionError
+from ...services.analytics_sink import Follow, follow_source
 from ...utils.url_patterns import is_remote_fetchable_audio_url
+from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state, require_admin, require_auth
 from ..task_manager import TaskStatus, TaskType
 
@@ -94,6 +96,9 @@ class AddPodcastRequest(BaseModel):
     """Request body for the add podcast command."""
 
     url: str
+    # Spec #95 usage event only: where the follow was made (Top podcasts,
+    # Add podcast modal). Unknown values count as ``other``.
+    source: Optional[str] = None
 
 
 class AddPodcastResponse(BaseModel):
@@ -124,6 +129,7 @@ def run_add_podcast_task(
     state: AppState,
     url: str,
     user_id: str,
+    on_followed: Optional[Callable[[], None]] = None,
 ) -> None:
     """
     Execute the add podcast task in the background.
@@ -136,6 +142,8 @@ def run_add_podcast_task(
         state: Application state with services
         url: URL of the podcast to add (RSS, Apple Podcasts, or YouTube)
         user_id: ID of the user who is adding/following the podcast
+        on_followed: called once when this add created a new follow
+            (the spec #95 ``follow`` event; not for a show already followed)
     """
     task_manager = state.task_manager
 
@@ -189,7 +197,10 @@ def run_add_podcast_task(
 
         # Auto-follow the podcast for the user (already-following and any
         # other follow failure are tolerated — spec #63 helper).
+        was_following = state.follower_repository.exists(user_id, podcast.id)
         followed = state.follower_service.follow_best_effort(user_id, podcast.id)
+        if followed and not was_following and on_followed is not None:
+            on_followed()
 
         task_manager.update_progress(TaskType.ADD_PODCAST, 90, "Finalizing...")
 
@@ -409,6 +420,7 @@ def get_all_tasks_status(
 @router.post("/add", response_model=AddPodcastResponse)
 def add_podcast(
     request: AddPodcastRequest,
+    http_request: Request,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ) -> AddPodcastResponse:
@@ -454,6 +466,11 @@ def add_podcast(
     thread = threading.Thread(
         target=run_add_podcast_task,
         args=(state, request.url, user.id),
+        kwargs={
+            "on_followed": partial(
+                capture_event, state, http_request, Follow(source=follow_source(request.source)), user=user
+            )
+        },
         daemon=True,
     )
     thread.start()

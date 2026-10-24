@@ -617,8 +617,13 @@ export interface RefreshTaskStatus {
 }
 
 // Add Podcast API Types
+// Spec #95 usage event: where in the app a follow was made. The server maps
+// anything else to ``other``.
+export type FollowSource = 'episode_prompt' | 'show_page' | 'pending_follow' | 'top_podcasts' | 'add_podcast'
+
 export interface AddPodcastRequest {
   url: string
+  source?: FollowSource
 }
 
 export interface AddPodcastResponse {

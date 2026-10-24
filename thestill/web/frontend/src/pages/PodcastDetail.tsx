@@ -82,7 +82,7 @@ export default function PodcastDetail() {
     if (!loadedPodcast || pendingFollowChecked.current) return
     pendingFollowChecked.current = true
     if (!consumePendingFollow(podcastSlug!) || loadedPodcast.is_following) return
-    follow(podcastSlug!, {
+    follow({ podcastSlug: podcastSlug!, source: 'pending_follow' }, {
       onSuccess: () => showToast(`Following ${loadedPodcast.title}`, 'success'),
       onError: (error) => showToast(`Failed to follow: ${error.message}`, 'error'),
     })
@@ -205,7 +205,7 @@ export default function PodcastDetail() {
                   onClick={() => {
                     if (isMutating) return
                     setIsMutating(true)
-                    follow(podcastSlug!, {
+                    follow({ podcastSlug: podcastSlug!, source: 'show_page' }, {
                       onSuccess: () => {
                         showToast(`Followed ${podcast.title}`, 'success')
                         setIsMutating(false)
