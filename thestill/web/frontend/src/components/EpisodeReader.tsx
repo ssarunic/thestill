@@ -255,11 +255,16 @@ export default function EpisodeReader({
 
   // Reading position persistence - auto-restores when episode ID is available
   useReadingPosition(episodeData?.episode?.id, scrollContainerRef)
-  // Spec #95 — which tab was shown and how far it was read.
+  // Spec #95 — which tab was shown and how far it was read. Depth waits for
+  // content: a still-processing tab is a short placeholder, and milestones
+  // sent from it would be spent before there is anything to read.
   useReaderEvents({
     episodeId: episodeData?.episode?.id,
     tab: activeTab,
-    ready: activeTab === 'summary' ? !summaryLoading : !transcriptLoading,
+    ready:
+      activeTab === 'summary'
+        ? !summaryLoading && summaryData?.available === true
+        : !transcriptLoading && transcriptData?.available === true,
     scrollContainerRef,
   })
 

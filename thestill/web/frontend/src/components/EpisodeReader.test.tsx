@@ -55,6 +55,7 @@ class FakeIntersectionObserver {
 }
 vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
 vi.mock('./SummaryViewer', () => ({ default: () => <div>SUMMARY_VIEWER</div> }))
+vi.mock('../hooks/useReaderEvents', () => ({ useReaderEvents: vi.fn() }))
 
 import {
   useEpisode,
@@ -65,6 +66,7 @@ import {
   useEpisodeLiveRefresh,
 } from '../hooks/useApi'
 import { act } from '@testing-library/react'
+import { useReaderEvents } from '../hooks/useReaderEvents'
 
 const mockUseEpisode = useEpisode as ReturnType<typeof vi.fn>
 const mockUseSummary = useEpisodeSummary as ReturnType<typeof vi.fn>
@@ -303,6 +305,26 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     renderAtEpisodeRoute(<EpisodeReader />)
     expect(screen.queryByRole('region', { name: 'Follow Sample Pod' })).toBeNull()
     ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 1 })
+  })
+
+  it('holds reading depth back while the tab has nothing to read yet', () => {
+    const lastReady = () => (useReaderEvents as ReturnType<typeof vi.fn>).mock.lastCall?.[0].ready
+    mockUseSummary.mockReturnValue({
+      data: { status: 'ok', timestamp: '', available: false, content: null },
+      isLoading: false,
+      isFetching: false,
+    })
+    const { unmount } = renderAtEpisodeRoute(<EpisodeReader />)
+    expect(lastReady()).toBe(false)
+    unmount()
+
+    mockUseSummary.mockReturnValue({
+      data: { status: 'ok', timestamp: '', available: true, content: '# Summary' },
+      isLoading: false,
+      isFetching: false,
+    })
+    renderAtEpisodeRoute(<EpisodeReader />)
+    expect(lastReady()).toBe(true)
   })
 
   it('hides the Source row for feed episodes and People when there is nobody to show', () => {
