@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
+from ...services.analytics_sink import Follow, Unfollow, follow_source
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
@@ -32,6 +33,7 @@ from ...services.podcast_service import PodcastWithIndex
 from ...utils.duration import format_duration
 from ...utils.episode_origin import derive_episode_origin
 from ...utils.language_config import normalize_language_code
+from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state, get_current_user, is_effective_admin, require_auth
 from ..responses import api_response, conflict, etag_json_response, not_found, paginated_response
 
@@ -579,6 +581,8 @@ def get_episode_summary_by_slugs(
 @router.post("/{podcast_slug}/follow", status_code=201)
 def follow_podcast(
     podcast_slug: str,
+    request: Request,
+    source: Optional[str] = Query(None, max_length=32),
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ) -> dict:
@@ -590,6 +594,8 @@ def follow_podcast(
 
     Args:
         podcast_slug: URL-safe podcast identifier
+        source: where in the app the follow was made (spec #95 usage
+            event only; unknown values count as ``other``)
 
     Returns:
         Success response with follow details.
@@ -600,6 +606,7 @@ def follow_podcast(
     """
     try:
         follower = state.follower_service.follow_by_slug(user.id, podcast_slug)
+        capture_event(state, request, Follow(source=follow_source(source)), user=user)
         return api_response(
             {
                 "message": "Successfully followed podcast",
@@ -616,6 +623,7 @@ def follow_podcast(
 @router.delete("/{podcast_slug}/follow", status_code=204)
 def unfollow_podcast(
     podcast_slug: str,
+    request: Request,
     state: AppState = Depends(get_app_state),
     user: User = Depends(require_auth),
 ) -> Response:
@@ -637,6 +645,7 @@ def unfollow_podcast(
     """
     try:
         state.follower_service.unfollow_by_slug(user.id, podcast_slug)
+        capture_event(state, request, Unfollow(), user=user)
         return Response(status_code=204)
     except PodcastNotFoundError:
         not_found("Podcast", podcast_slug)

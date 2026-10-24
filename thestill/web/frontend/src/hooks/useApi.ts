@@ -65,7 +65,7 @@ import {
   markBriefingListened,
   markBriefingOpened,
 } from '../api/client'
-import type { AnalyticsRange, RefreshRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeDetailResponse, EpisodeTask, EpisodeTasksResponse, McpTokenScope, InboxState } from '../api/types'
+import type { AnalyticsRange, RefreshRequest, PipelineStage, EpisodeFilters, RunPipelineRequest, EpisodeReprocessRequest, DLQBranchFilter, QuickSearchOptions, CorpusSearchOptions, EntityType, NarrateBriefingRequest, KaraokeWordsByEpisode, WordTimestamp, EpisodeDetail, EpisodeDetailResponse, EpisodeTask, EpisodeTasksResponse, FollowSource, McpTokenScope, InboxState } from '../api/types'
 import { ENTITY_BRANCH_STAGES, FEED_SCOPED_STAGES } from '../constants/stages'
 
 // Dashboard hooks
@@ -107,6 +107,16 @@ export function usePodcasts() {
   return useQuery({
     queryKey: ['podcasts'],
     queryFn: () => getPodcasts(),
+  })
+}
+
+// How many shows the reader follows: one row fetched, ``total`` is the
+// count. Under ['podcasts'], so a follow or unfollow refreshes it.
+export function useFollowCount() {
+  return useQuery({
+    queryKey: ['podcasts', 'follow-count'],
+    queryFn: () => getPodcasts(1, 0),
+    select: (data) => data.total,
   })
 }
 
@@ -182,7 +192,8 @@ export function usePodcastEpisodesInfinite(podcastSlug: string, limit = 20) {
 export function useFollowPodcast() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (podcastSlug: string) => followPodcast(podcastSlug),
+    mutationFn: ({ podcastSlug, source }: { podcastSlug: string; source?: FollowSource }) =>
+      followPodcast(podcastSlug, source),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['podcasts'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })

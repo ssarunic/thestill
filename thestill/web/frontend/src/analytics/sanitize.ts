@@ -14,6 +14,8 @@ const EVENT_PROPS: Record<string, readonly string[]> = {
   $pageview: ['path_kind'],
   share: ['kind'],
   entity_open: ['entity_type'],
+  reader_tab: ['tab'],
+  read_depth: ['tab', 'percent'],
 }
 
 // SDK props kept as they are: device and browser class, ids, timing.

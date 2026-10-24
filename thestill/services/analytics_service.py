@@ -37,7 +37,7 @@ NOTES: Final[List[str]] = [
     "Admin accounts and the single-user local account are excluded.",
     "Each activation step counts only users who signed up at least that step's horizon ago.",
     "Reads and retention are lower bounds: an episode read and later saved or dismissed no longer counts as read.",
-    "Active means an episode read, a show followed or a briefing opened.",
+    "Active means an episode read, a show followed or a briefing opened. A read is an inbox read, an open or a listen, so a reader who follows nothing counts too.",
     "Briefing opens are recorded from spec #95 onwards; earlier ones count only if they were marked listened.",
 ]
 

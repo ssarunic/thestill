@@ -29,6 +29,8 @@ vi.mock('../hooks/useApi', () => ({
   useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
   useEntityBranchRefresh: vi.fn(),
   useReprocessEpisode: vi.fn(() => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null })),
+  useFollowCount: vi.fn(() => ({ data: 1 })),
+  useFollowPodcast: vi.fn(() => ({ mutate: vi.fn(), isPending: false, isError: false })),
 }))
 
 let mockIsAdmin = false
@@ -56,6 +58,7 @@ vi.mock('./SummaryViewer', () => ({ default: () => <div>SUMMARY_VIEWER</div> }))
 
 import {
   useEpisode,
+  useFollowCount,
   useEpisodeSummary,
   useEpisodeTranscript,
   useMarkInboxReadOnView,
@@ -286,6 +289,20 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     expect(info).toHaveTextContent('English')
     expect(info).toHaveTextContent('Imported (YouTube)')
     expect(screen.getByRole('link', { name: /example\.com/ })).toHaveAttribute('href', 'https://www.example.com/notes')
+  })
+
+  it('offers the show to a reader who follows nothing yet, never for an imported file', () => {
+    ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 0 })
+    const { unmount } = renderAtEpisodeRoute(<EpisodeReader />)
+    expect(screen.getByRole('region', { name: 'Follow Sample Pod' })).toBeInTheDocument()
+    unmount()
+
+    const imported = episodeResponse()
+    imported.episode.origin = 'import'
+    mockUseEpisode.mockReturnValue({ data: imported, isLoading: false })
+    renderAtEpisodeRoute(<EpisodeReader />)
+    expect(screen.queryByRole('region', { name: 'Follow Sample Pod' })).toBeNull()
+    ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 1 })
   })
 
   it('hides the Source row for feed episodes and People when there is nobody to show', () => {

@@ -24,12 +24,16 @@ else.
 | `$set` | signed-in app, once per load | person property `is_admin` only (for the internal-users filter) |
 | `share` | signed-in app (episode share button, transcript timestamp link) | `kind`: `episode` or `moment` |
 | `entity_open` | signed-in app, entity page | `entity_type` |
+| `reader_tab` | signed-in app, episode reader: once per tab shown per episode, the landing tab included | `tab`: `summary` or `transcript` |
+| `read_depth` | signed-in app, episode reader: once per tab and milestone per episode, on scroll, once the tab's content has loaded | `tab`, `percent`: 25, 50, 75 or 100 (the bottom of the viewport within 2% of the end) |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
 | `login_cancelled` | server, OAuth callback, when Google returns no code | `reason`: `access_denied` (Cancel on Google's screen), `admin_policy_enforced`, `server_error`, `temporarily_unavailable`, `other`, `missing_code` |
 | `login_failed` | server, OAuth callback, when Google signed the reader in but thestill did not | `reason`: `account_disabled`, `signups_closed`, `error` |
 | `search` | server, `/api/search/corpus` (not in-episode expansion) | `result_count`, `mode` |
+| `follow` | server, when a follow is made (`POST /api/podcasts/{slug}/follow`, or an add from Top podcasts / Add podcast that created a new follow); never which show | `source`: `episode_prompt` (the reader's first-follow prompt), `show_page`, `pending_follow` (Follow pressed signed out, finished after sign-in), `top_podcasts`, `add_podcast`, `other` |
+| `unfollow` | server, `DELETE /api/podcasts/{slug}/follow` | none |
 | `mcp_tool_call` | server, remote MCP | `tool`, `ok` |
 
 Never sent: email, name, search text, page text, full URLs or query

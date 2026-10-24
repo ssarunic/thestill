@@ -7,12 +7,14 @@ from pydantic import ValidationError
 
 from thestill.models.user import User
 from thestill.services.analytics_sink import (
+    Follow,
     LoginStarted,
     McpToolCall,
     NullSink,
     PostHogSink,
     PublicPageView,
     Search,
+    follow_source,
     make_analytics_sink,
 )
 
@@ -90,6 +92,15 @@ def test_events_reject_unknown_props_and_bad_values():
         McpToolCall(tool="Robert'); DROP TABLE", ok=True)
     with pytest.raises(ValidationError):
         Search(result_count=-1, mode="hybrid")
+    with pytest.raises(ValidationError):
+        Follow(source="newsletter")
+
+
+def test_follow_source_maps_anything_unknown_to_other():
+    assert follow_source("top_podcasts") == "top_podcasts"
+    assert follow_source("episode_prompt") == "episode_prompt"
+    assert follow_source(None) == "other"
+    assert follow_source("TOP_PODCASTS") == "other"
 
 
 def test_null_sink_is_inert():

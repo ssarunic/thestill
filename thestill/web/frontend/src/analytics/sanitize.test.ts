@@ -16,6 +16,13 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
     expect(sanitizeEvent(null)).toBeNull()
   })
 
+  it('passes the reader events with only their allowlisted props', () => {
+    const tab = sanitizeEvent(event('reader_tab', { tab: 'transcript', episode: 'secret' }))!
+    expect(tab.properties).toEqual({ tab: 'transcript', app: 'thestill' })
+    const depth = sanitizeEvent(event('read_depth', { tab: 'summary', percent: 75, title: 'secret' }))!
+    expect(depth.properties).toEqual({ tab: 'summary', percent: 75, app: 'thestill' })
+  })
+
   it('reduces every URL to a route pattern or a host', () => {
     const out = sanitizeEvent(
       event('$pageview', {

@@ -48,7 +48,7 @@ If you are named on thestill, you can ask us to hide your person page, correct a
 
 We use PostHog, hosted in the EU, to see how thestill is used. It receives:
 
-- for signed-in users: your internal account number (not your name or email), whether you are an administrator, the kind of page you open, and events such as "searched", "shared an episode" or "an AI assistant used a tool", with counts but never the text you searched for, page text or full web addresses;
+- for signed-in users: your internal account number (not your name or email), whether you are an administrator, the kind of page you open, and events such as "searched", "shared an episode", "followed a show" (and where in the app, never which show), "opened an episode's transcript", "read three quarters of it" or "an AI assistant used a tool", with counts but never the text you searched for, page text or full web addresses;
 - for signed-out visitors: the page views described above, and whether a sign-in finished, was cancelled or failed, without any account number;
 - the browser, operating system and device type, worked out from your browser's user agent.
 

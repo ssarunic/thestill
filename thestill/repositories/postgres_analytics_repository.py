@@ -21,7 +21,8 @@ notes:
 - ``user_episode_inbox.state_changed_at`` keeps only the latest change, so
   an episode read and later saved or dismissed no longer counts as read.
 - "Active" means a read, a follow or a briefing opened; other use leaves
-  no state to count.
+  no state to count. A read is an inbox read, a first open or a playback
+  (``_EPISODE_READS``), so a reader who follows nothing still counts.
 """
 
 from __future__ import annotations
@@ -68,12 +69,30 @@ real_users AS (
      WHERE NOT is_admin AND email <> ALL(%(excluded)s::text[])
 )"""
 
-# Activity that counts towards retention and active users.
-_EVENTS = """
-events AS (
-    SELECT i.user_id, i.state_changed_at AS at
+# Every way a reader reads an episode: an inbox read, a first open
+# (``user_episode_views``) or playback (``listened_at``). Opens and playback
+# are stored only for readers who allow usage analytics (spec #103 D5), so
+# the inbox read keeps everyone else counted. An episode can appear up to
+# three times; callers dedupe by (user, episode).
+_EPISODE_READS = """
+episode_reads AS (
+    SELECT i.user_id, i.episode_id, i.state_changed_at AS at
       FROM user_episode_inbox i JOIN real_users ru ON ru.id = i.user_id
      WHERE i.state = 'read' AND i.state_changed_at IS NOT NULL
+    UNION ALL
+    SELECT v.user_id, v.episode_id, v.first_viewed_at
+      FROM user_episode_views v JOIN real_users ru ON ru.id = v.user_id
+    UNION ALL
+    SELECT p.user_id, p.episode_id, p.listened_at
+      FROM user_episode_progress p JOIN real_users ru ON ru.id = p.user_id
+     WHERE p.listened_at IS NOT NULL
+)"""
+
+# Activity that counts towards retention and active users.
+_EVENTS = f"""
+{_EPISODE_READS.strip()},
+events AS (
+    SELECT user_id, at FROM episode_reads
     UNION ALL
     SELECT f.user_id, f.created_at FROM podcast_followers f JOIN real_users ru ON ru.id = f.user_id
     UNION ALL
@@ -97,16 +116,19 @@ SELECT (created_at AT TIME ZONE 'UTC')::date AS day, source, count(*) AS n
 # signup; GREATEST clamps it to "at signup" rather than a negative delay.
 _ACTIVATION_SQL = f"""
 WITH {_REAL_USERS},
+{_EPISODE_READS.strip()},
 cohort AS (
     SELECT ru.id, ru.created_at, ru.source,
            (SELECT min(f.created_at) FROM podcast_followers f WHERE f.user_id = ru.id) AS first_follow_at,
            fb.created_at AS first_briefing_at,
            fb.opened_at AS first_opened_at,
-           (SELECT i.state_changed_at FROM user_episode_inbox i
-             WHERE i.user_id = ru.id AND i.state = 'read'
-               AND i.state_changed_at >= ru.created_at
-               AND i.state_changed_at < ru.created_at + interval '7 days'
-             ORDER BY i.state_changed_at OFFSET 2 LIMIT 1) AS third_read_at
+           (SELECT r.at FROM (
+                    SELECT min(r.at) AS at FROM episode_reads r
+                     WHERE r.user_id = ru.id
+                       AND r.at >= ru.created_at
+                       AND r.at < ru.created_at + interval '7 days'
+                     GROUP BY r.episode_id
+             ) r ORDER BY r.at OFFSET 2 LIMIT 1) AS third_read_at
       FROM real_users ru
       LEFT JOIN LATERAL (
             SELECT b.created_at, b.opened_at FROM user_briefings b
@@ -171,8 +193,8 @@ WITH {_REAL_USERS},
 SELECT
     (SELECT count(DISTINCT user_id) FROM events
       WHERE at >= %(start)s AND at < %(end)s) AS active_users,
-    (SELECT count(*) FROM user_episode_inbox i JOIN real_users ru ON ru.id = i.user_id
-      WHERE i.state = 'read' AND i.state_changed_at >= %(start)s AND i.state_changed_at < %(end)s) AS reads,
+    (SELECT count(DISTINCT (user_id, episode_id)) FROM episode_reads
+      WHERE at >= %(start)s AND at < %(end)s) AS reads,
     (SELECT count(*) FROM user_briefings b JOIN real_users ru ON ru.id = b.user_id
       WHERE b.created_at >= %(start)s AND b.created_at < %(end)s) AS briefings_generated,
     (SELECT count(*) FROM user_briefings b JOIN real_users ru ON ru.id = b.user_id

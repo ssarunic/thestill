@@ -189,7 +189,7 @@ describe('PodcastDetail pending follow (spec #102)', () => {
     window.sessionStorage.setItem('thestill.pendingFollow', JSON.stringify({ slug: 'prof-g-markets', at: Date.now() }))
     renderPage()
     expect(mutate).toHaveBeenCalledTimes(1)
-    expect(mutate.mock.calls[0][0]).toBe('prof-g-markets')
+    expect(mutate.mock.calls[0][0]).toEqual({ podcastSlug: 'prof-g-markets', source: 'pending_follow' })
     expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
   })
 
