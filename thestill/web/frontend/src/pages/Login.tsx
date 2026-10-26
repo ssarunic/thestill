@@ -2,12 +2,26 @@
 // here with ``next`` (where to come back to) and an optional ``intent`` (why);
 // this page offers the providers and carries the consent line once. Styled
 // like the public site, and also where the signed-in app sends logged-out users.
+//
+// ``next`` and ``intent`` arrive in the URL fragment (a public page's
+// button: ``/login#next=…&intent=…``) or in the query (the signed-in app's
+// redirect to ``/login?next=``). Public links use the fragment on purpose:
+// it survives a new tab like any href, and one ``/login`` URL for every
+// page keeps crawlers from listing thousands of robots-blocked
+// ``/login?next=…`` addresses.
 import { useEffect, type ReactNode } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { GoogleG } from '../components/public/ui'
 import { useAuth } from '../contexts/AuthContext'
 import { safeNextPath } from '../utils/safeNext'
-import { notNowPath, parseIntent, rememberPendingFollow, showSlugFromNext, type SignInIntent } from '../utils/signIn'
+import {
+  notNowPath,
+  parseIntent,
+  parseSignInFragment,
+  rememberPendingFollow,
+  showSlugFromNext,
+  type SignInIntent,
+} from '../utils/signIn'
 import '../styles/public.css'
 
 const WHY: Record<SignInIntent | 'default', string> = {
@@ -52,9 +66,10 @@ export default function Login() {
     useAuth()
   const navigate = useNavigate()
   const [params] = useSearchParams()
+  const linked = parseSignInFragment(useLocation().hash)
   // Spec #94 — where to return after sign-in (validated client- and server-side).
-  const next = safeNextPath(params.get('next'))
-  const intent = parseIntent(params.get('intent'))
+  const next = linked.next ?? safeNextPath(params.get('next'))
+  const intent = linked.intent ?? parseIntent(params.get('intent'))
   const notice = parseNotice(params.get('error'), accountDisabled)
 
   // Already signed in, or single-user mode: nothing to do here.

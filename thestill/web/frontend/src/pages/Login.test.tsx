@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Login from './Login'
@@ -46,6 +46,23 @@ describe('Login (spec #102)', () => {
     expect(screen.getByText(/we'll follow the show for you/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
     expect(JSON.parse(window.sessionStorage.getItem('thestill.pendingFollow') ?? '{}').slug).toBe('prof-g')
+  })
+
+  it('takes next and intent from the fragment, the way public pages link here', () => {
+    renderAt('/login#next=%2Fpodcasts%2Fprof-g&intent=follow')
+    expect(screen.getByText(/we'll follow the show for you/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
+    expect(auth.login).toHaveBeenCalledWith('/podcasts/prof-g')
+    expect(JSON.parse(window.sessionStorage.getItem('thestill.pendingFollow') ?? '{}').slug).toBe('prof-g')
+  })
+
+  it('lets the fragment win over the query and ignores an unsafe fragment next', () => {
+    renderAt('/login?next=%2Finbox#next=%2Fpodcasts%2Fprof-g')
+    expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
+    cleanup()
+    renderAt('/login?next=%2Fpodcasts%2Fprof-g#next=%2F%2Fevil.example')
+    expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
   })
 
   it('never remembers a Follow without a show to return to', () => {

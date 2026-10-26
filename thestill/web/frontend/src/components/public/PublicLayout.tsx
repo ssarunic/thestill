@@ -19,7 +19,9 @@ function SiteHeader() {
             Top podcasts
           </NavLink>
         </nav>
-        <Button to={signIn}>Sign in</Button>
+        <Button to={signIn} rel="nofollow">
+          Sign in
+        </Button>
       </div>
     </header>
   )

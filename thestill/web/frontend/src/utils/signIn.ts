@@ -10,13 +10,33 @@ const INTENTS: readonly SignInIntent[] = ['follow', 'transcript', 'summary']
 const PENDING_FOLLOW_KEY = 'thestill.pendingFollow'
 const PENDING_FOLLOW_MAX_AGE_MS = 15 * 60_000
 
+/** The sign-in link for an action on a public page: the bare ``/login``
+ * with ``next`` (where to come back to) and ``intent`` (why) in the URL
+ * fragment. A fragment survives a Ctrl-click or "Open in new tab" like
+ * any href, but is never sent to the server and does not make a distinct
+ * URL for a crawler, so every page shares one robots-blocked ``/login``
+ * instead of one ``/login?next=…`` each (Search Console listed 5,851 of
+ * those on 2026-10-26). The signed-in app's own redirect for a protected
+ * route still uses the query form, which ``/login`` also reads. */
 export function signInPath(next: string, intent?: SignInIntent): string {
   const params = new URLSearchParams()
   const safe = safeNextPath(next)
   if (safe) params.set('next', safe)
   if (intent) params.set('intent', intent)
-  const qs = params.toString()
-  return qs ? `/login?${qs}` : '/login'
+  const fragment = params.toString()
+  return fragment ? `/login#${fragment}` : '/login'
+}
+
+export interface SignInRequest {
+  next: string | null
+  intent: SignInIntent | null
+}
+
+/** ``next`` and ``intent`` from a sign-in link's fragment (``#next=…&intent=…``),
+ * each validated; a missing or malformed fragment yields nulls. */
+export function parseSignInFragment(hash: string): SignInRequest {
+  const params = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash)
+  return { next: safeNextPath(params.get('next')), intent: parseIntent(params.get('intent')) }
 }
 
 export function parseIntent(value: string | null): SignInIntent | null {

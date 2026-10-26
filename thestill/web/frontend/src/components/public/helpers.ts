@@ -9,7 +9,8 @@ import { signInPath, type SignInIntent } from '../../utils/signIn'
  * keep their usual names (Follow, Transcript); signed out, they lead to
  * /login, which offers the providers and returns to ``next`` (default:
  * this page, fragment included so a quote's ``#t=`` or a person's
- * ``#about=`` survives sign-in). */
+ * ``#about=`` survives sign-in). ``next`` and ``intent`` ride in the
+ * fragment, so every page links to the one ``/login`` URL. */
 export function useSignIn(intent?: SignInIntent, next?: string): string {
   const location = useLocation()
   return signInPath(next ?? returnPath(location.pathname, location.search, location.hash), intent)

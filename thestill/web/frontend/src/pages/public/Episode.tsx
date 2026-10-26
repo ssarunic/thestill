@@ -156,7 +156,7 @@ export default function Episode() {
               </button>
               {/* Spec #102 — the tab works as it does signed in; signed out it
                   asks for sign-in and comes back to the transcript. */}
-              <Link role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} to={readTranscript}>
+              <Link role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} to={readTranscript} rel="nofollow">
                 Transcript
               </Link>
             </div>
@@ -185,7 +185,7 @@ export default function Episode() {
               )}
               {moreSections.length > 0 && (
                 <div className="ts-summary-more">
-                  <Button variant="secondary" to={readFullSummary}>
+                  <Button variant="secondary" to={readFullSummary} rel="nofollow">
                     Read the full summary
                   </Button>
                   <span className="ts-meta">Also: {moreSections.join(' · ')}</span>

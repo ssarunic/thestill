@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { consumePendingFollow, notNowPath, parseIntent, rememberPendingFollow, showSlugFromNext, signInPath } from './signIn'
+import { consumePendingFollow, notNowPath, parseIntent, parseSignInFragment, rememberPendingFollow, showSlugFromNext, signInPath } from './signIn'
 
 describe('sign-in links (spec #102)', () => {
-  it('builds /login with a validated next and an intent', () => {
-    expect(signInPath('/podcasts/prof-g', 'follow')).toBe('/login?next=%2Fpodcasts%2Fprof-g&intent=follow')
-    expect(signInPath('/entities/person/x?about=company:y')).toBe('/login?next=%2Fentities%2Fperson%2Fx%3Fabout%3Dcompany%3Ay')
+  it('builds the one /login URL with a validated next and an intent in the fragment', () => {
+    expect(signInPath('/podcasts/prof-g', 'follow')).toBe('/login#next=%2Fpodcasts%2Fprof-g&intent=follow')
+    expect(signInPath('/entities/person/x?about=company:y')).toBe('/login#next=%2Fentities%2Fperson%2Fx%3Fabout%3Dcompany%3Ay')
     expect(signInPath('//evil.example')).toBe('/login')
+  })
+
+  it('reads only a valid next and intent back out of the fragment', () => {
+    expect(parseSignInFragment('#next=%2Fpodcasts%2Fprof-g&intent=follow')).toEqual({ next: '/podcasts/prof-g', intent: 'follow' })
+    expect(parseSignInFragment('next=%2Fpodcasts%2Fprof-g')).toEqual({ next: '/podcasts/prof-g', intent: null })
+    expect(parseSignInFragment('#next=%2F%2Fevil.example&intent=delete-account')).toEqual({ next: null, intent: null })
+    expect(parseSignInFragment('')).toEqual({ next: null, intent: null })
   })
 
   it('accepts only known intents', () => {

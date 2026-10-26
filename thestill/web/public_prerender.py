@@ -281,11 +281,15 @@ def clip_words(value: Optional[str], words: int = _DESCRIPTION_WORDS) -> str:
 
 
 def sign_in_path(next_path: str, intent: Optional[str] = None) -> str:
-    """``/login?next=…`` as ``signInPath`` in ``utils/signIn.ts`` builds it."""
+    """``/login#next=…&intent=…`` as ``signInPath`` in ``utils/signIn.ts``
+    builds it. The fragment survives a new tab like any href but is never
+    sent to the server and makes no distinct URL for a crawler, so every
+    page shares one robots-blocked ``/login`` instead of one
+    ``/login?next=…`` each (5,851 of them in Search Console, 2026-10-26)."""
     params = {"next": next_path}
     if intent:
         params["intent"] = intent
-    return f"/login?{urlencode(params)}"
+    return f"/login#{urlencode(params)}"
 
 
 def entity_path(ref: Dict[str, Any]) -> str:
@@ -376,7 +380,13 @@ def _chrome(page_path: str, main: str) -> str:
                 class_="ts-header-nav",
                 aria_label="Main",
             ),
-            el("a", el("span", text("Sign in")), href=sign_in_path(page_path), class_="ts-btn ts-btn-primary"),
+            el(
+                "a",
+                el("span", text("Sign in")),
+                href=sign_in_path(page_path),
+                rel="nofollow",
+                class_="ts-btn ts-btn-primary",
+            ),
             class_="ts-header-inner",
         ),
         class_="ts-header",
@@ -594,7 +604,7 @@ def episode_fallback(state: "AppState", podcast_slug: str, episode_slug: str, he
         if summary["more_sections"]:
             more = el(
                 "p",
-                el("a", text("Read the full summary"), href=sign_in_path(page_path, "summary")),
+                el("a", text("Read the full summary"), href=sign_in_path(page_path, "summary"), rel="nofollow"),
                 " ",
                 text("Also:"),
                 " ",

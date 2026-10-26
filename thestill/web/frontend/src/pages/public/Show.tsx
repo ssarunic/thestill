@@ -67,7 +67,9 @@ export default function Show() {
                 )}
               </div>
               <div style={{ marginTop: 8 }}>
-                <Button to={signInToFollow}>Follow</Button>
+                <Button to={signInToFollow} rel="nofollow">
+                  Follow
+                </Button>
               </div>
               {show.copyright && <span className="ts-meta" style={{ fontSize: 11 }}>{show.copyright}</span>}
             </>
