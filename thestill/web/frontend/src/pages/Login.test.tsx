@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Login from './Login'
@@ -14,9 +14,9 @@ const auth = {
 }
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => auth }))
 
-function renderAt(url: string, state?: unknown) {
+function renderAt(url: string) {
   return render(
-    <MemoryRouter initialEntries={[state === undefined ? url : { pathname: url, state }]}>
+    <MemoryRouter initialEntries={[url]}>
       <Login />
     </MemoryRouter>,
   )
@@ -48,8 +48,8 @@ describe('Login (spec #102)', () => {
     expect(JSON.parse(window.sessionStorage.getItem('thestill.pendingFollow') ?? '{}').slug).toBe('prof-g')
   })
 
-  it('takes next and intent from router state, the way public pages link here', () => {
-    renderAt('/login', { next: '/podcasts/prof-g', intent: 'follow' })
+  it('takes next and intent from the fragment, the way public pages link here', () => {
+    renderAt('/login#next=%2Fpodcasts%2Fprof-g&intent=follow')
     expect(screen.getByText(/we'll follow the show for you/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
@@ -57,28 +57,12 @@ describe('Login (spec #102)', () => {
     expect(JSON.parse(window.sessionStorage.getItem('thestill.pendingFollow') ?? '{}').slug).toBe('prof-g')
   })
 
-  it('falls back to the same-site referrer when a plain /login link was clicked before hydration', () => {
-    const referrer = vi.spyOn(document, 'referrer', 'get').mockReturnValue(`${window.location.origin}/entities/person/x`)
-    try {
-      renderAt('/login')
-      expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/entities/person/x')
-      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
-      expect(auth.login).toHaveBeenCalledWith('/entities/person/x')
-    } finally {
-      referrer.mockRestore()
-    }
-  })
-
-  it('ignores a referrer from another site', () => {
-    const referrer = vi.spyOn(document, 'referrer', 'get').mockReturnValue('https://www.google.com/')
-    try {
-      renderAt('/login')
-      expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/')
-      fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
-      expect(auth.login).toHaveBeenCalledWith(undefined)
-    } finally {
-      referrer.mockRestore()
-    }
+  it('lets the fragment win over the query and ignores an unsafe fragment next', () => {
+    renderAt('/login?next=%2Finbox#next=%2Fpodcasts%2Fprof-g')
+    expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
+    cleanup()
+    renderAt('/login?next=%2Fpodcasts%2Fprof-g#next=%2F%2Fevil.example')
+    expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
   })
 
   it('never remembers a Follow without a show to return to', () => {

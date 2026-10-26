@@ -3,12 +3,12 @@
 // this page offers the providers and carries the consent line once. Styled
 // like the public site, and also where the signed-in app sends logged-out users.
 //
-// ``next`` and ``intent`` arrive in router state (a public page's button),
-// or in the query (the signed-in app's redirect to ``/login?next=``), or,
-// for a server-written ``/login`` anchor clicked before the app took over,
-// from the same-site referrer. Public links carry no query on purpose:
-// one ``/login`` URL for every page keeps crawlers from listing thousands
-// of robots-blocked ``/login?next=…`` addresses.
+// ``next`` and ``intent`` arrive in the URL fragment (a public page's
+// button: ``/login#next=…&intent=…``) or in the query (the signed-in app's
+// redirect to ``/login?next=``). Public links use the fragment on purpose:
+// it survives a new tab like any href, and one ``/login`` URL for every
+// page keeps crawlers from listing thousands of robots-blocked
+// ``/login?next=…`` addresses.
 import { useEffect, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { GoogleG } from '../components/public/ui'
@@ -17,8 +17,7 @@ import { safeNextPath } from '../utils/safeNext'
 import {
   notNowPath,
   parseIntent,
-  parseSignInState,
-  referrerPath,
+  parseSignInFragment,
   rememberPendingFollow,
   showSlugFromNext,
   type SignInIntent,
@@ -67,12 +66,9 @@ export default function Login() {
     useAuth()
   const navigate = useNavigate()
   const [params] = useSearchParams()
-  const linked = parseSignInState(useLocation().state)
+  const linked = parseSignInFragment(useLocation().hash)
   // Spec #94 — where to return after sign-in (validated client- and server-side).
-  const next =
-    linked.next ??
-    safeNextPath(params.get('next')) ??
-    referrerPath(typeof document === 'undefined' ? '' : document.referrer, window.location.origin)
+  const next = linked.next ?? safeNextPath(params.get('next'))
   const intent = linked.intent ?? parseIntent(params.get('intent'))
   const notice = parseNotice(params.get('error'), accountDisabled)
 

@@ -35,7 +35,6 @@ export function Button({
   google = false,
   onClick,
   to,
-  state,
   rel,
   children,
   type = 'button',
@@ -45,8 +44,6 @@ export function Button({
   onClick?: () => void
   /** Navigation (e.g. to /login): rendered as a link styled as a button. */
   to?: string
-  /** Router state the link carries (a sign-in link's ``next`` and ``intent``). */
-  state?: unknown
   rel?: string
   children: ReactNode
   type?: 'button' | 'submit'
@@ -60,7 +57,7 @@ export function Button({
   )
   if (to) {
     return (
-      <Link to={to} state={state} rel={rel} className={className}>
+      <Link to={to} rel={rel} className={className}>
         {content}
       </Link>
     )
@@ -255,7 +252,7 @@ export function SignInCard({
       <h3 className="ts-signin-title">{title}</h3>
       {children && <p className="ts-signin-body">{children}</p>}
       <div className="ts-signin-action">
-        <Button to={signIn.to} state={signIn.state} rel="nofollow">
+        <Button to={signIn} rel="nofollow">
           {buttonLabel}
         </Button>
       </div>

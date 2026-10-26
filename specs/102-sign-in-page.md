@@ -13,7 +13,7 @@
 
 The public site starts Google sign-in from six places. Five of them (header, footer, landing hero, the sign-in cards and the show page's Follow button) send the visitor straight to Google. They are labelled differently: "Sign in", "Continue with Google", "Follow with Google", "Sign in to follow". The sixth (a signed-in path such as `/inbox`) goes to `/login`, a page styled like the signed-in app rather than the public site.
 
-This spec makes `/login` the one place sign-in happens. Every button on the public site links to `/login`, carrying `next` (this page) and optionally an `intent` in router state rather than the URL (since 2026-10-26: one `/login` URL for the whole site, so Search Console stops listing one robots-blocked `/login?next=…` per public page; it had 5,851). The page lists the sign-in providers (Google today; Microsoft, Apple and email later), carries the Terms/Privacy consent line once, and says why the visitor is signing in. A Follow click survives sign-in: the show is followed when the visitor lands back on its page.
+This spec makes `/login` the one place sign-in happens. Every button on the public site links to `/login#next=<this page>`, optionally with an `intent`, in the URL fragment rather than the query (since 2026-10-26: a fragment survives a new tab like any href but makes no distinct URL for a crawler, so Search Console stops listing one robots-blocked `/login?next=…` per public page; it had 5,851). The page lists the sign-in providers (Google today; Microsoft, Apple and email later), carries the Terms/Privacy consent line once, and says why the visitor is signing in. A Follow click survives sign-in: the show is followed when the visitor lands back on its page.
 
 ## Goals
 
@@ -59,10 +59,10 @@ Rule (decided 2026-10-16): an action keeps its usual label and icon; signed out,
 
 | Where | Label | Link |
 |-------|-------|------|
-| Header (the only plain "Sign in"; the footer and the landing hero have none) | Sign in | `/login`, state `{next: <page>}` |
-| Episode Transcript tab (no lock icon) and the "Read the transcript" cards | Transcript / Read the transcript | `/login`, state `{next: <episode>?view=transcript, intent: transcript}` (the signed-in reader opens on the transcript) |
-| Show page Follow (hero + card) | Follow | `/login`, state `{next: /podcasts/<slug>, intent: follow}` |
-| Person and entity page card | See every mention | `/login`, state `{next: <page>}` (signed in, the entity page lists every mention) |
+| Header (the only plain "Sign in"; the footer and the landing hero have none) | Sign in | `/login#next=<page>` |
+| Episode Transcript tab (no lock icon) and the "Read the transcript" cards | Transcript / Read the transcript | `/login#next=<episode>?view=transcript&intent=transcript` (the signed-in reader opens on the transcript) |
+| Show page Follow (hero + card) | Follow | `/login#next=/podcasts/<slug>&intent=follow` |
+| Person and entity page card | See every mention | `/login#next=<page>` (signed in, the entity page lists every mention) |
 
 ### Follow survives sign-in
 
@@ -75,8 +75,8 @@ The pending follow lives in `sessionStorage`, set by a click on our own page, so
 ## Testing
 
 - Vitest: `/login` copy per intent, consent links, the provider button calls `login(next)`, the pending follow is stored only for `intent=follow` with a show `next`; `consumePendingFollow` matches slug and age and clears the key.
-- Playwright (`public-pages.spec.ts`): the header Sign in opens `/login` and the page offers Continue with Google; Follow opens `/login` with the follow line and Not now returning to the show.
-- Every public sign-in anchor is `href="/login" rel="nofollow"` (server-written and hydrated alike). `/login` reads `next`/`intent` from router state, then the query (the signed-in app's `ProtectedRoute` redirect still uses `/login?next=`), then the same-site referrer (a server-written anchor clicked before hydration).
+- Playwright (`public-pages.spec.ts`): the header Sign in opens `/login#next=…` and the page offers Continue with Google; the Transcript tab opens `/login#next=…?view=transcript&intent=transcript` with the transcript line.
+- Every public sign-in anchor is `href="/login#next=…" rel="nofollow"` (server-written and hydrated alike). `/login` reads `next`/`intent` from the fragment first, then the query (the signed-in app's `ProtectedRoute` redirect still uses `/login?next=`).
 
 ## Rollback
 

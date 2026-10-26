@@ -67,7 +67,7 @@ export default function Show() {
                 )}
               </div>
               <div style={{ marginTop: 8 }}>
-                <Button to={signInToFollow.to} state={signInToFollow.state} rel="nofollow">
+                <Button to={signInToFollow} rel="nofollow">
                   Follow
                 </Button>
               </div>

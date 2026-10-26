@@ -19,7 +19,7 @@ function SiteHeader() {
             Top podcasts
           </NavLink>
         </nav>
-        <Button to={signIn.to} state={signIn.state} rel="nofollow">
+        <Button to={signIn} rel="nofollow">
           Sign in
         </Button>
       </div>

@@ -280,19 +280,16 @@ def clip_words(value: Optional[str], words: int = _DESCRIPTION_WORDS) -> str:
     return " ".join(parts) if len(parts) <= words else " ".join(parts[:words]) + "…"
 
 
-SIGN_IN_PATH = "/login"
-
-
 def sign_in_path(next_path: str, intent: Optional[str] = None) -> str:
-    """The sign-in link: the bare ``/login`` for every page, as
-    ``signInLink`` in ``utils/signIn.ts`` builds it. ``next_path`` and
-    ``intent`` are not put in the URL: one address for every page keeps a
-    crawler from listing one robots-blocked ``/login?next=…`` per public
-    page (5,851 of them in Search Console on 2026-10-26). The app reads the
-    return path from router state once it has taken over, and ``/login``
-    falls back to the same-site referrer for a click before that."""
-    del next_path, intent
-    return SIGN_IN_PATH
+    """``/login#next=…&intent=…`` as ``signInPath`` in ``utils/signIn.ts``
+    builds it. The fragment survives a new tab like any href but is never
+    sent to the server and makes no distinct URL for a crawler, so every
+    page shares one robots-blocked ``/login`` instead of one
+    ``/login?next=…`` each (5,851 of them in Search Console, 2026-10-26)."""
+    params = {"next": next_path}
+    if intent:
+        params["intent"] = intent
+    return f"/login#{urlencode(params)}"
 
 
 def entity_path(ref: Dict[str, Any]) -> str:

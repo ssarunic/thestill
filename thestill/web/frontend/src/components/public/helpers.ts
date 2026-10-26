@@ -3,17 +3,17 @@
 import { useLocation } from 'react-router-dom'
 import { episodePath, type PublicEntityType, type PublicQuote } from '../../api/public'
 import { deepLinkParam } from '../../hooks/useDeepLinkSeek'
-import { signInLink, type SignInIntent, type SignInLink } from '../../utils/signIn'
+import { signInPath, type SignInIntent } from '../../utils/signIn'
 
 /** Spec #102 — the sign-in page link for an action on this page. Buttons
  * keep their usual names (Follow, Transcript); signed out, they lead to
  * /login, which offers the providers and returns to ``next`` (default:
  * this page, fragment included so a quote's ``#t=`` or a person's
- * ``#about=`` survives sign-in). The link is the bare ``/login`` with
- * ``next`` and ``intent`` in router state, so every page shares one URL. */
-export function useSignIn(intent?: SignInIntent, next?: string): SignInLink {
+ * ``#about=`` survives sign-in). ``next`` and ``intent`` ride in the
+ * fragment, so every page links to the one ``/login`` URL. */
+export function useSignIn(intent?: SignInIntent, next?: string): string {
   const location = useLocation()
-  return signInLink(next ?? returnPath(location.pathname, location.search, location.hash), intent)
+  return signInPath(next ?? returnPath(location.pathname, location.search, location.hash), intent)
 }
 
 const EPISODE_PATH_RE = /^\/podcasts\/[^/]+\/episodes\/[^/]+\/?$/

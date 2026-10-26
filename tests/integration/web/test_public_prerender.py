@@ -28,6 +28,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import pytest
 
@@ -321,18 +322,21 @@ def test_links_are_canonical(site, app_state):
     )
     for href in page.hrefs:
         assert "?t=" not in href and "?page=" not in href, href
-        assert internal.match(href) or href == "/login" or href.startswith("https://"), href
+        assert internal.match(href) or href.startswith("/login#next=") or href.startswith("https://"), href
 
 
 def test_sign_in_links_share_one_url(site, app_state):
-    """Every page's sign-in link is the bare ``/login`` with ``rel=nofollow``:
-    one robots-blocked URL for the whole site, not ``/login?next=`` per page
-    (Search Console listed 5,851 of those on 2026-10-26)."""
+    """Every page's sign-in link is ``/login`` with ``next`` and ``intent`` in
+    the fragment and ``rel=nofollow``: one robots-blocked URL for the whole
+    site, not ``/login?next=`` per page (Search Console listed 5,851 of
+    those on 2026-10-26), while a new tab still gets the return path."""
     _seed_people(app_state)
     for path in (EPISODE, "/podcasts/public-show", "/entities/person/scott-galloway"):
         html_text = site.get(path).text
         assert "/login?" not in html_text, path
-        assert re.search(r'<a href="/login" rel="nofollow"', html_text), path
+        assert re.search(r'<a href="/login#next=[^"]+" rel="nofollow"', html_text), path
+    episode = site.get(EPISODE).text
+    assert f'href="/login#next={quote(EPISODE, safe="")}&amp;intent=summary" rel="nofollow"' in episode
 
 
 def test_signed_in_requests_keep_the_head_only_shell(site, app_state, monkeypatch):
