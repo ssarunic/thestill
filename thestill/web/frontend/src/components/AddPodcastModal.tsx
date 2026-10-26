@@ -150,7 +150,7 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
       })
       setAddError(null)
       try {
-        await addPodcast({ url: rssUrl })
+        await addPodcast({ url: rssUrl, source: 'add_podcast' })
         // The POST only starts a background task. Wait for it, so the list
         // refetch below sees the new row and a failure (e.g. a Spotify
         // exclusive with no public feed) is shown instead of a false "done".

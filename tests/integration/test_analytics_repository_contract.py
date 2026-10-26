@@ -209,11 +209,20 @@ def service():
         s.briefing(b, b[1] + 48 * H)
         s.read(b, b[1] + 1 * D)
         s.read(b, b[1] + 2 * D)
-        # C (no source = before tracking, -9d): did nothing.
-        s.user("c", NOW - 9 * D)
+        # C (no source = before tracking, -9d): follows nothing, so has no
+        # inbox; opens two episodes (+1d, +2d) and plays a third (+3d).
+        c = s.user("c", NOW - 9 * D)
+        for day in (1, 2):
+            s.view(c, s.episode(s.podcast_id, f"C open {day}", c[1]), c[1] + day * D)
+        c3 = s.episode(s.podcast_id, "C listen", c[1])
+        s.progress(c, c3, c[1] + 3 * D, position=60, listened_at=c[1] + 3 * D)
         # D (episode, -3d): follow +1h. Old enough for 24 h, not for 7 d.
+        # Opens and plays one episode: one read, not two.
         d = s.user("d", NOW - 3 * D, source="episode")
         s.follow(d, d[1] + 1 * H)
+        d1 = s.episode(s.podcast_id, "D both", d[1])
+        s.view(d, d1, d[1] + 2 * H)
+        s.progress(d, d1, d[1] + 3 * H, position=60, listened_at=d[1] + 3 * H)
         # E (top, -12h): too young for any step.
         s.user("e", NOW - 12 * H, source="top")
         # F (podcast, -40d): outside the 28d window; retention only.
@@ -262,8 +271,9 @@ def test_activation_overall_is_maturity_gated(service):
     opened = _step(overall, "briefing_opened")  # A 26h only
     assert (opened.eligible, opened.reached, opened.median_hours) == (3, 1, 26.0)
 
-    reads = _step(overall, "reads_3_first_week")  # A's 3rd read at 72h; B has 2
-    assert (reads.eligible, reads.reached, reads.median_hours) == (3, 1, 72.0)
+    # A's 3rd inbox read at 72h; C's 3rd read (two opens, a listen) at 72h; B has 2.
+    reads = _step(overall, "reads_3_first_week")
+    assert (reads.eligible, reads.reached, reads.median_hours) == (3, 2, 72.0)
 
 
 @pg_only
@@ -318,13 +328,13 @@ def test_cohorts_fixed_twelve_weeks_with_signup_relative_weeks(service):
 def test_engagement(service):
     report = service.report("28d")
     e = report.engagement
-    assert e.active_users == 4  # A B D F (C, E idle; admin/local excluded)
-    assert e.reads == 7  # A 4 + B 2 + F 1
+    assert e.active_users == 5  # A B C D F (E idle; admin/local excluded); C only opens and plays
+    assert e.reads == 11  # inbox: A 4 + B 2 + F 1; C 2 opens + 1 listen; D's open + listen of one episode = 1
     weeks = (report.window.end - report.window.start) / timedelta(weeks=1)  # 27.5 days so far
-    assert e.reads_per_active_user_per_week == pytest.approx(7 / (4 * weeks), abs=1e-4)
+    assert e.reads_per_active_user_per_week == pytest.approx(11 / (5 * weeks), abs=1e-4)
     assert (e.briefings_generated, e.briefings_opened, e.opened_ratio) == (2, 1, 0.5)
     assert e.follows == 3  # A B D (F's follow predates the window)
-    assert e.follows_per_active_user == 0.75
+    assert e.follows_per_active_user == 0.6
 
 
 # ----- spec #103 content popularity ---------------------------------------

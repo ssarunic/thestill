@@ -113,6 +113,20 @@ test.describe('episode hero on a phone (spec #76)', () => {
     await expect(page.getByTestId('collapsed-episode-bar')).toBeVisible()
   })
 
+  test('a reader who follows nothing gets the follow prompt under the tabs, not above them', async ({ page }) => {
+    await mockEpisodeApi(page)
+    await page.route('**/api/podcasts?*', (route) =>
+      route.fulfill({ json: { status: 'ok', podcasts: [], total: 0, count: 0, offset: 0, limit: 1, has_more: false } }),
+    )
+    await page.goto(EPISODE_PATH)
+    const prompt = page.getByRole('region', { name: 'Follow Prof G Markets' })
+    await expect(prompt).toBeAttached()
+    const tabBox = (await page.getByRole('button', { name: 'Summary' }).boundingBox())!
+    expect(tabBox.y + tabBox.height).toBeLessThanOrEqual(PHONE.height)
+    const promptBox = (await prompt.boundingBox())!
+    expect(promptBox.y).toBeGreaterThan(tabBox.y + tabBox.height)
+  })
+
   test('People and Information render below the tabs', async ({ page }) => {
     await mockEpisodeApi(page)
     await page.goto(EPISODE_PATH)

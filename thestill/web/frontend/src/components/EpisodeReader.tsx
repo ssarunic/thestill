@@ -4,10 +4,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh, useReprocessEpisode } from '../hooks/useApi'
 import { useAuth } from '../contexts/AuthContext'
 import { useReadingPosition } from '../hooks/useReadingPosition'
+import { useReaderEvents } from '../hooks/useReaderEvents'
 import { usePlayer } from '../contexts/PlayerContext'
 import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
+import { useIsSmUp } from '../hooks/useMediaQuery'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
@@ -28,6 +30,7 @@ import { InboxActionButton } from './InboxStatus'
 import FailureBanner from './FailureBanner'
 import Panel from './Panel'
 import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
+import FollowPrompt from './FollowPrompt'
 import People from './episode-header/People'
 import { buildEpisodeInformationRows } from './episode-header/episodeInformation'
 import DefinitionList from './DefinitionList'
@@ -252,6 +255,18 @@ export default function EpisodeReader({
 
   // Reading position persistence - auto-restores when episode ID is available
   useReadingPosition(episodeData?.episode?.id, scrollContainerRef)
+  // Spec #95 — which tab was shown and how far it was read. Depth waits for
+  // content: a still-processing tab is a short placeholder, and milestones
+  // sent from it would be spent before there is anything to read.
+  useReaderEvents({
+    episodeId: episodeData?.episode?.id,
+    tab: activeTab,
+    ready:
+      activeTab === 'summary'
+        ? !summaryLoading && summaryData?.available === true
+        : !transcriptLoading && transcriptData?.available === true,
+    scrollContainerRef,
+  })
 
   const episode = episodeData?.episode
 
@@ -305,6 +320,19 @@ export default function EpisodeReader({
   const reprocess = useReprocessEpisode(episode?.id)
   const [reprocessOpen, setReprocessOpen] = useState(false)
   const canReprocess = isAdmin && Boolean(episode?.has_summary)
+
+  // The first-follow prompt sits above the tabs from `sm` up; a phone has
+  // no room there (spec #76 keeps the tabs in the first viewport), so it
+  // opens the tab panel instead.
+  const isSmUp = useIsSmUp()
+  const followPrompt =
+    episode?.origin === 'feed' ? (
+      <FollowPrompt
+        podcastSlug={episode.podcast_slug}
+        podcastTitle={episode.podcast_title}
+        className={isSmUp ? '' : 'mx-4 mt-4'}
+      />
+    ) : null
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
@@ -554,6 +582,9 @@ export default function EpisodeReader({
                 : undefined
             }
           />
+          {/* A reader who follows nothing yet is offered this show; an
+              imported file's synthetic show has nothing to follow. */}
+          {isSmUp && followPrompt}
           {canReprocess && (
             <ReprocessDialog
               isOpen={reprocessOpen}
@@ -687,6 +718,8 @@ export default function EpisodeReader({
               </div>
             )}
           </div>
+
+          {!isSmUp && followPrompt}
 
           {/* Spec #76 §3.4 — the entity branch reports here as a one-line
               strip only while a task is running or failed. Spec #28

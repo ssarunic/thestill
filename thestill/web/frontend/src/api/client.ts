@@ -70,6 +70,7 @@ import type {
   McpTokenInfoResponse,
   McpTokenMintResponse,
   McpTokenScope,
+  FollowSource,
 } from './types'
 
 import { apiErrorMessage, redirectIfAccountDisabled } from './errors'
@@ -165,9 +166,10 @@ export async function resolvePodcast(
   return response.json()
 }
 
-// Follow a podcast
-export async function followPodcast(podcastSlug: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow`, {
+// Follow a podcast; ``source`` labels the spec #95 ``follow`` usage event.
+export async function followPodcast(podcastSlug: string, source?: FollowSource): Promise<void> {
+  const query = source ? `?source=${source}` : ''
+  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow${query}`, {
     method: 'POST',
     credentials: 'include',
   })

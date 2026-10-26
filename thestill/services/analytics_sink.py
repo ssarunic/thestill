@@ -41,6 +41,17 @@ APP_PROPERTY = {"app": "thestill"}
 
 PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal"]
 PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "none"]
+# Where a follow was made: the episode page's first-follow prompt, the show
+# page (or its follow carried through sign-in), the Top podcasts chart or
+# the Add podcast modal.
+FollowSource = Literal["episode_prompt", "show_page", "pending_follow", "top_podcasts", "add_podcast", "other"]
+_FOLLOW_SOURCES = frozenset(FollowSource.__args__)
+
+
+def follow_source(value: Optional[str]) -> FollowSource:
+    """The client's ``source`` as a ``FollowSource``; anything else is
+    ``other``, so an unknown label never fails the follow it describes."""
+    return value if value in _FOLLOW_SOURCES else "other"  # type: ignore[return-value]
 
 
 class _Event(BaseModel):
@@ -102,13 +113,26 @@ class Search(_Event):
     mode: Literal["lexical", "semantic", "hybrid"]
 
 
+class Follow(_Event):
+    """A show followed from the web app; never which show."""
+
+    name: Literal["follow"] = "follow"
+    source: FollowSource
+
+
+class Unfollow(_Event):
+    name: Literal["unfollow"] = "unfollow"
+
+
 class McpToolCall(_Event):
     name: Literal["mcp_tool_call"] = "mcp_tool_call"
     tool: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     ok: bool
 
 
-AnalyticsEvent = Union[PublicPageView, LoginStarted, LoginCompleted, LoginCancelled, LoginFailed, Search, McpToolCall]
+AnalyticsEvent = Union[
+    PublicPageView, LoginStarted, LoginCompleted, LoginCancelled, LoginFailed, Search, Follow, Unfollow, McpToolCall
+]
 
 
 class AnalyticsSink(Protocol):
