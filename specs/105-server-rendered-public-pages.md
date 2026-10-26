@@ -449,8 +449,9 @@ episode's four payloads come to ~25 KB of JSON.
   per-IP limit does not cap total load.
 - **Global cap.** A process-wide semaphore,
   `PRERENDER_MAX_CONCURRENT` (default 4), covers fallback builds that
-  miss the cache. The acquire never waits. When the cap is reached, the
-  request gets the head-only shell with a 200 and
+  miss the cache. A request over the cap waits up to
+  `PRERENDER_SLOT_WAIT_SECONDS` (default 5) for a slot; only when none
+  frees up in time does it get the head-only shell with a 200 and
   `public_prerender.shed` is logged. This sheds on load, not on who is
   asking, so it is not cloaking: anyone may get the head-only shell
   under load. The shell is a sync route in the threadpool, so the cap

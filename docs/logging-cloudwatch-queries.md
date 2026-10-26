@@ -287,7 +287,7 @@ filter message = "public_shell.served" and status = 200
 | sort hour desc, responses desc
 ```
 
-A steady `shed` count means crawl bursts exceed `PRERENDER_MAX_CONCURRENT`; a failure while building logs `public_prerender.failed` (warning) and the page falls back to the head-only shell.
+A steady `shed` count means crawl bursts hold every `PRERENDER_MAX_CONCURRENT` slot for longer than `PRERENDER_SLOT_WAIT_SECONDS`; a failure while building logs `public_prerender.failed` (warning) and the page falls back to the head-only shell.
 
 Training crawlers (`gptbot`, `claudebot`, `ccbot`, `meta-externalagent`, `bytespider`) are disallowed in `robots.txt`, so any fetches from them after the robots change are either a crawler ignoring it or a spoofed agent.
 

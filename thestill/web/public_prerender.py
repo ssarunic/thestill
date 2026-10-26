@@ -1231,13 +1231,20 @@ class Outcome:
 
 class Prerenderer:
     """Builds fallbacks under the ``public_prerender_enabled`` switch and a
-    process-wide cap on uncached builds (spec #105 §4). Over the cap, the
-    request gets the head-only shell: shedding is on load, never on who is
-    asking."""
+    process-wide cap on uncached builds (spec #105 §4). A request over the
+    cap waits up to ``prerender_slot_wait_seconds`` for a slot; only when
+    none frees up in time does it get the head-only shell. Shedding is on
+    load, never on who is asking.
+
+    The wait is what keeps a crawler's ordinary concurrency from showing up
+    as 5xx: Googlebot fetching a handful of cold entity pages at once used
+    to see 503s the moment the cap was full, and Search Console filed them
+    as server errors."""
 
     def __init__(self, state: "AppState") -> None:
         self._state = state
         self._slots = threading.BoundedSemaphore(max(1, int(state.config.prerender_max_concurrent)))
+        self._slot_wait = max(0.0, float(getattr(state.config, "prerender_slot_wait_seconds", 0.0) or 0.0))
 
     def enabled(self) -> bool:
         settings = getattr(getattr(self._state, "abuse", None), "settings", None)
@@ -1255,9 +1262,9 @@ class Prerenderer:
 
     @contextmanager
     def slot(self) -> Iterator[bool]:
-        """One of the uncached-build slots, never waited for: yields False
-        when all are taken (the caller sheds)."""
-        acquired = self._slots.acquire(blocking=False)
+        """One of the uncached-build slots, waited for up to the configured
+        wait: yields False when none frees up in time (the caller sheds)."""
+        acquired = self._slots.acquire(blocking=self._slot_wait > 0, timeout=self._slot_wait or None)
         try:
             yield acquired
         finally:

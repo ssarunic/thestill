@@ -71,7 +71,7 @@ from ..public_access import (
     public_rate_limit,
 )
 from ..responses import api_response, etag_json_response
-from .api_entities import _entity_id_from_path, get_episode_entities
+from .api_entities import _entity_id_from_path, get_episode_entities, url_candidate_ids, url_owner
 from .api_top_podcasts import _MAX_LIMIT as _TOP_MAX_LIMIT
 from .api_top_podcasts import _resolve_region
 
@@ -635,7 +635,9 @@ _RELATED_PER_TYPE = 6
 _FEATURED_WINDOW_DAYS = 90
 _SPEAKERS_WINDOW_DAYS = 365
 _ACTIVITY_WEEKS = 26
-_ENTITY_TTL_SECONDS = 120.0
+# Entity pages are the costly builds and the ones crawlers fetch in bursts;
+# ten minutes keeps a head-then-body fetch pair and a recrawl on one build.
+_ENTITY_TTL_SECONDS = 600.0
 _ABOUT_RE = re.compile(r"^(person|company|product|topic):[a-z0-9][a-z0-9-]{0,110}$")
 
 _entity_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=512)
@@ -949,6 +951,35 @@ def current_entity_path(state: AppState, entity_type: str, slug: str, payload: D
     if current != _public_entity_id(state, visibility, entity_type, slug):
         return None
     return f"/entities/{entity['type']}/{entity['slug']}"
+
+
+def stale_entity_path(state: AppState, entity_type: str, slug: str) -> Optional[str]:
+    """Where an entity lives now when ``entity_type/slug`` names nobody:
+    the type segment is one the entity had at some point but neither its
+    id prefix nor its current type (``topic/artificial-intelligence`` for
+    ``company:artificial-intelligence`` re-typed to a product, so a URL
+    Google indexed answers 301 rather than 404). ``None`` when no stored
+    id carries the slug, or when the current URL shows another entity."""
+    if entity_type not in _ENTITY_TYPES:
+        return None
+    try:
+        _check_slug(slug, "Entity")
+    except HTTPException:
+        return None
+    visibility = get_public_visibility(state)
+    stored = state.entity_repository.get_entities_by_ids(url_candidate_ids(slug))
+    candidates = [entity.id for entity in stored if _entity_type_str(entity.type) != entity_type]
+    if not candidates:
+        return None
+    with_mentions = state.entity_repository.entity_ids_with_mentions(candidates) if len(candidates) > 1 else set()
+    owner = url_owner(candidates, with_mentions)
+    current_type = next(_entity_type_str(entity.type) for entity in stored if entity.id == owner)
+    try:
+        if _public_entity_id(state, visibility, current_type, slug) != owner:
+            return None
+    except HTTPException:
+        return None
+    return f"/entities/{current_type}/{slug}"
 
 
 @router.get("/entities/{entity_type}/{slug}")

@@ -597,6 +597,7 @@ class Config(BaseModel):
     # a request gets today's head-only shell).
     public_prerender_enabled: bool = True
     prerender_max_concurrent: int = 4
+    prerender_slot_wait_seconds: float = 5.0
     # Spec #105 Phase 4 — IndexNow key (8-128 letters, digits or dashes),
     # served at /<key>.txt; empty turns the pings off.
     indexnow_key: str = ""
@@ -986,6 +987,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "public_pages_enabled": _env_bool("PUBLIC_PAGES_ENABLED", True),
         "public_prerender_enabled": _env_bool("PUBLIC_PRERENDER_ENABLED", True),
         "prerender_max_concurrent": max(1, _env_int("PRERENDER_MAX_CONCURRENT", 4)),
+        "prerender_slot_wait_seconds": max(0.0, float(os.getenv("PRERENDER_SLOT_WAIT_SECONDS", "5") or 0)),
         "indexnow_key": os.getenv("INDEXNOW_KEY", "").strip(),
         "enable_docs": os.getenv("ENABLE_DOCS", "false").lower() == "true",
         # Product usage events (spec #95 Layer B)

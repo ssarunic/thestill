@@ -373,7 +373,7 @@ class ShellRenderer:
 
         from .public_access import CacheMiss, cache_only
         from .public_prerender import get_prerenderer
-        from .routes.api_public import current_entity_path, public_entity_payload
+        from .routes.api_public import current_entity_path, public_entity_payload, stale_entity_path
 
         # The entity payload (quote counts decide noindex) is the costly part
         # of this page. Cached, it is free; uncached, it is built under the
@@ -394,6 +394,11 @@ class ShellRenderer:
                             raise LookupShed() from None
                         payload = public_entity_payload(self._state, entity_type, slug)
         except HTTPException:
+            # An entity re-typed more than once leaves URLs at a type that is
+            # neither its id prefix nor its current type; send those on too.
+            moved_to = stale_entity_path(self._state, entity_type, slug)
+            if moved_to:
+                return HeadTags(status_code=301, redirect_path=moved_to)
             return HeadTags(status_code=404)
         # A re-typed entity answers at its old type's URL too; send that URL
         # on, or the two copies split the page in search.
