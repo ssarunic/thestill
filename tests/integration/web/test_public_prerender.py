@@ -364,6 +364,7 @@ def test_over_the_cap_a_miss_is_shed_to_the_head_only_shell(site, app_state, mon
     recorder = _Recorder()
     monkeypatch.setattr(public_prerender, "logger", recorder)
     prerenderer = public_prerender.get_prerenderer(app_state)
+    prerenderer._slot_wait = 0.0  # noqa: SLF001 - shed at once, as with every slot held past the wait
     held = 0
     while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
         held += 1
@@ -464,6 +465,7 @@ def test_a_shed_request_builds_no_payload(site, app_state, monkeypatch, path):
             api_public, name, lambda *a, _real=real, _name=name, **k: (built.append(_name), _real(*a, **k))[1]
         )
     prerenderer = public_prerender.get_prerenderer(app_state)
+    prerenderer._slot_wait = 0.0  # noqa: SLF001 - shed at once, as with every slot held past the wait
     held = 0
     while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
         held += 1
@@ -477,6 +479,32 @@ def test_a_shed_request_builds_no_payload(site, app_state, monkeypatch, path):
     assert built == []
 
 
+def test_over_the_cap_a_miss_waits_for_a_slot_before_shedding(site, app_state, monkeypatch):
+    """A crawler's ordinary concurrency must not read as 5xx: a request that
+    finds every slot taken waits for one, and renders once it frees up."""
+    import threading
+
+    _seed_people(app_state)
+    recorder = _Recorder()
+    monkeypatch.setattr(public_prerender, "logger", recorder)
+    prerenderer = public_prerender.get_prerenderer(app_state)
+    prerenderer._slot_wait = 5.0  # noqa: SLF001
+    held = 0
+    while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
+        held += 1
+    release_one = threading.Timer(0.3, prerenderer._slots.release)  # noqa: SLF001
+    release_one.start()
+    try:
+        response = site.get("/entities/person/scott-galloway")
+    finally:
+        release_one.join()
+        for _ in range(held - 1):
+            prerenderer._slots.release()  # noqa: SLF001
+    assert response.status_code == 200
+    assert 'data-prerendered="entity"' in response.text
+    assert not [e for e in recorder.events if e[1] == "public_prerender.shed"]
+
+
 def test_an_uncached_entity_page_over_the_cap_is_a_503_not_a_build(site, app_state, monkeypatch):
     """The entity head needs the full entity payload (quote counts decide
     noindex); uncached and over the cap, it is shed, never built."""
@@ -487,6 +515,7 @@ def test_an_uncached_entity_page_over_the_cap_is_a_503_not_a_build(site, app_sta
     real = api_public._build_entity_payload
     monkeypatch.setattr(api_public, "_build_entity_payload", lambda *a, **k: (built.append("entity"), real(*a, **k))[1])
     prerenderer = public_prerender.get_prerenderer(app_state)
+    prerenderer._slot_wait = 0.0  # noqa: SLF001 - shed at once, as with every slot held past the wait
     held = 0
     while prerenderer._slots.acquire(blocking=False):  # noqa: SLF001 - hold every slot
         held += 1

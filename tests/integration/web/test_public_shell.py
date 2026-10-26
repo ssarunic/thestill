@@ -353,6 +353,31 @@ def test_an_undone_retype_never_loops_the_two_urls(site, app_state):
     assert back.status_code == 200 or back.headers["location"] == "/entities/company/nvidia"
 
 
+def test_a_twice_retyped_entity_moves_a_url_at_neither_type(site, app_state):
+    """``company:artificial-intelligence`` was a topic for a while (Google
+    indexed ``topic/artificial-intelligence``) and is a product now. That
+    URL matches neither the id prefix nor the current type; it is sent on
+    rather than dropped as a 404 (Search Console 2026-10-26)."""
+    from tests.integration.web.test_public_api import _seed_people
+    from thestill.models.entities import EntityRecord, EntityType
+
+    _seed_people(app_state)
+    app_state.entity_repository.upsert_entity(
+        EntityRecord(
+            id="company:artificial-intelligence", type=EntityType.PRODUCT, canonical_name="Artificial intelligence"
+        )
+    )
+    moved = site.get("/entities/topic/artificial-intelligence?about=x", follow_redirects=False)
+    assert moved.status_code == 301
+    assert moved.headers["location"] == "/entities/product/artificial-intelligence?about=x"
+    assert "no-cache" in moved.headers["cache-control"]
+    assert site.get("/entities/person/artificial-intelligence", follow_redirects=False).status_code == 301
+    current = site.get("/entities/product/artificial-intelligence", follow_redirects=False)
+    assert current.status_code == 200
+    # A slug no stored id carries is still a 404 at every type.
+    assert site.get("/entities/topic/twitter", follow_redirects=False).status_code == 404
+
+
 def test_a_retyped_entity_keeps_its_old_url_when_the_current_one_shows_another(site, app_state):
     """``product/nvidia`` belongs to a ``product:nvidia`` row with mentions of
     its own, so redirecting there would show a different entity."""
