@@ -1,11 +1,46 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { consumePendingFollow, notNowPath, parseIntent, rememberPendingFollow, showSlugFromNext, signInPath } from './signIn'
+import {
+  consumePendingFollow,
+  notNowPath,
+  parseIntent,
+  parseSignInState,
+  referrerPath,
+  rememberPendingFollow,
+  showSlugFromNext,
+  signInLink,
+  signInPath,
+} from './signIn'
 
 describe('sign-in links (spec #102)', () => {
   it('builds /login with a validated next and an intent', () => {
     expect(signInPath('/podcasts/prof-g', 'follow')).toBe('/login?next=%2Fpodcasts%2Fprof-g&intent=follow')
     expect(signInPath('/entities/person/x?about=company:y')).toBe('/login?next=%2Fentities%2Fperson%2Fx%3Fabout%3Dcompany%3Ay')
     expect(signInPath('//evil.example')).toBe('/login')
+  })
+
+  it('links every page to the one /login URL, with next and intent in state', () => {
+    expect(signInLink('/podcasts/prof-g', 'follow')).toEqual({ to: '/login', state: { next: '/podcasts/prof-g', intent: 'follow' } })
+    expect(signInLink('/entities/person/x#about=company:y')).toEqual({
+      to: '/login',
+      state: { next: '/entities/person/x#about=company:y' },
+    })
+    expect(signInLink('//evil.example')).toEqual({ to: '/login', state: {} })
+  })
+
+  it('reads only a valid next and intent back out of router state', () => {
+    expect(parseSignInState({ next: '/podcasts/prof-g', intent: 'follow' })).toEqual({ next: '/podcasts/prof-g', intent: 'follow' })
+    expect(parseSignInState({ next: '//evil.example', intent: 'delete-account' })).toEqual({})
+    expect(parseSignInState(null)).toEqual({})
+    expect(parseSignInState('/podcasts/prof-g')).toEqual({})
+  })
+
+  it('falls back to a same-site referrer for a pre-hydration click', () => {
+    expect(referrerPath('https://thestill.me/entities/person/x?about=y#t=1', 'https://thestill.me')).toBe(
+      '/entities/person/x?about=y#t=1',
+    )
+    expect(referrerPath('https://www.google.com/', 'https://thestill.me')).toBeNull()
+    expect(referrerPath('', 'https://thestill.me')).toBeNull()
+    expect(referrerPath('not a url', 'https://thestill.me')).toBeNull()
   })
 
   it('accepts only known intents', () => {

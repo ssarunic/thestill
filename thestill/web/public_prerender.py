@@ -280,12 +280,19 @@ def clip_words(value: Optional[str], words: int = _DESCRIPTION_WORDS) -> str:
     return " ".join(parts) if len(parts) <= words else " ".join(parts[:words]) + "…"
 
 
+SIGN_IN_PATH = "/login"
+
+
 def sign_in_path(next_path: str, intent: Optional[str] = None) -> str:
-    """``/login?next=…`` as ``signInPath`` in ``utils/signIn.ts`` builds it."""
-    params = {"next": next_path}
-    if intent:
-        params["intent"] = intent
-    return f"/login?{urlencode(params)}"
+    """The sign-in link: the bare ``/login`` for every page, as
+    ``signInLink`` in ``utils/signIn.ts`` builds it. ``next_path`` and
+    ``intent`` are not put in the URL: one address for every page keeps a
+    crawler from listing one robots-blocked ``/login?next=…`` per public
+    page (5,851 of them in Search Console on 2026-10-26). The app reads the
+    return path from router state once it has taken over, and ``/login``
+    falls back to the same-site referrer for a click before that."""
+    del next_path, intent
+    return SIGN_IN_PATH
 
 
 def entity_path(ref: Dict[str, Any]) -> str:
@@ -376,7 +383,13 @@ def _chrome(page_path: str, main: str) -> str:
                 class_="ts-header-nav",
                 aria_label="Main",
             ),
-            el("a", el("span", text("Sign in")), href=sign_in_path(page_path), class_="ts-btn ts-btn-primary"),
+            el(
+                "a",
+                el("span", text("Sign in")),
+                href=sign_in_path(page_path),
+                rel="nofollow",
+                class_="ts-btn ts-btn-primary",
+            ),
             class_="ts-header-inner",
         ),
         class_="ts-header",
@@ -594,7 +607,7 @@ def episode_fallback(state: "AppState", podcast_slug: str, episode_slug: str, he
         if summary["more_sections"]:
             more = el(
                 "p",
-                el("a", text("Read the full summary"), href=sign_in_path(page_path, "summary")),
+                el("a", text("Read the full summary"), href=sign_in_path(page_path, "summary"), rel="nofollow"),
                 " ",
                 text("Also:"),
                 " ",
