@@ -39,7 +39,7 @@ RUN npm run build
 FROM mwader/static-ffmpeg:9.0.2-1@sha256:f5d100184884eb3e82b0eb14bb5ebf98da99826ac824989720297fb9ef21c822 AS ffmpeg-src
 
 # ---------- Stage 3: build the Python wheel ----------
-FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS python-builder
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS python-builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 WORKDIR /build
 RUN apt-get update \
@@ -72,7 +72,7 @@ RUN set -eux; \
     pip wheel --wheel-dir /wheels --no-deps .
 
 # ---------- Stage 4: runtime base ----------
-FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3 AS base
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS base
 # Re-declare with defaults so `docker build` works without --build-arg.
 # Top-level ARGs before the first FROM don't propagate into stages.
 ARG THESTILL_UID=1000
