@@ -139,7 +139,9 @@ def linked_result(
     entity_type = fallback_type
     if wikidata_client is not None:
         p31_qids = wikidata_client.fetch_p31(qid)
-        classified = classify_entity_type(p31_qids, fallback_type)
+        # Test fakes may implement only ``fetch_p31``.
+        superclasses = getattr(wikidata_client, "fetch_superclasses", None)
+        classified = classify_entity_type(p31_qids, fallback_type, superclasses)
         if classified is not None and classified != fallback_type:
             logger.info(
                 "entity_type_reclassified",

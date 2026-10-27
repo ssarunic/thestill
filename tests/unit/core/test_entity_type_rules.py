@@ -177,3 +177,47 @@ class TestBusinessAndSoftware:
 
         assert _mint_type_from_p31(self.ALLIANZ) is EntityType.COMPANY
         assert _mint_type_from_p31(["Q7397"]) is EntityType.PRODUCT
+
+
+class TestPlacesAndEventsBySuperclass:
+    """Croatian towns, battles and demographics from "Sjeverna Dalmacija u
+    Domovinskom ratu": Wikidata types them by classes no list names, so they
+    kept GLiNER's company/person guess."""
+
+    SUPERCLASSES = {
+        "Q15105893": ["Q3435941", "Q12357832", "Q3957", "Q57058", "Q515"],  # town in Croatia
+        "Q4845841": ["Q486972", "Q12357920", "Q3435941"],  # settlement in Croatia
+        "Q23983664": ["Q2725376", "Q74817647"],  # demographics of country or region
+        "Q207320": ["Q1673189"],  # paramilitary organization
+        "Q46970": ["Q43229", "Q4830453"],  # airline: "organization" + business
+    }
+
+    def lookup(self, qid):
+        return self.SUPERCLASSES.get(qid, [])
+
+    def test_a_town_in_croatia_is_a_topic(self):
+        for fallback in (EntityType.COMPANY, EntityType.PERSON, EntityType.PRODUCT):
+            assert classify_entity_type(["Q15105893"], fallback, self.lookup) is EntityType.TOPIC
+        assert classify_entity_type(["Q4845841"], EntityType.PERSON, self.lookup) is EntityType.TOPIC
+
+    def test_demographics_is_a_topic(self):
+        assert classify_entity_type(["Q62944360", "Q23983664"], EntityType.COMPANY, self.lookup) is EntityType.TOPIC
+
+    def test_battles_and_military_operations_are_topics_without_a_lookup(self):
+        assert classify_entity_type(["Q178561"], EntityType.COMPANY) is EntityType.TOPIC
+        assert classify_entity_type(["Q645883"], EntityType.COMPANY) is EntityType.TOPIC
+
+    def test_an_organization_superclass_does_not_demote(self):
+        assert classify_entity_type(["Q207320"], EntityType.COMPANY, self.lookup) is EntityType.COMPANY
+        assert classify_entity_type(["Q46970"], EntityType.COMPANY, self.lookup) is EntityType.COMPANY
+
+    def test_superclasses_are_only_fetched_when_no_class_matched(self):
+        fetched = []
+
+        def lookup(qid):
+            fetched.append(qid)
+            return []
+
+        assert classify_entity_type(["Q5"], EntityType.COMPANY, lookup) is EntityType.PERSON
+        assert classify_entity_type(["Q999"], EntityType.TOPIC, lookup) is EntityType.TOPIC
+        assert fetched == []
