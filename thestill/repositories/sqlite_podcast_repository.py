@@ -659,7 +659,8 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 client_name TEXT NULL,
                 metadata    TEXT NOT NULL,
                 created_at  TIMESTAMP NOT NULL,
-                fetched_at  TIMESTAMP NULL
+                fetched_at  TIMESTAMP NULL,
+                fresh_until TIMESTAMP NULL
             );
 
             CREATE TABLE IF NOT EXISTS oauth_pending (

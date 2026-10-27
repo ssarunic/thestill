@@ -171,7 +171,7 @@ class PostgresOAuthRepository(OAuthRepository):
     def get_client(self, client_id: str) -> Optional[OAuthClientRecord]:
         with connect(self.dsn) as conn:
             row = conn.execute(
-                "SELECT client_id, source, client_name, metadata, created_at, fetched_at"
+                "SELECT client_id, source, client_name, metadata, created_at, fetched_at, fresh_until"
                 " FROM oauth_clients WHERE client_id = %s",
                 (client_id,),
             ).fetchone()
@@ -184,19 +184,22 @@ class PostgresOAuthRepository(OAuthRepository):
             metadata=row["metadata"],
             created_at=row["created_at"],
             fetched_at=row["fetched_at"],
+            fresh_until=row["fresh_until"],
         )
 
     def save_client(self, client: OAuthClientRecord) -> None:
         with connect(self.dsn) as conn:
             conn.execute(
                 """
-                INSERT INTO oauth_clients (client_id, source, client_name, metadata, created_at, fetched_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO oauth_clients
+                    (client_id, source, client_name, metadata, created_at, fetched_at, fresh_until)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (client_id) DO UPDATE SET
                     source      = excluded.source,
                     client_name = excluded.client_name,
                     metadata    = excluded.metadata,
-                    fetched_at  = excluded.fetched_at
+                    fetched_at  = excluded.fetched_at,
+                    fresh_until = excluded.fresh_until
                 """,
                 (
                     client.client_id,
@@ -205,6 +208,7 @@ class PostgresOAuthRepository(OAuthRepository):
                     Jsonb(client.metadata),
                     client.created_at,
                     client.fetched_at,
+                    client.fresh_until,
                 ),
             )
 

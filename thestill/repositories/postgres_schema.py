@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_name text NULL,
     metadata jsonb NOT NULL,
     created_at timestamptz NOT NULL,
-    fetched_at timestamptz NULL
+    fetched_at timestamptz NULL,
+    fresh_until timestamptz NULL
 );
 
 CREATE TABLE IF NOT EXISTS oauth_pending (

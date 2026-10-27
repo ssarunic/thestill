@@ -60,6 +60,8 @@ class OAuthClientRecord(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     fetched_at: Optional[datetime] = None
+    # CIMD only: refetch the document after this (its max-age, capped).
+    fresh_until: Optional[datetime] = None
 
 
 class OAuthPending(BaseModel):
