@@ -158,6 +158,7 @@ CREATE TABLE transcript_edits (
     episode_id      uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
     seq             integer NOT NULL,          -- per-episode, monotonic
     op              text NOT NULL,             -- closed list below
+    raw_sha256      text NOT NULL,             -- raw transcript the anchors refer to
     anchor_json     jsonb NOT NULL,            -- durable anchor(s)
     args_json       jsonb NOT NULL,            -- op arguments
     before_json     jsonb NOT NULL,            -- snapshot of what it replaced
@@ -190,16 +191,24 @@ later moderator role safe to add.
 | `segment.adjust_boundary` | segment anchor | `{edge: start\|end, to: {raw_segment_id, word_index}}` (Phase 4) |
 | `revert` | `{edit_id}` | — |
 
-**Segment anchor:** `{source_segment_ids, start_s, end_s, text_sha256}`,
-the same shape as #86's `transcript_segment` anchor plus a text hash.
-`source_segment_ids` is the identity (#18 §"Future: user
-segment-editing UI"); times and hash disambiguate.
+**Segment anchor:** `{source_segment_ids, source_word_span, start_s,
+end_s, text_sha256}`, the same shape as #86's `transcript_segment`
+anchor plus the word span and a text hash. `source_segment_ids` locate
+the segment (#18 §"Future: user segment-editing UI"); the word span
+tells apart the children of a split, which share raw segments; the text
+hash is computed on the segment as the editor showed it, after the
+earlier ops in the log.
 
 **Speaker labels** are diarization labels read from the raw segments
 behind each cleaned segment (majority label across its
 `source_segment_ids`), because the cleaned sidecar already holds mapped
-names. Label-level ops are therefore stable across any re-clean that
-keeps the same raw transcript.
+names. A label is only an identity within one raw transcript:
+`reprocess --from transcribe` overwrites the raw JSON, and every
+transcriber assigns `SPEAKER_NN` afresh in encounter order
+([dalston_transcriber.py](../thestill/core/dalston_transcriber.py)), so
+`SPEAKER_02` after a re-transcribe may be someone else. That is why
+every op records `raw_sha256`, the hash of the raw transcript its
+anchors were written against.
 
 **Concurrency.** Every write carries `base_seq`, the last `seq` the
 client saw. A mismatch returns 409 with the new ops; the client
@@ -218,14 +227,30 @@ A new module (`thestill/core/transcript_edits.py`) owns
 3. Return the transcript plus `applied`, `conflicts` and `last_seq`.
 
 Applied segments get a `user_segment_id` (UUID, deterministic from the
-first edit's id) and `metadata["edited"] = true`. Ops apply in this
-order of anchor matching:
+first edit's id) and `metadata["edited"] = true`. An op applies only
+when all of these hold, and is otherwise a **conflict** (not applied,
+listed with the reason):
 
-1. An exact `source_segment_ids` match.
-2. Otherwise a unique overlapping segment whose text still hashes to
-   `text_sha256`.
-3. Otherwise the op is a **conflict**: not applied, listed with the
-   reason.
+1. **Same raw transcript.** The op's `raw_sha256` equals the current
+   raw transcript's. After a re-transcribe every op conflicts with
+   reason `retranscribed`; nothing is applied by label or segment id.
+   The editor lists the speaker ops with a suggested new label (the one
+   covering most of the old label's speaking time) and a segment's
+   suggested match (same text hash, overlapping time); the admin
+   confirms each, and confirming writes a fresh op against the new raw
+   transcript. Nothing is remapped without that confirmation.
+2. **Exactly one candidate.** Among segments with the anchor's
+   `source_segment_ids`, exactly one has its `source_word_span`; with
+   no candidate, or more than one, the reason is `anchor_missing` or
+   `anchor_ambiguous`.
+3. **Unchanged text.** The candidate, as rebuilt by the earlier ops in
+   the log, still hashes to `text_sha256`. A re-clean that rewrote the
+   segment gives reason `text_changed`, even though its ids still
+   match. The editor shows the old and new text side by side, and the
+   admin re-applies or drops the edit.
+
+Speaker-label ops need only rule 1: a label means the same voice
+anywhere in the same raw transcript.
 
 All seven sidecar reads listed in §Current state move to this loader. A
 unit test fails if `AnnotatedTranscript.model_validate_json` appears
@@ -425,7 +450,10 @@ soaks before Phase 1's UI.
   sidecar; revert of a revert restores the op.
 - Replay: ops written against one sidecar replay on a re-cleaned
   sidecar of the same raw transcript; a changed segment text yields a
-  conflict, not a wrong application.
+  `text_changed` conflict even when `source_segment_ids` still match;
+  an edit to one child of a split applies to that child only; after a
+  re-transcribe every op, label ops included, is a `retranscribed`
+  conflict and nothing is applied until the admin confirms a remap.
 - Read-path parity: for an episode with no ops, every migrated reader
   produces byte-identical output before and after Phase 0.
 - Concurrency: stale `base_seq` returns 409; editing during a running
