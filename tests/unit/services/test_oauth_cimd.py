@@ -55,7 +55,7 @@ def test_validate_document_refuses(doc):
     ],
 )
 def test_fetch_refuses_unsafe_urls_before_any_request(url, monkeypatch):
-    monkeypatch.setattr(oauth_cimd.httpx, "Client", lambda *a, **k: pytest.fail("must not fetch"))
+    monkeypatch.setattr(oauth_cimd.httpx, "AsyncClient", lambda *a, **k: pytest.fail("must not fetch"))
     with pytest.raises(CimdError):
         oauth_cimd.fetch_document(url)
 
@@ -133,3 +133,28 @@ def test_resolver_backs_off_after_a_failure(repo):
     assert resolver.resolve(URL) is None
     assert resolver.resolve(URL) is None
     assert len(calls) == 1
+
+
+def test_fetch_deadline_covers_the_whole_request(monkeypatch):
+    """Codex P1 on #442: a server dripping response headers must not hold a
+    lookup past the deadline. Stand in for a hanging DNS-to-headers phase."""
+    import anyio
+
+    async def public(*_a, **_k):
+        return [(None, None, None, None, ("93.184.216.34", 443))]
+
+    class Hanging:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            await anyio.sleep(60)
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(oauth_cimd.anyio, "getaddrinfo", public)
+    monkeypatch.setattr(oauth_cimd.httpx, "AsyncClient", Hanging)
+    monkeypatch.setattr(oauth_cimd, "DEADLINE_SECONDS", 0.2)
+    with pytest.raises(CimdError, match="took too long"):
+        oauth_cimd.fetch_document(URL)

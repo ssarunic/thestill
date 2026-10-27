@@ -42,6 +42,7 @@ from datetime import timedelta
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 from structlog import get_logger
 
@@ -53,8 +54,8 @@ from ..utils.redirect_uris import is_allowed_redirect_uri
 logger = get_logger(__name__)
 
 MAX_BYTES = 64 * 1024
-# Per network operation; the whole fetch also has a wall-clock deadline, so
-# a server dripping a byte at a time cannot hold a worker thread.
+# Per network operation; the whole fetch (DNS, connect, headers, body) also
+# has a wall-clock deadline, so a server dripping bytes cannot hold a worker.
 TIMEOUT_SECONDS = 5.0
 DEADLINE_SECONDS = 8.0
 # A URL that failed is not fetched again for this long (unknown or broken
@@ -81,7 +82,7 @@ def is_cimd_client_id(client_id: str) -> bool:
     return client_id.startswith("https://")
 
 
-def _check_url(url: str) -> None:
+async def _check_url(url: str) -> None:
     try:
         parts = urlsplit(url)
         hostname, port = parts.hostname, parts.port  # .port raises on a bad port
@@ -89,8 +90,8 @@ def _check_url(url: str) -> None:
             raise CimdError("client_id must be an https URL")
         if parts.username or parts.password or parts.fragment:
             raise CimdError("client_id URL must not carry credentials or a fragment")
-        infos = socket.getaddrinfo(hostname, port or 443, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, ValueError, UnicodeError) as exc:  # UnicodeError: bad IDNA label
+        infos = await anyio.getaddrinfo(hostname, port or 443, proto=socket.IPPROTO_TCP)
+    except (OSError, ValueError, UnicodeError) as exc:  # gaierror; bad port; bad IDNA label
         raise CimdError("client_id is not a usable URL") from exc
     for info in infos:
         address = ipaddress.ip_address(info[4][0])
@@ -98,25 +99,25 @@ def _check_url(url: str) -> None:
             raise CimdError("client_id host resolves to a non-public address")
 
 
-def fetch_document(url: str) -> FetchedDocument:
-    """GET the metadata document at ``url`` within the fences above."""
-    _check_url(url)
-    try:
-        with httpx.Client(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
-            with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
-                if response.status_code != 200:
-                    raise CimdError(f"metadata document answered {response.status_code}")
-                body = b""
-                deadline = time.monotonic() + DEADLINE_SECONDS
-                for chunk in response.iter_bytes():
-                    body += chunk
-                    if len(body) > MAX_BYTES:
-                        raise CimdError("metadata document is too large")
-                    if time.monotonic() > deadline:
-                        raise CimdError("metadata document took too long")
-                cache_control = response.headers.get("cache-control", "")
-    except httpx.HTTPError as exc:
-        raise CimdError("metadata document could not be fetched") from exc
+async def _fetch(url: str) -> FetchedDocument:
+    # One deadline over everything a slow or hostile server could stretch:
+    # the DNS lookup, the connection, the response headers and the body.
+    # httpx's own timeout is per socket operation, so it alone is not enough.
+    with anyio.fail_after(DEADLINE_SECONDS):
+        await _check_url(url)
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS, follow_redirects=False) as client:
+                async with client.stream("GET", url, headers={"Accept": "application/json"}) as response:
+                    if response.status_code != 200:
+                        raise CimdError(f"metadata document answered {response.status_code}")
+                    body = b""
+                    async for chunk in response.aiter_bytes():
+                        body += chunk
+                        if len(body) > MAX_BYTES:
+                            raise CimdError("metadata document is too large")
+                    cache_control = response.headers.get("cache-control", "")
+        except httpx.HTTPError as exc:
+            raise CimdError("metadata document could not be fetched") from exc
     try:
         document = json.loads(body)
     except ValueError as exc:
@@ -127,6 +128,19 @@ def fetch_document(url: str) -> FetchedDocument:
     no_store = "no-store" in cache_control.lower() or "no-cache" in cache_control.lower()
     max_age = timedelta(0) if no_store else (timedelta(seconds=int(match.group(1))) if match else None)
     return FetchedDocument(document=document, max_age=max_age)
+
+
+def fetch_document(url: str) -> FetchedDocument:
+    """GET the metadata document at ``url`` within the fences above.
+
+    Synchronous for the resolver, which runs on a worker thread (the SDK
+    provider and the sync API routes both call it from one), so it runs its
+    own short event loop for the deadline.
+    """
+    try:
+        return anyio.run(_fetch, url)
+    except TimeoutError as exc:
+        raise CimdError("metadata document took too long") from exc
 
 
 def validate_document(url: str, document: Dict[str, Any]) -> Dict[str, Any]:

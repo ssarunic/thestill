@@ -427,16 +427,22 @@ class SqliteOAuthRepository(OAuthRepository):
             # Used codes stay until they expire, so a replay inside the
             # code's lifetime is still recognised (and revokes the grant).
             deleted += conn.execute("DELETE FROM oauth_codes WHERE expires_at <= ?", (n,)).rowcount
+            # A retired or revoked refresh token is kept for reuse detection until
+            # its window passes, even past its own expiry (Codex P2 on #442): rotate
+            # on day 89 of 90 and the replay must still be recognised on day 91. A
+            # retired token whose successor is already gone has outlived its window.
             deleted += conn.execute(
                 """
                 DELETE FROM oauth_tokens
-                 WHERE (expires_at IS NOT NULL AND expires_at <= ?)
+                 WHERE (kind = 'access' AND expires_at IS NOT NULL AND expires_at <= ?)
+                    OR (kind = 'refresh' AND replaced_by_hash IS NULL AND revoked_at IS NULL
+                        AND expires_at IS NOT NULL AND expires_at <= ?)
                     OR (kind = 'refresh' AND revoked_at IS NOT NULL AND revoked_at <= ?)
                     OR (kind = 'refresh' AND replaced_by_hash IS NOT NULL
-                        AND EXISTS (SELECT 1 FROM oauth_tokens n
-                                     WHERE n.token_hash = oauth_tokens.replaced_by_hash AND n.created_at <= ?))
+                        AND NOT EXISTS (SELECT 1 FROM oauth_tokens n
+                                         WHERE n.token_hash = oauth_tokens.replaced_by_hash AND n.created_at > ?))
                 """,
-                (n, r, r),
+                (n, n, r, r),
             ).rowcount
             deleted += conn.execute(
                 "DELETE FROM oauth_grants WHERE revoked_at IS NOT NULL AND revoked_at <= ?", (r,)
