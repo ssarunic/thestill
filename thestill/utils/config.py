@@ -24,6 +24,7 @@ from pydantic.config import ConfigDict
 
 from .file_storage import FileStorage, make_storage
 from .path_manager import PathManager
+from .redirect_uris import is_loopback_uri
 
 logger = structlog.get_logger(__name__)
 
@@ -1100,8 +1101,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         if not config_data["mcp_http_enabled"]:
             raise ValueError("MCP_OAUTH_ENABLED=true requires MCP_HTTP_ENABLED=true")
         base = config_data["public_base_url"]
-        loopback = base.startswith(("http://localhost", "http://127.0.0.1"))
-        if not (base.startswith("https://") or loopback):
+        if not (base.startswith("https://") or is_loopback_uri(base)):
             raise ValueError(
                 "MCP_OAUTH_ENABLED=true requires an https PUBLIC_BASE_URL (or a loopback one for development)"
             )

@@ -43,6 +43,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from ..mcp.identity import STATE_GPC, STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
+from ..models.mcp_token import SCOPE_READ
 from ..models.oauth import SCOPE_OFFLINE_ACCESS
 from ..services.abuse.access_guard import AccessGuard
 from ..services.abuse.errors import AccountDisabledError
@@ -135,6 +136,22 @@ class McpHttpRuntime:
             self._analytics.capture(McpToolCall(tool=tool, ok=ok), user=identity.user, gpc=identity.gpc)
         except Exception as exc:  # noqa: BLE001 - e.g. a malformed tool name; never fails the call
             logger.warning("analytics_mcp_tool_call_skipped", error=str(exc))
+
+    @property
+    def config(self) -> "Config":
+        return self._config
+
+    @property
+    def users(self):
+        return self._users
+
+    def is_active(self, user: "User") -> bool:
+        """Spec #104: False for a suspended or banned account."""
+        try:
+            self._access.ensure_active(user)
+        except AccountDisabledError:
+            return False
+        return True
 
     def lifespan(self):
         """Session-manager task-group context; enter it in the app lifespan."""
@@ -238,9 +255,11 @@ class McpBearerGuard:
     def __init__(self, runtime: McpHttpRuntime, oauth: "McpOAuthService", *, resource_metadata_url: str):
         self._runtime = runtime
         self._oauth = oauth
-        self._config = runtime._config
-        self._users = runtime._users
-        self._challenge = f'Bearer resource_metadata="{resource_metadata_url}", scope="read offline_access"'
+        self._config = runtime.config
+        self._users = runtime.users
+        self._challenge = (
+            f'Bearer resource_metadata="{resource_metadata_url}", scope="{SCOPE_READ} {SCOPE_OFFLINE_ACCESS}"'
+        )
 
     def _unauthorized(self, error: Optional[str] = None) -> Response:
         challenge = self._challenge + (f', error="{error}"' if error else "")
@@ -253,18 +272,20 @@ class McpBearerGuard:
             return
 
         request = Request(scope, receive)
+        header = request.headers.get("authorization", "")
+        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        if not token:
+            # First contact: no credential yet is normal, not a miss, and the
+            # challenge is cheap, so it is answered even for a burnt budget
+            # (a scanner behind the same NAT must not block sign-in).
+            await self._unauthorized()(scope, receive, send)
+            return
+
         ip = resolve_client_ip(request, config=self._config)
         if mcp_miss_budget_exhausted(ip):
             await Response(status_code=429, headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)})(
                 scope, receive, send
             )
-            return
-
-        header = request.headers.get("authorization", "")
-        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
-        if not token:
-            # First contact: no credential yet is normal, not a miss.
-            await self._unauthorized()(scope, receive, send)
             return
 
         found = self._oauth.verify_access(token)

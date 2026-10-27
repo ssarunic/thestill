@@ -50,10 +50,10 @@ from ..models.oauth import (
     OAuthGrant,
     OAuthPending,
     OAuthTokenRecord,
-    RevokeReason,
 )
 from ..repositories.oauth_repository import OAuthRepository
 from ..utils.datetime_utils import now_utc
+from ..utils.redirect_uris import is_allowed_redirect_uri, is_loopback_uri
 from .mcp_token_service import McpTokenService
 from .oauth_cimd import CimdResolver, is_cimd_client_id
 
@@ -75,8 +75,6 @@ TOUCH_INTERVAL_SECONDS = 60
 SUPPORTED_SCOPES: Tuple[str, ...] = (*ALL_SCOPES, SCOPE_OFFLINE_ACCESS)
 #: What a request that names no scope gets.
 DEFAULT_REQUEST_SCOPES: Tuple[str, ...] = (SCOPE_READ, SCOPE_OFFLINE_ACCESS)
-
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
 
 
 class OAuthRequestError(Exception):
@@ -138,11 +136,6 @@ def redirect_host(uri: str) -> str:
     return urlsplit(uri).hostname or uri
 
 
-def is_loopback(uri: str) -> bool:
-    parts = urlsplit(uri)
-    return parts.scheme == "http" and (parts.hostname or "") in _LOOPBACK_HOSTS
-
-
 def with_query(uri: str, **params: Optional[str]) -> str:
     """``uri`` with ``params`` appended to its query (None values skipped)."""
     parts = urlsplit(uri)
@@ -186,6 +179,11 @@ class McpOAuthService:
         """Store a dynamic registration (metadata as the SDK built it)."""
         if is_cimd_client_id(client_id):
             raise OAuthRequestError("invalid_client_metadata", "client_id must not be a URL")
+        uris = metadata.get("redirect_uris") or []
+        if not uris or not all(isinstance(u, str) and is_allowed_redirect_uri(u) for u in uris):
+            raise OAuthRequestError(
+                "invalid_redirect_uri", "redirect_uris must be https, loopback http or an app scheme"
+            )
         name = metadata.get("client_name")
         self._repo.save_client(
             OAuthClientRecord(
@@ -241,7 +239,7 @@ class McpOAuthService:
         return PendingView(
             client_name=client.client_name if client else None,
             redirect_host=redirect_host(pending.redirect_uri),
-            loopback_only=bool(redirect_uris) and all(is_loopback(u) for u in redirect_uris),
+            loopback_only=bool(redirect_uris) and all(is_loopback_uri(u) for u in redirect_uris),
             requested_scopes=tuple(s for s in pending.scopes if s in ALL_SCOPES),
             offline_access=SCOPE_OFFLINE_ACCESS in pending.scopes,
         )
@@ -254,8 +252,13 @@ class McpOAuthService:
         pending = self._repo.get_pending(id_hash, now=now)
         if pending is None:
             return None
-        scopes = approved_scopes(pending.scopes, ticked, is_admin=is_admin)
         client = self.get_client(pending.client_id)
+        # The client must still resolve (a CIMD document can vanish) and its
+        # redirect must still pass the policy; registration checked it, this
+        # is the last line before a browser is sent there.
+        if client is None or not is_allowed_redirect_uri(pending.redirect_uri):
+            return None
+        scopes = approved_scopes(pending.scopes, ticked, is_admin=is_admin)
         code = secrets.token_urlsafe(32)
         result = self._repo.approve(
             id_hash,
@@ -280,6 +283,8 @@ class McpOAuthService:
         id_hash = hash_secret(request_id)
         pending = self._repo.get_pending(id_hash, now=self._clock())
         if pending is None or not self._repo.delete_pending(id_hash):
+            return None
+        if not is_allowed_redirect_uri(pending.redirect_uri):
             return None
         return with_query(pending.redirect_uri, error="access_denied", state=pending.state)
 
@@ -425,9 +430,6 @@ class McpOAuthService:
 
     def disconnect(self, user_id: str, grant_id: str) -> bool:
         return self._repo.revoke_grant(grant_id, now=self._clock(), reason="user", user_id=user_id)
-
-    def revoke_all(self, user_id: str, *, reason: RevokeReason = "admin") -> int:
-        return self._repo.revoke_user_grants(user_id, now=self._clock(), reason=reason)
 
     def prune(self) -> int:
         now = self._clock()

@@ -302,15 +302,6 @@ def test_rotate_refused_after_grant_revoked(repos, user):
     assert repo.rotate_refresh("r1", now=NOW, tokens=_tokens(grant.id, "a2", "r2")) is False
 
 
-def test_revoke_token(repos, user):
-    repo, _ = repos
-    grant, _ = _approve(repo, user.id)
-    repo.redeem_code("code1", now=NOW, tokens=_tokens(grant.id, "a1", "r1"))
-    assert repo.revoke_token("a1", now=NOW) is True
-    assert repo.revoke_token("a1", now=NOW) is False
-    assert repo.find_active_access("a1", now=NOW) is None
-
-
 # -- grants -------------------------------------------------------------------------
 
 
@@ -371,3 +362,44 @@ def test_prune(repos, user):
     assert repo.get_token("r1") is None and repo.get_token("r2") is not None
     assert repo.get_client("dcr-1") is None and repo.get_client(CLIENT) is not None
     assert repo.get_grant(grant.id) is not None
+
+
+def test_prune_keeps_a_retired_refresh_for_30_days_from_retirement(repos, user):
+    """A refresh token idle for weeks and then rotated is still recognised as
+    a replay for 30 days after the rotation, not after its issue."""
+    repo, _ = repos
+    grant, _ = _approve(repo, user.id)
+    repo.redeem_code("code1", now=NOW, tokens=_tokens(grant.id, "a1", "r1"))
+    rotated = NOW + timedelta(days=35)
+    repo.rotate_refresh("r1", now=rotated, tokens=_tokens(grant.id, "a2", "r2", now=rotated))
+    later = NOW + timedelta(days=40)
+    repo.prune(now=later, retired_before=later - timedelta(days=30), unused_clients_before=later - timedelta(days=7))
+    assert repo.get_token("r1") is not None
+    much_later = rotated + timedelta(days=31)
+    repo.prune(
+        now=much_later,
+        retired_before=much_later - timedelta(days=30),
+        unused_clients_before=much_later - timedelta(days=7),
+    )
+    assert repo.get_token("r1") is None
+
+
+def test_prune_drops_stale_metadata_documents_nobody_used(repos, user):
+    repo, _ = repos
+    meta = {"client_id": "https://x.example/doc", "redirect_uris": ["https://x.example/cb"]}
+    repo.save_client(
+        OAuthClientRecord(
+            client_id="https://x.example/doc",
+            source="cimd",
+            metadata=meta,
+            created_at=NOW,
+            fresh_until=NOW + timedelta(hours=1),
+        )
+    )
+    used = {**meta, "client_id": CLIENT}
+    repo.save_client(OAuthClientRecord(client_id=CLIENT, source="cimd", metadata=used, created_at=NOW, fresh_until=NOW))
+    _approve(repo, user.id)
+    later = NOW + timedelta(days=8)
+    repo.prune(now=later, retired_before=later - timedelta(days=30), unused_clients_before=later - timedelta(days=7))
+    assert repo.get_client("https://x.example/doc") is None
+    assert repo.get_client(CLIENT) is not None

@@ -429,6 +429,8 @@ In-memory per-client rate limiting on the sensitive web surfaces.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `RATE_LIMIT_MCP_MISS_MAX` | Unknown/revoked/expired remote-MCP tokens per client IP per window before the guard stops looking them up (spec #78) | `120` |
+| `RATE_LIMIT_OAUTH_REGISTRATION_MAX` | Dynamic client registrations (`POST /register`) per client IP per window (spec #109); above it `429` | `10` |
+| `RATE_LIMIT_OAUTH_REGISTRATION_WINDOW_SECONDS` | Registration budget window length | `3600` |
 | `RATE_LIMIT_MCP_MISS_WINDOW_SECONDS` | Window for the MCP token-miss budget | `60` |
 | `RATE_LIMIT_PUBLIC_MAX` | Signed-out `/api/public` and page-shell lookups per client IP per window (spec #94); signed-in requests skip it | `120` |
 | `RATE_LIMIT_PUBLIC_WINDOW_SECONDS` | Public budget window length | `60` |

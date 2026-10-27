@@ -600,6 +600,53 @@ Two facts found while planning change the design above:
   error page. That meets the requirement that `/authorize` never
   redirects to an unregistered URI, so we keep it.
 
+## Implementation review (2026-10-27)
+
+Three reviews of Phase 1 (security, conventions, frontend) found these,
+all fixed on the branch:
+
+- **Script redirect URIs.** Nothing checked a redirect URI's scheme, so a
+  client registering `javascript:` could run script on thestill's origin
+  when the reader clicked Approve. `utils/redirect_uris.py` now holds one
+  policy, enforced at DCR, in the CIMD check, when a client record is
+  loaded, in approve and deny, and again in the consent page before
+  navigating:
+  - `https` with a host;
+  - `http` on loopback only;
+  - a native app's private-use scheme;
+  - never `javascript:`, `data:`, `file:` and the like, a fragment, or
+    credentials in the URI.
+- **Slow CIMD fetch.** The CIMD fetch had a per-read timeout but no total
+  deadline. It now has an 8 s deadline, a one-minute backoff for a URL that
+  failed, and an 8-wide limit on concurrent client lookups. Malformed URLs
+  are refused instead of raising.
+- **Retired refresh tokens pruned too early.** Prune measured retirement
+  by issue time. A refresh token idle for over 30 days and then rotated was
+  deleted at once, so its replay went unnoticed. It now counts from the
+  successor's issue. Stale cached CIMD documents that nobody connected
+  through are pruned too.
+- **Signed-out consent hit NotFound.** A signed-out reader opening the
+  consent page landed on "page not found". `/oauth/consent` is now on
+  `PublicApp`'s sign-in redirect list.
+- **Smaller fixes:**
+  - Approve refuses when the client no longer resolves.
+  - The registration body is capped before it is read.
+  - The bearer challenge is answered even when the IP's miss budget is
+    spent.
+  - One loopback helper replaces four copies; the config check had
+    accepted `http://localhost.evil.example`.
+  - Dead API removed.
+  - Shared SQL column lists live in the repository interface.
+  - Accessibility on the consent page.
+
+Not changed, deliberately:
+
+- **Sync database calls in the bearer guard.** It makes its database calls
+  synchronously on the event loop, as the personal-URL guard always has.
+  Moving both to a worker thread is a separate change.
+- **Duplicated `approve` body.** The repository `approve` stays duplicated
+  across backends because the SQL dialects differ.
+
 ## Phase 1 execution plan
 
 Each step has a gate. The next step starts only when the gate is green.

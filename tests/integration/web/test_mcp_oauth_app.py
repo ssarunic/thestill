@@ -42,3 +42,11 @@ def test_flag_off_registers_nothing(app_config, app_state):
         "/.well-known/oauth-authorization-server",
     }
     assert client.post("/mcp", json={}, follow_redirects=False).status_code != 401
+
+
+def test_consent_route_cannot_be_framed(app_config, app_state):
+    """The app-wide security headers cover the consent page (spec #109)."""
+    client = _client(app_config, app_state, mcp_oauth_enabled=True)
+    headers = client.get("/oauth/consent").headers
+    assert headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in headers["content-security-policy"]

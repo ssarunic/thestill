@@ -69,13 +69,17 @@ class Harness:
         self.repos = make_repositories(self.config)
         self.user = self.repos.user.save(User(id=USER_A, email="a@example.com", is_admin=False))
         runtime = build_mcp_http(self.config, self.repos)
-        self.service, routes = build_mcp_oauth(self.config, self.repos, runtime)
         self.cimd_doc = {
             "client_id": CIMD_URL,
             "client_name": "Claude Code",
             "redirect_uris": ["http://localhost/callback"],
         }
-        self.service._cimd._fetch = lambda url: FetchedDocument(dict(self.cimd_doc), timedelta(hours=1))
+        self.service, routes = build_mcp_oauth(
+            self.config,
+            self.repos,
+            runtime,
+            cimd_fetch=lambda url: FetchedDocument(dict(self.cimd_doc), timedelta(hours=1)),
+        )
 
         @asynccontextmanager
         async def lifespan(app: FastAPI):
@@ -251,11 +255,22 @@ def test_without_offline_access_no_refresh_token(h):
 
 
 def test_plain_pkce_refused(h):
+    """The SDK refuses ``plain``; with a valid client and redirect the error
+    goes back to the client's callback (RFC 6749 §4.1.2.1), never to consent."""
     with h.client() as c:
         client = h.register(c)
         r = h.authorize(c, client["client_id"], "http://localhost:9999/cb", "x" * 43, code_challenge_method="plain")
-        assert r.status_code in (302, 400)
-        assert "consent" not in r.headers.get("location", "")
+        assert r.status_code == 302
+        location = r.headers["location"]
+        assert location.startswith("http://localhost:9999/cb?")
+        assert parse_qs(urlsplit(location).query)["error"] == ["invalid_request"]
+
+
+@pytest.mark.parametrize("uri", ["javascript:alert(document.cookie)//", "http://evil.example/cb", "data:text/html,x"])
+def test_dcr_refuses_unsafe_redirect_uris(h, uri):
+    with h.client() as c:
+        r = c.post("/register", json={"redirect_uris": [uri], "grant_types": ["authorization_code"]})
+        assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri"
 
 
 def test_wrong_verifier_refused(h):
@@ -312,6 +327,38 @@ def test_https_redirect_port_is_exact(h):
 
 
 # -- scopes across authorizations ---------------------------------------------------------------
+
+
+def test_tools_call_without_follows_names_the_scope(h):
+    with h.client() as c:
+        _, tokens = h.connect(c)
+        r = c.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "add_podcast", "arguments": {"url": "https://example.com/f.xml"}},
+            },
+            headers={**MCP_HEADERS, "Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert r.status_code == 200 and "follows" in r.text
+
+
+def test_non_admin_asking_for_pipeline_gets_read_only(h):
+    with h.client() as c:
+        _, tokens = h.connect(c, scope="read pipeline offline_access", ticked=("read", "pipeline"))
+        assert tokens["scope"] == "read offline_access"
+
+
+def test_demoting_an_admin_drops_pipeline_on_the_next_call(h):
+    h.repos.user.set_admin(USER_A, True)
+    h.user = h.repos.user.get_by_id(USER_A)
+    with h.client() as c:
+        _, tokens = h.connect(c, scope="read pipeline offline_access", ticked=("read", "pipeline"))
+        assert "transcribe_episodes" in _tool_names(h.rpc(c, tokens["access_token"]))
+        h.repos.user.set_admin(USER_A, False)
+        assert "transcribe_episodes" not in _tool_names(h.rpc(c, tokens["access_token"]))
 
 
 def test_two_authorizations_with_different_scopes(h):
@@ -377,11 +424,28 @@ def test_deny_redirects_access_denied(h):
 
 def test_suspended_account_refused(h):
     with h.client() as c:
-        _, tokens = h.connect(c)
+        client, tokens = h.connect(c)
         h.repos.user.apply_status(
             USER_A, UserStatus.SUSPENDED, reason="test", changed_by=None, changed_at=datetime.now(timezone.utc)
         )
         assert h.rpc(c, tokens["access_token"]).status_code == 403
+        refresh = c.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": tokens["refresh_token"],
+                "client_id": client["client_id"],
+            },
+        )
+        assert refresh.status_code == 400 and refresh.json()["error"] == "invalid_grant"
+
+
+def test_account_revocation_stops_the_next_call(h):
+    """Ban, suspend and logout everywhere revoke every grant (spec #109)."""
+    with h.client() as c:
+        _, tokens = h.connect(c)
+        assert h.repos.oauth.revoke_user_grants(USER_A, now=datetime.now(timezone.utc), reason="admin") == 1
+        assert h.rpc(c, tokens["access_token"]).status_code == 401
 
 
 def test_personal_url_still_works_beside_oauth(h):

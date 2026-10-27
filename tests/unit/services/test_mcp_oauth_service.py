@@ -267,15 +267,48 @@ def test_revoke_token_disconnects(env):
     assert service.list_grants(user.id) == []
 
 
-def test_disconnect_and_revoke_all(env):
+def test_disconnect(env):
     service, _, user, *_ = env
     issued = _connect(service, user)
     [grant] = service.list_grants(user.id)
     assert service.disconnect("someone-else", grant.id) is False
     assert service.disconnect(user.id, grant.id) is True
     assert service.verify_access(issued.access_token) is None
-    _connect(service, user)
-    assert service.revoke_all(user.id) == 1
+
+
+def test_refresh_lifetime_slides_with_use(env):
+    """90 days since last use, not since consent (spec #109 decision 1)."""
+    service, _, user, clock, _ = env
+    token = _connect(service, user).refresh_token
+    for _ in range(3):  # day 80, 160, 240
+        clock.advance(days=80)
+        assert service.load_refresh(CLIENT, token) is not None
+        token = service.exchange_refresh(token, []).refresh_token
+
+
+def test_dcr_refuses_unsafe_redirect_uris(env):
+    service, *_ = env
+    for uri in ("javascript:alert(1)//", "http://evil.example/cb", "data:text/html,x", "https://x.example/cb#frag"):
+        with pytest.raises(OAuthRequestError) as exc:
+            service.register_client("bad", {"client_id": "bad", "redirect_uris": [uri]})
+        assert exc.value.error == "invalid_redirect_uri"
+    service.register_client("ok", {"client_id": "ok", "redirect_uris": ["com.example.app:/cb", "http://127.0.0.1/cb"]})
+
+
+def test_approve_refused_when_client_no_longer_resolves(env):
+    """A registration pruned (or a document gone) between /authorize and
+    the reader's click gets no code."""
+    service, _, user, *_ = env
+    request_id = service.park(
+        client_id="dcr-pruned",
+        redirect_uri="http://localhost:9999/cb",
+        redirect_uri_explicit=True,
+        state="st",
+        scopes=["read"],
+        code_challenge="c" * 43,
+        resource=RESOURCE,
+    )
+    assert service.approve(request_id, user_id=user.id, is_admin=False, ticked=["read"]) is None
 
 
 def test_dcr_client_round_trip(env):

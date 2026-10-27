@@ -88,7 +88,7 @@ from .dependencies import (
     user_search_rate_limit,
 )
 from .error_handlers import register_abuse_handlers
-from .mcp_oauth import OAUTH_PATHS
+from .mcp_oauth import OAUTH_PATHS, build_mcp_oauth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .public_access import has_valid_session
 from .public_prerender import Outcome, get_prerenderer, inject_body
@@ -515,8 +515,6 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # MCP_OAUTH_ENABLED is set. Its routes register ahead of the /mcp mount.
     mcp_oauth_routes = []
     if config.mcp_oauth_enabled and mcp_runtime is not None:
-        from .mcp_oauth import build_mcp_oauth
-
         app_state.mcp_oauth_service, mcp_oauth_routes = build_mcp_oauth(config, repos, mcp_runtime)
 
     @asynccontextmanager

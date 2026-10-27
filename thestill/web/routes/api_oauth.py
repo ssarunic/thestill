@@ -28,6 +28,7 @@ from typing import List
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 
+from ...models.oauth import SCOPE_OFFLINE_ACCESS
 from ...models.user import User
 from ...services.mcp_oauth_service import McpOAuthService
 from ..dependencies import AppState, get_app_state, is_effective_admin, require_auth
@@ -104,7 +105,7 @@ def list_grants(state: AppState = Depends(get_app_state), user: User = Depends(r
                     "id": g.id,
                     "client_name": g.client_name,
                     "redirect_host": g.redirect_host,
-                    "scopes": [s for s in g.scopes if s != "offline_access"],
+                    "scopes": [s for s in g.scopes if s != SCOPE_OFFLINE_ACCESS],
                     "created_at": g.created_at.isoformat(),
                     "last_used_at": g.last_used_at.isoformat() if g.last_used_at else None,
                 }

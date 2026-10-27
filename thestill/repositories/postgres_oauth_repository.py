@@ -33,42 +33,9 @@ from structlog import get_logger
 
 from ..models.oauth import OAuthClientRecord, OAuthCode, OAuthGrant, OAuthPending, OAuthTokenRecord, RevokeReason
 from ..utils.postgres_ext import as_str, connect
-from .oauth_repository import OAuthRepository
+from .oauth_repository import CODE_COLS, GRANT_COLS, PENDING_COLS, TOKEN_COLS, OAuthRepository, split_scopes
 
 logger = get_logger(__name__)
-
-# Grant columns are aliased ``g_*`` everywhere: joined with a code or token
-# row, ``scopes``/``created_at``/``revoked_at`` would otherwise collide.
-_GRANT_FIELDS = (
-    "id",
-    "user_id",
-    "client_id",
-    "client_name",
-    "redirect_host",
-    "scopes",
-    "created_at",
-    "last_used_at",
-    "last_used_ip",
-    "revoked_at",
-    "revoked_reason",
-)
-_GRANT_COLS = ", ".join(f"g.{f} AS g_{f}" for f in _GRANT_FIELDS)
-_CODE_COLS = (
-    "c.code_hash, c.grant_id, c.client_id, c.scopes, c.redirect_uri, c.redirect_uri_explicit,"
-    " c.code_challenge, c.resource, c.expires_at, c.used_at"
-)
-_TOKEN_COLS = (
-    "t.token_hash, t.grant_id, t.client_id, t.kind, t.scopes, t.resource, t.created_at,"
-    " t.expires_at, t.replaced_by_hash, t.revoked_at"
-)
-_PENDING_COLS = (
-    "id_hash, client_id, redirect_uri, redirect_uri_explicit, state, scopes, code_challenge,"
-    " resource, created_at, expires_at"
-)
-
-
-def _scopes(value: str) -> Tuple[str, ...]:
-    return tuple(s for s in value.split(",") if s)
 
 
 def _grant(row) -> OAuthGrant:
@@ -78,7 +45,7 @@ def _grant(row) -> OAuthGrant:
         client_id=row["g_client_id"],
         client_name=row["g_client_name"],
         redirect_host=row["g_redirect_host"],
-        scopes=_scopes(row["g_scopes"]),
+        scopes=split_scopes(row["g_scopes"]),
         created_at=row["g_created_at"],
         last_used_at=row["g_last_used_at"],
         last_used_ip=row["g_last_used_ip"],
@@ -92,7 +59,7 @@ def _code(row) -> OAuthCode:
         code_hash=row["code_hash"],
         grant_id=as_str(row["grant_id"]),
         client_id=row["client_id"],
-        scopes=_scopes(row["scopes"]),
+        scopes=split_scopes(row["scopes"]),
         redirect_uri=row["redirect_uri"],
         redirect_uri_explicit=row["redirect_uri_explicit"],
         code_challenge=row["code_challenge"],
@@ -108,7 +75,7 @@ def _token(row) -> OAuthTokenRecord:
         grant_id=as_str(row["grant_id"]),
         client_id=row["client_id"],
         kind=row["kind"],
-        scopes=_scopes(row["scopes"]),
+        scopes=split_scopes(row["scopes"]),
         resource=row["resource"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
@@ -124,7 +91,7 @@ def _pending(row) -> OAuthPending:
         redirect_uri=row["redirect_uri"],
         redirect_uri_explicit=row["redirect_uri_explicit"],
         state=row["state"],
-        scopes=_scopes(row["scopes"]),
+        scopes=split_scopes(row["scopes"]),
         code_challenge=row["code_challenge"],
         resource=row["resource"],
         created_at=row["created_at"],
@@ -217,7 +184,7 @@ class PostgresOAuthRepository(OAuthRepository):
     def save_pending(self, pending: OAuthPending) -> None:
         with connect(self.dsn) as conn:
             conn.execute(
-                f"INSERT INTO oauth_pending ({_PENDING_COLS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                f"INSERT INTO oauth_pending ({PENDING_COLS}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     pending.id_hash,
                     pending.client_id,
@@ -235,7 +202,7 @@ class PostgresOAuthRepository(OAuthRepository):
     def get_pending(self, id_hash: str, *, now: datetime) -> Optional[OAuthPending]:
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_PENDING_COLS} FROM oauth_pending WHERE id_hash = %s AND expires_at > %s",
+                f"SELECT {PENDING_COLS} FROM oauth_pending WHERE id_hash = %s AND expires_at > %s",
                 (id_hash, now),
             ).fetchone()
         return _pending(row) if row else None
@@ -260,7 +227,7 @@ class PostgresOAuthRepository(OAuthRepository):
         joined = ",".join(scopes)
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"DELETE FROM oauth_pending WHERE id_hash = %s AND expires_at > %s RETURNING {_PENDING_COLS}",
+                f"DELETE FROM oauth_pending WHERE id_hash = %s AND expires_at > %s RETURNING {PENDING_COLS}",
                 (id_hash, now),
             ).fetchone()
             if row is None:
@@ -273,7 +240,7 @@ class PostgresOAuthRepository(OAuthRepository):
                 (f"oauth_grant:{user_id}:{pending.client_id}",),
             )
             current = conn.execute(
-                f"SELECT {_GRANT_COLS} FROM oauth_grants g WHERE g.user_id = %s AND g.client_id = %s"
+                f"SELECT {GRANT_COLS} FROM oauth_grants g WHERE g.user_id = %s AND g.client_id = %s"
                 " AND g.revoked_at IS NULL",
                 (user_id, pending.client_id),
             ).fetchone()
@@ -328,9 +295,7 @@ class PostgresOAuthRepository(OAuthRepository):
                     code.expires_at,
                 ),
             )
-            grant_row = conn.execute(
-                f"SELECT {_GRANT_COLS} FROM oauth_grants g WHERE g.id = %s", (grant_id,)
-            ).fetchone()
+            grant_row = conn.execute(f"SELECT {GRANT_COLS} FROM oauth_grants g WHERE g.id = %s", (grant_id,)).fetchone()
             return _grant(grant_row), code
 
     # -- codes ---------------------------------------------------------------
@@ -338,7 +303,7 @@ class PostgresOAuthRepository(OAuthRepository):
     def get_code(self, code_hash: str) -> Optional[Tuple[OAuthCode, OAuthGrant]]:
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_CODE_COLS}, {_GRANT_COLS} FROM oauth_codes c"
+                f"SELECT {CODE_COLS}, {GRANT_COLS} FROM oauth_codes c"
                 " JOIN oauth_grants g ON g.id = c.grant_id WHERE c.code_hash = %s",
                 (code_hash,),
             ).fetchone()
@@ -366,7 +331,7 @@ class PostgresOAuthRepository(OAuthRepository):
         with connect(self.dsn) as conn:
             row = conn.execute(
                 f"""
-                SELECT {_TOKEN_COLS}, {_GRANT_COLS} FROM oauth_tokens t
+                SELECT {TOKEN_COLS}, {GRANT_COLS} FROM oauth_tokens t
                   JOIN oauth_grants g ON g.id = t.grant_id
                  WHERE t.token_hash = %s AND t.kind = 'access' AND t.revoked_at IS NULL
                    AND (t.expires_at IS NULL OR t.expires_at > %s)
@@ -379,7 +344,7 @@ class PostgresOAuthRepository(OAuthRepository):
     def get_token(self, token_hash: str) -> Optional[Tuple[OAuthTokenRecord, OAuthGrant]]:
         with connect(self.dsn) as conn:
             row = conn.execute(
-                f"SELECT {_TOKEN_COLS}, {_GRANT_COLS} FROM oauth_tokens t"
+                f"SELECT {TOKEN_COLS}, {GRANT_COLS} FROM oauth_tokens t"
                 " JOIN oauth_grants g ON g.id = t.grant_id WHERE t.token_hash = %s",
                 (token_hash,),
             ).fetchone()
@@ -404,27 +369,17 @@ class PostgresOAuthRepository(OAuthRepository):
             _insert_tokens(conn, tokens)
             return True
 
-    def revoke_token(self, token_hash: str, *, now: datetime) -> bool:
-        with connect(self.dsn) as conn:
-            return (
-                conn.execute(
-                    "UPDATE oauth_tokens SET revoked_at = %s WHERE token_hash = %s AND revoked_at IS NULL",
-                    (now, token_hash),
-                ).rowcount
-                == 1
-            )
-
     # -- grants --------------------------------------------------------------
 
     def get_grant(self, grant_id: str) -> Optional[OAuthGrant]:
         with connect(self.dsn) as conn:
-            row = conn.execute(f"SELECT {_GRANT_COLS} FROM oauth_grants g WHERE g.id = %s", (grant_id,)).fetchone()
+            row = conn.execute(f"SELECT {GRANT_COLS} FROM oauth_grants g WHERE g.id = %s", (grant_id,)).fetchone()
         return _grant(row) if row else None
 
     def list_active_grants(self, user_id: str) -> List[OAuthGrant]:
         with connect(self.dsn) as conn:
             rows = conn.execute(
-                f"SELECT {_GRANT_COLS} FROM oauth_grants g WHERE g.user_id = %s AND g.revoked_at IS NULL"
+                f"SELECT {GRANT_COLS} FROM oauth_grants g WHERE g.user_id = %s AND g.revoked_at IS NULL"
                 " ORDER BY g.created_at DESC",
                 (user_id,),
             ).fetchall()
@@ -475,10 +430,12 @@ class PostgresOAuthRepository(OAuthRepository):
                 """
                 DELETE FROM oauth_tokens
                  WHERE (expires_at IS NOT NULL AND expires_at <= %s)
-                    OR (kind = 'refresh' AND (replaced_by_hash IS NOT NULL OR revoked_at IS NOT NULL)
-                        AND created_at <= %s)
+                    OR (kind = 'refresh' AND revoked_at IS NOT NULL AND revoked_at <= %s)
+                    OR (kind = 'refresh' AND replaced_by_hash IS NOT NULL
+                        AND EXISTS (SELECT 1 FROM oauth_tokens n
+                                     WHERE n.token_hash = oauth_tokens.replaced_by_hash AND n.created_at <= %s))
                 """,
-                (now, retired_before),
+                (now, retired_before, retired_before),
             ).rowcount
             deleted += conn.execute(
                 "DELETE FROM oauth_grants WHERE revoked_at IS NOT NULL AND revoked_at <= %s", (retired_before,)
@@ -486,9 +443,10 @@ class PostgresOAuthRepository(OAuthRepository):
             deleted += conn.execute(
                 """
                 DELETE FROM oauth_clients
-                 WHERE source = 'dcr' AND created_at <= %s
+                 WHERE ((source = 'dcr' AND created_at <= %s)
+                        OR (source = 'cimd' AND (fresh_until IS NULL OR fresh_until <= %s)))
                    AND NOT EXISTS (SELECT 1 FROM oauth_grants g WHERE g.client_id = oauth_clients.client_id)
                 """,
-                (unused_clients_before,),
+                (unused_clients_before, unused_clients_before),
             ).rowcount
         return deleted

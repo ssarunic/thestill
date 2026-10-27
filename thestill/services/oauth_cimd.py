@@ -20,7 +20,8 @@ document at that URL (Claude and Claude Code identify themselves this way;
 the MCP SDK models the field but implements nothing server-side). The
 fetch runs against a URL any caller of ``/authorize`` chooses, so it is
 fenced: https only, no credentials in the URL, every resolved address must
-be public, no redirects, a 5 s timeout and a 64 KB cap. Fetched documents
+be public, no redirects, a 5 s timeout per read inside an 8 s deadline and
+a 64 KB cap; a URL that failed is left alone for a minute. Fetched documents
 are cached in ``oauth_clients`` for their ``Cache-Control`` max-age, capped
 at 24 h; a failed refetch keeps serving the last good copy.
 
@@ -34,6 +35,8 @@ import ipaddress
 import json
 import re
 import socket
+import threading
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Callable, Dict, Optional
@@ -45,11 +48,18 @@ from structlog import get_logger
 from ..models.oauth import OAuthClientRecord
 from ..repositories.oauth_repository import OAuthRepository
 from ..utils.datetime_utils import now_utc
+from ..utils.redirect_uris import is_allowed_redirect_uri
 
 logger = get_logger(__name__)
 
 MAX_BYTES = 64 * 1024
+# Per network operation; the whole fetch also has a wall-clock deadline, so
+# a server dripping a byte at a time cannot hold a worker thread.
 TIMEOUT_SECONDS = 5.0
+DEADLINE_SECONDS = 8.0
+# A URL that failed is not fetched again for this long (unknown or broken
+# documents are what an attacker would send many of).
+FAILURE_BACKOFF_SECONDS = 60.0
 MAX_CACHE = timedelta(hours=24)
 # A document with no usable ``Cache-Control`` is refetched after this.
 DEFAULT_CACHE = timedelta(hours=1)
@@ -71,21 +81,21 @@ def is_cimd_client_id(client_id: str) -> bool:
     return client_id.startswith("https://")
 
 
-def _check_url(url: str) -> str:
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname:
-        raise CimdError("client_id must be an https URL")
-    if parts.username or parts.password or parts.fragment:
-        raise CimdError("client_id URL must not carry credentials or a fragment")
+def _check_url(url: str) -> None:
     try:
-        infos = socket.getaddrinfo(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise CimdError("client_id host does not resolve") from exc
+        parts = urlsplit(url)
+        hostname, port = parts.hostname, parts.port  # .port raises on a bad port
+        if parts.scheme != "https" or not hostname:
+            raise CimdError("client_id must be an https URL")
+        if parts.username or parts.password or parts.fragment:
+            raise CimdError("client_id URL must not carry credentials or a fragment")
+        infos = socket.getaddrinfo(hostname, port or 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, ValueError, UnicodeError) as exc:  # UnicodeError: bad IDNA label
+        raise CimdError("client_id is not a usable URL") from exc
     for info in infos:
         address = ipaddress.ip_address(info[4][0])
         if not address.is_global:
             raise CimdError("client_id host resolves to a non-public address")
-    return parts.hostname
 
 
 def fetch_document(url: str) -> FetchedDocument:
@@ -97,10 +107,13 @@ def fetch_document(url: str) -> FetchedDocument:
                 if response.status_code != 200:
                     raise CimdError(f"metadata document answered {response.status_code}")
                 body = b""
+                deadline = time.monotonic() + DEADLINE_SECONDS
                 for chunk in response.iter_bytes():
                     body += chunk
                     if len(body) > MAX_BYTES:
                         raise CimdError("metadata document is too large")
+                    if time.monotonic() > deadline:
+                        raise CimdError("metadata document took too long")
                 cache_control = response.headers.get("cache-control", "")
     except httpx.HTTPError as exc:
         raise CimdError("metadata document could not be fetched") from exc
@@ -127,6 +140,8 @@ def validate_document(url: str, document: Dict[str, Any]) -> Dict[str, Any]:
     redirect_uris = document.get("redirect_uris")
     if not isinstance(redirect_uris, list) or not redirect_uris or not all(isinstance(u, str) for u in redirect_uris):
         raise CimdError("metadata document has no redirect_uris")
+    if not all(is_allowed_redirect_uri(u) for u in redirect_uris):
+        raise CimdError("metadata document lists a redirect URI that is not allowed")
     method = document.get("token_endpoint_auth_method", "none")
     if method != "none":
         # A metadata document has no secret to share; only public clients
@@ -148,18 +163,29 @@ class CimdResolver:
         self._repository = repository
         self._fetch = fetch
         self._clock = clock
+        # url -> monotonic time before which a failed URL is not refetched.
+        self._failed: dict = {}
+        self._failed_lock = threading.Lock()
 
     def resolve(self, url: str) -> Optional[OAuthClientRecord]:
         now = self._clock()
         cached = self._repository.get_client(url)
         if cached is not None and cached.source == "cimd" and cached.fresh_until and cached.fresh_until > now:
             return cached
+        fallback = cached if cached is not None and cached.source == "cimd" else None
+        with self._failed_lock:
+            if self._failed.get(url, 0.0) > time.monotonic():
+                return fallback
         try:
             fetched = self._fetch(url)
             document = validate_document(url, fetched.document)
         except CimdError as exc:
-            logger.warning("oauth_cimd_fetch_failed", client_id=url, error=str(exc), cached=cached is not None)
-            return cached if cached is not None and cached.source == "cimd" else None
+            logger.warning("oauth_cimd_fetch_failed", client_id=url, error=str(exc), cached=fallback is not None)
+            with self._failed_lock:
+                if len(self._failed) > 10_000:
+                    self._failed.clear()
+                self._failed[url] = time.monotonic() + FAILURE_BACKOFF_SECONDS
+            return fallback
         max_age = fetched.max_age if fetched.max_age is not None else DEFAULT_CACHE
         record = OAuthClientRecord(
             client_id=url,

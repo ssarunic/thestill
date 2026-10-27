@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
 
 from ...models.user import User
+from ...utils.redirect_uris import is_loopback_host
 from ..dependencies import AppState, get_app_state, is_effective_admin, require_auth
 from ..mcp_http import mount_base_url
 from ..responses import api_response, bad_request
@@ -39,9 +40,6 @@ class McpTokenRequest(BaseModel):
     scopes: List[str] = Field(default_factory=list)
 
 
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-
-
 def _issuing_over_secure_origin(state: AppState, request: Request) -> bool:
     """The token rides in the URL path, so we only hand one out when the
     URL it will be pasted into is HTTPS (or a loopback dev address).
@@ -54,7 +52,7 @@ def _issuing_over_secure_origin(state: AppState, request: Request) -> bool:
         return base.lower().startswith("https://")
     if request.url.scheme == "https":
         return True
-    return (request.url.hostname or "").lower() in _LOCAL_HOSTS
+    return is_loopback_host(request.url.hostname or "")
 
 
 def _token_view(state: AppState, user: User) -> dict:
@@ -75,7 +73,9 @@ def _token_view(state: AppState, user: User) -> dict:
 
 
 @router.get("")
-def get_mcp_token(state: AppState = Depends(get_app_state), user: User = Depends(require_auth)) -> dict:
+def get_mcp_token(
+    request: Request, state: AppState = Depends(get_app_state), user: User = Depends(require_auth)
+) -> dict:
     """The caller's connector token state — never the plaintext. With OAuth
     on (spec #109), also the one address every reader pastes."""
     oauth = state.mcp_oauth_service is not None
@@ -83,7 +83,7 @@ def get_mcp_token(state: AppState = Depends(get_app_state), user: User = Depends
         {
             "enabled": bool(state.config.mcp_http_enabled),
             "oauth_enabled": oauth,
-            "address": f"{state.config.public_base_url.rstrip('/')}/mcp" if oauth else None,
+            "address": mount_base_url(state.config, str(request.base_url)) if oauth else None,
             **_token_view(state, user),
         }
     )

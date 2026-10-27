@@ -32,6 +32,8 @@ def test_validate_document_accepts_doc_without_scope_and_defaults_public():
         _doc(redirect_uris=[]),
         _doc(redirect_uris="http://localhost/callback"),
         _doc(token_endpoint_auth_method="client_secret_basic"),
+        _doc(redirect_uris=["javascript:alert(1)//"]),
+        _doc(redirect_uris=["http://evil.example/callback"]),
     ],
 )
 def test_validate_document_refuses(doc):
@@ -48,6 +50,8 @@ def test_validate_document_refuses(doc):
         "https://localhost/doc",
         "https://10.0.0.5/doc",
         "https://169.254.169.254/latest/meta-data",
+        "https://claude.ai:abc/doc",
+        "https://a..b/doc",
     ],
 )
 def test_fetch_refuses_unsafe_urls_before_any_request(url, monkeypatch):
@@ -116,3 +120,16 @@ def test_resolver_unknown_and_failing_is_none(repo):
 def test_resolver_refuses_invalid_document(repo):
     resolver = CimdResolver(repo, fetch=lambda url: FetchedDocument(_doc(client_id="https://x"), None), clock=Clock())
     assert resolver.resolve(URL) is None
+
+
+def test_resolver_backs_off_after_a_failure(repo):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        raise CimdError("down")
+
+    resolver = CimdResolver(repo, fetch=fetch, clock=Clock())
+    assert resolver.resolve(URL) is None
+    assert resolver.resolve(URL) is None
+    assert len(calls) == 1

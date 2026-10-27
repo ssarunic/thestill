@@ -37,7 +37,7 @@ the way Claude needs are patched here, not forked:
 
 import json
 from functools import partial
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import anyio.to_thread
@@ -50,6 +50,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     AuthorizeError,
     RefreshToken,
+    RegistrationError,
     TokenError,
 )
 from mcp.server.auth.routes import (
@@ -74,6 +75,9 @@ from ..services.mcp_oauth_service import (
     OAuthRequestError,
     client_scope_ceiling,
 )
+from ..services.oauth_cimd import CimdResolver, FetchedDocument, fetch_document
+from ..utils.redirect_uris import is_allowed_redirect_uri, is_loopback_host
+from .mcp_http import MOUNT_PATH, McpBearerGuard, McpHttpRuntime
 from .middleware.rate_limit import allow_oauth_registration, resolve_client_ip
 
 logger = structlog.get_logger(__name__)
@@ -85,15 +89,17 @@ AUTHORIZATION_SERVER_PATH = "/.well-known/oauth-authorization-server"
 OAUTH_PATHS = ("authorize", "token", "register", "revoke")
 _REGISTRATION_BODY_MAX = 16 * 1024
 _REVOCATION_BODY_MAX = 64 * 1024
-_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _AUTH_METHODS = ["none", "client_secret_post", "client_secret_basic"]
+# Client lookups can fetch a metadata document over the network; a few at a
+# time is plenty, and it keeps them from taking every worker thread.
+_CLIENT_LOOKUPS = 8
 
 
 def _loopback_port_match(requested: str, registered: List[AnyUrl]) -> bool:
     """RFC 8252 §7.3: an ``http`` loopback redirect matches a registered one
     that differs only in port. Never applies to ``https`` or other hosts."""
     want = urlsplit(requested)
-    if want.scheme != "http" or (want.hostname or "") not in _LOOPBACK_HOSTS:
+    if want.scheme != "http" or not is_loopback_host(want.hostname or ""):
         return False
     for uri in registered:
         have = urlsplit(str(uri))
@@ -116,6 +122,11 @@ class ThestillClient(OAuthClientInformationFull):
         scope = client_scope_ceiling(data.get("scope"))
         if scope is None:
             return None
+        # Registration and the CIMD check refuse these already; a row written
+        # before that rule (or by hand) must not reach the redirect step.
+        if not all(isinstance(u, str) and is_allowed_redirect_uri(u) for u in data.get("redirect_uris") or []):
+            logger.warning("oauth_client_redirect_refused", client_id=record.client_id)
+            return None
         data["scope"] = scope
         try:
             return cls.model_validate(data)
@@ -134,6 +145,18 @@ class ThestillClient(OAuthClientInformationFull):
         return super().validate_redirect_uri(redirect_uri)
 
 
+async def _read_capped(receive, cap: int) -> Optional[bytes]:
+    """The whole request body, or None once it passes ``cap`` bytes."""
+    body = b""
+    while True:
+        message = await receive()
+        body += message.get("body", b"")
+        if len(body) > cap:
+            return None
+        if not message.get("more_body"):
+            return body
+
+
 class _PublicClientRevocation:
     """ASGI wrapper for the SDK's ``/revoke``.
 
@@ -150,15 +173,10 @@ class _PublicClientRevocation:
         if scope["type"] != "http" or scope.get("method") != "POST":
             await self._app(scope, receive, send)
             return
-        body = b""
-        while True:
-            message = await receive()
-            body += message.get("body", b"")
-            if len(body) > _REVOCATION_BODY_MAX:
-                await Response(status_code=413)(scope, receive, send)
-                return
-            if not message.get("more_body"):
-                break
+        body = await _read_capped(receive, _REVOCATION_BODY_MAX)
+        if body is None:
+            await Response(status_code=413)(scope, receive, send)
+            return
         if b"client_secret=" not in body:
             body += b"&client_secret=" if body else b"client_secret="
 
@@ -186,18 +204,22 @@ class ThestillOAuthProvider:
 
     def __init__(self, service: McpOAuthService, *, base_url: str):
         self._service = service
-        self._base_url = base_url.rstrip("/")
+        self._base_url = base_url
+        self._client_lookups = anyio.CapacityLimiter(_CLIENT_LOOKUPS)
 
     async def _run(self, fn, *args, **kwargs):
         return await anyio.to_thread.run_sync(partial(fn, *args, **kwargs))
 
     async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
-        record = await self._run(self._service.get_client, client_id)
+        record = await anyio.to_thread.run_sync(self._service.get_client, client_id, limiter=self._client_lookups)
         return ThestillClient.from_record(record) if record is not None else None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         metadata = client_info.model_dump(mode="json", exclude_none=True)
-        await self._run(self._service.register_client, client_info.client_id, metadata)
+        try:
+            await self._run(self._service.register_client, client_info.client_id, metadata)
+        except OAuthRequestError as exc:
+            raise RegistrationError(error=exc.error, error_description=exc.description) from exc
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         try:
@@ -302,15 +324,26 @@ def _authorization_server_metadata(base: str) -> OAuthMetadata:
     )
 
 
+def resource_url(base_url: str) -> str:
+    """The protected resource: the exact ``/mcp`` address readers paste."""
+    return f"{base_url}{MOUNT_PATH}"
+
+
+def resource_metadata_url(base_url: str) -> str:
+    return f"{base_url}{PROTECTED_RESOURCE_PATH}{MOUNT_PATH}"
+
+
 def build_oauth_routes(service: McpOAuthService, *, base_url: str, config) -> List[BaseRoute]:
     """The OAuth routes to register ahead of the ``/mcp`` mount and the SPA.
 
-    The SDK's routes, minus its authorization server metadata (replaced) and
-    its registration endpoint (wrapped to default to public clients and
-    rate-limited per IP); plus protected resource metadata at both the
-    path-suffixed and the root well-known location.
+    The SDK's routes, minus its authorization server metadata (replaced),
+    its registration endpoint (wrapped to default to public clients, cap the
+    body and rate-limit per IP) and its revocation endpoint (wrapped for
+    public clients); plus protected resource metadata at both the
+    path-suffixed and the root well-known location. ``base_url`` has no
+    trailing slash.
     """
-    base = base_url.rstrip("/")
+    base = base_url
     provider = ThestillOAuthProvider(service, base_url=base)
     registration = ClientRegistrationOptions(
         enabled=True, valid_scopes=list(SUPPORTED_SCOPES), default_scopes=list(SUPPORTED_SCOPES)
@@ -335,9 +368,13 @@ def build_oauth_routes(service: McpOAuthService, *, base_url: str, config) -> Li
                 status_code=429,
                 headers={"Retry-After": "3600"},
             )
-        body = await request.body()
-        if len(body) > _REGISTRATION_BODY_MAX:
-            return JSONResponse({"error": "invalid_client_metadata"}, status_code=413)
+        too_large = JSONResponse({"error": "invalid_client_metadata"}, status_code=413)
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > _REGISTRATION_BODY_MAX:
+            return too_large
+        body = await _read_capped(request.receive, _REGISTRATION_BODY_MAX)
+        if body is None:
+            return too_large
         try:
             data = json.loads(body)
         except ValueError:
@@ -352,7 +389,7 @@ def build_oauth_routes(service: McpOAuthService, *, base_url: str, config) -> Li
         return await register.handle(Request(request.scope, receive))
 
     resource_routes = create_protected_resource_routes(
-        resource_url=f"{base}/mcp",
+        resource_url=resource_url(base),
         authorization_servers=[base],
         scopes_supported=list(SUPPORTED_SCOPES),
         resource_name="thestill",
@@ -378,39 +415,26 @@ def build_oauth_routes(service: McpOAuthService, *, base_url: str, config) -> Li
     ]
 
 
-def resource_metadata_url(base_url: str) -> str:
-    return f"{base_url.rstrip('/')}{PROTECTED_RESOURCE_PATH}/mcp"
-
-
-def build_mcp_oauth(config, repos, runtime) -> Tuple[McpOAuthService, List[BaseRoute]]:
+def build_mcp_oauth(
+    config, repos, runtime: McpHttpRuntime, *, cimd_fetch: Callable[[str], FetchedDocument] = fetch_document
+) -> Tuple[McpOAuthService, List[BaseRoute]]:
     """The OAuth service and every route spec #109 adds, ahead of the
     ``/mcp`` mount: the OAuth endpoints, both metadata documents and the
     bearer guard on the exact path ``/mcp`` (also installed on ``runtime``
-    for ``/mcp/``)."""
-    from ..services.abuse.access_guard import AccessGuard
-    from ..services.abuse.errors import AccountDisabledError
-    from .mcp_http import McpBearerGuard
-
+    for ``/mcp/``). ``cimd_fetch`` is the metadata-document fetcher, for tests."""
     base = config.public_base_url.rstrip("/")
-    guard = AccessGuard(repos.user, None, multi_user=config.multi_user)
 
     def is_user_active(user_id: str) -> bool:
         user = repos.user.get_by_id(user_id)
-        if user is None:
-            return False
-        try:
-            guard.ensure_active(user)
-        except AccountDisabledError:
-            return False
-        return True
+        return user is not None and runtime.is_active(user)
 
     service = McpOAuthService(
         repos.oauth,
-        resource_url=f"{base}/mcp",
+        resource_url=resource_url(base),
         refresh_ttl_days=config.mcp_token_ttl_days,
         is_user_active=is_user_active,
+        cimd=CimdResolver(repos.oauth, fetch=cimd_fetch),
     )
     bearer = McpBearerGuard(runtime, service, resource_metadata_url=resource_metadata_url(base))
     runtime.bearer = bearer
-    routes = [*build_oauth_routes(service, base_url=base, config=config), Route("/mcp", endpoint=bearer)]
-    return service, routes
+    return service, [*build_oauth_routes(service, base_url=base, config=config), Route(MOUNT_PATH, endpoint=bearer)]

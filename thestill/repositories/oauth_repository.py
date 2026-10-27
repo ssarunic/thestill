@@ -32,6 +32,41 @@ from typing import List, Optional, Sequence, Tuple
 
 from ..models.oauth import OAuthClientRecord, OAuthCode, OAuthGrant, OAuthPending, OAuthTokenRecord, RevokeReason
 
+# Column lists shared by both backends. Grant columns are aliased ``g_*``
+# everywhere: joined with a code or token row, ``scopes``/``created_at``/
+# ``revoked_at`` would otherwise collide.
+GRANT_FIELDS = (
+    "id",
+    "user_id",
+    "client_id",
+    "client_name",
+    "redirect_host",
+    "scopes",
+    "created_at",
+    "last_used_at",
+    "last_used_ip",
+    "revoked_at",
+    "revoked_reason",
+)
+GRANT_COLS = ", ".join(f"g.{f} AS g_{f}" for f in GRANT_FIELDS)
+CODE_COLS = (
+    "c.code_hash, c.grant_id, c.client_id, c.scopes, c.redirect_uri, c.redirect_uri_explicit,"
+    " c.code_challenge, c.resource, c.expires_at, c.used_at"
+)
+TOKEN_COLS = (
+    "t.token_hash, t.grant_id, t.client_id, t.kind, t.scopes, t.resource, t.created_at,"
+    " t.expires_at, t.replaced_by_hash, t.revoked_at"
+)
+PENDING_COLS = (
+    "id_hash, client_id, redirect_uri, redirect_uri_explicit, state, scopes, code_challenge,"
+    " resource, created_at, expires_at"
+)
+
+
+def split_scopes(value: str) -> Tuple[str, ...]:
+    """Scopes are stored comma-joined, like ``mcp_tokens``."""
+    return tuple(s for s in value.split(",") if s)
+
 
 class OAuthRepository(ABC):
     """Abstract repository for ``oauth_*`` tables."""
@@ -117,10 +152,6 @@ class OAuthRepository(ABC):
         (and nothing written) unless the old token is an unexpired,
         unretired, unrevoked refresh token under an active grant."""
 
-    @abstractmethod
-    def revoke_token(self, token_hash: str, *, now: datetime) -> bool:
-        """Revoke one token. True when an unrevoked one existed."""
-
     # -- grants --------------------------------------------------------------
 
     @abstractmethod
@@ -154,9 +185,14 @@ class OAuthRepository(ABC):
     def prune(self, *, now: datetime, retired_before: datetime, unused_clients_before: datetime) -> int:
         """Delete what can never be used again; the number of rows deleted.
 
-        Expired pending requests; expired codes (used ones are kept until
-        then, so a replay is recognised); tokens that are expired; refresh tokens that are expired or were
-        retired/revoked before ``retired_before``; grants revoked before
-        ``retired_before`` (cascading their codes and tokens); DCR clients
-        created before ``unused_clients_before`` that have no grant at all.
+        - expired pending requests;
+        - expired codes (a used code is kept until then, so a replay is
+          recognised);
+        - expired tokens;
+        - refresh tokens retired (their successor issued) or revoked before
+          ``retired_before``, kept until then for reuse detection;
+        - grants revoked before ``retired_before``, with their codes and
+          tokens;
+        - clients with no grant at all: DCR registrations created, and cached
+          metadata documents gone stale, before ``unused_clients_before``.
         """
