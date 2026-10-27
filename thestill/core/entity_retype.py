@@ -31,7 +31,13 @@ from ..models.entities import EntityRecord, EntityType
 from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type
 
 
-def plan_retype(entity: EntityRecord, p31: List[str], *, only_works: bool = False) -> Optional[EntityType]:
+def plan_retype(
+    entity: EntityRecord,
+    p31: List[str],
+    *,
+    only_works: bool = False,
+    superclasses: Optional[Callable[[str], List[str]]] = None,
+) -> Optional[EntityType]:
     """The type ``entity`` should have given ``p31``, or ``None`` if unchanged.
 
     ``only_works`` limits the change to the spec #92 works rule: a film,
@@ -43,7 +49,7 @@ def plan_retype(entity: EntityRecord, p31: List[str], *, only_works: bool = Fals
     if only_works:
         works = set(p31) & WORK_P31 and not set(p31) & PERSON_P31
         return EntityType.PRODUCT if works and entity.type != EntityType.PRODUCT else None
-    classified = classify_entity_type(p31, entity.type) or entity.type
+    classified = classify_entity_type(p31, entity.type, superclasses) or entity.type
     return None if classified == entity.type else classified
 
 
@@ -63,12 +69,15 @@ def plan_backfill(
     fetch_p31: Optional[Callable[[str], List[str]]],
     *,
     only_works: bool = False,
+    superclasses: Optional[Callable[[str], List[str]]] = None,
 ) -> Iterator[RetypePlan]:
     """What ``backfill-entity-types`` would do, one entity at a time.
 
     ``fetch_p31`` is called only for entities with no stored P31; ``None``
     (``--cached-only``) skips them instead, so the run makes no network
-    calls. Entities with nothing to change are not yielded.
+    calls. ``superclasses`` (P279) lets an unlisted class such as "town in
+    Croatia" count as a place. Entities with nothing to change are not
+    yielded.
     """
     for entity in entities:
         p31 = entity.wikidata_instance_of
@@ -78,7 +87,7 @@ def plan_backfill(
             p31 = fetch_p31(entity.wikidata_qid)
             if not p31:
                 continue
-        new_type = plan_retype(entity, p31, only_works=only_works)
+        new_type = plan_retype(entity, p31, only_works=only_works, superclasses=superclasses)
         if new_type is None and entity.wikidata_instance_of == p31:
             continue
         yield RetypePlan(entity, p31, new_type)
