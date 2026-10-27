@@ -5,7 +5,7 @@
 > **Updated:** 2026-10-27
 > **Priority:** Medium. The connector has worked for every user since v1.4.1 (2026-09-08), but nobody outside the operator has used it, and today we could not tell if someone tried and gave up.
 > **Author:** Product & Engineering
-> **Related:** [#78 remote-mcp-access](78-remote-mcp-access.md) (per-user connector URLs, scopes, Phase 3 OAuth), [#94 public-pages](94-public-pages.md) (public routes, head tags, sitemap), [#95 product-analytics](95-product-analytics.md) (Layer B events and their privacy rules), [#105 server-rendered-public-pages](105-server-rendered-public-pages.md) (server-written fallback HTML for crawlers).
+> **Related:** [#78 remote-mcp-access](78-remote-mcp-access.md) (per-user connector URLs, scopes), [#109 mcp-oauth](109-mcp-oauth.md) (OAuth, directory listing), [#94 public-pages](94-public-pages.md) (public routes, head tags, sitemap), [#95 product-analytics](95-product-analytics.md) (Layer B events and their privacy rules), [#105 server-rendered-public-pages](105-server-rendered-public-pages.md) (server-written fallback HTML for crawlers).
 
 ---
 
@@ -37,8 +37,8 @@ This spec does three things:
    results and entity pages. Also show a one-time card once a reader
    follows three shows.
 
-Getting into connector directories needs OAuth (spec #78 Phase 3).
-This spec lists the directories but does not build OAuth.
+Getting into connector directories needs OAuth, which spec #109
+covers. This spec lists the directories but does not build OAuth.
 
 ## Problem and evidence
 
@@ -270,7 +270,7 @@ thestill URL, so Claude's tools can resolve it.
 
 These are where people look for MCP connectors. Each one lists a server
 under a fixed URL, so the per-user token URL does not fit any of them
-until OAuth exists (spec #78 Phase 3). Recorded so the OAuth work has
+until OAuth exists (spec #109). Recorded so the OAuth work has
 its payoff written down:
 
 - Anthropic's connector directory in Claude. This is the one that
@@ -310,7 +310,7 @@ personal URL from Settings". Do that only where a directory allows it.
 
 ### Phase 3 (follow-up spec): OAuth and directories
 
-Owned by spec #78 Phase 3. Not started here.
+Owned by spec #109. Not started here.
 
 ## Acceptance
 
@@ -342,8 +342,7 @@ Phase 2:
 
 ## Out of scope
 
-- OAuth, organisation connectors and directory listings (spec #78
-  Phase 3).
+- OAuth, organisation connectors and directory listings (spec #109).
 - New MCP tools such as inbox or briefing tools (spec #78 says these
   need their own spec).
 - Email or social announcements. That is operator work after Phase 1
