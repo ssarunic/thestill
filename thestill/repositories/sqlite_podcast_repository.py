@@ -650,6 +650,77 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_usage_events_user_kind ON usage_events(user_id, kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_usage_events_kind_created ON usage_events(kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_usage_events_reserved ON usage_events(created_at) WHERE state = 'reserved';
+
+            -- Spec #109 (Postgres 0025): OAuth authorization server for the
+            -- remote MCP server. JSON is TEXT, booleans 0/1.
+            CREATE TABLE IF NOT EXISTS oauth_clients (
+                client_id   TEXT PRIMARY KEY NOT NULL,
+                source      TEXT NOT NULL CHECK (source IN ('cimd', 'dcr')),
+                client_name TEXT NULL,
+                metadata    TEXT NOT NULL,
+                created_at  TIMESTAMP NOT NULL,
+                fetched_at  TIMESTAMP NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_pending (
+                id_hash               TEXT PRIMARY KEY NOT NULL,
+                client_id             TEXT NOT NULL,
+                redirect_uri          TEXT NOT NULL,
+                redirect_uri_explicit INTEGER NOT NULL,
+                state                 TEXT NULL,
+                scopes                TEXT NOT NULL,
+                code_challenge        TEXT NOT NULL,
+                resource              TEXT NULL,
+                created_at            TIMESTAMP NOT NULL,
+                expires_at            TIMESTAMP NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_pending_expires ON oauth_pending(expires_at);
+
+            CREATE TABLE IF NOT EXISTS oauth_grants (
+                id             TEXT PRIMARY KEY NOT NULL,
+                user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                client_id      TEXT NOT NULL,
+                client_name    TEXT NULL,
+                redirect_host  TEXT NOT NULL,
+                scopes         TEXT NOT NULL,
+                created_at     TIMESTAMP NOT NULL,
+                last_used_at   TIMESTAMP NULL,
+                last_used_ip   TEXT NULL,
+                revoked_at     TIMESTAMP NULL,
+                revoked_reason TEXT NULL CHECK (revoked_reason IN ('user', 'admin', 'replaced', 'reuse'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_grants_active
+                ON oauth_grants(user_id, client_id) WHERE revoked_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_oauth_grants_client ON oauth_grants(client_id);
+
+            CREATE TABLE IF NOT EXISTS oauth_codes (
+                code_hash             TEXT PRIMARY KEY NOT NULL,
+                grant_id              TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+                client_id             TEXT NOT NULL,
+                scopes                TEXT NOT NULL,
+                redirect_uri          TEXT NOT NULL,
+                redirect_uri_explicit INTEGER NOT NULL,
+                code_challenge        TEXT NOT NULL,
+                resource              TEXT NULL,
+                expires_at            TIMESTAMP NOT NULL,
+                used_at               TIMESTAMP NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_codes_grant ON oauth_codes(grant_id);
+
+            CREATE TABLE IF NOT EXISTS oauth_tokens (
+                token_hash       TEXT PRIMARY KEY NOT NULL,
+                grant_id         TEXT NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+                client_id        TEXT NOT NULL,
+                kind             TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
+                scopes           TEXT NOT NULL,
+                resource         TEXT NULL,
+                created_at       TIMESTAMP NOT NULL,
+                expires_at       TIMESTAMP NULL,
+                replaced_by_hash TEXT NULL,
+                revoked_at       TIMESTAMP NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
+            CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
             """
         )
 
