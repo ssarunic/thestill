@@ -1,6 +1,6 @@
 # OAuth for the Remote MCP Server
 
-> **Status:** 📝 Draft (2026-10-27)
+> **Status:** 🚧 Phase 1 in development on `feat/109-mcp-oauth` (2026-10-27)
 > **Created:** 2026-10-27
 > **Updated:** 2026-10-27 (review: scope snapshots, `offline_access`, CIMD scope and loopback adapter)
 > **Priority:** Medium. This decides whether the connector can be listed in the Claude directory and set up without copying a secret URL. Until it ships, spec #108's promotion can reach only the readers who already visit thestill.me.
@@ -559,7 +559,122 @@ retired more than 30 days ago.
 - **New tools,** such as inbox and briefings (spec #78 says they need
   their own spec).
 
+## Decisions (2026-10-27)
+
+The open questions were settled before implementation:
+
+1. **Refresh lifetime:** 90 days since last use. An active connection
+   never lapses.
+2. **Silent re-approval:** not in Phase 1. The consent screen shows on
+   every reconnect.
+3. **Backends:** both SQLite and Postgres, under the current repository
+   contract. CI and local test servers run SQLite.
+4. **Confidential DCR clients.** SDK 2.2.0 defaults a registration that
+   names no `token_endpoint_auth_method` to `client_secret_post`. Its
+   `ClientAuthenticator` compares the stored secret in plaintext. So:
+   - **No method named:** registered as a public client (`none`), like
+     Claude and ChatGPT.
+   - **`client_secret_post` or `client_secret_basic` named explicitly:**
+     accepted, and the secret is stored as issued. PKCE and the
+     reader's consent still guard every authorization.
+5. **Shipping:** one PR with staged commits, all behind
+   `MCP_OAUTH_ENABLED` (default off).
+
+Two facts found while planning change the design above:
+
+- **Metadata.** SDK 2.2.0's `build_metadata` hard-codes
+  `token_endpoint_auth_methods_supported` to
+  `client_secret_post` and `client_secret_basic`. Claude uses CIMD only
+  when `none` is in that list. So we serve our own
+  `/.well-known/oauth-authorization-server` document built from the
+  SDK's `OAuthMetadata` model, and drop the SDK's metadata route.
+- **Bare `/mcp`.** A Starlette `Mount("/mcp")` does not match the bare
+  path `/mcp`. The bearer guard is its own `Route("/mcp")` registered
+  ahead of the mount.
+
+## Phase 1 execution plan
+
+Each step has a gate. The next step starts only when the gate is green.
+Tests run from the worktree with
+`PYTHONPATH=$PWD ../thestill/venv/bin/python -m pytest …`. Postgres
+contract tests run with `TEST_DATABASE_URL` set to a scratch Postgres.app
+database.
+
+### Step A: tables and repository
+
+| # | File | Change |
+|---|---|---|
+| A1 | `thestill/models/oauth.py` | New pydantic models: `OAuthClientRecord`, `OAuthPending`, `OAuthGrant`, `OAuthCode`, `OAuthTokenRecord` |
+| A2 | `thestill/migrations/versions/0025_mcp_oauth.py` | Five tables, `IF NOT EXISTS`. Partial unique index on `oauth_grants(user_id, client_id) WHERE revoked_at IS NULL`. Codes and tokens cascade from grants, grants from users |
+| A3 | `thestill/repositories/postgres_schema.py` | The same DDL in `SCHEMA_SQL`, after `users` |
+| A4 | `thestill/repositories/sqlite_podcast_repository.py` | The same tables in the SQLite migration block (TEXT ids and JSON, ISO-8601 `+00:00` timestamps) |
+| A5 | `thestill/repositories/oauth_repository.py` and its `sqlite_` and `postgres_` implementations | One repository for the five tables, because grant replacement and refresh rotation cross tables and must be atomic (`BEGIN IMMEDIATE` on SQLite, row locks / `RETURNING` on Postgres). Time is always a parameter |
+| A6 | `thestill/repositories/factory.py` | A `RepositoryBundle.oauth` field, wired on both backends |
+| A7 | `tests/integration/test_oauth_repository_contract.py` | Contract tests on both backends, including grant replacement, rotation compare-and-set, reuse, cascade and prune |
+
+**Gate:** the contract tests pass on SQLite and on Postgres, and
+`tests/integration/test_migrate_on_startup.py` passes.
+
+### Step B: service and client policy
+
+| # | File | Change |
+|---|---|---|
+| B1 | `thestill/services/mcp_oauth_service.py` | Synchronous logic:<br>- scope policy (MCP scopes via `normalize_scopes()`, `offline_access` handled separately)<br>- park a request, read it for its user, approve (keep or replace the grant), deny<br>- load and exchange a code<br>- load and rotate a refresh token, with reuse detection<br>- verify an access token<br>- revoke; list and disconnect grants; revoke everything for a user; prune |
+| B2 | `thestill/services/oauth_cimd.py` | CIMD fetch: https only, refuses private addresses after resolution, 5 s timeout, 64 KB cap, `client_id` must equal the URL, cache by max-age capped at 24 h, keeps the last good copy |
+| B3 | `tests/unit/services/test_mcp_oauth_service.py`, `test_oauth_cimd.py` | The acceptance cases that need no HTTP |
+
+**Gate:** the unit tests pass.
+
+### Step C: SDK adapter, routes and bearer guard
+
+| # | File | Change |
+|---|---|---|
+| C1 | `thestill/web/mcp_oauth.py` | `ThestillClient` (scope policy plus the loopback-port `validate_redirect_uri`).<br>`ThestillOAuthProvider` (async SDK protocol, which calls the service through `anyio.to_thread`).<br>`build_oauth_routes()`, which returns the SDK `/authorize`, `/token`, `/register`, `/revoke` with registration defaulting to public clients, our authorization-server metadata, and the protected-resource metadata at `/.well-known/oauth-protected-resource/mcp` and at the root |
+| C2 | `thestill/web/mcp_http.py` | Factor the shared dispatch out of the personal-URL guard. Add a `McpBearerApp` ASGI guard for exact `/mcp`: a `401` with `resource_metadata`, a per-grant rate limit, `STATE_SCOPES` taken from the access token minus `offline_access` |
+| C3 | `thestill/utils/config.py`, `docs/configuration.md`, `.env.example` | `MCP_OAUTH_ENABLED` (default false). It needs `MCP_HTTP_ENABLED` and an `https` `PUBLIC_BASE_URL`, or a loopback one for development |
+| C4 | `thestill/web/app.py` | Register the OAuth routes and `Route("/mcp")` ahead of the mount when the flag is on. Add the OAuth paths to the SPA skip list (exact names). Add the `/api/oauth` router. Add the housekeeping job |
+| C5 | `thestill/web/routes/api_oauth.py` | `GET /api/oauth/pending/{id}`, `POST …/approve`, `POST …/deny`, `GET /api/me/oauth-grants`, `DELETE /api/me/oauth-grants/{id}`. All take the session cookie, and none accepts an OAuth access token |
+| C6 | `thestill/services/abuse/housekeeping.py` | `oauth_housekeeping_jobs` (prune every 6 h) |
+| C7 | `tests/unit/web/test_mcp_oauth_flow.py` | The full flow through `TestClient`:<br>- metadata, the `401` shape, DCR, CIMD (with a stubbed fetch), PKCE<br>- the two-authorization scope case, `offline_access`, rotation and reuse, the loopback port<br>- refusals, revocation<br>- personal URLs still working |
+
+**Gate:** the flow tests pass, plus the existing `tests/unit/web/test_mcp_http.py`, `test_api_me_mcp_token.py`, `tests/unit/mcp/` and `tests/integration/web/test_default_deny_auth.py` (with the new routes added to it).
+
+### Step D: account controls
+
+| # | File | Change |
+|---|---|---|
+| D1 | `thestill/services/abuse/account_admin_service.py`, `services/abuse/wiring.py` | Suspend, ban and logout everywhere revoke every grant, and the count goes in the audit entry |
+| D2 | `thestill/cli.py` | `user show` lists grants. The suspend text names connected apps |
+| D3 | tests | The existing abuse-controls tests, extended |
+
+**Gate:** the abuse tests pass.
+
+### Step E: frontend
+
+| # | File | Change |
+|---|---|---|
+| E1 | `frontend/src/pages/OAuthConsent.tsx` and a route in `App.tsx` next to `/login` | Reads `#request=`. Shows the client name, the redirect host in large type, the loopback warning, the scope checkboxes and the line "Stay connected until you disconnect". Approve and Deny navigate to the URL the server returns. Signed-out readers already reach `/login?next=…#request=…` through `PublicApp`'s catch-all |
+| E2 | `frontend/src/components/McpScopeForm.tsx` | `ScopeForm` extracted from `McpConnectorSettings` and reused |
+| E3 | `McpConnectorSettings.tsx`, `api/client.ts`, `hooks/useApi.ts`, `api/types.ts` | The address line (when OAuth is enabled), a Connected apps list with Disconnect, and the personal URL under Advanced |
+| E4 | Vitest specs | Consent page states, Connected apps |
+
+**Gate:** `npm run build`, `npx vitest run` on the touched specs, and `npx tsc --noEmit`.
+
+### Step F: manual check
+
+Boot a scratch server with the flag on and a loopback issuer. Run the
+whole flow in MCP Inspector, and, after deploy with the flag on, in
+claude.ai.
+
+### Rollback
+
+- Set `MCP_OAUTH_ENABLED=false`. The routes disappear, `/mcp` goes back
+  to 404, and personal URLs are untouched.
+- The 0025 tables stay. They are additive, so nothing else reads them.
+
 ## Open questions
+
+All three were settled on 2026-10-27 (see Decisions). They are kept here for the record.
 
 1. **Refresh lifetime.** Proposed: 90 days *idle*, so active
    connections never lapse. The alternative is a hard cap from consent.
