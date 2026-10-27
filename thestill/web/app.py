@@ -979,7 +979,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 return None
             # Spec #109: OAuth paths are never the SPA, even with the flag
             # off or the wrong method (exact names: /tokens is not /token).
-            if full_path in ("mcp", *OAUTH_PATHS) or full_path.startswith(".well-known/"):
+            if full_path in ("mcp", *OAUTH_PATHS) or full_path.startswith(".well-known/oauth-"):
                 return None
             index_file = static_dir / "index.html"
             if full_path and full_path != "index.html":
