@@ -320,3 +320,29 @@ def test_dcr_client_round_trip(env):
     assert service.get_client("unknown") is None
     with pytest.raises(OAuthRequestError):
         service.register_client("https://x.example/doc", {})
+
+
+def test_concurrent_refresh_reuse_revokes_the_grant(env):
+    """Codex P2 on #442: two requests with one refresh token both pass
+    load_refresh; the loser of the rotation must revoke the grant, not just
+    fail, or a stolen token that wins the race stays usable."""
+    service, _, user, *_ = env
+    first = _connect(service, user)
+    assert service.load_refresh(CLIENT, first.refresh_token) is not None
+    assert service.load_refresh(CLIENT, first.refresh_token) is not None  # both pass before either rotates
+    winner = service.exchange_refresh(first.refresh_token, [])
+    with pytest.raises(OAuthRequestError):
+        service.exchange_refresh(first.refresh_token, [])
+    assert service.verify_access(winner.access_token) is None
+    assert service.load_refresh(CLIENT, winner.refresh_token) is None
+
+
+def test_concurrent_code_reuse_revokes_the_grant(env):
+    service, _, user, *_ = env
+    code = _code_from(service.approve(_park(service), user_id=user.id, is_admin=False, ticked=["read"]))
+    assert service.load_code(CLIENT, code) is not None
+    assert service.load_code(CLIENT, code) is not None
+    winner = service.exchange_code(code)
+    with pytest.raises(OAuthRequestError):
+        service.exchange_code(code)
+    assert service.verify_access(winner.access_token) is None

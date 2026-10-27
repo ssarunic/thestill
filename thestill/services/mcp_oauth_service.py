@@ -301,8 +301,7 @@ class McpOAuthService:
             return None
         now = self._clock()
         if record.used_at is not None:
-            if self._repo.revoke_grant(grant.id, now=now, reason="reuse"):
-                logger.warning("oauth_code_replayed", grant_id=grant.id, client_id=client_id)
+            self._revoke_for_reuse(grant.id, client_id, "oauth_code_replayed")
             return None
         if record.expires_at <= now or grant.revoked_at is not None or not self._is_user_active(grant.user_id):
             return None
@@ -316,6 +315,12 @@ class McpOAuthService:
         now = self._clock()
         tokens, issued = self._mint(grant, record.client_id, record.scopes, record.resource, now)
         if not self._repo.redeem_code(record.code_hash, now=now, tokens=tokens):
+            # Lost the compare-and-set: if another request redeemed it first,
+            # that is reuse, and the grant goes (load_code only catches the
+            # replay that arrives after the redemption, not the race).
+            again = self._repo.get_code(record.code_hash)
+            if again is not None and again[0].used_at is not None:
+                self._revoke_for_reuse(grant.id, record.client_id, "oauth_code_replayed")
             raise OAuthRequestError("invalid_grant", "authorization code is not valid")
         return issued
 
@@ -332,8 +337,7 @@ class McpOAuthService:
             return None
         now = self._clock()
         if record.replaced_by_hash is not None:
-            if self._repo.revoke_grant(grant.id, now=now, reason="reuse"):
-                logger.warning("oauth_refresh_replayed", grant_id=grant.id, client_id=client_id)
+            self._revoke_for_reuse(grant.id, client_id, "oauth_refresh_replayed")
             return None
         if record.revoked_at is not None or grant.revoked_at is not None:
             return None
@@ -356,8 +360,17 @@ class McpOAuthService:
             grant, record.client_id, tuple(scopes) or record.scopes, record.resource, now, refresh_scopes=record.scopes
         )
         if not self._repo.rotate_refresh(record.token_hash, now=now, tokens=tokens):
+            # Lost the race to a concurrent rotation of the same token: reuse,
+            # exactly as a later replay is (Codex P2 on #442).
+            again = self._repo.get_token(record.token_hash)
+            if again is not None and again[0].replaced_by_hash is not None:
+                self._revoke_for_reuse(grant.id, record.client_id, "oauth_refresh_replayed")
             raise OAuthRequestError("invalid_grant", "refresh token is not valid")
         return issued
+
+    def _revoke_for_reuse(self, grant_id: str, client_id: str, event: str) -> None:
+        if self._repo.revoke_grant(grant_id, now=self._clock(), reason="reuse"):
+            logger.warning(event, grant_id=grant_id, client_id=client_id)
 
     def _mint(
         self,
