@@ -5345,6 +5345,7 @@ def user_show(ctx, email_or_id, json_output):
         suspended_follows=footprint.suspended_follows,
         feeds_brought_in=footprint.feeds_brought_in,
         usage_24h=footprint.usage_24h,
+        connected_apps=footprint.connected_apps or None,
     )
     if json_output:
         click.echo(json.dumps(info, indent=2))
@@ -5363,7 +5364,7 @@ def user_show(ctx, email_or_id, json_output):
 def user_suspend(ctx, email_or_id, reason):
     """Block sign-in and every request. Follows are kept."""
     user, _ = _act_on(ctx, email_or_id, lambda admin, user, actor: admin.suspend(user.id, reason=reason, actor=actor))
-    click.echo(f"✓ Suspended {user.email}. Their sessions and MCP token are revoked.")
+    click.echo(f"✓ Suspended {user.email}. Their sessions, MCP token and connected apps are revoked.")
 
 
 @user_group.command("ban")
@@ -5418,7 +5419,7 @@ def user_reinstate(ctx, email_or_id, reason):
 @require_config
 @log_command
 def user_logout_everywhere(ctx, email_or_id):
-    """Revoke every session and the MCP token of this user."""
+    """Revoke every session, the MCP token and the connected apps of this user."""
     user, _ = _act_on(ctx, email_or_id, lambda admin, user, actor: admin.logout_everywhere(user.id, actor=actor))
     click.echo(f"✓ Signed {user.email} out everywhere.")
 
