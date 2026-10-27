@@ -297,6 +297,11 @@ public page calls any `/api` endpoint outside `/api/public` and
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
+| `/api/me/oauth-grants` | GET | The caller's connected apps (spec #109, `MCP_OAUTH_ENABLED`): client name, redirect host, scopes, connected and last-used times. Empty when OAuth is off |
+| `/api/me/oauth-grants/{id}` | DELETE | Disconnect one app; its tokens stop working on the next call (204; 404 when not the caller's) |
+| `/api/oauth/pending/{id}` | GET | What the consent screen shows for a parked authorization request: client name, redirect host, loopback-only flag, requested scopes, `offline_access`. 404 once it expired or was decided |
+| `/api/oauth/pending/{id}/approve` | POST | Approve with `{scopes: [...]}` for the signed-in reader; returns `{redirect}` (the client's callback with the code) |
+| `/api/oauth/pending/{id}/deny` | POST | Refuse; returns `{redirect}` carrying `error=access_denied` |
 | `/api/me/listening/{episode_id}` | PUT | Record the caller's listening position (spec #90): `{event, position_seconds, duration_seconds, session_id, seq}` with `event` one of `tick`/`pause`/`seek`/`ended`/`stop`/`mark_played`/`mark_unplayed`. Returns `{accepted, completed, listening}`; `accepted: false` means an older write from the same tab was ignored. 404 unknown episode, 400 non-finite or negative position. Playback writes also set the analytics-only `listened_at` (spec #103) unless the caller turned usage analytics off or sent `Sec-GPC: 1` |
 | `/api/me/listening/{episode_id}` | GET | The caller's `{position_seconds, duration_seconds, completed_at, updated_at}` for one episode, or `{"item": null}` |
 | `/api/me/listening/latest` | GET | Restore candidate: the most recently updated unfinished episode not stopped since, with the episode fields needed to build a player track, or `{"item": null}` |
@@ -432,6 +437,7 @@ operator-only surface requires an admin session (`require_admin`):
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)
 - Remote MCP feature flag: `GET /api/status/mcp` (spec #78 — reports only whether the endpoint is mounted; connector URLs are per user via `/api/me/mcp-token`)
+- MCP OAuth (spec #109, `MCP_OAUTH_ENABLED`): `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource[/mcp]`, `/authorize`, `/token`, `/register` (DCR, public clients by default, 10/h per IP), `/revoke`, and bearer tokens on the exact path `/mcp` (`401` with `resource_metadata` when missing). Consent happens at `/oauth/consent` in the SPA
 - Stored webhook payload inspection: `GET`/`DELETE` `/webhook/elevenlabs/results*`
 
 Ordinary users never drive the pipeline manually — it runs automatically

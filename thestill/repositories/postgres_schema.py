@@ -106,6 +106,79 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_tokens_hash ON mcp_tokens(token_hash);
 
+-- Spec #109 — OAuth authorization server for the remote MCP server
+-- (alembic 0025). Secrets are SHA-256 hashes; a revoked grant invalidates
+-- its codes and tokens through the lookup join.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id text PRIMARY KEY,
+    source text NOT NULL CHECK (source IN ('cimd', 'dcr')),
+    client_name text NULL,
+    metadata jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    fetched_at timestamptz NULL,
+    fresh_until timestamptz NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_pending (
+    id_hash text PRIMARY KEY,
+    client_id text NOT NULL,
+    redirect_uri text NOT NULL,
+    redirect_uri_explicit boolean NOT NULL,
+    state text NULL,
+    scopes text NOT NULL,
+    code_challenge text NOT NULL,
+    resource text NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_pending_expires ON oauth_pending(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_grants (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id text NOT NULL,
+    client_name text NULL,
+    redirect_host text NOT NULL,
+    scopes text NOT NULL,
+    created_at timestamptz NOT NULL,
+    last_used_at timestamptz NULL,
+    last_used_ip text NULL,
+    revoked_at timestamptz NULL,
+    revoked_reason text NULL CHECK (revoked_reason IN ('user', 'admin', 'replaced', 'reuse'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_grants_active
+    ON oauth_grants(user_id, client_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_oauth_grants_client ON oauth_grants(client_id);
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash text PRIMARY KEY,
+    grant_id uuid NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+    client_id text NOT NULL,
+    scopes text NOT NULL,
+    redirect_uri text NOT NULL,
+    redirect_uri_explicit boolean NOT NULL,
+    code_challenge text NOT NULL,
+    resource text NULL,
+    expires_at timestamptz NOT NULL,
+    used_at timestamptz NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_codes_grant ON oauth_codes(grant_id);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash text PRIMARY KEY,
+    grant_id uuid NOT NULL REFERENCES oauth_grants(id) ON DELETE CASCADE,
+    client_id text NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('access', 'refresh')),
+    scopes text NOT NULL,
+    resource text NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NULL,
+    replaced_by_hash text NULL,
+    revoked_at timestamptz NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
+
 -- Spec #104 — runtime switches that override env defaults, and the
 -- append-only record of every admin action. No FK on the user columns:
 -- the log must outlive a deleted account.

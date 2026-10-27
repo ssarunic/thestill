@@ -42,8 +42,9 @@ export default function PublicApp() {
         ].map(([path, element]) => (
           <Route key={path as string} path={path as string} element={<Suspense fallback={null}>{element}</Suspense>} />
         ))}
-        {/* Signed-in areas: ask for sign-in, then come back. */}
-        {['/inbox', '/briefings/*', '/search', '/settings', '/episodes', '/status', '/queue', '/failed', '/analytics', '/podcasts'].map((path) => (
+        {/* Signed-in areas: ask for sign-in, then come back. /oauth/consent
+            (spec #109) keeps its #request= fragment through the round trip. */}
+        {['/inbox', '/briefings/*', '/search', '/settings', '/episodes', '/status', '/queue', '/failed', '/analytics', '/podcasts', '/oauth/consent'].map((path) => (
           <Route key={path} path={path} element={<SignInRedirect />} />
         ))}
         <Route

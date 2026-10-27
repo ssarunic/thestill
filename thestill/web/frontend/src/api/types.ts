@@ -1641,6 +1641,9 @@ export interface McpTokenInfo {
   last_used_at?: string | null
   last_used_ip?: string | null
   revoked_at?: string | null
+  // Spec #109 — standard OAuth on /mcp: the one address every reader pastes.
+  oauth_enabled?: boolean
+  address?: string | null
 }
 
 export interface McpTokenInfoResponse extends McpTokenInfo {
@@ -1654,6 +1657,40 @@ export interface McpTokenMintResponse {
   url: string
   scopes: McpTokenScope[]
   expires_at: string | null
+}
+
+// Spec #109 — an MCP client's request waiting on the consent screen.
+export interface OAuthPendingResponse {
+  status: string
+  timestamp: string
+  client_name: string | null
+  redirect_host: string
+  loopback_only: boolean
+  requested_scopes: McpTokenScope[]
+  offline_access: boolean
+}
+
+// Approve or deny: where to send the browser next (the client's callback).
+export interface OAuthDecisionResponse {
+  status: string
+  timestamp: string
+  redirect: string
+}
+
+// Spec #109 — a connected app (an active OAuth grant).
+export interface OAuthGrant {
+  id: string
+  client_name: string | null
+  redirect_host: string
+  scopes: McpTokenScope[]
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface OAuthGrantsResponse {
+  status: string
+  timestamp: string
+  grants: OAuthGrant[]
 }
 
 // ---------------------------------------------------------------------------

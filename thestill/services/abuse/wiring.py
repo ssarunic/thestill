@@ -80,6 +80,7 @@ def build_abuse_services(
             followers=repos.follower,
             suspended=repos.suspended_follow,
             mcp_tokens=repos.mcp_token,
+            oauth=repos.oauth,
             podcasts=repos.podcast,
             queue=repos.queue_manager,
             audit=audit,

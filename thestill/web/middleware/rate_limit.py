@@ -84,6 +84,14 @@ MCP_MISS_LIMIT = RateLimit(
     window_seconds=_int_env("RATE_LIMIT_MCP_MISS_WINDOW_SECONDS", 60),
 )
 
+# Spec #109 — dynamic client registrations per client IP. Claude registers
+# once per fresh connection when it falls back from a metadata document, so
+# a person stays far below this; a script creating clients does not.
+OAUTH_REGISTRATION_LIMIT = RateLimit(
+    max_events=_int_env("RATE_LIMIT_OAUTH_REGISTRATION_MAX", 10),
+    window_seconds=_int_env("RATE_LIMIT_OAUTH_REGISTRATION_WINDOW_SECONDS", 3600),
+)
+
 # Spec #94 — signed-out reads of the public pages (API + page shell lookups),
 # per client IP. One page view costs 3-6 requests, so 120/min is ~20 pages a
 # minute for a person and a hard ceiling for a scraper.
@@ -322,6 +330,14 @@ def check_mcp_token_rate_limit(token_hash: str, *, requests_per_minute: int) -> 
 def mcp_miss_budget_exhausted(client_ip: str) -> bool:
     """True when ``client_ip`` has burned its token-miss budget (spec #78)."""
     return _LIMITER.exhausted(f"mcp-miss:{client_ip}", MCP_MISS_LIMIT)
+
+
+def allow_oauth_registration(client_ip: str) -> bool:
+    """Charge one dynamic client registration to ``client_ip`` (spec #109)."""
+    allowed = _LIMITER.allow(f"oauth-register:{client_ip}", OAUTH_REGISTRATION_LIMIT)
+    if not allowed:
+        logger.warning("oauth_registration_limit_exceeded", client_ip=client_ip)
+    return allowed
 
 
 def record_mcp_token_miss(client_ip: str) -> None:

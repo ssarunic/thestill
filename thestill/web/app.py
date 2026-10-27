@@ -88,6 +88,7 @@ from .dependencies import (
     user_search_rate_limit,
 )
 from .error_handlers import register_abuse_handlers
+from .mcp_oauth import OAUTH_PATHS, build_mcp_oauth
 from .middleware import BodySizeLimitMiddleware, LoggingMiddleware, SecurityHeadersMiddleware
 from .public_access import has_valid_session
 from .public_prerender import Outcome, get_prerenderer, inject_body
@@ -116,6 +117,7 @@ from .routes import (
     api_me_listening,
     api_me_mcp_token,
     api_narrations,
+    api_oauth,
     api_podcasts,
     api_public,
     api_search,
@@ -509,6 +511,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     mcp_runtime = build_mcp_http(
         config, repos, token_service=app_state.mcp_token_service, analytics_sink=app_state.analytics_sink
     )
+    # Spec #109 — standard OAuth beside the personal URLs, off until
+    # MCP_OAUTH_ENABLED is set. Its routes register ahead of the /mcp mount.
+    mcp_oauth_routes = []
+    if config.mcp_oauth_enabled and mcp_runtime is not None:
+        app_state.mcp_oauth_service, mcp_oauth_routes = build_mcp_oauth(config, repos, mcp_runtime)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -648,6 +655,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 *usage_housekeeping_jobs(repos.usage, reservation_ttl_seconds=config.quota_reservation_ttl_seconds),
                 PeriodicJob("admin_alerts", 300, abuse.alerts.tick),
                 PeriodicJob("admin_digest", 60, abuse.alerts.maybe_send_digest),
+                *(app_state.mcp_oauth_service.housekeeping_jobs() if app_state.mcp_oauth_service else []),
             ]
         )
         periodic_runner.start()
@@ -830,6 +838,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # Spec #78 Phase 2 — per-user remote MCP tokens: user-authenticated,
     # deliberately NOT on the admin router.
     app.include_router(api_me_mcp_token.router, prefix="/api/me/mcp-token", tags=["mcp"], dependencies=require_session)
+    # Spec #109 — the OAuth consent screen's calls and the connected-apps
+    # list. Session-only like the token routes; they 404 while OAuth is off.
+    app.include_router(
+        api_oauth.pending_router, prefix="/api/oauth/pending", tags=["mcp"], dependencies=require_session
+    )
+    app.include_router(
+        api_oauth.grants_router, prefix="/api/me/oauth-grants", tags=["mcp"], dependencies=require_session
+    )
     # Spec #90 — per-user listening progress.
     app.include_router(
         api_me_listening.router, prefix="/api/me/listening", tags=["listening"], dependencies=require_session
@@ -884,6 +900,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # catch-all so route matching can never hand /mcp/* to the frontend
     # shell. The runtime itself 404s everything but the exact secret path.
     if mcp_runtime is not None:
+        # Spec #109: the OAuth endpoints, metadata and the exact-path /mcp
+        # bearer guard (a Mount at /mcp never matches the bare path).
+        app.router.routes.extend(mcp_oauth_routes)
         app.mount("/mcp", mcp_runtime)
         # uvicorn's access logger formats the raw path from the ASGI scope
         # and bypasses structlog, so LoggingMiddleware's redaction alone
@@ -955,6 +974,10 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             """
             # Skip if it's an API or known route
             if full_path.startswith(("api/", "webhook/", "mcp/", "docs", "redoc", "openapi.json", "health")):
+                return None
+            # Spec #109: OAuth paths are never the SPA, even with the flag
+            # off or the wrong method (exact names: /tokens is not /token).
+            if full_path in ("mcp", *OAUTH_PATHS) or full_path.startswith(".well-known/oauth-"):
                 return None
             index_file = static_dir / "index.html"
             if full_path and full_path != "index.html":

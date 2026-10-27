@@ -25,6 +25,8 @@ export const APP_ROUTE_PATTERNS = [
   '/admin/settings',
   '/admin/audit',
   '/login',
+  // Spec #109: the request id rides in the fragment, never in the pattern.
+  '/oauth/consent',
   '/terms',
   '/privacy',
 ] as const

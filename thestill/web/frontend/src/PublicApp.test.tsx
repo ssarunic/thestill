@@ -46,6 +46,15 @@ describe('PublicApp (spec #94)', () => {
     expect(await screen.findByText(`LOGIN ?next=${encodeURIComponent('/briefings/b1#item-3')}`)).toBeInTheDocument()
   })
 
+  it('sends the MCP consent screen to sign-in with its request id (spec #109)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/oauth/consent#request=abc']}>
+        <PublicApp />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(`LOGIN ?next=${encodeURIComponent('/oauth/consent#request=abc')}`)).toBeInTheDocument()
+  })
+
   it('answers unknown paths with the not-found page', async () => {
     render(
       <MemoryRouter initialEntries={['/nowhere']}>

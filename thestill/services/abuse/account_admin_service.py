@@ -39,6 +39,7 @@ from .errors import AdminActionError
 
 if TYPE_CHECKING:
     from ...repositories.mcp_token_repository import McpTokenRepository
+    from ...repositories.oauth_repository import OAuthRepository
     from ...repositories.podcast_follower_repository import PodcastFollowerRepository
     from ...repositories.podcast_repository import PodcastRepository
     from ...repositories.suspended_follow_repository import SuspendedFollowRepository
@@ -80,6 +81,8 @@ class UserFootprint:
     feeds_brought_in: int
     #: Counted ledger rows per kind in the last 24h (Phase 2).
     usage_24h: Dict[str, int] = field(default_factory=dict)
+    #: Connected apps (spec #109): "client name (host)" per active OAuth grant.
+    connected_apps: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -144,6 +147,7 @@ class AccountAdminService:
         followers: "PodcastFollowerRepository",
         suspended: "SuspendedFollowRepository",
         mcp_tokens: "McpTokenRepository",
+        oauth: "OAuthRepository",
         podcasts: "PodcastRepository",
         queue: QueuedTaskCanceller,
         audit: "AuditLog",
@@ -157,6 +161,7 @@ class AccountAdminService:
         self._followers = followers
         self._suspended = suspended
         self._mcp_tokens = mcp_tokens
+        self._oauth = oauth
         self._podcasts = podcasts
         self._queue = queue
         self._audit = audit
@@ -204,6 +209,9 @@ class AccountAdminService:
             suspended_follows=len(self._suspended.list_podcast_ids(user_id)),
             feeds_brought_in=len(self._followers.introduced_podcast_ids(user_id)),
             usage_24h=self._quota.usage_last_day(user_id) if self._quota is not None else {},
+            connected_apps=[
+                f"{g.client_name or g.client_id} ({g.redirect_host})" for g in self._oauth.list_active_grants(user_id)
+            ],
         )
 
     def detail(self, user_id: str) -> UserDetail:
@@ -260,15 +268,22 @@ class AccountAdminService:
         """Block sign-in and every request. Follows are kept, so lifting it
         restores the account exactly. (Suspending a banned user keeps the
         ban's moved-aside follows aside; a reinstate restores them.)"""
-        target, reason = self._disable(user_id, UserStatus.SUSPENDED, reason, actor)
-        self._audit.record(actor, "user.suspend", target_user_id=target.id, reason=reason, old=target.status.value)
+        target, reason, grants = self._disable(user_id, UserStatus.SUSPENDED, reason, actor)
+        self._audit.record(
+            actor,
+            "user.suspend",
+            target_user_id=target.id,
+            reason=reason,
+            old=target.status.value,
+            oauth_grants_revoked=grants,
+        )
         return self._load(target.id)
 
     def ban(self, user_id: str, *, reason: str, actor: Actor, remove_introduced_feeds: bool = False) -> BanResult:
         """Block the account *and* stop the spending it caused: the user's
         follows move aside, so feeds only they followed leave the follower
         gate and their queued tasks are cancelled. Running tasks finish."""
-        target, reason = self._disable(user_id, UserStatus.BANNED, reason, actor)
+        target, reason, grants = self._disable(user_id, UserStatus.BANNED, reason, actor)
         # Measured before the move: earliest follow across both tables.
         introduced = self._followers.introduced_podcast_ids(target.id)
         moved = self._suspended.move_follows_aside(target.id, now=self._clock())
@@ -292,6 +307,7 @@ class AccountAdminService:
             feeds_orphaned=len(orphaned),
             tasks_cancelled=cancelled,
             introduced_feeds_removed=len(removed),
+            oauth_grants_revoked=grants,
         )
         return BanResult(
             user=self._load(target.id),
@@ -353,10 +369,11 @@ class AccountAdminService:
             ).user
         return self.reinstate(user_id, actor=actor, reason=reason).user
 
-    def _disable(self, user_id: str, status: UserStatus, reason: Optional[str], actor: Actor) -> Tuple[User, str]:
+    def _disable(self, user_id: str, status: UserStatus, reason: Optional[str], actor: Actor) -> Tuple[User, str, int]:
         """Shared first step of suspend and ban: validate, set the status,
-        revoke every session and the MCP token. Returns the target as it
-        was before, and the cleaned reason."""
+        revoke every session, the MCP token and every OAuth grant (spec
+        #109). Returns the target as it was before, the cleaned reason and
+        the number of grants revoked."""
         self._require_multi_user()
         target = self._load(user_id)
         cleaned = (reason or "").strip()
@@ -377,18 +394,21 @@ class AccountAdminService:
         except LastActiveAdminError:
             raise _last_admin() from None
         self._mcp_tokens.revoke(target.id, revoked_at=now)
-        return target, cleaned
+        grants = self._oauth.revoke_user_grants(target.id, now=now, reason="admin")
+        return target, cleaned, grants
 
     # ----- sessions -----
 
     def logout_everywhere(self, user_id: str, *, actor: Actor) -> User:
-        """Reject every JWT issued so far and revoke the MCP token."""
+        """Reject every JWT issued so far and revoke the MCP token and every
+        OAuth grant (spec #109): connected apps are sessions too."""
         self._require_multi_user()
         target = self._load(user_id)
         now = self._clock()
         self._users.set_tokens_valid_after(target.id, revocation_instant(now))
         self._mcp_tokens.revoke(target.id, revoked_at=now)
-        self._audit.record(actor, "user.logout_everywhere", target_user_id=target.id)
+        grants = self._oauth.revoke_user_grants(target.id, now=now, reason="admin")
+        self._audit.record(actor, "user.logout_everywhere", target_user_id=target.id, oauth_grants_revoked=grants)
         return self._load(target.id)
 
     # ----- feeds -----

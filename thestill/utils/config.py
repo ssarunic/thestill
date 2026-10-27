@@ -24,6 +24,7 @@ from pydantic.config import ConfigDict
 
 from .file_storage import FileStorage, make_storage
 from .path_manager import PathManager
+from .redirect_uris import is_loopback_uri
 
 logger = structlog.get_logger(__name__)
 
@@ -626,6 +627,10 @@ class Config(BaseModel):
     mcp_token_ttl_days: int = 90
     # Per-token HTTP request limit on the /mcp endpoint (429 above it).
     mcp_token_requests_per_minute: int = 120
+    # Spec #109 — standard OAuth on the remote MCP server: thestill as its
+    # own authorization server and a bearer-token guard on the exact /mcp
+    # path, beside the personal URLs. Off until tested end to end.
+    mcp_oauth_enabled: bool = False
 
     # Entity linking (spec #81). ``live`` looks names up in live Wikidata and
     # lets an LLM choose among the candidates; ``refined`` is the 2022 ReFinED
@@ -1000,6 +1005,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "mcp_http_enabled": os.getenv("MCP_HTTP_ENABLED", "true").lower() == "true",
         "mcp_token_ttl_days": int(os.getenv("MCP_TOKEN_TTL_DAYS", "90")),
         "mcp_token_requests_per_minute": int(os.getenv("MCP_TOKEN_REQUESTS_PER_MINUTE", "120")),
+        "mcp_oauth_enabled": _env_bool("MCP_OAUTH_ENABLED", False),
         # Entity enrichment (spec #45 Tier 0)
         "entity_linker": os.getenv("ENTITY_LINKER", "live").lower(),
         "entity_linking_provider": os.getenv("ENTITY_LINKING_PROVIDER", "").lower(),
@@ -1088,6 +1094,17 @@ def load_config(env_file: Optional[str] = None) -> Config:
         raise ValueError(
             "MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0; got " f"{config_data['mcp_token_requests_per_minute']}"
         )
+    # Spec #109 — the issuer and the protected resource are built from
+    # PUBLIC_BASE_URL, and the MCP SDK refuses a non-https issuer other than
+    # loopback, so fail at boot rather than on the first /authorize.
+    if config_data["mcp_oauth_enabled"]:
+        if not config_data["mcp_http_enabled"]:
+            raise ValueError("MCP_OAUTH_ENABLED=true requires MCP_HTTP_ENABLED=true")
+        base = config_data["public_base_url"]
+        if not (base.startswith("https://") or is_loopback_uri(base)):
+            raise ValueError(
+                "MCP_OAUTH_ENABLED=true requires an https PUBLIC_BASE_URL (or a loopback one for development)"
+            )
 
     # Multi-user mode runs OAuth, which must build a non-spoofable
     # callback URL. Require PUBLIC_BASE_URL unconditionally — TRUSTED_PROXIES

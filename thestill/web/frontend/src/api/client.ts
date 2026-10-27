@@ -70,6 +70,9 @@ import type {
   McpTokenInfoResponse,
   McpTokenMintResponse,
   McpTokenScope,
+  OAuthDecisionResponse,
+  OAuthGrantsResponse,
+  OAuthPendingResponse,
   FollowSource,
 } from './types'
 
@@ -906,4 +909,49 @@ export async function revokeMcpToken(): Promise<void> {
     const error = await response.json().catch(() => ({}))
     throw new Error(apiErrorMessage(error, response.status))
   }
+}
+
+// Spec #109 — the OAuth consent screen and connected apps. Session-only
+// endpoints; the request id comes from the consent page's URL fragment.
+async function sendApi<T>(method: 'POST' | 'DELETE', endpoint: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method,
+    credentials: 'include',
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(apiErrorMessage(error, response.status))
+  }
+  return (response.status === 204 ? undefined : await response.json()) as T
+}
+
+// null when the request expired or was already decided (404); anything
+// else is an error worth retrying, not a dead request.
+export async function getOAuthPending(requestId: string): Promise<OAuthPendingResponse | null> {
+  const response = await fetch(`${API_BASE}/oauth/pending/${encodeURIComponent(requestId)}`, { credentials: 'include' })
+  if (response.status === 404) return null
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    redirectIfAccountDisabled(body)
+    throw new Error(body ? apiErrorMessage(body, response.status) : `API error: ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function approveOAuthPending(requestId: string, scopes: McpTokenScope[]): Promise<OAuthDecisionResponse> {
+  return sendApi<OAuthDecisionResponse>('POST', `/oauth/pending/${encodeURIComponent(requestId)}/approve`, { scopes })
+}
+
+export async function denyOAuthPending(requestId: string): Promise<OAuthDecisionResponse> {
+  return sendApi<OAuthDecisionResponse>('POST', `/oauth/pending/${encodeURIComponent(requestId)}/deny`)
+}
+
+export async function getOAuthGrants(): Promise<OAuthGrantsResponse> {
+  return fetchApi<OAuthGrantsResponse>('/me/oauth-grants')
+}
+
+export async function disconnectOAuthGrant(grantId: string): Promise<void> {
+  return sendApi<void>('DELETE', `/me/oauth-grants/${encodeURIComponent(grantId)}`)
 }

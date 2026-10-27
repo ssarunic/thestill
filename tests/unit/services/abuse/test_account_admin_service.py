@@ -258,3 +258,52 @@ def test_override_edits_keep_another_workers_change(world, admin, edit):
 
     stored = world.repos.settings.get_all()["quota_overrides"].value
     assert stored == {a.id: {"imports_per_day": 7}, b.id: {"imports_per_day": 9}}
+
+
+def _connect_app(world, user_id, request="p1"):
+    """Spec #109 — give the user an active OAuth grant (a connected app)."""
+    import uuid
+
+    from thestill.models.oauth import OAuthPending
+
+    world.repos.oauth.save_pending(
+        OAuthPending(
+            id_hash=request,
+            client_id="https://claude.ai/oauth/mcp-oauth-client-metadata",
+            redirect_uri="https://claude.ai/api/mcp/auth_callback",
+            redirect_uri_explicit=True,
+            scopes=("read",),
+            code_challenge="c" * 43,
+            created_at=NOW,
+            expires_at=NOW + timedelta(minutes=10),
+        )
+    )
+    grant, _ = world.repos.oauth.approve(
+        request,
+        now=NOW,
+        user_id=user_id,
+        new_grant_id=str(uuid.uuid4()),
+        client_name="Claude",
+        redirect_host="claude.ai",
+        scopes=("read",),
+        code_hash=f"code-{request}",
+        code_expires_at=NOW + timedelta(seconds=60),
+    )
+    return grant
+
+
+@pytest.mark.parametrize("action", ["suspend", "ban", "logout_everywhere"])
+def test_account_actions_revoke_connected_apps(world, admin, action):
+    user = world.add_user("reader@example.com")
+    _connect_app(world, user.id)
+    assert world.abuse.account_admin.footprint(user.id).connected_apps == ["Claude (claude.ai)"]
+
+    account_admin = world.abuse.account_admin
+    if action == "logout_everywhere":
+        account_admin.logout_everywhere(user.id, actor=Actor.web(admin.id))
+    else:
+        getattr(account_admin, action)(user.id, reason="spam", actor=Actor.web(admin.id))
+
+    assert world.repos.oauth.list_active_grants(user.id) == []
+    entry = world.repos.audit_log.list(target_user_id=user.id)[0]
+    assert entry.details["oauth_grants_revoked"] == 1
