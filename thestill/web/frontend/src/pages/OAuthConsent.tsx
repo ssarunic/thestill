@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { approveOAuthPending, denyOAuthPending } from '../api/client'
 import type { McpTokenScope } from '../api/types'
@@ -11,41 +11,67 @@ import { useOAuthPending } from '../hooks/useApi'
 // redirected here with its id in the fragment (never in a log or Referer).
 // The session cookie is SameSite=strict, so it rode none of that cross-site
 // navigation; everything here goes through same-origin API calls instead.
-// A signed-out reader never gets here: the route sits behind
-// ProtectedRoute, which sends them through /login and back, fragment
-// included.
+// A signed-out reader never gets here: PublicApp and ProtectedRoute both
+// send them through /login and back, fragment included.
 
 function requestIdFrom(hash: string): string | null {
   return new URLSearchParams(hash.replace(/^#/, '')).get('request')
+}
+
+// The server only ever returns a registered redirect URI; refusing script
+// and data URLs here is defence in depth. Custom schemes (native apps) pass.
+function isNavigable(url: string): boolean {
+  try {
+    const { protocol } = new URL(url)
+    return !['javascript:', 'data:', 'vbscript:', 'blob:', 'file:'].includes(protocol)
+  } catch {
+    return false
+  }
 }
 
 export default function OAuthConsent() {
   const { hash } = useLocation()
   const { isAdmin } = useAuth()
   const requestId = requestIdFrom(hash)
-  const { data, isLoading, error } = useOAuthPending(requestId)
+  const { data, isLoading, error, refetch } = useOAuthPending(requestId)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
+  // A fast double click fires twice before `busy` renders; the server would
+  // refuse the second, but it must not flash an error while navigating.
+  const inFlight = useRef(false)
+  const heading = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    document.title = 'Connect an app · thestill'
+  }, [])
+  useEffect(() => {
+    if (data) heading.current?.focus()
+  }, [data])
 
   async function decide(action: () => Promise<{ redirect: string }>) {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setFailure(null)
     try {
       const { redirect } = await action()
+      if (!isNavigable(redirect)) throw new Error('The app sent an address that cannot be opened.')
       // A full navigation to the app's own callback, not a router push.
       window.location.assign(redirect)
     } catch (err) {
+      inFlight.current = false
       setBusy(false)
       setFailure(err instanceof Error ? err.message : 'Something went wrong')
     }
   }
 
   const appName = data?.client_name || 'An app'
+  const expired = !requestId || data === null
 
   return (
     <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-10">
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm max-w-md w-full p-6 space-y-5">
-        {(!requestId || error) && (
+        {expired && (
           <div className="space-y-2">
             <h1 className="text-lg font-semibold text-gray-900">This request has expired</h1>
             <p className="text-sm text-gray-600">
@@ -53,11 +79,24 @@ export default function OAuthConsent() {
             </p>
           </div>
         )}
-        {requestId && isLoading && <p className="text-sm text-gray-500">Loading…</p>}
+        {error && (
+          <div role="alert" className="space-y-2">
+            <h1 className="text-lg font-semibold text-gray-900">Couldn’t load this request</h1>
+            <p className="text-sm text-gray-600">Check your connection and try again.</p>
+            <button type="button" className="text-sm text-blue-700 underline" onClick={() => refetch()}>
+              Try again
+            </button>
+          </div>
+        )}
+        {requestId && isLoading && (
+          <p role="status" className="text-sm text-gray-500">
+            Loading…
+          </p>
+        )}
         {data && (
           <>
             <div className="space-y-2">
-              <h1 className="text-lg font-semibold text-gray-900">
+              <h1 ref={heading} tabIndex={-1} className="text-lg font-semibold text-gray-900 outline-none">
                 {appName} wants to connect to your thestill account
               </h1>
               <p className="text-sm text-gray-600">After you decide, you go back to</p>
@@ -93,7 +132,11 @@ export default function OAuthConsent() {
             </p>
           </>
         )}
-        {failure && <p className="text-sm text-red-600">{failure}</p>}
+        {failure && (
+          <p role="alert" className="text-sm text-red-600">
+            {failure}
+          </p>
+        )}
       </div>
     </main>
   )

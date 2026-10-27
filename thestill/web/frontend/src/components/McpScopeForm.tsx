@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import Button from './Button'
 import type { McpTokenScope } from '../api/types'
 import { SCOPE_COPY } from '../constants/mcpScopes'
@@ -31,6 +31,7 @@ export default function McpScopeForm({
   // `read` is always shown; `pipeline` only to admins.
   offer?: McpTokenScope[]
 }) {
+  const id = useId()
   const [follows, setFollows] = useState(initial.includes('follows'))
   const [pipeline, setPipeline] = useState(initial.includes('pipeline'))
   const wanted = new Set<McpTokenScope>(offer ?? ['read', 'follows', 'pipeline'])
@@ -62,11 +63,16 @@ export default function McpScopeForm({
                 checked={checked}
                 disabled={scope === 'read' || busy}
                 onChange={(e) => setter(e.target.checked)}
-                aria-label={SCOPE_COPY[scope].label}
+                aria-labelledby={`${id}-${scope}-label`}
+                aria-describedby={`${id}-${scope}-hint`}
               />
               <span>
-                <span className="font-medium text-gray-900">{SCOPE_COPY[scope].label}</span>
-                <span className="block text-xs text-gray-500">{SCOPE_COPY[scope].hint}</span>
+                <span id={`${id}-${scope}-label`} className="font-medium text-gray-900">
+                  {SCOPE_COPY[scope].label}
+                </span>
+                <span id={`${id}-${scope}-hint`} className="block text-xs text-gray-500">
+                  {SCOPE_COPY[scope].hint}
+                </span>
               </span>
             </label>
           )

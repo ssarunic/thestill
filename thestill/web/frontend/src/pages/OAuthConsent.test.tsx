@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -52,10 +52,16 @@ function renderPage(hash = '#request=abc') {
   )
 }
 
+const realLocation = window.location
+
 beforeEach(() => {
   vi.clearAllMocks()
   authState.isAdmin = false
-  Object.defineProperty(window, 'location', { value: { ...window.location, assign }, writable: true })
+  Object.defineProperty(window, 'location', { value: { ...realLocation, assign }, writable: true })
+})
+
+afterEach(() => {
+  Object.defineProperty(window, 'location', { value: realLocation, writable: true })
 })
 
 describe('OAuthConsent', () => {
@@ -100,9 +106,64 @@ describe('OAuthConsent', () => {
   })
 
   it('explains an expired or answered request', async () => {
-    mockPending.mockRejectedValue(new Error('not found'))
+    mockPending.mockResolvedValue(null)
     renderPage()
     expect(await screen.findByText('This request has expired')).toBeInTheDocument()
+  })
+
+  it('tells a load failure apart from an expired request', async () => {
+    mockPending.mockRejectedValue(new Error('API error: 503'))
+    renderPage()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t load this request')
+    expect(screen.queryByText('This request has expired')).not.toBeInTheDocument()
+  })
+
+  it('offers pipeline to an admin only when the app asked for it', async () => {
+    authState.isAdmin = true
+    mockPending.mockResolvedValue(pending({ requested_scopes: ['read', 'follows'] }))
+    renderPage()
+    expect(await screen.findByLabelText('Follows')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Pipeline')).not.toBeInTheDocument()
+  })
+
+  it('describes each scope to assistive tech', async () => {
+    mockPending.mockResolvedValue(pending())
+    renderPage()
+    expect(await screen.findByLabelText('Follows')).toHaveAccessibleDescription(/Adding a feed runs the pipeline/)
+  })
+
+  it('shows a failed approval and lets the reader try again', async () => {
+    mockPending.mockResolvedValue(pending({ loopback_only: false, offline_access: false }))
+    mockApprove.mockRejectedValue(new Error('Authorization request not found'))
+    renderPage()
+    expect(await screen.findByText('Claude wants to connect to your thestill account')).toBeInTheDocument()
+    expect(screen.queryByRole('note')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Stays connected/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Authorization request not found')
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled()
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('sends one decision for a double click', async () => {
+    mockPending.mockResolvedValue(pending())
+    let release: (v: { status: string; timestamp: string; redirect: string }) => void = () => {}
+    mockApprove.mockReturnValue(new Promise((resolve) => (release = resolve)))
+    renderPage()
+    const approve = await screen.findByRole('button', { name: 'Approve' })
+    await userEvent.dblClick(approve)
+    release({ status: 'ok', timestamp: '', redirect: 'https://claude.ai/cb?code=x' })
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1))
+    expect(mockApprove).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to follow a script URL', async () => {
+    mockPending.mockResolvedValue(pending())
+    mockApprove.mockResolvedValue({ status: 'ok', timestamp: '', redirect: 'javascript:alert(1)' })
+    renderPage()
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('cannot be opened')
+    expect(assign).not.toHaveBeenCalled()
   })
 
   it('explains a missing request id without calling the server', async () => {

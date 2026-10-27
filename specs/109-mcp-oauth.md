@@ -661,7 +661,7 @@ database.
 
 | # | File | Change |
 |---|---|---|
-| E1 | `frontend/src/pages/OAuthConsent.tsx` and a route in `App.tsx` next to `/login` | Reads `#request=`. Shows the client name, the redirect host in large type, the loopback warning, the scope checkboxes and the line "Stay connected until you disconnect". Approve and Deny navigate to the URL the server returns. Signed-out readers already reach `/login?next=…#request=…` through `PublicApp`'s catch-all |
+| E1 | `frontend/src/pages/OAuthConsent.tsx` and a route in `App.tsx` next to `/login` | Reads `#request=`. Shows the client name, the redirect host in large type, the loopback warning, the scope checkboxes and the line "Stay connected until you disconnect". Approve and Deny navigate to the URL the server returns. Signed-out readers reach `/login?next=…#request=…` because `/oauth/consent` is on `PublicApp`'s sign-in redirect list. Its catch-all is NotFound, so that entry is required |
 | E2 | `frontend/src/components/McpScopeForm.tsx` | `ScopeForm` extracted from `McpConnectorSettings` and reused |
 | E3 | `McpConnectorSettings.tsx`, `api/client.ts`, `hooks/useApi.ts`, `api/types.ts` | The address line (when OAuth is enabled), a Connected apps list with Disconnect, and the personal URL under Advanced |
 | E4 | Vitest specs | Consent page states, Connected apps |

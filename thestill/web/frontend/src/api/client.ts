@@ -927,8 +927,17 @@ async function sendApi<T>(method: 'POST' | 'DELETE', endpoint: string, body?: un
   return (response.status === 204 ? undefined : await response.json()) as T
 }
 
-export async function getOAuthPending(requestId: string): Promise<OAuthPendingResponse> {
-  return fetchApi<OAuthPendingResponse>(`/oauth/pending/${encodeURIComponent(requestId)}`)
+// null when the request expired or was already decided (404); anything
+// else is an error worth retrying, not a dead request.
+export async function getOAuthPending(requestId: string): Promise<OAuthPendingResponse | null> {
+  const response = await fetch(`${API_BASE}/oauth/pending/${encodeURIComponent(requestId)}`, { credentials: 'include' })
+  if (response.status === 404) return null
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    redirectIfAccountDisabled(body)
+    throw new Error(body ? apiErrorMessage(body, response.status) : `API error: ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function approveOAuthPending(requestId: string, scopes: McpTokenScope[]): Promise<OAuthDecisionResponse> {
