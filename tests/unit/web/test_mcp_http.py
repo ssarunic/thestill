@@ -332,6 +332,28 @@ class TestConfig:
         with pytest.raises(ValueError, match="MCP_TOKEN_REQUESTS_PER_MINUTE must be > 0"):
             load_config()
 
+    def test_oauth_off_by_default(self, isolated_env):
+        assert load_config().mcp_oauth_enabled is False
+
+    def test_oauth_needs_https_public_base_url(self, isolated_env):
+        """Spec #109: the issuer is PUBLIC_BASE_URL and the SDK refuses a
+        non-https one, so a bad setting fails at boot, not at /authorize."""
+        isolated_env.setenv("MCP_OAUTH_ENABLED", "true")
+        isolated_env.setenv("PUBLIC_BASE_URL", "http://thestill.example")
+        with pytest.raises(ValueError, match="MCP_OAUTH_ENABLED=true requires an https PUBLIC_BASE_URL"):
+            load_config()
+        isolated_env.setenv("PUBLIC_BASE_URL", "http://localhost:8000")
+        assert load_config().mcp_oauth_enabled is True
+        isolated_env.setenv("PUBLIC_BASE_URL", "https://thestill.me")
+        assert load_config().mcp_oauth_enabled is True
+
+    def test_oauth_needs_mcp_http(self, isolated_env):
+        isolated_env.setenv("MCP_OAUTH_ENABLED", "true")
+        isolated_env.setenv("MCP_HTTP_ENABLED", "false")
+        isolated_env.setenv("PUBLIC_BASE_URL", "https://thestill.me")
+        with pytest.raises(ValueError, match="requires MCP_HTTP_ENABLED=true"):
+            load_config()
+
     def test_env_overrides(self, isolated_env):
         isolated_env.setenv("MCP_HTTP_ENABLED", "false")
         isolated_env.setenv("MCP_TOKEN_TTL_DAYS", "0")

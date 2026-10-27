@@ -37,7 +37,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Callable, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from structlog import get_logger
@@ -56,6 +56,9 @@ from ..repositories.oauth_repository import OAuthRepository
 from ..utils.datetime_utils import now_utc
 from .mcp_token_service import McpTokenService
 from .oauth_cimd import CimdResolver, is_cimd_client_id
+
+if TYPE_CHECKING:
+    from ..core.periodic_runner import PeriodicJob
 
 logger = get_logger(__name__)
 
@@ -431,3 +434,14 @@ class McpOAuthService:
         return self._repo.prune(
             now=now, retired_before=now - RETIRED_KEEP, unused_clients_before=now - UNUSED_CLIENT_KEEP
         )
+
+    def housekeeping_jobs(self) -> List["PeriodicJob"]:
+        """Idempotent deletes, so every web worker may run them."""
+        from ..core.periodic_runner import PeriodicJob
+
+        def prune_oauth() -> None:
+            pruned = self.prune()
+            if pruned:
+                logger.info("oauth_rows_pruned", count=pruned)
+
+        return [PeriodicJob("prune_oauth", 6 * 3600, prune_oauth)]

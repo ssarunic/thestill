@@ -372,8 +372,9 @@ every-tool-has-a-scope test.
 ### Data model (alembic 0025, both backends)
 
 - `oauth_clients`: `client_id` PK, `source` (`cimd` | `dcr`),
-  `client_name`, `redirect_uris` (json), `metadata` (json),
-  `fetched_at`, `created_at`.
+  `client_name`, `metadata` (json: the client's whole document, with
+  `redirect_uris`, `scope` and the auth method), `created_at`,
+  `fetched_at`, `fresh_until` (CIMD only: refetch after this).
 - `oauth_pending`: `id_hash` PK, `client_id`, `redirect_uri`, `state`,
   `scopes`, `code_challenge`, `resource`, `expires_at`.
 - `oauth_grants`: `id` PK, `user_id` FK (`ON DELETE CASCADE`),
@@ -590,7 +591,14 @@ Two facts found while planning change the design above:
   SDK's `OAuthMetadata` model, and drop the SDK's metadata route.
 - **Bare `/mcp`.** A Starlette `Mount("/mcp")` does not match the bare
   path `/mcp`. The bearer guard is its own `Route("/mcp")` registered
-  ahead of the mount.
+  ahead of the mount. The mount sends `/mcp/` to the same guard.
+- **`/revoke` for public clients.** SDK 2.2.0's `RevocationRequest`
+  makes `client_secret` a required field, so a public client that omits
+  it gets a 400. A thin ASGI wrapper supplies the empty value, with a
+  64 KB body cap. The SDK's client authenticator still runs first.
+- **Unregistered redirects.** The SDK answers with a JSON 400, not our
+  error page. That meets the requirement that `/authorize` never
+  redirects to an unregistered URI, so we keep it.
 
 ## Phase 1 execution plan
 
@@ -634,7 +642,7 @@ database.
 | C3 | `thestill/utils/config.py`, `docs/configuration.md`, `.env.example` | `MCP_OAUTH_ENABLED` (default false). It needs `MCP_HTTP_ENABLED` and an `https` `PUBLIC_BASE_URL`, or a loopback one for development |
 | C4 | `thestill/web/app.py` | Register the OAuth routes and `Route("/mcp")` ahead of the mount when the flag is on. Add the OAuth paths to the SPA skip list (exact names). Add the `/api/oauth` router. Add the housekeeping job |
 | C5 | `thestill/web/routes/api_oauth.py` | `GET /api/oauth/pending/{id}`, `POST …/approve`, `POST …/deny`, `GET /api/me/oauth-grants`, `DELETE /api/me/oauth-grants/{id}`. All take the session cookie, and none accepts an OAuth access token |
-| C6 | `thestill/services/abuse/housekeeping.py` | `oauth_housekeeping_jobs` (prune every 6 h) |
+| C6 | `McpOAuthService.housekeeping_jobs()` | The prune job (every 6 h), registered with the app's periodic runner. It lives on the service rather than in the abuse housekeeping module, because OAuth is not an abuse control |
 | C7 | `tests/unit/web/test_mcp_oauth_flow.py` | The full flow through `TestClient`:<br>- metadata, the `401` shape, DCR, CIMD (with a stubbed fetch), PKCE<br>- the two-authorization scope case, `offline_access`, rotation and reuse, the loopback port<br>- refusals, revocation<br>- personal URLs still working |
 
 **Gate:** the flow tests pass, plus the existing `tests/unit/web/test_mcp_http.py`, `test_api_me_mcp_token.py`, `tests/unit/mcp/` and `tests/integration/web/test_default_deny_auth.py` (with the new routes added to it).

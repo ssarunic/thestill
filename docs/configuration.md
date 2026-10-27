@@ -686,6 +686,7 @@ The MCP server logs through the shared logging setup — use `LOG_LEVEL`,
 | `MCP_HTTP_ENABLED` | Mount the remote MCP endpoint (Streamable HTTP) on the web server at `/mcp/{token}` for claude.ai custom connectors / Claude mobile (spec #78). Inert until a user mints a token from Settings; set `false` to opt out | `true` |
 | `MCP_TOKEN_TTL_DAYS` | Lifetime of a remote MCP token in days; rotating resets it. `0` = never expires (spec #78 Phase 2) | `90` |
 | `MCP_TOKEN_REQUESTS_PER_MINUTE` | Per-token HTTP request limit on `/mcp/{token}`; above it the server answers `429` with `Retry-After` (spec #78 Phase 2) | `120` |
+| `MCP_OAUTH_ENABLED` | Standard OAuth on the remote MCP server (spec #109): thestill acts as its own authorization server and `https://<host>/mcp` accepts bearer tokens, so readers connect by pasting the address and signing in. Needs `MCP_HTTP_ENABLED` and an `https` `PUBLIC_BASE_URL`. Personal `/mcp/{token}` URLs keep working | `false` |
 
 ## Security & Misc
 

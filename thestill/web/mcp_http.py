@@ -25,8 +25,12 @@ the *current* admin flag and the token's scopes on the ASGI scope state;
 ``mcp/identity.py`` reads them inside the handlers. Possession of a URL is
 still the credential, so it must only travel over HTTPS; see
 specs/78-remote-mcp-access.md for the threat model. This is Claude-specific
-capability auth, not standards MCP authorization (bearer tokens); OAuth is
-Phase 3, keeping the same mount and session manager.
+capability auth, not standards MCP authorization (bearer tokens).
+
+Spec #109 adds the standard door beside it: ``McpBearerGuard`` on the exact
+path ``/mcp`` accepts OAuth access tokens (``web/mcp_oauth.py``). Both
+guards end in the same ``admit``/``dispatch``, so tools see one identity
+model whichever door a request came through.
 """
 
 from typing import TYPE_CHECKING, Optional
@@ -39,6 +43,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from ..mcp.identity import STATE_GPC, STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
+from ..models.oauth import SCOPE_OFFLINE_ACCESS
 from ..services.abuse.access_guard import AccessGuard
 from ..services.abuse.errors import AccountDisabledError
 from ..services.mcp_token_service import McpTokenService
@@ -53,7 +58,9 @@ from .middleware.rate_limit import (
 )
 
 if TYPE_CHECKING:
+    from ..models.user import User
     from ..repositories.factory import RepositoryBundle
+    from ..services.mcp_oauth_service import McpOAuthService
     from ..utils.config import Config
 
 logger = structlog.get_logger(__name__)
@@ -114,6 +121,8 @@ class McpHttpRuntime:
             json_response=True,
             stateless=True,
         )
+        # Spec #109 — set by the app when MCP_OAUTH_ENABLED is on.
+        self.bearer: Optional["McpBearerGuard"] = None
         logger.info("mcp_http_runtime_initialized", transport="streamable-http", stateless=True)
 
     def _count_tool_call(self, identity, tool: str, ok: bool) -> None:
@@ -147,6 +156,10 @@ class McpHttpRuntime:
         if root_path and path.startswith(root_path):
             path = path[len(root_path) :]
         candidate = path.strip("/")
+        if not candidate and self.bearer is not None:
+            # ``/mcp/`` with a trailing slash: the same door as ``/mcp``.
+            await self.bearer(scope, receive, send)
+            return
         if not candidate or "/" in candidate:
             await Response(status_code=404)(scope, receive, send)
             return
@@ -181,23 +194,104 @@ class McpHttpRuntime:
         if user is None:
             await Response(status_code=404)(scope, receive, send)
             return
-        # Spec #104: a suspended or banned account is refused outright. The
-        # ban also revoked the token; this covers a revocation that failed.
+        if not await self.admit(user, scope, receive, send):
+            return
+
+        self._tokens.touch_last_used(user.id, ip=ip, now=now)
+        await self.dispatch(scope, receive, send, user=user, scopes=frozenset(token.scopes))
+
+    async def admit(self, user: "User", scope: Scope, receive: Receive, send: Send) -> bool:
+        """Spec #104: a suspended or banned account is refused outright, on
+        either door. Revocation on ban covers this too; this check covers a
+        revocation that failed. False when a refusal was sent."""
         try:
             self._access.ensure_active(user)
         except AccountDisabledError as exc:
             await JSONResponse(status_code=exc.status_code, content={"detail": exc.detail()})(scope, receive, send)
-            return
+            return False
+        return True
 
-        self._tokens.touch_last_used(user.id, ip=ip, now=now)
-
+    async def dispatch(self, scope: Scope, receive: Receive, send: Send, *, user: "User", scopes: frozenset) -> None:
+        """Hand an admitted request to the MCP session manager with its
+        identity on the scope state, where ``mcp/identity.py`` reads it."""
         state = scope.setdefault("state", {})
         state[STATE_USER] = user
         state[STATE_IS_ADMIN] = is_effective_admin(user, self._config)
-        state[STATE_SCOPES] = frozenset(token.scopes)
+        state[STATE_SCOPES] = scopes
         state[STATE_GPC] = request_gpc(Request(scope, receive))
 
         await self.session_manager.handle_request(scope, receive, send)
+
+
+class McpBearerGuard:
+    """ASGI app for the exact path ``/mcp``: standard bearer tokens (spec #109).
+
+    A missing or unusable token gets ``401`` with
+    ``WWW-Authenticate: Bearer resource_metadata=...``, the handshake that
+    starts sign-in in Claude and other MCP clients. A valid token is the
+    access token of an active grant; its own scope set (minus
+    ``offline_access``, which is not an MCP scope) becomes the request's
+    scopes. Account status, the admin flag and the session manager are the
+    personal-URL guard's, so tools see one identity model.
+    """
+
+    def __init__(self, runtime: McpHttpRuntime, oauth: "McpOAuthService", *, resource_metadata_url: str):
+        self._runtime = runtime
+        self._oauth = oauth
+        self._config = runtime._config
+        self._users = runtime._users
+        self._challenge = f'Bearer resource_metadata="{resource_metadata_url}", scope="read offline_access"'
+
+    def _unauthorized(self, error: Optional[str] = None) -> Response:
+        challenge = self._challenge + (f', error="{error}"' if error else "")
+        return Response(status_code=401, headers={"WWW-Authenticate": challenge})
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1000})
+            return
+
+        request = Request(scope, receive)
+        ip = resolve_client_ip(request, config=self._config)
+        if mcp_miss_budget_exhausted(ip):
+            await Response(status_code=429, headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)})(
+                scope, receive, send
+            )
+            return
+
+        header = request.headers.get("authorization", "")
+        token = header[7:].strip() if header[:7].lower() == "bearer " else ""
+        if not token:
+            # First contact: no credential yet is normal, not a miss.
+            await self._unauthorized()(scope, receive, send)
+            return
+
+        found = self._oauth.verify_access(token)
+        if found is None:
+            record_mcp_token_miss(ip)
+            await self._unauthorized("invalid_token")(scope, receive, send)
+            return
+        record, grant = found
+
+        if not check_mcp_token_rate_limit(
+            f"oauth-grant:{grant.id}", requests_per_minute=self._config.mcp_token_requests_per_minute
+        ):
+            await Response(status_code=429, headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)})(
+                scope, receive, send
+            )
+            return
+
+        user = self._users.get_by_id(grant.user_id)
+        if user is None:
+            await self._unauthorized("invalid_token")(scope, receive, send)
+            return
+        if not await self._runtime.admit(user, scope, receive, send):
+            return
+
+        self._oauth.touch(grant.id, ip=ip)
+        scopes = frozenset(s for s in record.scopes if s != SCOPE_OFFLINE_ACCESS)
+        await self._runtime.dispatch(scope, receive, send, user=user, scopes=scopes)
 
 
 def build_mcp_http(

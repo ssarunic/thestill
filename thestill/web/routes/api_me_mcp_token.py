@@ -76,8 +76,17 @@ def _token_view(state: AppState, user: User) -> dict:
 
 @router.get("")
 def get_mcp_token(state: AppState = Depends(get_app_state), user: User = Depends(require_auth)) -> dict:
-    """The caller's connector token state — never the plaintext."""
-    return api_response({"enabled": bool(state.config.mcp_http_enabled), **_token_view(state, user)})
+    """The caller's connector token state — never the plaintext. With OAuth
+    on (spec #109), also the one address every reader pastes."""
+    oauth = state.mcp_oauth_service is not None
+    return api_response(
+        {
+            "enabled": bool(state.config.mcp_http_enabled),
+            "oauth_enabled": oauth,
+            "address": f"{state.config.public_base_url.rstrip('/')}/mcp" if oauth else None,
+            **_token_view(state, user),
+        }
+    )
 
 
 @router.post("", status_code=201)
