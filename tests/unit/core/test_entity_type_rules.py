@@ -165,6 +165,19 @@ class TestBusinessAndSoftware:
             classify_entity_type(["Q15911314", "Q43229", "Q79913", "Q163740"], EntityType.COMPANY) is EntityType.TOPIC
         )
 
+    def test_only_the_broad_organization_class_keeps_a_company(self):
+        # Prod dry run 2026-10-27: these were all demoted company → topic.
+        sanofi = ["Q19644607", "Q43229"]  # pharmaceutical company
+        framatome = ["Q43229"]
+        xtx_markets = ["Q11691", "Q43229"]  # stock exchange
+        for p31 in (sanofi, framatome, xtx_markets):
+            assert classify_entity_type(p31, EntityType.COMPANY) is EntityType.COMPANY
+            assert classify_entity_type(p31, EntityType.TOPIC) is EntityType.TOPIC
+
+    def test_organization_with_another_topic_class_is_still_a_topic(self):
+        assert classify_entity_type(["Q1127126", "Q43229"], EntityType.COMPANY) is EntityType.TOPIC  # alliance
+        assert classify_entity_type(["Q7278", "Q43229"], EntityType.COMPANY) is EntityType.TOPIC  # party
+
     def test_a_place_that_lists_a_business_class_stays_a_topic(self):
         assert classify_entity_type(["Q515", "Q4830453"], EntityType.COMPANY) is EntityType.TOPIC
 

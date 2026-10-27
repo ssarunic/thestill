@@ -237,6 +237,17 @@ TOPIC_P31 = frozenset(
     }
 )
 
+# Non-profit markers. With one of these, the broad "organization" class keeps
+# demoting a GLiNER "company" to topic (NGOs and associations read as topics).
+_NONPROFIT_P31 = frozenset(
+    {
+        "Q79913",  # non-governmental organization
+        "Q15911314",  # association
+        "Q163740",  # nonprofit organization
+        "Q1194093",  # international NGO
+    }
+)
+
 # Wikidata types most towns and villages by a per-country class ("town in
 # Croatia", "municipality of Spain") that no list here names, so Knin and
 # Obrovac fell back to whatever GLiNER guessed. When no P31 matches, a
@@ -306,6 +317,9 @@ def classify_entity_type(
        ``PRODUCT``.
     6. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
        countries / ethnic groups / ideologies that landed elsewhere.
+       Exception: when the broad "organization" (Q43229) is the only topic
+       class, the fallback is company and nothing marks a non-profit, it
+       stays ``COMPANY`` (Sanofi, Framatome, XTX Markets).
     7. Else if ``superclasses`` is given and any P31's direct superclass
        (P279) is in ``SUPERCLASS_TOPIC_P31`` → ``TOPIC``. Catches
        per-country place classes such as "town in Croatia".
@@ -329,7 +343,11 @@ def classify_entity_type(
     if p31_set & SOFTWARE_P31:
         return EntityType.PRODUCT
 
-    if p31_set & TOPIC_P31:
+    topic_hits = p31_set & TOPIC_P31
+    if topic_hits == {"Q43229"} and fallback is EntityType.COMPANY and not p31_set & _NONPROFIT_P31:
+        return EntityType.COMPANY
+
+    if topic_hits:
         # Topic check runs before company because countries/parties
         # have organization-like P31s ("Israel" is also Q3624078
         # sovereign state, sometimes an "Q43229 organization" sibling).
