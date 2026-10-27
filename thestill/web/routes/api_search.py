@@ -92,7 +92,8 @@ class SearchResult(BaseModel):
     score: float
     match_type: str
     deeplink: str
-    web_url: str
+    web_url: Optional[str] = None
+    episode_url: Optional[str] = None
     # Spec #28 §4.2 — search results page plays each quote inline via
     # the FloatingPlayer. Without the audio URL the click has to fall
     # back to a full navigation, which loses the user's place in the
@@ -260,22 +261,29 @@ def search_corpus(
         effective_mode = SearchMode.LEXICAL
         hits = backend.search(q, mode=effective_mode, limit=limit, filters=filters)
     # Resolve slugs so the React client can build /podcasts/<p>/episodes/<e>
-    # routes directly. The citation's web_url is /episodes/<id> — kept on
-    # the wire for MCP/desktop callers but the web doesn't have that route.
+    # routes directly, and the citation's page links point there.
     payload_map = _resolve_episode_payloads(
         state=state,
         episode_ids=[h.episode_id for h in hits],
     )
     results: list[SearchResult] = []
     for h in hits:
-        row = SearchResult(**h.as_citation())
         payload = payload_map.get(h.episode_id)
-        if payload is not None:
-            row.podcast_slug = payload.podcast_slug
-            row.episode_slug = payload.episode_slug
-            row.audio_url = payload.audio_url
-            row.image_url = payload.image_url
-            row.duration = payload.duration
+        if payload is None:
+            results.append(SearchResult(**h.as_citation()))
+            continue
+        row = SearchResult(
+            **h.as_citation(
+                base_url=state.config.public_base_url,
+                podcast_slug=payload.podcast_slug,
+                episode_slug=payload.episode_slug,
+                audio_url=payload.audio_url,
+            )
+        )
+        row.podcast_slug = payload.podcast_slug
+        row.episode_slug = payload.episode_slug
+        row.image_url = payload.image_url
+        row.duration = payload.duration
         results.append(row)
     match_counts = None
     if per_episode is not None:

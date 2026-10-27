@@ -72,7 +72,8 @@ def entity_tool_definitions() -> List[Tool]:
             description=(
                 "Find every resolved mention of an entity (person, company, product, or topic) "
                 "across the corpus. Returns citation-shaped rows with episode title, "
-                "speaker, quote excerpt, timestamps, and a deeplink. Use this for "
+                "speaker, quote excerpt, timestamps, episode_url (the episode page at the "
+                "quote) and audio_url. Use this for "
                 '"what has X been mentioned in?" or "all clips where Y appears".'
             ),
             input_schema={
@@ -231,24 +232,27 @@ def dispatch_entity_tool(
     name: str,
     arguments: Any,
     repository: EntityRepository,
+    *,
+    base_url: str = "",
 ) -> Optional[List[TextContent]]:
     """Handle one of the spec #28 §1.8 tools.
 
     Returns a list of ``TextContent`` when the tool is recognised,
     or ``None`` when ``name`` isn't an entity tool — letting the
     caller fall through to the existing dispatcher chain.
+    ``base_url`` (``PUBLIC_BASE_URL``) makes citation ``episode_url``s absolute.
     """
     if name not in ENTITY_TOOL_NAMES:
         return None
     args = arguments or {}
     if name == "find_mentions":
-        return _handle_find_mentions(args, repository)
+        return _handle_find_mentions(args, repository, base_url)
     if name == "list_quotes_by":
-        return _handle_list_quotes_by(args, repository)
+        return _handle_list_quotes_by(args, repository, base_url)
     if name == "get_episode_clip":
-        return _handle_get_episode_clip(args, repository)
+        return _handle_get_episode_clip(args, repository, base_url)
     if name == "get_entity":
-        return _handle_get_entity(args, repository)
+        return _handle_get_entity(args, repository, base_url)
     if name == "list_episodes_by_entity":
         return _handle_list_episodes_by_entity(args, repository)
     return None
@@ -259,7 +263,7 @@ def dispatch_entity_tool(
 # ---------------------------------------------------------------------------
 
 
-def _handle_find_mentions(args: dict, repo: EntityRepository) -> List[TextContent]:
+def _handle_find_mentions(args: dict, repo: EntityRepository, base_url: str) -> List[TextContent]:
     raw = args.get("entity")
     if not raw:
         return _err("'entity' is required")
@@ -275,7 +279,7 @@ def _handle_find_mentions(args: dict, repo: EntityRepository) -> List[TextConten
         role=args.get("role"),
         limit=int(args.get("limit", 50)),
     )
-    rows = [r.model_dump(mode="json") for r in build_citation_rows(contexts)]
+    rows = [r.model_dump(mode="json") for r in build_citation_rows(contexts, base_url=base_url)]
     return _ok(
         {
             "matched_entity": _entity_to_dict(entity),
@@ -284,7 +288,7 @@ def _handle_find_mentions(args: dict, repo: EntityRepository) -> List[TextConten
     )
 
 
-def _handle_list_quotes_by(args: dict, repo: EntityRepository) -> List[TextContent]:
+def _handle_list_quotes_by(args: dict, repo: EntityRepository, base_url: str) -> List[TextContent]:
     speaker = args.get("speaker")
     if not speaker:
         return _err("'speaker' is required")
@@ -300,11 +304,11 @@ def _handle_list_quotes_by(args: dict, repo: EntityRepository) -> List[TextConte
         date_range=_parse_date_range(args),
         limit=int(args.get("limit", 50)),
     )
-    rows = [r.model_dump(mode="json") for r in build_citation_rows(contexts)]
+    rows = [r.model_dump(mode="json") for r in build_citation_rows(contexts, base_url=base_url)]
     return _ok({"speaker": speaker, "topic_entity_id": topic_id, "results": rows})
 
 
-def _handle_get_episode_clip(args: dict, repo: EntityRepository) -> List[TextContent]:
+def _handle_get_episode_clip(args: dict, repo: EntityRepository, base_url: str) -> List[TextContent]:
     episode_id = args.get("episode_id")
     start_ms = args.get("start_ms")
     if episode_id is None or start_ms is None:
@@ -316,7 +320,7 @@ def _handle_get_episode_clip(args: dict, repo: EntityRepository) -> List[TextCon
     )
     if ctx is None:
         return _ok({"result": None, "note": "no resolved mention near that timestamp"})
-    rows = build_citation_rows([ctx])
+    rows = build_citation_rows([ctx], base_url=base_url)
     row = rows[0]
     plus_minus = args.get("plus_minus_sec")
     if plus_minus is not None:
@@ -326,7 +330,7 @@ def _handle_get_episode_clip(args: dict, repo: EntityRepository) -> List[TextCon
     return _ok({"result": row.model_dump(mode="json")})
 
 
-def _handle_get_entity(args: dict, repo: EntityRepository) -> List[TextContent]:
+def _handle_get_entity(args: dict, repo: EntityRepository, base_url: str) -> List[TextContent]:
     id_or_name = args.get("id_or_name")
     if not id_or_name:
         return _err("'id_or_name' is required")
@@ -349,7 +353,10 @@ def _handle_get_entity(args: dict, repo: EntityRepository) -> List[TextContent]:
                     }
                     for c in summary["cooccurring"]
                 ],
-                "recent_mentions": [r.model_dump(mode="json") for r in build_citation_rows(summary["recent_mentions"])],
+                "recent_mentions": [
+                    r.model_dump(mode="json")
+                    for r in build_citation_rows(summary["recent_mentions"], base_url=base_url)
+                ],
             }
         }
     )

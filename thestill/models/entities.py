@@ -185,7 +185,8 @@ class CitationRow(BaseModel):
 
     Per Strategy §4: no tool returns a ``summarised`` field without the
     source attached. ``deeplink`` is the in-app ``thestill://`` URI;
-    ``web_url`` is the equivalent web path with a timestamp anchor.
+    ``web_url``, ``episode_url`` and ``audio_url`` come from
+    ``utils.url_generator.episode_links``.
     """
 
     episode_id: str
@@ -200,4 +201,6 @@ class CitationRow(BaseModel):
     score: float
     match_type: MatchType
     deeplink: str
-    web_url: str
+    web_url: Optional[str] = None
+    episode_url: Optional[str] = None
+    audio_url: Optional[str] = None

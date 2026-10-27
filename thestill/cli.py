@@ -4568,7 +4568,7 @@ def find_mentions(ctx, entity, entity_type, podcast_id, since, role, limit, json
         role=role,
         limit=limit,
     )
-    rows = build_citation_rows(contexts)
+    rows = build_citation_rows(contexts, base_url=ctx.obj.config.public_base_url)
     _print_citation_rows(
         rows,
         json_output=json_output,
@@ -4616,7 +4616,7 @@ def quotes_by(ctx, speaker, topic, podcast_id, since, limit, json_output):
         date_range=_date_range_from_since(since),
         limit=limit,
     )
-    rows = build_citation_rows(contexts)
+    rows = build_citation_rows(contexts, base_url=ctx.obj.config.public_base_url)
     header = f"{len(rows)} mention(s) by speaker matching {speaker!r}"
     if topic_id:
         header += f" intersected with {topic_id!r}"
@@ -4654,6 +4654,7 @@ def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
     """
     from .models.entities import CitationRow
     from .search.base import SearchFilters, SearchMode
+    from .search.citation import search_citations
 
     backend = ctx.obj.search_backend
     if backend is None:
@@ -4681,24 +4682,8 @@ def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
         has_entity=tuple(has_entity or ()),
     )
     hits = backend.search(query, mode=SearchMode(mode), limit=limit, filters=filters)
-    rows = [
-        CitationRow(
-            episode_id=h.episode_id,
-            podcast_id=h.podcast_id,
-            podcast_title=h.podcast_title,
-            episode_title=h.episode_title,
-            published_at=h.published_at,
-            start_ms=h.start_ms,
-            end_ms=h.end_ms,
-            speaker=h.speaker,
-            quote=h.text[:600],
-            score=h.score,
-            match_type=h.match_type,
-            deeplink=f"thestill://episode/{h.episode_id}?t={h.start_ms // 1000}",
-            web_url=f"/episodes/{h.episode_id}?t={h.start_ms // 1000}",
-        )
-        for h in hits
-    ]
+    citations = search_citations(hits, repository=ctx.obj.repository, base_url=ctx.obj.config.public_base_url)
+    rows = [CitationRow(**c) for c in citations]
     header = f"{len(rows)} hit(s) for {query!r} (mode={mode}):"
     _print_citation_rows(rows, json_output=json_output, header=header)
 

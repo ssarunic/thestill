@@ -16,20 +16,24 @@
 from the repository's ``MentionContext`` rows.
 
 The deeplink format is ``thestill://episode/<id>?t=<seconds>`` —
-the desktop app scheme. The ``web_url`` is the corresponding web
-path (``/episodes/<id>?t=<seconds>``) that the React client uses for
-in-browser navigation.
+the desktop app scheme. The page and audio links come from
+``episode_links``, the same builder the search citations use.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, List
+from typing import TYPE_CHECKING, Iterable, List, Sequence
 
 from ..models.entities import CitationRow, MatchType
 from ..repositories.sqlite_entity_repository import MentionContext
+from ..utils.url_generator import episode_links
+from .base import ResolvedHit
+
+if TYPE_CHECKING:
+    from ..repositories.podcast_repository import PodcastRepository
 
 
-def build_citation_row(ctx: MentionContext, *, score: float = 1.0) -> CitationRow:
+def build_citation_row(ctx: MentionContext, *, score: float = 1.0, base_url: str = "") -> CitationRow:
     """Convert one ``MentionContext`` to its wire-shape ``CitationRow``.
 
     ``match_type`` is hard-coded to ``entity`` — these rows always
@@ -53,10 +57,37 @@ def build_citation_row(ctx: MentionContext, *, score: float = 1.0) -> CitationRo
         score=score,
         match_type=MatchType.ENTITY,
         deeplink=f"thestill://episode/{ctx.episode_id}?t={start_seconds}",
-        web_url=f"/episodes/{ctx.episode_id}?t={start_seconds}",
+        **episode_links(
+            base_url=base_url,
+            podcast_slug=ctx.podcast_slug,
+            episode_slug=ctx.episode_slug,
+            audio_url=ctx.episode_audio_url,
+            start_ms=ctx.mention.start_ms,
+        ),
     )
 
 
-def build_citation_rows(contexts: Iterable[MentionContext]) -> List[CitationRow]:
+def build_citation_rows(contexts: Iterable[MentionContext], *, base_url: str = "") -> List[CitationRow]:
     """Convenience: bulk-convert a list."""
-    return [build_citation_row(c) for c in contexts]
+    return [build_citation_row(c, base_url=base_url) for c in contexts]
+
+
+def search_citations(hits: Sequence[ResolvedHit], *, repository: "PodcastRepository", base_url: str = "") -> List[dict]:
+    """``as_citation`` for each search hit, with the page and audio links.
+
+    Hits carry ids, not slugs; one ``get_episodes_by_ids`` round-trip
+    fills them in. An episode the lookup misses keeps ``None`` links.
+    """
+    episodes = repository.get_episodes_by_ids(list(dict.fromkeys(h.episode_id for h in hits))) if hits else {}
+    out: List[dict] = []
+    for hit in hits:
+        podcast, episode = episodes.get(hit.episode_id, (None, None))
+        out.append(
+            hit.as_citation(
+                base_url=base_url,
+                podcast_slug=podcast.slug if podcast else None,
+                episode_slug=episode.slug if episode else None,
+                audio_url=str(episode.audio_url) if episode else None,
+            )
+        )
+    return out
