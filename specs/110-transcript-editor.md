@@ -257,12 +257,33 @@ unit test fails if `AnnotatedTranscript.model_validate_json` appears
 outside the loader (the same pattern as
 [test_scopes.py](../tests/unit/mcp/test_scopes.py), which keeps every MCP
 tool registered).
-The summarizer renders `effective.to_blended_markdown()` when the
-episode has applied ops, and reads `_cleaned.md` unchanged when it has
-none, so unedited episodes are byte-identical to today.
+The summarizer renders
+`effective.to_blended_markdown(exclude_kinds=_ADS_STRIPPED_KINDS)` when
+the episode has applied ops, the same exclusion
+[transcript_cleaning_processor.py](../thestill/core/transcript_cleaning_processor.py)
+uses to write `_cleaned.md` (the renderer includes ads by default), so
+an edit never changes which kinds reach the summarizer; only a kind
+retag does. With no applied ops it reads `_cleaned.md` unchanged, so
+unedited episodes are byte-identical to today. A test renders an
+episode with an ad segment and a speaker-only edit and asserts the
+sponsor text is absent.
 
-The result is cached per `(sidecar sha256, last_seq)`. An episode with
-no ops pays one indexed count query.
+When any structural op (split, merge, boundary) is applied, the
+effective transcript's `algorithm_version` becomes
+`<sidecar version>+edits.<seq of the last applied structural op>`.
+`load_valid_citations_for_api` trusts a citation's `segment_id_hint`
+only when that version matches the one the citations were resolved
+against ([summary_citations.py](../thestill/core/summary_citations.py)),
+so after a split or merge the hint is ignored and every citation
+re-resolves from its `source_segment_ids`. Text, speaker and kind ops
+leave the version alone because they do not move segment ids.
+
+The result is cached per `(raw sha256, sidecar sha256, last_seq)`. The
+raw hash is in the key because a re-transcribe replaces the raw JSON
+but keeps the old sidecar until cleaning succeeds and appends no op, so
+without it a cached result would keep reporting the old ops as applied
+instead of `retranscribed` conflicts. An episode with no ops pays one
+indexed count query.
 
 ### 4. Downstream propagation
 
@@ -278,8 +299,8 @@ mentions. Derived artifacts refresh per this table:
 | Speaker rename, merge, move | Auto (speaker column, FTS) | Auto (re-extract; `speaking` mentions follow) | Follow entities | Stale badge: prose may name the wrong person | — |
 | Text | Auto | Auto | Follow entities | Stale badge | — |
 | Kind (content ↔ ad) | Auto | Auto | Follow entities | Stale badge: summarizer input changed | — |
-| Split, merge | Auto | Auto | Follow entities | Citations re-resolve by `source_segment_ids` overlap ([summary_citations.py](../thestill/core/summary_citations.py)); no stale badge | — |
-| Boundary (Phase 4) | Auto | Auto | Follow entities | Citations re-resolve | — (publisher chapters, #97) |
+| Split, merge | Auto | Auto | Follow entities | Citations re-resolve by `source_segment_ids` overlap, forced by the `+edits` version (§3); no stale badge | — |
+| Boundary (Phase 4) | Auto | Auto | Follow entities | Citations re-resolve, forced the same way | — (publisher chapters, #97) |
 
 **Auto** means: when the admin presses **Finish editing**, or the
 session has been idle for 15 minutes, the service queues one #106
@@ -448,6 +469,12 @@ soaks before Phase 1's UI.
 
 - Op models: each op validates, applies and reverts on a fixture
   sidecar; revert of a revert restores the op.
+- Cache: replacing the raw JSON with no new op and the old sidecar
+  still in place turns cached applied ops into `retranscribed`
+  conflicts.
+- Citations: after a split, a citation whose `segment_id_hint` still
+  exists but now names the other child resolves from its source anchor
+  to the right passage.
 - Replay: ops written against one sidecar replay on a re-cleaned
   sidecar of the same raw transcript; a changed segment text yields a
   `text_changed` conflict even when `source_segment_ids` still match;
