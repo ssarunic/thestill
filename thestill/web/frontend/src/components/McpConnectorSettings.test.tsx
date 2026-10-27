@@ -13,6 +13,8 @@ vi.mock('../api/client', () => ({
   getMcpToken: vi.fn(),
   createOrRotateMcpToken: vi.fn(),
   revokeMcpToken: vi.fn(),
+  getOAuthGrants: vi.fn(),
+  disconnectOAuthGrant: vi.fn(),
 }))
 
 const authState = { isAdmin: false }
@@ -25,11 +27,13 @@ vi.mock('./Toast', () => ({
   useToast: () => ({ showToast }),
 }))
 
-import { getMcpToken, createOrRotateMcpToken, revokeMcpToken } from '../api/client'
+import { getMcpToken, createOrRotateMcpToken, revokeMcpToken, getOAuthGrants, disconnectOAuthGrant } from '../api/client'
 
 const mockGet = getMcpToken as ReturnType<typeof vi.fn>
 const mockMint = createOrRotateMcpToken as ReturnType<typeof vi.fn>
 const mockRevoke = revokeMcpToken as ReturnType<typeof vi.fn>
+const mockGrants = getOAuthGrants as ReturnType<typeof vi.fn>
+const mockDisconnect = disconnectOAuthGrant as ReturnType<typeof vi.fn>
 
 const TOKEN = 't'.repeat(64)
 
@@ -136,5 +140,54 @@ describe('McpConnectorSettings', () => {
     )
     renderCard()
     expect(await screen.findByText(/rotate to renew/)).toBeInTheDocument()
+  })
+})
+
+// Spec #109 — with OAuth on, the card leads with the address, lists the
+// connected apps, and keeps the personal URL under Advanced.
+describe('McpConnectorSettings with OAuth', () => {
+  const grant = {
+    id: 'g1',
+    client_name: 'Claude',
+    redirect_host: 'claude.ai',
+    scopes: ['read', 'follows'],
+    created_at: '2026-10-27T10:00:00Z',
+    last_used_at: null,
+  }
+
+  it('leads with the address and lists connected apps', async () => {
+    mockGet.mockResolvedValue(info({ oauth_enabled: true, address: 'https://pods.example.com/mcp' }))
+    mockGrants.mockResolvedValue({ status: 'ok', timestamp: '', grants: [grant] })
+    renderCard()
+    expect(await screen.findByText('Claude and other AI apps')).toBeInTheDocument()
+    expect(screen.getByTestId('mcp-address')).toHaveTextContent('https://pods.example.com/mcp')
+    expect(await screen.findByText('Claude')).toBeInTheDocument()
+    expect(screen.getByText(/claude\.ai · Read, Follows/)).toBeInTheDocument()
+    expect(screen.getByText('Advanced: personal connector URL')).toBeInTheDocument()
+  })
+
+  it('disconnects an app after confirming', async () => {
+    mockGet.mockResolvedValue(info({ oauth_enabled: true, address: 'https://pods.example.com/mcp' }))
+    mockGrants.mockResolvedValueOnce({ status: 'ok', timestamp: '', grants: [grant] }).mockResolvedValue({
+      status: 'ok',
+      timestamp: '',
+      grants: [],
+    })
+    mockDisconnect.mockResolvedValue(undefined)
+    renderCard()
+    await userEvent.click(await screen.findByRole('button', { name: 'Disconnect' }))
+    expect(screen.getByText('Disconnect Claude?')).toBeInTheDocument()
+    const confirm = screen.getAllByRole('button', { name: 'Disconnect' }).at(-1) as HTMLElement
+    await userEvent.click(confirm)
+    await waitFor(() => expect(mockDisconnect).toHaveBeenCalledWith('g1'))
+    expect(await screen.findByText('No apps connected yet.')).toBeInTheDocument()
+  })
+
+  it('shows no OAuth parts while OAuth is off', async () => {
+    mockGet.mockResolvedValue(info({ state: 'none' }))
+    renderCard()
+    expect(await screen.findByText('Claude connector (MCP)')).toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-address')).not.toBeInTheDocument()
+    expect(mockGrants).not.toHaveBeenCalled()
   })
 })

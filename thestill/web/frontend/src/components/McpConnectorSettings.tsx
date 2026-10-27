@@ -1,96 +1,36 @@
 import { useState } from 'react'
 import Button from './Button'
 import ConfirmDialog from './ConfirmDialog'
+import McpScopeForm from './McpScopeForm'
+import { SCOPE_COPY } from '../constants/mcpScopes'
 import { useToast } from './Toast'
 import { useAuth } from '../contexts/AuthContext'
-import { useCreateOrRotateMcpToken, useMcpToken, useRevokeMcpToken } from '../hooks/useApi'
-import type { McpTokenInfo, McpTokenScope } from '../api/types'
+import {
+  useCreateOrRotateMcpToken,
+  useDisconnectOAuthGrant,
+  useMcpToken,
+  useOAuthGrants,
+  useRevokeMcpToken,
+} from '../hooks/useApi'
+import type { McpTokenInfo, McpTokenScope, OAuthGrant } from '../api/types'
 
-// Per-user Claude connector card (spec #78 Phase 2).
+// Per-user Claude connector card (spec #78 Phase 2, spec #109).
 //
-// The connector URL *is* a credential (equivalent to this user's web
+// With OAuth on (spec #109) the card leads with the one address every
+// reader pastes into Claude, lists the apps connected through it, and keeps
+// the personal URL under Advanced for clients that cannot do OAuth. With
+// OAuth off it is the personal-URL card alone.
+//
+// The personal URL *is* a credential (equivalent to this user's web
 // session, narrowed by scopes), so the plaintext is shown exactly once —
 // in a modal right after Create/Rotate — and never again: the server
 // stores only a hash. There is no Reveal; a user who lost the URL
-// rotates. Rotate and Revoke confirm through ConfirmDialog.
-
-const SCOPE_COPY: Record<McpTokenScope, { label: string; hint: string }> = {
-  read: { label: 'Read', hint: 'Podcasts, episodes, transcripts, summaries, search. Always on.' },
-  follows: { label: 'Follows', hint: 'Add podcasts and unfollow. Adding a feed runs the pipeline, so this is off by default.' },
-  pipeline: { label: 'Pipeline', hint: 'Refresh, download, transcribe, summarise. Admins only.' },
-}
+// rotates. Rotate, Revoke and Disconnect confirm through ConfirmDialog.
 
 function formatWhen(iso: string | null | undefined): string {
   if (!iso) return 'never'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
-}
-
-function ScopeForm({
-  isAdmin,
-  initial,
-  onSubmit,
-  onCancel,
-  busy,
-  submitLabel,
-}: {
-  isAdmin: boolean
-  initial: McpTokenScope[]
-  onSubmit: (scopes: McpTokenScope[]) => void
-  onCancel?: () => void
-  busy: boolean
-  submitLabel: string
-}) {
-  const [follows, setFollows] = useState(initial.includes('follows'))
-  const [pipeline, setPipeline] = useState(initial.includes('pipeline'))
-  const offered: McpTokenScope[] = isAdmin ? ['read', 'follows', 'pipeline'] : ['read', 'follows']
-
-  return (
-    <form
-      className="space-y-3"
-      onSubmit={(e) => {
-        e.preventDefault()
-        const scopes: McpTokenScope[] = ['read']
-        if (follows) scopes.push('follows')
-        if (pipeline && isAdmin) scopes.push('pipeline')
-        onSubmit(scopes)
-      }}
-    >
-      <fieldset className="space-y-2">
-        <legend className="text-sm font-medium text-gray-900">What this connector may do</legend>
-        {offered.map((scope) => {
-          const checked = scope === 'read' ? true : scope === 'follows' ? follows : pipeline
-          const setter = scope === 'follows' ? setFollows : setPipeline
-          return (
-            <label key={scope} className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={checked}
-                disabled={scope === 'read' || busy}
-                onChange={(e) => setter(e.target.checked)}
-                aria-label={SCOPE_COPY[scope].label}
-              />
-              <span>
-                <span className="font-medium text-gray-900">{SCOPE_COPY[scope].label}</span>
-                <span className="block text-xs text-gray-500">{SCOPE_COPY[scope].hint}</span>
-              </span>
-            </label>
-          )
-        })}
-      </fieldset>
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" isLoading={busy}>
-          {submitLabel}
-        </Button>
-        {onCancel && (
-          <Button type="button" variant="secondary" size="sm" onClick={onCancel} disabled={busy}>
-            Cancel
-          </Button>
-        )}
-      </div>
-    </form>
-  )
 }
 
 function OneTimeUrlModal({ url, onClose }: { url: string; onClose: () => void }) {
@@ -149,10 +89,9 @@ function StateBadge({ state }: { state: McpTokenInfo['state'] }) {
   return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${tone}`}>{state}</span>
 }
 
-export default function McpConnectorSettings() {
+function PersonalUrlSection({ data }: { data: McpTokenInfo }) {
   const { isAdmin } = useAuth()
   const { showToast } = useToast()
-  const { data, isLoading, error } = useMcpToken()
   const mint = useCreateOrRotateMcpToken()
   const revoke = useRevokeMcpToken()
   const [mode, setMode] = useState<'idle' | 'create' | 'rotate'>('idle')
@@ -169,7 +108,7 @@ export default function McpConnectorSettings() {
       setMode('idle')
       setConfirming(null)
       setPendingScopes(null)
-      showToast(data?.state === 'active' || data?.state === 'expiring' ? 'Connector rotated' : 'Connector created', 'success')
+      showToast(data.state === 'active' || data.state === 'expiring' ? 'Connector rotated' : 'Connector created', 'success')
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to create connector', 'error')
     }
@@ -185,22 +124,11 @@ export default function McpConnectorSettings() {
     }
   }
 
-  const live = data?.state === 'active' || data?.state === 'expiring'
+  const live = data.state === 'active' || data.state === 'expiring'
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold text-gray-900">Claude connector (MCP)</h2>
-        <p className="text-sm text-gray-600 mt-1">
-          Let Claude (mobile, web, desktop) reach your podcasts through a personal connector URL. The URL acts
-          as your login for this instance, narrowed to the scopes you choose, so treat it like a password.
-        </p>
-      </div>
-
-      {error && <p className="text-sm text-red-600">{error instanceof Error ? error.message : 'Failed to load'}</p>}
-      {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
-
-      {data && !data.enabled && (
+    <div className="space-y-4">
+      {!data.enabled && (
         <div className="text-sm text-gray-600 space-y-2">
           <p>Remote MCP is disabled on this server. An operator turned it off with:</p>
           <pre className="bg-gray-50 border border-gray-200 rounded-md p-3 text-xs overflow-x-auto">
@@ -209,7 +137,7 @@ export default function McpConnectorSettings() {
         </div>
       )}
 
-      {data && data.enabled && !live && mode === 'idle' && (
+      {data.enabled && !live && mode === 'idle' && (
         <div className="space-y-3 text-sm text-gray-600">
           {data.state === 'revoked' && <p>Revoked on {formatWhen(data.revoked_at)}.</p>}
           {data.state === 'expired' && <p>Expired on {formatWhen(data.expires_at)}.</p>}
@@ -220,8 +148,8 @@ export default function McpConnectorSettings() {
         </div>
       )}
 
-      {data && data.enabled && mode === 'create' && (
-        <ScopeForm
+      {data.enabled && mode === 'create' && (
+        <McpScopeForm
           isAdmin={isAdmin}
           initial={['read']}
           busy={busy}
@@ -231,7 +159,7 @@ export default function McpConnectorSettings() {
         />
       )}
 
-      {data && data.enabled && live && mode === 'idle' && (
+      {data.enabled && live && mode === 'idle' && (
         <div className="space-y-3 text-sm">
           <div className="flex items-center gap-2">
             <code
@@ -273,8 +201,8 @@ export default function McpConnectorSettings() {
         </div>
       )}
 
-      {data && data.enabled && live && mode === 'rotate' && (
-        <ScopeForm
+      {data.enabled && live && mode === 'rotate' && (
+        <McpScopeForm
           isAdmin={isAdmin}
           initial={data.scopes ?? ['read']}
           busy={busy}
@@ -308,6 +236,126 @@ export default function McpConnectorSettings() {
       />
 
       {freshUrl && <OneTimeUrlModal url={freshUrl} onClose={() => setFreshUrl(null)} />}
+    </div>
+  )
+}
+
+function AddressBlock({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(address)
+      setCopied(true)
+    } catch {
+      // Clipboard unavailable: the address is visible for manual selection.
+    }
+  }
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex items-center gap-2">
+        <code
+          data-testid="mcp-address"
+          className="flex-1 bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-xs text-gray-800 overflow-x-auto whitespace-nowrap select-all"
+        >
+          {address}
+        </code>
+        <Button size="sm" variant="secondary" onClick={copy}>
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <p className="text-xs text-gray-500">
+        Paste this into Claude → Settings → Connectors → “Add custom connector”, then sign in and approve. It
+        works in Claude on the web, desktop and phone, and in other apps that support MCP.
+      </p>
+    </div>
+  )
+}
+
+function ConnectedApps() {
+  const { showToast } = useToast()
+  const { data, isLoading } = useOAuthGrants()
+  const disconnect = useDisconnectOAuthGrant()
+  const [confirming, setConfirming] = useState<OAuthGrant | null>(null)
+  const grants = data?.grants ?? []
+
+  async function doDisconnect(grant: OAuthGrant) {
+    try {
+      await disconnect.mutateAsync(grant.id)
+      setConfirming(null)
+      showToast('App disconnected', 'success')
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to disconnect', 'error')
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <h3 className="text-sm font-medium text-gray-900">Connected apps</h3>
+      {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
+      {!isLoading && grants.length === 0 && <p className="text-sm text-gray-500">No apps connected yet.</p>}
+      <ul className="divide-y divide-gray-100">
+        {grants.map((grant) => (
+          <li key={grant.id} className="py-2 flex items-start gap-3 text-sm">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-gray-900 truncate">{grant.client_name ?? grant.redirect_host}</p>
+              <p className="text-xs text-gray-500">
+                {grant.redirect_host} · {grant.scopes.map((s) => SCOPE_COPY[s]?.label ?? s).join(', ')} · connected{' '}
+                {formatWhen(grant.created_at)} · last used {formatWhen(grant.last_used_at)}
+              </p>
+            </div>
+            <Button size="sm" variant="secondary" onClick={() => setConfirming(grant)} disabled={disconnect.isPending}>
+              Disconnect
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        isOpen={confirming !== null}
+        title={`Disconnect ${confirming?.client_name ?? confirming?.redirect_host ?? 'this app'}?`}
+        message="It stops working on its next request. You can connect it again later."
+        confirmLabel="Disconnect"
+        confirmVariant="danger"
+        busy={disconnect.isPending}
+        onConfirm={() => confirming && doDisconnect(confirming)}
+        onCancel={() => setConfirming(null)}
+      />
+    </div>
+  )
+}
+
+export default function McpConnectorSettings() {
+  const { data, isLoading, error } = useMcpToken()
+  const oauth = !!data?.oauth_enabled
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-6 space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-900">{oauth ? 'Claude and other AI apps' : 'Claude connector (MCP)'}</h2>
+        <p className="text-sm text-gray-600 mt-1">
+          {oauth
+            ? 'Let Claude and other AI apps read your podcasts: summaries, transcripts, quotes and search. Each app asks you to sign in and approve what it may do.'
+            : 'Let Claude (mobile, web, desktop) reach your podcasts through a personal connector URL. The URL acts as your login for this instance, narrowed to the scopes you choose, so treat it like a password.'}
+        </p>
+      </div>
+
+      {error && <p className="text-sm text-red-600">{error instanceof Error ? error.message : 'Failed to load'}</p>}
+      {isLoading && <p className="text-sm text-gray-500">Loading…</p>}
+
+      {data && oauth && data.address && <AddressBlock address={data.address} />}
+      {data && oauth && <ConnectedApps />}
+      {data &&
+        (oauth ? (
+          <details className="text-sm">
+            <summary className="cursor-pointer text-gray-700">Advanced: personal connector URL</summary>
+            <p className="text-xs text-gray-500 mt-2 mb-3">
+              For apps that cannot sign in. The URL acts as your login, narrowed to the scopes you choose, so treat
+              it like a password.
+            </p>
+            <PersonalUrlSection data={data} />
+          </details>
+        ) : (
+          <PersonalUrlSection data={data} />
+        ))}
     </div>
   )
 }

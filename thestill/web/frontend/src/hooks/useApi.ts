@@ -25,6 +25,9 @@ import {
   getMcpToken,
   createOrRotateMcpToken,
   revokeMcpToken,
+  getOAuthPending,
+  getOAuthGrants,
+  disconnectOAuthGrant,
   queuePipelineTask,
   getEpisodeTasks,
   getAllEpisodes,
@@ -227,6 +230,37 @@ export function useRevokeMcpToken() {
     mutationFn: () => revokeMcpToken(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-token'] })
+    },
+  })
+}
+
+// Spec #109 — an MCP client's request on the consent screen. Not retried:
+// a 404 means it expired or was already decided, which the page explains.
+export function useOAuthPending(requestId: string | null) {
+  return useQuery({
+    queryKey: ['oauth-pending', requestId],
+    queryFn: () => getOAuthPending(requestId as string),
+    enabled: !!requestId,
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+}
+
+// Spec #109 — connected apps (active OAuth grants).
+export function useOAuthGrants() {
+  return useQuery({
+    queryKey: ['oauth-grants'],
+    queryFn: getOAuthGrants,
+    staleTime: 30_000,
+  })
+}
+
+export function useDisconnectOAuthGrant() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (grantId: string) => disconnectOAuthGrant(grantId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['oauth-grants'] })
     },
   })
 }

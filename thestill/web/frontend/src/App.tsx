@@ -35,6 +35,7 @@ const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 const LegalPage = lazy(() => import('./pages/public/LegalPage'))
+const OAuthConsent = lazy(() => import('./pages/OAuthConsent'))
 const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 
 // Loading fallback for page transitions
@@ -89,6 +90,16 @@ function App() {
         <Suspense fallback={<PageLoader />}>
           <Login />
         </Suspense>
+      } />
+
+      {/* Spec #109 — the MCP OAuth consent screen: signed in, but outside the
+          app layout (no sidebar or player between the reader and the decision). */}
+      <Route path="/oauth/consent" element={
+        <ProtectedRoute>
+          <Suspense fallback={<PageLoader />}>
+            <OAuthConsent />
+          </Suspense>
+        </ProtectedRoute>
       } />
 
       {/* Spec #94 — Terms and Privacy are readable signed in or not. */}
