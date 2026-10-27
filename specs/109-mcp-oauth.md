@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft (2026-10-27)
 > **Created:** 2026-10-27
-> **Updated:** 2026-10-27
+> **Updated:** 2026-10-27 (review: scope snapshots, `offline_access`, CIMD scope and loopback adapter)
 > **Priority:** Medium. This decides whether the connector can be listed in the Claude directory and set up without copying a secret URL. Until it ships, spec #108's promotion can reach only the readers who already visit thestill.me.
 > **Author:** Product & Engineering
 > **Related:** [#78 remote-mcp-access](78-remote-mcp-access.md) (per-user capability URLs; this is its deferred Phase 3), [#96 prompt-injection-hardening](96-prompt-injection-hardening.md) (tool output that reaches a model), [#102 sign-in-page](102-sign-in-page.md) (`/login` and the return path), [#104 abuse-prevention-and-user-admin](104-abuse-prevention-and-user-admin.md) (ban, suspend, logout everywhere), [#108 claude-connector-page](108-claude-connector-page.md) (the `/claude` page and the connector events).
@@ -153,8 +153,15 @@ the server, so this lives in our provider.
 
 **DCR (fallback; ChatGPT and other clients).**
 
-- `/register` is enabled, with `valid_scopes` = `read follows pipeline
-  offline_access` and `default_scopes` = `read offline_access`.
+- `/register` is enabled, with both `valid_scopes` and `default_scopes`
+  set to `read follows pipeline offline_access`.
+  - The SDK only lets a client request scopes from its registered
+    `scope`. If the default were narrower, a client that registered
+    without one could never ask for `follows`.
+  - Registration is a ceiling, not a grant. What the reader actually
+    gets is decided on the consent screen.
+  - A client that registers an explicit, narrower `scope` keeps it,
+    since that is its own declaration.
 - Registrations are public clients (`token_endpoint_auth_method: none`).
 - Rate limit per IP: 10 registrations per hour.
 - A daily sweep deletes registrations with no grant that are more than
@@ -165,10 +172,71 @@ the server, so this lives in our provider.
 
 - Exact match against the registered list, with one exception:
   `http://localhost` and `http://127.0.0.1` match on any port (RFC 8252
-  §7.3, and what Claude Code needs).
+  §7.3, and what Claude Code needs). The client record adapter below
+  implements this.
 - Any other `http://` redirect is refused at registration.
 - A request with an unregistered redirect gets an error page from us,
   never a redirect, so `/authorize` cannot be used as an open redirect.
+
+**Client record adapter.**
+
+SDK 2.2.0's `AuthorizationHandler` checks the scope and the redirect on
+the client record **before** it calls our `authorize()`. It uses
+`OAuthClientInformationFull.validate_scope()` and
+`validate_redirect_uri()`, and neither does what we need:
+
+- **Scopes.** `validate_scope()` treats `scope=None` as "no scopes
+  allowed". A CIMD document may omit `scope`, and Claude Code's does.
+  Every request from such a client would fail with `invalid_scope`
+  before our code runs.
+- **Redirects.** `validate_redirect_uri()` is exact list membership. It
+  would reject Claude Code's random-port loopback callback.
+
+So `get_client()` never returns a plain SDK record. It returns
+`ThestillClient`, a subclass of `OAuthClientInformationFull` built from
+the stored row, which does three things.
+
+**1. It sets the record's `scope` from our policy, not only from the
+client.**
+
+- CIMD document without `scope`: the full supported set, `read follows
+  pipeline offline_access`.
+- CIMD document with `scope`: its intersection with that set. An empty
+  intersection makes `get_client()` return `None`, so the client is
+  unknown.
+- DCR: the stored registration scope, as described above.
+
+**2. It overrides `validate_redirect_uri()`.**
+
+- An exact match is accepted, as in the SDK.
+- Otherwise the requested URI is accepted only when all of these hold:
+  - its scheme is `http`
+  - its host is `localhost`, `127.0.0.1` or `[::1]`
+  - a registered URI has the same scheme, host, path and query, and
+    differs only in port (or has none)
+- It returns the URI as requested, so the code stores the real port.
+- `https` URIs and every other host are never port-relaxed.
+- When `redirect_uri` is missing, it behaves as the SDK does.
+- The SDK token handler then requires the token request's
+  `redirect_uri` to equal the one stored on the code, exactly, port
+  included. That is the correct second check, and it needs no change.
+
+**3. It leaves `validate_scope()` as the SDK has it.**
+
+- It now checks against the policy scope set in point 1.
+- A request with no `scope` passes through as `None`, and `authorize()`
+  reads that as `read offline_access`.
+
+Unit tests cover:
+
+- a CIMD document without `scope`, which can request `read
+  offline_access` and `follows`
+- a CIMD document with `scope: "read"`, where `follows` is refused
+- Claude Code's `http://localhost:53121/callback` against a registered
+  `http://localhost/callback`, accepted
+- the same against `http://localhost/other`, refused
+- `https://claude.ai:8443/api/mcp/auth_callback`, refused
+- `http://evil.example:53121/callback`, refused
 
 We do not use Anthropic-held client credentials or credentials entered
 at connection time. CIMD and DCR cover Claude without sharing a secret.
@@ -205,11 +273,26 @@ at connection time. CIMD and DCR cover Claude without sharing a secret.
      only parks the request, and the consent page authenticates through
      its own same-origin API calls. Never through a server-side check
      on the navigation itself.
-   - It creates or updates the grant for (user, client), with scopes
-     narrowed to what was both requested and approved, using
-     `normalize_scopes()` from `McpTokenService`.
-   - It issues a single-use authorization code (60 s, hashed) and
-     answers with the client's `redirect_uri?code=…&state=…`.
+   - **It computes the approved scopes in two parts.**
+     - **MCP scopes:** `normalize_scopes()` from `McpTokenService`,
+       applied to what was both requested and ticked. It knows only
+       `read`, `follows` and `pipeline`, and drops anything else.
+     - **`offline_access`:** handled outside `normalize_scopes()`, which
+       would drop it, and kept only when it was requested. There is no
+       checkbox for it. The consent screen states it in one line: "Stay
+       connected until you disconnect".
+     - The approved set is the MCP scopes plus `offline_access` when
+       kept.
+   - **It creates the grant, or replaces it.**
+     - If the reader already has an active grant for this client with a
+       **different** approved set, that grant is revoked with all its
+       codes and tokens, and a new grant is created. Approving more
+       never widens a credential issued earlier. Approving less takes
+       effect at once instead of waiting for old tokens to expire.
+     - The same approved set keeps the existing grant.
+   - It issues a single-use authorization code (60 s, hashed) that
+     carries its own copy of the approved set. It answers with the
+     client's `redirect_uri?code=…&state=…`.
    - Deny answers `error=access_denied`.
 5. **Framing.** The consent route sets `X-Frame-Options: DENY` and
    `frame-ancestors 'none'`, so it cannot be clickjacked.
@@ -233,8 +316,18 @@ at connection time. CIMD and DCR cover Claude without sharing a secret.
   answers `invalid_grant`.
 - **Refresh re-checks the account.** It answers `invalid_grant` if the
   user is no longer active, so a suspended account cannot refresh.
-- **Scopes are fixed per grant.** Changing them means approving again,
-  as rotating does for personal URLs today.
+- **Every credential carries its own scopes.**
+  - A code, an access token and a refresh token each store the scope
+    set they were issued with. The SDK's `AuthorizationCode`,
+    `AccessToken` and `RefreshToken` models already have a `scopes`
+    field, and its refresh handler refuses scopes beyond the refresh
+    token's own.
+  - A refresh issues tokens with the refresh token's scopes, or a
+    narrower set if the client asks.
+  - Nothing reads scopes from the grant at request time. The grant's
+    copy exists for the Settings page.
+  - Changing scopes means approving again, which replaces the grant
+    (see Approve).
 
 ### Resource server
 
@@ -251,6 +344,8 @@ A new bearer guard in `web/mcp_http.py` serves the exact path `/mcp`:
     and touch `last_used_at` / `last_used_ip` on the grant.
   - Set the same scope state the personal-URL guard sets today
     (`STATE_USER`, `STATE_IS_ADMIN`, `STATE_SCOPES`, `STATE_GPC`).
+    `STATE_SCOPES` is the **access token's own** scope set, minus
+    `offline_access`, never the grant's.
   - Hand the request to the same `StreamableHTTPSessionManager`.
   - Nothing in `mcp/tools.py`, `mcp/scopes.py` or `mcp/identity.py`
     changes, because the handlers read identity only from that state.
@@ -283,12 +378,15 @@ every-tool-has-a-scope test.
   `scopes`, `code_challenge`, `resource`, `expires_at`.
 - `oauth_grants`: `id` PK, `user_id` FK (`ON DELETE CASCADE`),
   `client_id`, `client_name` (snapshot for Settings), `redirect_host`,
-  `scopes`, `created_at`, `last_used_at`, `last_used_ip`,
-  `revoked_at`. Unique on (`user_id`, `client_id`) while not revoked.
-- `oauth_codes`: `code_hash` PK, `grant_id`, `redirect_uri`,
+  `scopes` (the approved set, for display only), `created_at`,
+  `last_used_at`, `last_used_ip`, `revoked_at`. Unique on
+  (`user_id`, `client_id`) while not revoked. Replacing a grant revokes
+  the old row before inserting the new one, in one transaction.
+- `oauth_codes`: `code_hash` PK, `grant_id`, `scopes`, `redirect_uri`,
   `code_challenge`, `resource`, `expires_at`, `used_at`.
 - `oauth_tokens`: `token_hash` PK, `grant_id`, `kind` (`access` |
-  `refresh`), `expires_at`, `replaced_by_hash`, `revoked_at`.
+  `refresh`), `scopes`, `expires_at`, `replaced_by_hash`,
+  `revoked_at`.
 
 Timestamps are ISO-8601 UTC, as everywhere else. A daily sweep deletes
 expired pending rows, codes and access tokens, and refresh tokens
@@ -408,15 +506,33 @@ retired more than 30 days ago.
   Settings with host `claude.ai`.
 - **DCR.** MCP Inspector completes the flow, and the client shows as
   `source = dcr`.
-- **Claude Code.** It connects through a loopback redirect on a random
-  port. The consent screen shows the loopback warning.
+- **Claude Code.**
+  - Its CIMD document has no `scope`, and it still gets
+    `read offline_access`.
+  - It connects through a loopback redirect on a random port.
+  - The consent screen shows the loopback warning.
 - **Scopes.**
   - A grant without `follows` gets no `add_podcast` in `tools/list`,
     and a direct `tools/call` is refused naming the scope.
   - A non-admin cannot get `pipeline` by asking for it.
   - Demoting an admin removes `pipeline` on the next call.
+- **Two authorizations with different scopes.**
+  1. The reader approves client A with `read`. Client A redeems the code
+     and holds token T1.
+  2. The reader approves client A again with `read follows`, which
+     produces code C2.
+  3. T1 is now revoked: it gets `401`, not a token with `follows`.
+  4. A code issued under the first approval and not yet redeemed is
+     refused at `/token`.
+  5. Tokens from C2 can call `add_podcast`.
+  6. Approving `read` alone a third time revokes the C2 tokens.
+- **`offline_access` survives approval.**
+  - A request for `read offline_access` returns a refresh token.
+  - The same request without `offline_access` returns none.
 - **Refresh.**
   - It rotates.
+  - A refreshed token keeps the refresh token's scopes, not the
+    grant's.
   - Presenting the old refresh token revokes the grant, and the next
     call gets `401`.
   - A suspended user's refresh gets `invalid_grant`.
