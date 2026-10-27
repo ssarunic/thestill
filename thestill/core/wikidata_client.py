@@ -103,6 +103,9 @@ class WikidataClient:
         # cache is per-client (tests can construct a fresh client to
         # bypass it).
         self._cached = lru_cache(maxsize=cache_size)(self._fetch_p31_uncached)
+        # Few distinct classes (town in Croatia, battle, …) cover most
+        # entities, so P279 lookups are cached the same way.
+        self._superclasses_cached = lru_cache(maxsize=cache_size)(self._fetch_superclasses_uncached)
         # Spec #45 — separate caches for the enrichment surface. ``fetch_facts``
         # raises on transient failure (unlike ``fetch_p31``); ``lru_cache``
         # does not memoise exceptions, so a failed fetch stays retryable.
@@ -123,7 +126,22 @@ class WikidataClient:
             return []
         return self._cached(qid)
 
+    def fetch_superclasses(self, qid: str) -> List[str]:
+        """Return the direct superclasses (P279) of class ``qid``, or ``[]``.
+
+        Never raises, like :meth:`fetch_p31`: empty means "no signal".
+        """
+        if not qid:
+            return []
+        return self._superclasses_cached(qid)
+
     def _fetch_p31_uncached(self, qid: str) -> List[str]:
+        return self._fetch_claim_ids(qid, "P31")
+
+    def _fetch_superclasses_uncached(self, qid: str) -> List[str]:
+        return self._fetch_claim_ids(qid, "P279")
+
+    def _fetch_claim_ids(self, qid: str, prop: str) -> List[str]:
         url = WIKIDATA_ENTITY_URL.format(qid=qid)
         try:
             resp = requests.get(
@@ -142,7 +160,7 @@ class WikidataClient:
         except ValueError as exc:
             logger.warning("wikidata_parse_failed", qid=qid, error=str(exc))
             return []
-        return _extract_p31_qids(payload, qid)
+        return _extract_claim_qids(payload, qid, prop)
 
     # ------------------------------------------------------------------
     # Spec #81 — candidate search for the live linker
@@ -463,8 +481,12 @@ def _parse_entity_payload(payload: dict, qid: str, language: str) -> Optional["W
 
 
 def _extract_p31_qids(payload: dict, qid: str) -> List[str]:
-    """Pull the P31 entity ids out of a ``Special:EntityData`` JSON
-    response. Defensive against missing keys at every level — Wikidata
+    return _extract_claim_qids(payload, qid, "P31")
+
+
+def _extract_claim_qids(payload: dict, qid: str, prop: str) -> List[str]:
+    """Pull the ``prop`` entity ids (P31, P279) out of a
+    ``Special:EntityData`` JSON response. Defensive against missing keys at every level — Wikidata
     occasionally returns redirects or stripped responses for retired
     QIDs.
     """
@@ -478,9 +500,8 @@ def _extract_p31_qids(payload: dict, qid: str) -> List[str]:
     if not entity:
         return []
     claims = (entity or {}).get("claims") or {}
-    p31_claims = claims.get("P31") or []
     out: List[str] = []
-    for claim in p31_claims:
+    for claim in claims.get(prop) or []:
         try:
             target = claim["mainsnak"]["datavalue"]["value"]["id"]
         except (KeyError, TypeError):
@@ -499,6 +520,9 @@ class NullWikidataClient:
     """
 
     def fetch_p31(self, qid: str) -> List[str]:  # noqa: D401 — protocol shim
+        return []
+
+    def fetch_superclasses(self, qid: str) -> List[str]:
         return []
 
     def fetch_facts(self, qid: str, *, language: str = "en") -> Optional["WikidataEntity"]:

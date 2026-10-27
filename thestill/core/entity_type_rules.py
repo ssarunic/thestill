@@ -40,7 +40,7 @@ mapping would be over-engineered for the volume of error we're seeing.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Callable, Iterable, List, Optional
 
 from ..models.entities import EntityType
 
@@ -168,6 +168,10 @@ TOPIC_P31 = frozenset(
         "Q10711424",  # state-recognised by some
         "Q51576574",  # member state of the United Nations
         "Q2221906",  # geographic location
+        "Q3957",  # town
+        "Q532",  # village
+        "Q15284",  # municipality
+        "Q56061",  # administrative territorial entity
         # Groups / demographics
         "Q41710",  # ethnic group
         "Q9174",  # religion
@@ -182,10 +186,16 @@ TOPIC_P31 = frozenset(
         "Q6266",  # nation
         "Q2472587",  # people (demographic)
         "Q6957341",  # religious denomination type
+        "Q2725376",  # demographics
+        "Q37732",  # demography
         # Events / conflicts
         "Q1190554",  # occurrence
         "Q198",  # war
         "Q124734",  # battle
+        "Q178561",  # battle
+        "Q645883",  # military operation
+        "Q350604",  # armed conflict
+        "Q13418847",  # historical event
         "Q1656682",  # event
         "Q175331",  # demonstration
         # Concepts / fields
@@ -227,6 +237,34 @@ TOPIC_P31 = frozenset(
     }
 )
 
+# Wikidata types most towns and villages by a per-country class ("town in
+# Croatia", "municipality of Spain") that no list here names, so Knin and
+# Obrovac fell back to whatever GLiNER guessed. When no P31 matches, a
+# superclass (P279) in this set still makes the entity a topic. Only
+# places, events and demographics count: the generic "organization" a
+# real company's class may inherit must not demote it.
+SUPERCLASS_TOPIC_P31 = frozenset(
+    {
+        "Q515",  # city
+        "Q3957",  # town
+        "Q532",  # village
+        "Q486972",  # human settlement
+        "Q15284",  # municipality
+        "Q56061",  # administrative territorial entity
+        "Q6256",  # country
+        "Q39594",  # geographic region
+        "Q82794",  # geographic region (alt)
+        "Q1656682",  # event
+        "Q13418847",  # historical event
+        "Q350604",  # armed conflict
+        "Q645883",  # military operation
+        "Q198",  # war
+        "Q178561",  # battle
+        "Q2725376",  # demographics
+        "Q37732",  # demography
+    }
+)
+
 
 # Type → allowed-P31 set. Used to validate the resolver's tentative
 # bucket against the Wikidata signal.
@@ -241,6 +279,7 @@ ALLOWED_P31_BY_TYPE = {
 def classify_entity_type(
     p31_qids: Iterable[str],
     fallback: EntityType,
+    superclasses: Optional[Callable[[str], List[str]]] = None,
 ) -> Optional[EntityType]:
     """Return the bucket this entity should land in based on its P31 set.
 
@@ -267,7 +306,10 @@ def classify_entity_type(
        ``PRODUCT``.
     6. Else if any P31 is in ``TOPIC_P31`` → ``TOPIC``. Demotes
        countries / ethnic groups / ideologies that landed elsewhere.
-    7. Else → ``fallback`` (we have no signal to override the resolver).
+    7. Else if ``superclasses`` is given and any P31's direct superclass
+       (P279) is in ``SUPERCLASS_TOPIC_P31`` → ``TOPIC``. Catches
+       per-country place classes such as "town in Croatia".
+    8. Else → ``fallback`` (we have no signal to override the resolver).
 
     Returns ``None`` only when ``p31_qids`` is empty *and* ``fallback``
     is ``None`` — the resolver always passes a fallback so this is a
@@ -306,5 +348,9 @@ def classify_entity_type(
         if fallback == EntityType.PRODUCT:
             return EntityType.PRODUCT
         return EntityType.TOPIC
+
+    if superclasses is not None and fallback != EntityType.TOPIC:
+        if any(set(superclasses(q)) & SUPERCLASS_TOPIC_P31 for q in sorted(p31_set)):
+            return EntityType.TOPIC
 
     return fallback

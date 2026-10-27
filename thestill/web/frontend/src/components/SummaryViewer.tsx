@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
 import type { EpisodeEntity, SummaryCitation } from '../api/types'
 import { parseCitationId } from '../utils/citationHref'
+import { escapeListItemLeadingNumbers } from '../utils/summaryMarkdown'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { buildEntityTermIndex } from './episode-entities/entityTerms'
 import { rehypeEntityMentions } from './episode-entities/rehypeEntityMentions'
@@ -93,6 +94,8 @@ export default function SummaryViewer({
     }
     return out
   }, [citations])
+
+  const markdown = useMemo(() => escapeListItemLeadingNumbers(content), [content])
 
   // Spec #82 — one term index per entity list; the plugin is registered
   // only when there is something to match, so an episode without
@@ -202,7 +205,7 @@ export default function SummaryViewer({
   return (
     <div className="prose prose-gray max-w-none prose-headings:text-primary-900 prose-h1:text-xl prose-h2:text-lg prose-h2:mt-6 prose-h2:mb-3 prose-h3:text-base prose-h3:mt-5 prose-h3:mb-2 prose-h4:text-base prose-h4:mt-4 prose-h4:mb-2 prose-blockquote:border-l-secondary-400 prose-blockquote:bg-secondary-50 prose-blockquote:py-3 prose-blockquote:px-4 prose-blockquote:not-italic prose-blockquote:text-gray-700 prose-li:marker:text-gray-400">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={rehypePlugins} components={markdownComponents}>
-        {content}
+        {markdown}
       </ReactMarkdown>
     </div>
   )

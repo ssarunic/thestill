@@ -38,6 +38,17 @@ class TestOnlyWorks:
         assert plan_retype(_entity("topic:x", EntityType.TOPIC), ["Q5", "Q11424"], only_works=True) is None
 
 
+class TestSuperclasses:
+    def test_a_town_typed_company_becomes_a_topic(self):
+        knin = _entity("company:knin", EntityType.PERSON, ["Q15105893"], qid="Q208514")
+        plans = list(plan_backfill([knin], None, superclasses=lambda q: ["Q3957", "Q515"]))
+        assert [(p.entity.id, p.new_type) for p in plans] == [("company:knin", EntityType.TOPIC)]
+
+    def test_without_a_lookup_the_town_keeps_its_type(self):
+        knin = _entity("company:knin", EntityType.PERSON, ["Q15105893"], qid="Q208514")
+        assert list(plan_backfill([knin], None)) == []
+
+
 class TestPlanBackfill:
     def test_cached_only_never_fetches_and_skips_entities_without_p31(self):
         entities = [

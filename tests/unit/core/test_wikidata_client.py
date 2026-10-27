@@ -130,6 +130,32 @@ class TestFetchP31:
         assert get.call_count == 1
 
 
+class TestFetchSuperclasses:
+    def test_returns_p279_not_p31(self):
+        client = WikidataClient()
+        payload = _wikidata_response("Q15105893", ["Q4167836"])  # P31: Wikimedia category-ish noise
+        payload["entities"]["Q15105893"]["claims"]["P279"] = [
+            {"mainsnak": {"datavalue": {"value": {"id": q}}}} for q in ("Q3957", "Q515")
+        ]
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = payload
+        with patch("thestill.core.wikidata_client.requests.get", return_value=resp) as get:
+            assert client.fetch_superclasses("Q15105893") == ["Q3957", "Q515"]
+            assert client.fetch_superclasses("Q15105893") == ["Q3957", "Q515"]
+        assert get.call_count == 1
+
+    def test_network_error_returns_empty_list(self):
+        with patch(
+            "thestill.core.wikidata_client.requests.get",
+            side_effect=requests.ConnectionError("network down"),
+        ):
+            assert WikidataClient().fetch_superclasses("Q15105893") == []
+
+    def test_null_client_has_no_superclasses(self):
+        assert NullWikidataClient().fetch_superclasses("Q15105893") == []
+
+
 def _facts_payload(qid: str) -> dict:
     """A richer ``Special:EntityData`` payload for fetch_facts tests."""
     return {

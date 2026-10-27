@@ -3688,10 +3688,12 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_wor
         return
 
     click.echo(f"Checking {len(entities)} entit(y/ies)…")
-    fetch_p31 = None if cached_only else WikidataClient().fetch_p31
+    client = None if cached_only else WikidataClient()
+    fetch_p31 = client.fetch_p31 if client else None
+    superclasses = client.fetch_superclasses if client else None
     changes: Counter = Counter()
     cached = 0
-    for plan in plan_backfill(entities, fetch_p31, only_works=only_works):
+    for plan in plan_backfill(entities, fetch_p31, only_works=only_works, superclasses=superclasses):
         entity, p31, new_type = plan.entity, plan.p31, plan.new_type
         if new_type is not None:
             new_id = entity.id if in_place else _build_entity_id(new_type, entity.canonical_name, entity.wikidata_qid)
