@@ -126,7 +126,7 @@ class TestEntityToolPodcastIdentifier:
 
         seen = []
 
-        def spy(name, arguments, repository):
+        def spy(name, arguments, repository, *, base_url=""):
             seen.append((name, dict(arguments)))
             return [TextContent(type="text", text=json.dumps({"results": []}))]
 

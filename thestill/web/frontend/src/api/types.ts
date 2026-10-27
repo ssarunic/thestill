@@ -1042,9 +1042,9 @@ export interface SearchResult {
   episode_id: string
   podcast_id: string
   // Slugs are populated by the API layer (api_search.py); they may be
-  // null for legacy episode rows that pre-date the slug migration. The
-  // wire-format `web_url`/`deeplink` carry the legacy `/episodes/<id>`
-  // shape for MCP/desktop callers — the web client uses slugs instead.
+  // null for legacy episode rows that pre-date the slug migration.
+  // `web_url` / `episode_url` (absolute) are the episode page at the hit,
+  // for MCP and API callers; the web client builds routes from the slugs.
   podcast_slug: string | null
   episode_slug: string | null
   podcast_title: string
@@ -1057,7 +1057,8 @@ export interface SearchResult {
   score: number
   match_type: string
   deeplink: string
-  web_url: string
+  web_url: string | null
+  episode_url?: string | null
   // Spec #28 §4.2 — populated so the search results page can play the
   // matching quote inline through the FloatingPlayer instead of
   // navigating to the episode page.

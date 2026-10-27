@@ -107,7 +107,7 @@ class TestCitationRow:
             score=0.873,
             match_type=MatchType.LEXICAL,
             deeplink="thestill://episode/ep-1?t=2347",
-            web_url="/episodes/ep-1?t=2347",
+            web_url="/podcasts/pod/episodes/ep#t=2347",
         )
         restored = CitationRow.model_validate(row.model_dump())
         assert restored.match_type is MatchType.LEXICAL

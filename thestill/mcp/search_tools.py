@@ -17,7 +17,9 @@ from typing import Any, List, Optional
 
 from mcp.types import TextContent, Tool
 
+from ..repositories.podcast_repository import PodcastRepository
 from ..search.base import SearchBackend, SearchFilters, SearchMode
+from ..search.citation import search_citations
 
 SEARCH_TOOL_NAMES = frozenset({"search_corpus"})
 
@@ -29,7 +31,9 @@ def search_tool_definitions() -> List[Tool]:
             description=(
                 "Lexical, semantic, or hybrid search over the podcast corpus. "
                 "Returns citation-shaped rows: episode title, speaker, quote, "
-                "timestamp, deeplink. Use this when the user's question isn't "
+                "timestamp, episode_url (the episode page, seeking to the quote; "
+                "link this when citing) and audio_url (the publisher's file). "
+                "Use this when the user's question isn't "
                 'entity-scoped (e.g. "episodes about agentic engineering" '
                 'rather than "what has Karpathy said"). For entity-scoped '
                 "queries prefer ``find_mentions``.\n\n"
@@ -89,17 +93,23 @@ def dispatch_search_tool(
     arguments: Any,
     *,
     search_backend: SearchBackend,
+    podcast_repository: PodcastRepository,
+    base_url: str = "",
 ) -> Optional[List[TextContent]]:
     if name not in SEARCH_TOOL_NAMES:
         return None
     args = arguments or {}
-    return _handle_search_corpus(args, search_backend=search_backend)
+    return _handle_search_corpus(
+        args, search_backend=search_backend, podcast_repository=podcast_repository, base_url=base_url
+    )
 
 
 def _handle_search_corpus(
     args: dict,
     *,
     search_backend: SearchBackend,
+    podcast_repository: PodcastRepository,
+    base_url: str,
 ) -> List[TextContent]:
     query = (args.get("query") or "").strip()
     if not query:
@@ -112,7 +122,7 @@ def _handle_search_corpus(
     payload = {
         "query": query,
         "mode": mode.value,
-        "results": [h.as_citation() for h in hits],
+        "results": search_citations(hits, repository=podcast_repository, base_url=base_url),
         "total": len(hits),
     }
     return [TextContent(type="text", text=json.dumps(payload))]

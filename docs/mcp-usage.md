@@ -451,6 +451,8 @@ List episodes for a specific podcast.
 - `limit` (integer, optional, default=10): Maximum episodes to return
 - `since_hours` (integer, optional): Only episodes from last N hours
 
+Each episode carries `episode_url` (its thestill page) and `audio_url` (the publisher's file from the feed). `episode_url` needs `PUBLIC_BASE_URL`; without it (a local stdio server) it is `null`.
+
 **Example Usage:**
 
 ```
@@ -788,6 +790,8 @@ Get the comprehensive summary for a specific episode.
 - `podcast_id` (string, required): Podcast index (1, 2, 3...) or RSS URL
 - `episode_id` (string, required): Episode index (1=latest, 2=second latest, etc.), 'latest', date (YYYY-MM-DD), or GUID
 
+The summary ends with an `Episode page:` line (when `PUBLIC_BASE_URL` is set) and an `Audio:` line. `get_transcript` ends the same way.
+
 **Example Usage:**
 
 ```
@@ -804,7 +808,7 @@ Claude: [Displays the comprehensive summary with executive summary, quotes, and 
 
 The following tools query the entity layer (resolved mentions of people, companies, products, and topics) and the search index. They require installing with the `entities` extra (`pip install -e ".[entities]"`) and a corpus that has been through entity resolution and indexing.
 
-Most of these tools return **citation-shaped rows**: each row carries `episode_id`, `podcast_title`, `episode_title`, `published_at`, `start_ms`, `end_ms`, `speaker`, `quote`, a `thestill://episode/<id>?t=<sec>` deeplink, and a `web_url` — so Claude can compose narrative answers from cited, playable clips.
+Most of these tools return **citation-shaped rows**: each row carries `episode_id`, `podcast_title`, `episode_title`, `published_at`, `start_ms`, `end_ms`, `speaker`, `quote`, a `thestill://episode/<id>?t=<sec>` deeplink, `episode_url` (the episode page at the quote, `#t=<sec>`; `null` without `PUBLIC_BASE_URL`), its relative `web_url`, and `audio_url` (the publisher's file) — so Claude can compose narrative answers from cited, playable clips.
 
 ### 15. `find_mentions`
 
@@ -854,7 +858,9 @@ Claude: "Elon Musk is mentioned in 12 clips across 5 episodes..."
       "score": 1.0,
       "match_type": "entity",
       "deeplink": "thestill://episode/<id>?t=754",
-      "web_url": "/episodes/<id>?t=754"
+      "web_url": "/podcasts/the-rest-is-politics/episodes/<slug>#t=754",
+      "episode_url": "https://thestill.me/podcasts/the-rest-is-politics/episodes/<slug>#t=754",
+      "audio_url": "https://<publisher-cdn>/<episode>.mp3"
     }
   ]
 }

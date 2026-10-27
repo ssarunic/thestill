@@ -18,6 +18,8 @@ URL generator for web UI links.
 Provides consistent URL generation for podcasts, episodes, and other resources.
 """
 
+from typing import Dict, Optional
+
 
 class UrlGenerator:
     """
@@ -91,3 +93,33 @@ class UrlGenerator:
             Relative URL path
         """
         return f"/digests/{digest_id}"
+
+
+def episode_links(
+    *,
+    base_url: str,
+    podcast_slug: Optional[str],
+    episode_slug: Optional[str],
+    audio_url: Optional[str],
+    start_ms: Optional[int] = None,
+) -> Dict[str, Optional[str]]:
+    """Where to read and where to listen, for MCP and API callers.
+
+    - ``web_url``: the episode page path, ``#t=`` when ``start_ms`` is set
+      (the fragment form public pages use, so it seeks for signed-out
+      visitors too). ``None`` without both slugs: there's no id route.
+    - ``episode_url``: ``web_url`` made absolute with ``PUBLIC_BASE_URL``;
+      ``None`` when that's unset (a local stdio server has no public host).
+    - ``audio_url``: the publisher's enclosure from the feed, never our
+      own downloaded or downsampled copy.
+    """
+    web_url = None
+    if podcast_slug and episode_slug:
+        web_url = UrlGenerator().episode(podcast_slug, episode_slug)
+        if start_ms is not None:
+            web_url += f"#t={max(0, start_ms // 1000)}"
+    return {
+        "web_url": web_url,
+        "episode_url": f"{base_url.rstrip('/')}{web_url}" if base_url and web_url else None,
+        "audio_url": audio_url or None,
+    }

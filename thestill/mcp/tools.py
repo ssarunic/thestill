@@ -43,6 +43,7 @@ from ..services.follower_service import NotFollowingError
 from ..utils.config import Config, load_config
 from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
+from ..utils.url_generator import episode_links
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
 from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
@@ -227,7 +228,7 @@ def setup_tools(
             ),
             Tool(
                 name="list_episodes",
-                description="List episodes for a specific podcast with optional filtering.",
+                description="List episodes for a specific podcast with optional filtering. Each episode carries episode_url (its page; link this) and audio_url (the publisher's file).",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -255,7 +256,7 @@ def setup_tools(
             ),
             Tool(
                 name="get_transcript",
-                description="Get the cleaned Markdown transcript for a specific episode. Returns the cleaned transcript from clean_transcripts/ directory. Episode must be in CLEANED or SUMMARIZED state.",
+                description="Get the cleaned Markdown transcript for a specific episode. Returns the cleaned transcript from clean_transcripts/ directory. Episode must be in CLEANED or SUMMARIZED state. Ends with the episode page and audio links.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -405,7 +406,7 @@ def setup_tools(
             ),
             Tool(
                 name="get_summary",
-                description="Get the summary for a specific episode. Returns the comprehensive analysis including executive summary, quotes, and content angles.",
+                description="Get the summary for a specific episode. Returns the comprehensive analysis including executive summary, quotes, and content angles. Ends with the episode page and audio links.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -487,6 +488,27 @@ def setup_tools(
             """The remote caller's followed podcasts, with the list's stats."""
             followed = set(follower_service.follower_repository.get_followed_podcast_ids(identity.user.id))
             return [p for p in podcast_service.get_podcasts() if p.id in followed]
+
+        def _episode_links(podcast_slug, episode_slug, audio_url):
+            """``episode_url`` (the page Claude should link) + ``audio_url``."""
+            links = episode_links(
+                base_url=config.public_base_url,
+                podcast_slug=podcast_slug,
+                episode_slug=episode_slug,
+                audio_url=str(audio_url) if audio_url else None,
+            )
+            return {"episode_url": links["episode_url"], "audio_url": links["audio_url"]}
+
+        def _links_footer(podcast_id, episode_id):
+            """Trailing link lines for the plain-text summary/transcript tools."""
+            podcast = podcast_service.get_podcast(podcast_id)
+            episode = podcast_service.get_episode(podcast_id, episode_id)
+            if podcast is None or episode is None:
+                return ""
+            links = _episode_links(podcast.slug, episode.slug, episode.audio_url)
+            labels = {"episode_url": "Episode page", "audio_url": "Audio"}
+            lines = [f"{labels[key]}: {url}" for key, url in links.items() if url]
+            return "\n\n---\n" + "\n".join(lines) if lines else ""
 
         if name in _MUTATING_TOOLS:
             refusal = None
@@ -665,6 +687,7 @@ def setup_tools(
                             "state": ep.state,
                             "transcript_available": ep.transcript_available,
                             "summary_available": ep.summary_available,
+                            **_episode_links(ep.podcast_slug, ep.slug, ep.audio_url),
                         }
                         for ep in episodes
                     ],
@@ -752,7 +775,9 @@ def setup_tools(
                     ]
 
                 # Return the transcript content directly (not JSON-encoded)
-                return [TextContent(type="text", text=transcript_result.content)]
+                return [
+                    TextContent(type="text", text=transcript_result.content + _links_footer(podcast_id, episode_id))
+                ]
 
             # Pipeline tools implementation
             elif name == "refresh_feeds":
@@ -1663,7 +1688,7 @@ def setup_tools(
                     return [TextContent(type="text", text=json.dumps({"success": False, "error": summary}))]
 
                 # Return the summary content directly (not JSON-encoded)
-                return [TextContent(type="text", text=summary)]
+                return [TextContent(type="text", text=summary + _links_footer(podcast_id, episode_id))]
 
             # Spec #28 §1.8 — try the entity-tool dispatcher before
             # falling through to "unknown tool". Returns ``None`` when
@@ -1681,7 +1706,7 @@ def setup_tools(
                     error = f"Podcast not found: {arguments['podcast_id']}"
                     return [TextContent(type="text", text=json.dumps({"success": False, "error": error}))]
                 arguments = {**arguments, "podcast_id": entity_podcast.id}
-            entity_response = dispatch_entity_tool(name, arguments, entity_repository)
+            entity_response = dispatch_entity_tool(name, arguments, entity_repository, base_url=config.public_base_url)
             if entity_response is not None:
                 return entity_response
 
@@ -1690,6 +1715,8 @@ def setup_tools(
                     name,
                     arguments,
                     search_backend=search_backend,
+                    podcast_repository=repository,
+                    base_url=config.public_base_url,
                 )
                 if search_response is not None:
                     return search_response

@@ -28,6 +28,7 @@ from enum import Enum
 from typing import Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple, TypeVar
 
 from ..models.entities import MatchType
+from ..utils.url_generator import episode_links
 
 
 class SearchMode(str, Enum):
@@ -151,13 +152,30 @@ class ResolvedHit:
     # semantic). Diagnostics and evals only; not part of the citation.
     origin: Optional[str] = None
 
-    def as_citation(self, *, quote_max: int = 600) -> dict:
+    def as_citation(
+        self,
+        *,
+        quote_max: int = 600,
+        base_url: str = "",
+        podcast_slug: Optional[str] = None,
+        episode_slug: Optional[str] = None,
+        audio_url: Optional[str] = None,
+    ) -> dict:
         """Serialize to the citation-shaped wire dict used by MCP + REST.
 
         Single source of truth for the deeplink/web_url/quote shape so
-        MCP and REST callers can't drift.
+        MCP and REST callers can't drift. Hits carry no slugs, so the
+        page links are ``None`` unless the caller passes them in
+        (``search.citation.search_citations`` does the batched lookup).
         """
         seconds = self.start_ms // 1000
+        links = episode_links(
+            base_url=base_url,
+            podcast_slug=podcast_slug,
+            episode_slug=episode_slug,
+            audio_url=audio_url,
+            start_ms=self.start_ms,
+        )
         return {
             "episode_id": self.episode_id,
             "podcast_id": self.podcast_id,
@@ -171,7 +189,7 @@ class ResolvedHit:
             "score": self.score,
             "match_type": self.match_type.value,
             "deeplink": f"thestill://episode/{self.episode_id}?t={seconds}",
-            "web_url": f"/episodes/{self.episode_id}?t={seconds}",
+            **links,
         }
 
 
