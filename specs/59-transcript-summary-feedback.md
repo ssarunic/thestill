@@ -238,6 +238,8 @@ client-side merge only — canonical data untouched, other users unaffected.
 
 ## Tier 2 — admin correction workbench
 
+> **Moved:** the workbench is now its own spec, [#110 transcript-editor](110-transcript-editor.md). This section is kept for history; #110 supersedes it.
+
 An ElevenLabs-style editor, scoped to `is_admin` (route behind `AdminRoute`,
 API behind the admin guard), reached primarily by clicking a report in the
 triage list — it opens on the episode with the anchored segment centered and
