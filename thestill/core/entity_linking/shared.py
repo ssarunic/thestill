@@ -134,6 +134,12 @@ def linked_result(
     Spec #28 §5.2 — Wikidata P31 gating. Re-bucket entities whose
     ``instance of`` contradicts the extractor's guess (e.g. countries that
     GLiNER labelled "company"). Without a client the unchecked type stands.
+
+    A person is never moved out of ``person`` here: when Wikidata says place
+    or work, the name was usually matched to the wrong item (Bellingham the
+    footballer → the US city), the same call ``backfill-entity-types``
+    holds. The entity review queue flags the disagreement
+    (``p31_says_other_type``) for a curator.
     """
     p31_qids: List[str] = []
     entity_type = fallback_type
@@ -142,6 +148,15 @@ def linked_result(
         # Test fakes may implement only ``fetch_p31``.
         superclasses = getattr(wikidata_client, "fetch_superclasses", None)
         classified = classify_entity_type(p31_qids, fallback_type, superclasses)
+        if fallback_type is EntityType.PERSON and classified not in (None, EntityType.PERSON):
+            logger.info(
+                "entity_person_demotion_held",
+                surface_form=mention.surface_form,
+                qid=qid,
+                to_type=classified.value,
+                p31=p31_qids,
+            )
+            classified = fallback_type
         if classified is not None and classified != fallback_type:
             logger.info(
                 "entity_type_reclassified",

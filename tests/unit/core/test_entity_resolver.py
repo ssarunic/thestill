@@ -355,6 +355,15 @@ class TestP31Gating:
         assert results[0].entity.type is EntityType.PERSON
         assert results[0].entity.wikidata_instance_of == ["Q5"]
 
+    def test_a_person_linked_to_a_place_stays_a_person(self):
+        # Bellingham the footballer matched to the US city.
+        predictions = {"Bellingham": ("Q430267", "Bellingham, Washington", "LOC")}
+        client = _StubP31Client({"Q430267": ["Q515"]})  # city
+        resolver = EntityResolver(preloaded_model=StubReFinED(predictions), wikidata_client=client)
+        results = resolver.resolve([_mention(1, "Bellingham", label="person")])
+        assert results[0].entity.type is EntityType.PERSON
+        assert results[0].entity.id.startswith("person:")
+
     def test_no_p31_signal_falls_back_to_inferred_type(self):
         predictions = {"Mystery": ("Q9999", "Mystery", "WAT")}
         # Empty P31 list — client returned nothing.

@@ -172,8 +172,19 @@ def test_a_spoken_variant_becomes_an_alias_only_when_it_resembles_the_name(decis
 def test_p31_can_move_an_entity_to_another_bucket(decisions):
     wikidata = FakeWikidata({"Truman": [FILM]}, p31={"Q214801": ["Q11424"]})  # instance of: film
     linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
-    (result,) = linker.resolve([mention(1, "Truman", label="person")], context=CTX)
+    (result,) = linker.resolve([mention(1, "Truman", label="company")], context=CTX)
     assert result.entity.type == EntityType.PRODUCT  # a film, whatever GLiNER said (spec #92)
+
+
+def test_a_person_linked_to_a_work_stays_a_person(decisions):
+    # Prod 2026-10-28: "JFK" → the film, "Chuck" (Nice) → the TV series. A
+    # person tag that Wikidata contradicts is a wrong link far more often
+    # than a wrong tag, so the type is held, as backfill-entity-types does.
+    wikidata = FakeWikidata({"Truman": [FILM]}, p31={"Q214801": ["Q11424"]})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Truman", label="person")], context=CTX)
+    assert result.entity.type == EntityType.PERSON
+    assert result.entity.wikidata_instance_of == ["Q11424"]  # kept for the review queue
 
 
 # --- failures ----------------------------------------------------------------
