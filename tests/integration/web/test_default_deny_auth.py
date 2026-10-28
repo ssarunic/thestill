@@ -84,6 +84,7 @@ ADMIN_ROUTES = {
     ("POST", "/api/admin/entities/move-mentions"),
     ("POST", "/api/admin/entities/split"),
     ("POST", "/api/admin/entities/{entity_id}/relink"),
+    ("POST", "/api/admin/entities/{entity_id}/set-type"),
     ("POST", "/api/admin/entities/blacklist"),
     ("POST", "/api/admin/entities/prune-orphans"),
     ("GET", "/webhook/elevenlabs/results"),
