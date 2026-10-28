@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -83,3 +85,59 @@ def test_in_place_only_works_changes_the_film_and_keeps_the_company(repo):
     assert repo.get_entity("topic:margin-call").type is EntityType.PRODUCT
     assert repo.get_entity("company:allianz").type is EntityType.COMPANY
     assert repo.get_entity("product:margin-call") is None
+
+
+@pytest.fixture
+def people(repo):
+    with sqlite3.connect(str(Path(os.environ["STORAGE_PATH"]) / "podcasts.db")) as conn:
+        (episode_id,) = conn.execute("SELECT id FROM episodes").fetchone()
+    people = (("person:bellingham", "Bellingham"), ("person:london", "London"))
+    for entity_id, name in people:
+        repo.upsert_entity(
+            EntityRecord(
+                id=entity_id,
+                type=EntityType.PERSON,
+                canonical_name=name,
+                wikidata_qid="Q430267",
+                wikidata_instance_of=["Q515"],  # city
+            )
+        )
+    repo.insert_mentions(
+        [
+            EntityMention(
+                entity_id=entity_id,
+                resolution_status=ResolutionStatus.RESOLVED,
+                episode_id=episode_id,
+                segment_id=10 + i,
+                start_ms=0,
+                end_ms=1000,
+                surface_form=name,
+                surface_label="person",
+                quote_excerpt=name,
+                confidence=0.9,
+                extractor="gliner:test",
+            )
+            for i, (entity_id, name) in enumerate(people)
+        ]
+    )
+    return repo
+
+
+def test_person_demotions_are_held_by_default(people):
+    out = _run("--in-place", "--cached-only")
+    assert "⏸ person:bellingham (person → topic) Bellingham" in out
+    assert "2 person demotion(s) held" in out
+    assert people.get_entity("person:bellingham").type is EntityType.PERSON
+    assert people.get_entity("company:allianz").type is EntityType.COMPANY
+
+
+def test_entity_id_applies_a_reviewed_person_demotion(people):
+    out = _run("--in-place", "--cached-only", "--entity-id", "person:london")
+    assert "person:london (person → topic) London" in out and "held" not in out
+    assert people.get_entity("person:london").type is EntityType.TOPIC
+    assert people.get_entity("person:bellingham").type is EntityType.PERSON
+
+
+def test_entity_id_cannot_be_mixed_with_a_scope(people):
+    result = CliRunner().invoke(main, ["backfill-entity-types", "--entity-id", "person:london", "--podcast-id", "p"])
+    assert result.exit_code == 1 and "cannot be combined" in result.output
