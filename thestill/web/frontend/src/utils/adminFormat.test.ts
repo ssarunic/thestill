@@ -29,5 +29,8 @@ describe('describeAuditEntry — entity curation', () => {
     expect(
       describeAuditEntry(entry('entity.relink', { entity_id: 'company:perplexity', old: 'Q372193', new: 'Q123403392', reason: 'wrong item' })),
     ).toBe('company:perplexity: Q372193 → Q123403392 — “wrong item”')
+    expect(
+      describeAuditEntry(entry('entity.set_type', { entity_id: 'product:android-17', old: 'person', new: 'product', reason: 'the OS' })),
+    ).toBe('product:android-17: person → product — “the OS”')
   })
 })

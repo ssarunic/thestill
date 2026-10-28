@@ -360,6 +360,11 @@ class EntityRelinkRequest(BaseModel):
     reason: Optional[str] = Field(None, max_length=500)
 
 
+class EntitySetTypeRequest(BaseModel):
+    type: EntityTypeName
+    reason: Optional[str] = Field(None, max_length=500)
+
+
 class BlacklistRequest(BaseModel):
     surface_form: str = Field(..., min_length=1, max_length=300)
     wrong_qid: str = Field(..., min_length=2, max_length=20)
@@ -431,6 +436,19 @@ def relink_entity(
         blacklist_old=body.blacklist_old,
         reason=body.reason,
     )
+    return api_response(asdict(result))
+
+
+@router.post("/entities/{entity_id}/set-type")
+def set_entity_type(
+    entity_id: str,
+    body: EntitySetTypeRequest,
+    state: AppState = Depends(get_app_state),
+    admin: User = Depends(require_admin),
+) -> dict:
+    from ...models.entities import EntityType
+
+    result = _curation(state).set_type(entity_id, EntityType(body.type), actor=Actor.web(admin.id), reason=body.reason)
     return api_response(asdict(result))
 
 

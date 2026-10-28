@@ -41,6 +41,8 @@ export function describeAuditEntry(entry: AdminAuditEntry): string {
       return `Split ${String(d.entity_id)} out of ${String(d.from_entity_id)} (${String(d.moved ?? 0)} mentions)${reason}`
     case 'entity.relink':
       return `${String(d.entity_id)}: ${String(d.old ?? '—')} → ${String(d.new ?? '—')}${reason}`
+    case 'entity.set_type':
+      return `${String(d.entity_id)}: ${String(d.old)} → ${String(d.new)}${reason}`
     case 'entity.blacklist':
       return `Blacklisted “${String(d.surface_form)}” ↛ ${String(d.wrong_qid)}${reason}`
     case 'entity.prune_orphans':

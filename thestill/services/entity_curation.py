@@ -80,6 +80,13 @@ class RelinkResult:
 
 
 @dataclass(frozen=True)
+class SetTypeResult:
+    entity_id: str
+    old_type: str
+    new_type: str
+
+
+@dataclass(frozen=True)
 class PruneResult:
     orphans: List[str]
     deleted: int
@@ -275,6 +282,22 @@ class EntityCurationService:
             actor, "entity.relink", entity_id=entity.id, old=old, new=qid, blacklisted=blacklisted, reason=reason
         )
         return RelinkResult(entity.id, old, qid, blacklisted)
+
+    def set_type(
+        self, entity_id: str, entity_type: EntityType, *, actor: Actor, reason: Optional[str] = None
+    ) -> SetTypeResult:
+        """Move an entity to another bucket in place: id, mentions, aliases and
+        link stay, and the old-type URL redirects (#417). A row still linked to
+        Wikidata can be moved back by the resolver or the next
+        ``backfill-entity-types``; when the link is the mistake, unlink it too."""
+        entity = self._get(entity_id)
+        if entity.type is entity_type:
+            raise AdminActionError("unchanged", f"{entity.id} is already a {entity_type.value}.")
+        self._repo.upsert_entity(entity.model_copy(update={"type": entity_type}))
+        self._audit.record(
+            actor, "entity.set_type", entity_id=entity.id, old=entity.type.value, new=entity_type.value, reason=reason
+        )
+        return SetTypeResult(entity.id, entity.type.value, entity_type.value)
 
     def blacklist(self, surface_form: str, wrong_qid: str, *, actor: Actor, reason: Optional[str] = None) -> None:
         """Refuse ``surface_form → wrong_qid`` in every future resolution."""

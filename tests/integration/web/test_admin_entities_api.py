@@ -145,6 +145,22 @@ def test_relink_fixes_the_link_and_refuses_the_old_one(client, app_state):
     assert repo.is_blacklisted("Perplexity", "Q372193")
 
 
+def test_set_type_moves_the_bucket_in_place_and_audits(client, app_state):
+    _admin(client, app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(
+        EntityRecord(id="product:android-17", type=EntityType.PERSON, canonical_name="Android 17", wikidata_qid=None)
+    )
+    body = client.post(
+        "/api/admin/entities/product:android-17/set-type", json={"type": "product", "reason": "the OS"}
+    ).json()
+    assert (body["old_type"], body["new_type"]) == ("person", "product")
+    assert repo.get_entity("product:android-17").type is EntityType.PRODUCT
+    assert client.get("/api/admin/audit").json()["entries"][0]["action"] == "entity.set_type"
+    again = client.post("/api/admin/entities/product:android-17/set-type", json={"type": "product"})
+    assert again.status_code == 409
+
+
 def test_refusals_are_409_with_a_reason(client, app_state, corpus):
     _admin(client, app_state)
     across = client.post("/api/admin/entities/merge", json={"keeper_id": "topic:islam", "loser_id": "person:nobody"})

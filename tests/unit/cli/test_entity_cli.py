@@ -284,6 +284,17 @@ class TestEntityCurationCli:
         assert result.exit_code == 1
         assert "already belongs to company:spacex" in result.output
 
+    def test_set_type_keeps_the_id_and_audits(self, tmp_db_with_entities):
+        result = _run(["entity", "set-type", "company:spacex", "product", "--reason", "the rocket"])
+        assert result.exit_code == 0, result.output
+        assert "company:spacex: company → product" in result.output
+        entity = self._repo(tmp_db_with_entities).get_entity("company:spacex")
+        assert entity.type is EntityType.PRODUCT and entity.wikidata_qid == "Q193701"
+
+    def test_set_type_refuses_the_same_type(self, tmp_db_with_entities):
+        result = _run(["entity", "set-type", "company:spacex", "company"])
+        assert result.exit_code == 1 and "already a company" in result.output
+
     def test_relink_blacklists_the_old_qid(self, tmp_db_with_entities):
         result = _run(["entity", "relink", "company:tesla", "Q999999", "--reason", "wrong item"])
         assert result.exit_code == 0, result.output

@@ -453,6 +453,7 @@ Admin only. Every write goes through the same services as `thestill user` / `adm
 | `/api/admin/entities/move-mentions` | POST | `{from_entity_id, to_entity_id, mention_ids, delete_emptied?, reason?}`: point chosen mentions at another entity; only mentions of `from_entity_id` move |
 | `/api/admin/entities/split` | POST | `{from_entity_id, name, type, qid?, description?, entity_id?, mention_ids?, delete_emptied?, reason?}`: create an entity and move the chosen mentions (or every reference) to it. 409 `exists`, `qid_taken` |
 | `/api/admin/entities/{entity_id}/relink` | POST | `{qid, description?, blacklist_old?, reason?}`: point the entity at another Wikidata item (`qid: null` unlinks); drops the old description, P31 classes and enrichment and blacklists its names for the old QID. 409 `qid_taken`, `unchanged`, `invalid_qid` |
+| `/api/admin/entities/{entity_id}/set-type` | POST | `{type, reason?}`: move the entity to another type in place (id, mentions and link stay; the old-type URL redirects). A still-linked row can be moved back by the resolver or a backfill, so unlink a wrong link too. 409 `unchanged` |
 | `/api/admin/entities/blacklist` | POST | `{surface_form, wrong_qid, reason?}`: refuse that link in every future resolution and forget the live linker's cached decision |
 | `/api/admin/entities/prune-orphans` | POST | `{apply?}`: count entity rows nothing refers to (`sample` of 50); with `apply: true`, delete them |
 

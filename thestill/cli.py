@@ -4943,6 +4943,28 @@ def entity_split(
         click.echo(f"  {deleted} deleted (nothing referred to it)")
 
 
+@entity_group.command("set-type")
+@click.argument("entity_id")
+@click.argument("entity_type", type=click.Choice(["person", "company", "product", "topic"]))
+@click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.pass_context
+@require_config
+@log_command
+def entity_set_type(ctx, entity_id, entity_type, reason):
+    """Move ENTITY_ID to another type in place; the id and mentions stay.
+
+    A row still linked to Wikidata can be moved back by the resolver or the
+    next ``backfill-entity-types``. When the link is the mistake, follow
+    with ``entity relink ENTITY_ID none``, which also refuses the old item.
+    """
+    from .models.entities import EntityType
+
+    result = _curate(
+        ctx, lambda svc, actor: svc.set_type(entity_id, EntityType(entity_type), actor=actor, reason=reason)
+    )
+    click.echo(f"✓ {result.entity_id}: {result.old_type} → {result.new_type}")
+
+
 @entity_group.command("relink")
 @click.argument("entity_id")
 @click.argument("qid")
