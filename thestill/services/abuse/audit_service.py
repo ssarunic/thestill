@@ -43,6 +43,7 @@ AUDIT_ACTIONS = (
     "entity.move_mentions",
     "entity.split",
     "entity.relink",
+    "entity.set_type",
     "entity.blacklist",
     "entity.prune_orphans",
 )

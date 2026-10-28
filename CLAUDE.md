@@ -73,6 +73,7 @@ thestill entity merge KEEPER LOSER            # two rows, one thing
 thestill entity move-mentions FROM TO ID...   # one name, two things
 thestill entity split FROM --name N --type T [--qid Q] [--mention ID]...
 thestill entity relink ID QID                 # wrong Wikidata item; blacklists the old one
+thestill entity set-type ID TYPE              # wrong type; pair with relink ID none if the link is wrong
 thestill entity prune-orphans [--apply]       # rows nothing refers to
 
 # Product analytics from product tables (spec #95; multi-user + Postgres only):
