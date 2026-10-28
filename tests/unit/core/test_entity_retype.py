@@ -85,3 +85,27 @@ class TestPlanBackfill:
             list(plan_backfill([_entity("company:acme", EntityType.COMPANY, ["Q4830453"])], None, only_works=True))
             == []
         )
+
+
+class TestPersonDemotionsAreHeld:
+    """Prod dry run 2026-10-27: a person linked to a same-name place or work
+    (Bellingham the footballer → the US city) is a wrong link, not a wrong
+    type, so the backfill must not turn people into places on its own."""
+
+    CITY = ["Q515"]  # city
+
+    def test_a_person_linked_to_a_place_is_held(self):
+        (plan,) = plan_backfill([_entity("person:bellingham", EntityType.PERSON, self.CITY)], None)
+        assert plan.new_type is EntityType.TOPIC and plan.held
+
+    def test_a_released_person_moves(self):
+        entity = _entity("person:london", EntityType.PERSON, self.CITY)
+        (plan,) = plan_backfill([entity], None, release={"person:london"})
+        assert plan.new_type is EntityType.TOPIC and not plan.held
+
+    def test_other_types_are_never_held(self):
+        (plan,) = plan_backfill([_entity("company:knin", EntityType.COMPANY, self.CITY)], None)
+        assert plan.new_type is EntityType.TOPIC and not plan.held
+
+    def test_a_human_stays_a_person_and_is_not_held(self):
+        assert list(plan_backfill([_entity("person:ada", EntityType.PERSON, ["Q5"])], None)) == []

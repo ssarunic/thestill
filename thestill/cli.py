@@ -3615,6 +3615,12 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
 @main.command("backfill-entity-types")
 @click.option("--episode-id", help="Scope backfill to entities mentioned in this episode")
 @click.option("--podcast-id", help="Scope backfill to entities mentioned in this podcast")
+@click.option(
+    "--entity-id",
+    "entity_ids",
+    multiple=True,
+    help="Only these entities (repeatable); also applies their held person → topic/product change",
+)
 @click.option("--limit", type=int, help="Cap the number of entities to process")
 @click.option(
     "--in-place",
@@ -3635,7 +3641,7 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
 @click.pass_context
 @require_config
 @log_command
-def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_works, cached_only, dry_run):
+def backfill_entity_types(ctx, episode_id, podcast_id, entity_ids, limit, in_place, only_works, cached_only, dry_run):
     """Spec #28 §5.2 — fetch Wikidata P31 and re-bucket existing entities.
 
     Walks resolved entities with a ``wikidata_qid`` set, fetches
@@ -3664,6 +3670,12 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_wor
     Scope by ``--episode-id`` or ``--podcast-id`` to test on a single
     episode before running corpus-wide. ``--dry-run`` reports the
     planned changes without writing.
+
+    A person that Wikidata calls a place, work or company is held, not
+    retyped: usually the name was linked to the wrong item (Bellingham the
+    footballer → the US city). Held rows only get their P31 cached. Check
+    each link; unlink a wrong one with ``entity relink ID none``, and apply
+    a right one by naming it with ``--entity-id``.
     """
     from collections import Counter
 
@@ -3682,7 +3694,16 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_wor
             ctx.exit(1)
         scope_podcast_id = podcast.id
 
-    entities = repo.list_entities_with_qid(episode_id=episode_id, podcast_id=scope_podcast_id, limit=limit)
+    if entity_ids:
+        if episode_id or podcast_id:
+            click.echo("❌ --entity-id cannot be combined with --episode-id or --podcast-id", err=True)
+            ctx.exit(1)
+        named = {i: repo.get_entity(i) for i in dict.fromkeys(entity_ids)}
+        for missing in [i for i, e in named.items() if e is None or not e.wikidata_qid]:
+            click.echo(f"⚠️  {missing}: not found or not linked to Wikidata, skipped", err=True)
+        entities = [e for e in named.values() if e is not None and e.wikidata_qid]
+    else:
+        entities = repo.list_entities_with_qid(episode_id=episode_id, podcast_id=scope_podcast_id, limit=limit)
     if not entities:
         click.echo("No resolved entities with QIDs match the scope.")
         return
@@ -3692,10 +3713,22 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_wor
     fetch_p31 = client.fetch_p31 if client else None
     superclasses = client.fetch_superclasses if client else None
     changes: Counter = Counter()
+    held: Counter = Counter()
     cached = 0
-    for plan in plan_backfill(entities, fetch_p31, only_works=only_works, superclasses=superclasses):
+    plans = plan_backfill(
+        entities, fetch_p31, only_works=only_works, superclasses=superclasses, release=frozenset(entity_ids)
+    )
+    for plan in plans:
         entity, p31, new_type = plan.entity, plan.p31, plan.new_type
-        if new_type is not None:
+        if plan.held:
+            click.echo(
+                f"  ⏸ {entity.id} ({entity.type.value} → {new_type.value}) {entity.canonical_name} "
+                f"[P31={p31}] held: check the link"
+            )
+            held[f"{entity.type.value} → {new_type.value}"] += 1
+            cached += plan.caches_p31
+            new_type = None  # cache the P31, keep the type
+        elif new_type is not None:
             new_id = entity.id if in_place else _build_entity_id(new_type, entity.canonical_name, entity.wikidata_qid)
             click.echo(f"  {entity.id} ({entity.type.value} → {new_type.value}) {entity.canonical_name} [P31={p31}]")
             changes[f"{entity.type.value} → {new_type.value}"] += 1
@@ -3741,6 +3774,13 @@ def backfill_entity_types(ctx, episode_id, podcast_id, limit, in_place, only_wor
     )
     for transition, count in changes.most_common():
         click.echo(f"   {count:6}  {transition}")
+    if held:
+        click.echo(
+            f"\n⏸ {sum(held.values())} person demotion(s) held, type unchanged. Check each link: "
+            "`thestill entity relink ID none` for a wrong one, `--entity-id ID` to apply a right one."
+        )
+        for transition, count in held.most_common():
+            click.echo(f"   {count:6}  {transition}")
 
 
 def _upsert_enrichment_with_retry(repo, enrichment, *, attempts: int = 4, base_delay: float = 0.5) -> None:

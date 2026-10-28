@@ -25,7 +25,7 @@ linker keeps an existing row's id for a known QID the same way.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator, List, Optional
+from typing import Callable, Collection, Iterable, Iterator, List, Optional
 
 from ..models.entities import EntityRecord, EntityType
 from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type
@@ -58,6 +58,7 @@ class RetypePlan:
     entity: EntityRecord
     p31: List[str]
     new_type: Optional[EntityType]  # None: type unchanged, P31 cache only
+    held: bool = False  # a person demotion not released by --entity-id
 
     @property
     def caches_p31(self) -> bool:
@@ -70,6 +71,7 @@ def plan_backfill(
     *,
     only_works: bool = False,
     superclasses: Optional[Callable[[str], List[str]]] = None,
+    release: Collection[str] = (),
 ) -> Iterator[RetypePlan]:
     """What ``backfill-entity-types`` would do, one entity at a time.
 
@@ -78,6 +80,11 @@ def plan_backfill(
     calls. ``superclasses`` (P279) lets an unlisted class such as "town in
     Croatia" count as a place. Entities with nothing to change are not
     yielded.
+
+    A person whose P31 says place, work or company is ``held``: the prod
+    dry run of 2026-10-27 showed the person tag is usually right and the
+    link wrong (Bellingham the footballer → the US city, Amol Avasare →
+    the Iranian city). Only ids in ``release`` (reviewed) move.
     """
     for entity in entities:
         p31 = entity.wikidata_instance_of
@@ -90,7 +97,8 @@ def plan_backfill(
         new_type = plan_retype(entity, p31, only_works=only_works, superclasses=superclasses)
         if new_type is None and entity.wikidata_instance_of == p31:
             continue
-        yield RetypePlan(entity, p31, new_type)
+        held = new_type is not None and entity.type is EntityType.PERSON and entity.id not in release
+        yield RetypePlan(entity, p31, new_type, held)
 
 
 def retype_in_place(repo, entity: EntityRecord, new_type: EntityType, p31: List[str]) -> None:
