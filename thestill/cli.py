@@ -6369,11 +6369,34 @@ def _render_content(content: ContentReport, top: int = 10) -> None:
         click.echo(click.style(f"Note: {note}", dim=True))
 
 
+def _render_scorecard(scorecard) -> None:
+    """The spec #111 Scorecard: each metric's newest graded week, then the
+    last weeks oldest first, then the guardrails."""
+    click.echo("Scorecard (spec #111)")
+    for metric in scorecard.metrics:
+        graded = [p for p in metric.points if p.eligible]
+        latest = _pct_cell(graded[-1].reached, graded[-1].eligible, graded[-1].pct) if graded else "—"
+        week = f"  week of {graded[-1].week_start:%Y-%m-%d}" if graded else ""
+        click.echo(f"  {metric.label:<18} {metric.readers:<8} {latest}{week}")
+        trend = "  ".join(f"{p.pct * 100:.0f}%" if p.pct is not None else "—" for p in metric.points)
+        click.echo(click.style(f"    last {len(metric.points)} weeks: {trend}", dim=True))
+    for guard in scorecard.guardrails:
+        value = guard.value if guard.value is not None else "see PostHog"
+        click.echo(f"  Guardrail: {guard.label}: {value} ({guard.detail})")
+    since = f"{scorecard.connector_days_since:%Y-%m-%d}" if scorecard.connector_days_since else "none yet"
+    click.echo(f"  Opted out of usage analytics: {scorecard.opted_out}. Connector days since: {since}.")
+    for note in scorecard.notes:
+        click.echo(click.style(f"  Note: {note}", dim=True))
+
+
 def _render_analytics(report) -> None:
     """Plain-text Layer A report for the operator's terminal."""
     window = report.window
     click.echo(CLIFormatter.format_header(f"Product analytics — last {report.range}"))
     click.echo(f"Window: {window.start:%Y-%m-%d} → {window.end:%Y-%m-%d %H:%M} UTC\n")
+
+    _render_scorecard(report.scorecard)
+    click.echo("")
 
     click.echo(f"Signups: {report.signups.total}")
     for source, n in sorted(report.signups.by_source.items(), key=lambda kv: -kv[1]):
@@ -6420,11 +6443,12 @@ def _render_analytics(report) -> None:
     help=f"Window for signups, activation and engagement (retention always covers {COHORT_ROWS} weeks).",
 )
 @click.option("--json", "json_output", is_flag=True, help="Print the report as JSON.")
+@click.option("--scorecard", "scorecard_only", is_flag=True, help="Print only the spec #111 Scorecard.")
 @click.pass_context
 @require_config
 @log_command
-def analytics(ctx, range_, json_output):
-    """Product analytics from product tables: signups, activation, retention (spec #95).
+def analytics(ctx, range_, json_output, scorecard_only):
+    """Product analytics from product tables: Scorecard, signups, activation, retention (specs #95, #111).
 
     Admin accounts and the single-user local account are excluded. Needs
     multi-user mode on Postgres; otherwise says so and exits 0.
@@ -6435,6 +6459,14 @@ def analytics(ctx, range_, json_output):
             click.echo(json.dumps({"available": False}))
         else:
             click.echo("Analytics is off (needs MULTI_USER=true and Postgres).")
+        return
+
+    if scorecard_only:
+        scorecard = service.scorecard()
+        if json_output:
+            click.echo(json.dumps({"available": True, "scorecard": scorecard.model_dump(mode="json")}, indent=2))
+        else:
+            _render_scorecard(scorecard)
         return
 
     report = service.report(range_)

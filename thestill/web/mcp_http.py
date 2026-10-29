@@ -33,7 +33,8 @@ guards end in the same ``admit``/``dispatch``, so tools see one identity
 model whichever door a request came through.
 """
 
-from typing import TYPE_CHECKING, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Optional, Set
 
 import structlog
 from mcp.server import Server
@@ -97,6 +98,12 @@ class McpHttpRuntime:
         self._config = config
         self._analytics = analytics_sink
         self._users = repos.user
+        # Spec #111 — connector days for the Scorecard, written at most once
+        # per reader per UTC quarter hour from this process (see
+        # _record_connector_day).
+        self._connector_days = repos.connector_day
+        self._connector_slot: Optional[datetime] = None
+        self._connector_seen: Set[str] = set()
         # Spec #104 — the same account-status rule as the web session check.
         self._access = AccessGuard(repos.user, None, multi_user=config.multi_user)
         # The app passes its own service so there is one instance per
@@ -127,7 +134,9 @@ class McpHttpRuntime:
         logger.info("mcp_http_runtime_initialized", transport="streamable-http", stateless=True)
 
     def _count_tool_call(self, identity, tool: str, ok: bool) -> None:
-        """Spec #95 ``mcp_tool_call``: remote calls by signed-in users only."""
+        """Spec #95 ``mcp_tool_call``: remote calls by signed-in users only.
+        Also records the spec #111 connector day, which needs no PostHog."""
+        self._record_connector_day(identity, ok)
         if self._analytics is None or not self._analytics.enabled or identity.user is None:
             return
         try:
@@ -136,6 +145,31 @@ class McpHttpRuntime:
             self._analytics.capture(McpToolCall(tool=tool, ok=ok), user=identity.user, gpc=identity.gpc)
         except Exception as exc:  # noqa: BLE001 - e.g. a malformed tool name; never fails the call
             logger.warning("analytics_mcp_tool_call_skipped", error=str(exc))
+
+    def _record_connector_day(self, identity, ok: bool) -> None:
+        """Spec #111 §4: a successful remote call puts today on the reader's
+        connector days. The day is local to the reader, so the in-process
+        memo is keyed by UTC quarter hour rather than date: every IANA
+        offset in use is a whole number of quarter hours (+05:30, +05:45),
+        so a local midnight always starts a new slot and is never skipped,
+        at the cost of at most four inserts per reader per hour. Opted-out
+        readers and GPC calls store nothing (spec #103 D5); the repository
+        re-checks the switch under the opt-out's lock."""
+        user = identity.user
+        if not ok or user is None or identity.gpc or not user.usage_analytics_enabled:
+            return
+        now = now_utc()
+        slot = now.replace(minute=now.minute - now.minute % 15, second=0, microsecond=0)
+        if slot != self._connector_slot:
+            self._connector_slot, self._connector_seen = slot, set()
+        if user.id in self._connector_seen:
+            return
+        try:
+            self._connector_days.record_day(user.id, now)
+        except Exception:  # noqa: BLE001 - measuring a call never fails it
+            logger.warning("connector_day_record_failed", user_id=user.id, exc_info=True)
+            return
+        self._connector_seen.add(user.id)
 
     @property
     def config(self) -> "Config":

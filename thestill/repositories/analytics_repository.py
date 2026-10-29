@@ -28,6 +28,7 @@ from ..models.analytics import (
     CohortsReport,
     ContentReport,
     EngagementReport,
+    ScorecardReport,
     SignupsReport,
 )
 
@@ -60,6 +61,12 @@ class AnalyticsRepository(ABC):
         """Reads, briefings and follows in ``window``."""
 
     @abstractmethod
+    def scorecard(self, as_of: datetime) -> ScorecardReport:
+        """The spec #111 Scorecard: four weekly series, the Layer A
+        guardrails and the opted-out count, up to ``as_of``; independent of
+        the selected range. One statement per series."""
+
+    @abstractmethod
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
         """Top podcasts, top episodes and categories for ``window``, with
         readers in ``previous`` for the change column (spec #103). One
@@ -84,6 +91,9 @@ class UnavailableAnalyticsRepository(AnalyticsRepository):
         self._unavailable()
 
     def engagement(self, window: AnalyticsWindow) -> EngagementReport:
+        self._unavailable()
+
+    def scorecard(self, as_of: datetime) -> ScorecardReport:
         self._unavailable()
 
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:

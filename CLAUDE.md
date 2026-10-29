@@ -77,7 +77,7 @@ thestill entity set-type ID TYPE              # wrong type; pair with relink ID 
 thestill entity prune-orphans [--apply]       # rows nothing refers to
 
 # Product analytics from product tables (spec #95; multi-user + Postgres only):
-thestill analytics [--range 7d|28d|90d] [--json]
+thestill analytics [--range 7d|28d|90d] [--json] [--scorecard]   # --scorecard: spec #111 metrics only
 
 # Abuse prevention (spec #104): accounts, admins, runtime switches.
 # Straight against the database, so they work when the web server doesn't.
@@ -201,7 +201,8 @@ These IDs enable tracing requests across all layers of the application.
 - [mcp-usage.md](docs/mcp-usage.md) - MCP server usage
 - [transcript-cleaning.md](docs/transcript-cleaning.md) - Cleaning configuration
 - [evals.md](docs/evals.md) - LLM-as-judge quality eval runs (`thestill eval`)
-- [analytics.md](docs/analytics.md) - Product analytics: the `/analytics` funnel and PostHog usage events (spec #95)
+- [analytics.md](docs/analytics.md) - Product analytics: the Scorecard (spec #111), the `/analytics` funnel and PostHog usage events (spec #95)
+- [experiments.md](docs/experiments.md) - Log of product changes aimed at a Scorecard metric, and how each was read (spec #111)
 - [code-guidelines.md](docs/code-guidelines.md) - Development standards
 
 ### Technical Specs (`specs/`)

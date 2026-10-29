@@ -1610,6 +1610,20 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: user_episode_views table created")
 
+        # Spec #111 (Postgres migration 0026): reader-local days with a
+        # successful remote connector call. ``day`` is an ISO date string.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_connector_days (
+                user_id  TEXT NOT NULL,
+                day      TEXT NOT NULL,
+                first_at TIMESTAMP NOT NULL,
+                PRIMARY KEY (user_id, day),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+
         # Spec #103 Phase 2 (Postgres migration 0020): signed-out views per
         # public page per UTC day. ``day`` is an ISO date string.
         conn.execute(

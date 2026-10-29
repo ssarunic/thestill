@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useAnalytics } from '../hooks/useApi'
 import type { AnalyticsRange } from '../api/types'
 import SegmentedControl from '../components/SegmentedControl'
+import ScorecardSection from '../components/analytics/ScorecardSection'
 import SignupsSection from '../components/analytics/SignupsSection'
 import ActivationSection from '../components/analytics/ActivationSection'
 import RetentionSection from '../components/analytics/RetentionSection'
@@ -10,9 +11,9 @@ import ContentSection from '../components/analytics/ContentSection'
 import { DEFAULT_RANGE, RANGES, parseRange } from '../utils/analyticsFormat'
 
 /**
- * Spec #95 Layer A — product analytics read from product tables: signups,
- * activation, cohort retention, engagement, and what readers read
- * (spec #103). Admin-only (AdminRoute + the server's require_admin);
+ * Spec #95 Layer A — product analytics read from product tables: the
+ * spec #111 Scorecard, signups, activation, cohort retention, engagement,
+ * and what readers read (spec #103). Admin-only (AdminRoute + the server's require_admin);
  * aggregates only, no per-user rows.
  */
 export default function Analytics() {
@@ -38,7 +39,7 @@ export default function Analytics() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-ink">Analytics</h1>
-          <p className="text-muted mt-1">Signups, activation, retention and reading from product data</p>
+          <p className="text-muted mt-1">Scorecard, signups, activation, retention and reading from product data</p>
         </div>
         {data?.available !== false && (
           <SegmentedControl options={RANGES} value={range} onChange={setRange} ariaLabel="Date range" />
@@ -65,6 +66,7 @@ export default function Analytics() {
         </div>
       ) : (
         <>
+          <ScorecardSection scorecard={data.scorecard} />
           <SignupsSection signups={data.signups} />
           <ActivationSection activation={data.activation} />
           <RetentionSection cohorts={data.cohorts} />

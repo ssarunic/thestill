@@ -12,13 +12,19 @@ function Stat({ label, value, detail }: { label: string; value: string | number;
   )
 }
 
-/** Activity in the window across everyone, not only new users. */
+/**
+ * Activity in the window across everyone, not only new users. Averages and
+ * per-briefing ratios, so diagnostic only (spec #111 §5).
+ */
 export default function EngagementSection({ engagement: e }: { engagement: AnalyticsReport['engagement'] }) {
   return (
     <Panel as="section" aria-labelledby="analytics-engagement" className="p-4 space-y-3">
-      <h2 id="analytics-engagement" className="text-section text-ink">
-        Engagement
-      </h2>
+      <div>
+        <h2 id="analytics-engagement" className="text-section text-ink">
+          Engagement
+        </h2>
+        <p className="text-sm text-muted">Diagnostics: these help explain a change; the Scorecard decides it.</p>
+      </div>
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Stat label="Active users" value={e.active_users} />
         <Stat

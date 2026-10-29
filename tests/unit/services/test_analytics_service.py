@@ -69,3 +69,15 @@ def test_single_user_mode_is_unavailable_even_with_a_working_repository(repo):
 )
 def test_change_label(now, before, label):
     assert change_label(now, before) == label
+
+
+def test_scorecard_is_in_the_report_and_on_its_own_with_the_same_clock(repo):
+    service = AnalyticsService(repo, enabled=True, clock=lambda: NOW)
+    assert service.report("7d").scorecard.opted_out == 2
+    assert service.scorecard().metrics[0].key == "activation"
+    assert [arg for name, arg in repo.calls if name == "scorecard"] == [NOW, NOW]
+
+
+def test_scorecard_respects_availability(repo):
+    with pytest.raises(AnalyticsUnavailableError):
+        AnalyticsService(repo, enabled=False).scorecard()

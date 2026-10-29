@@ -115,10 +115,44 @@ interface AnalyticsContentReport {
   notes: string[]
 }
 
+// Spec #111 — the Scorecard. Activation and week-4 retention points are
+// signup weeks; engagement and weekly return points are activity weeks.
+export interface AnalyticsMetricPoint {
+  week_start: string // Monday
+  eligible: number
+  reached: number
+  pct: number | null
+}
+
+export interface AnalyticsMetricSeries {
+  key: string
+  label: string
+  readers: 'new' | 'existing'
+  definition: string
+  points: AnalyticsMetricPoint[] // oldest first
+}
+
+export interface AnalyticsGuardrail {
+  key: string
+  label: string
+  layer: 'A' | 'B' // B: read in PostHog, value is null
+  value: number | null
+  detail: string
+}
+
+export interface AnalyticsScorecard {
+  metrics: AnalyticsMetricSeries[]
+  guardrails: AnalyticsGuardrail[]
+  opted_out: number
+  connector_days_since: string | null
+  notes: string[]
+}
+
 export interface AnalyticsReport {
   generated_at: string
   range: AnalyticsRange
   window: { start: string; end: string; days: number }
+  scorecard: AnalyticsScorecard
   signups: {
     total: number
     by_source: Record<string, number>

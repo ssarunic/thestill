@@ -84,3 +84,26 @@ def test_text_report_content_block(available):
 
 def test_rejects_unknown_range(cli_env):
     assert CliRunner().invoke(main, ["-q", "analytics", "--range", "1y"]).exit_code == 2
+
+
+def test_scorecard_leads_the_text_report(available):
+    out = CliRunner().invoke(main, ["-q", "analytics"]).output
+    assert out.index("Scorecard (spec #111)") < out.index("Signups: 3")
+    assert "Activation         new      25.0% (1/4)  week of 2026-09-28" in out
+    assert "last 2 weeks: 25%  —" in out
+    assert "Guardrail: Sign-in completion: see PostHog" in out
+    assert "Opted out of usage analytics: 2. Connector days since: 2026-10-29." in out
+
+
+def test_scorecard_only(available):
+    out = CliRunner().invoke(main, ["-q", "analytics", "--scorecard"]).output
+    assert "Scorecard (spec #111)" in out and "Signups" not in out
+    result = CliRunner().invoke(main, ["-q", "analytics", "--scorecard", "--json"])
+    payload = json.loads(result.stdout)
+    assert payload["available"] is True and set(payload) == {"available", "scorecard"}
+    assert [m["key"] for m in payload["scorecard"]["metrics"]] == [
+        "activation",
+        "engagement",
+        "retention_w4",
+        "weekly_return",
+    ]

@@ -36,6 +36,7 @@ from .audit_log_repository import AuditLogRepository
 from .briefing_delivery_repository import BriefingDeliveryRepository
 from .briefing_repository import BriefingRepository
 from .briefing_schedule_repository import BriefingScheduleRepository
+from .connector_day_repository import ConnectorDayRepository
 from .episode_view_repository import EpisodeViewRepository
 from .inbox_repository import InboxRepository
 from .link_decision_repository import LinkDecisionRepository
@@ -147,6 +148,8 @@ class RepositoryBundle:
     # Spec #103: first episode opens, and signed-out public page views.
     episode_view: EpisodeViewRepository
     public_page_view: PublicPageViewRepository
+    # Spec #111: reader-local days with a successful connector call.
+    connector_day: ConnectorDayRepository
     # Spec #104: runtime switches, the admin audit log, a banned user's
     # follows moved aside, and the operator's cross-user listing.
     settings: SettingsRepository
@@ -170,6 +173,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_briefing_delivery_repository import PostgresBriefingDeliveryRepository
         from .postgres_briefing_repository import PostgresBriefingRepository
         from .postgres_briefing_schedule_repository import PostgresBriefingScheduleRepository
+        from .postgres_connector_day_repository import PostgresConnectorDayRepository
         from .postgres_entity_repository import PostgresEntityRepository
         from .postgres_episode_view_repository import PostgresEpisodeViewRepository
         from .postgres_inbox_repository import PostgresInboxRepository
@@ -208,6 +212,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
             episode_view=PostgresEpisodeViewRepository(dsn),
             public_page_view=PostgresPublicPageViewRepository(dsn),
+            connector_day=PostgresConnectorDayRepository(dsn),
             settings=PostgresSettingsRepository(dsn),
             audit_log=PostgresAuditLogRepository(dsn),
             suspended_follow=PostgresSuspendedFollowRepository(dsn),
@@ -221,6 +226,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_briefing_delivery_repository import SqliteBriefingDeliveryRepository
     from .sqlite_briefing_repository import SqliteBriefingRepository
     from .sqlite_briefing_schedule_repository import SqliteBriefingScheduleRepository
+    from .sqlite_connector_day_repository import SqliteConnectorDayRepository
     from .sqlite_entity_repository import SqliteEntityRepository
     from .sqlite_episode_view_repository import SqliteEpisodeViewRepository
     from .sqlite_inbox_repository import SqliteInboxRepository
@@ -259,6 +265,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         analytics=UnavailableAnalyticsRepository(),
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
         public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
+        connector_day=SqliteConnectorDayRepository(db_path=db_path),
         settings=SqliteSettingsRepository(db_path=db_path),
         audit_log=SqliteAuditLogRepository(db_path=db_path),
         suspended_follow=SqliteSuspendedFollowRepository(db_path=db_path),

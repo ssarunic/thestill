@@ -15,7 +15,8 @@
 """Layer A product analytics: the funnel derived from product tables (spec #95).
 
 Every number here is read from state the product already keeps (users,
-follows, inbox read state, briefings). Nothing is collected for it. Admin
+follows, inbox read state, briefings), plus the measurement-only facts of
+specs #103 and #111 (first opens, playback, connector days). Admin
 accounts and the single-user ``local`` account are excluded throughout.
 """
 
@@ -53,8 +54,14 @@ class StepDef(NamedTuple):
     key: str
     label: str
     horizon_hours: int
-    fact: str  # the per-user moment measured: first_follow, first_briefing, first_opened, third_read
+    fact: str  # the per-user moment measured: first_follow, first_briefing, first_opened, third_read, activated
 
+
+# Spec #111 §3.1: a new reader is activated once, within this many hours
+# of signup, they have followed a show and had a delivered value day on a
+# later local day than the signup day. One constant for the funnel step and
+# the Scorecard series.
+ACTIVATION_HOURS = 7 * 24
 
 # The activation funnel, in order. The single definition of the steps: the
 # repository, the API payload (``StepStat.label``), the page and the CLI
@@ -65,6 +72,7 @@ STEPS = (
     StepDef("briefing_generated", "First briefing within 7 days", 7 * 24, "first_briefing"),
     StepDef("briefing_opened", "Opened first briefing within 7 days", 7 * 24, "first_opened"),
     StepDef("reads_3_first_week", "Read 3+ episodes in week 1", 7 * 24, "third_read"),
+    StepDef("activated", "Activated within 7 days (spec #111)", ACTIVATION_HOURS, "activated"),
 )
 
 # Activity weeks shown in the retention table. Week k is days [7k, 7k+7)
@@ -214,10 +222,104 @@ class ContentReport(BaseModel):
     notes: List[str] = Field(default_factory=lambda: list(CONTENT_NOTES))
 
 
+class MetricDef(NamedTuple):
+    """One Scorecard metric (spec #111 §3). ``readers`` says whose metric
+    it is: "new" points are signup weeks, "existing" points activity weeks."""
+
+    key: str
+    label: str
+    readers: str  # "new" or "existing"
+    definition: str
+
+
+# The Scorecard, in display order. The single definition of its labels and
+# wording: the repository, the API payload, the page and the CLI read it.
+SCORECARD_METRICS = (
+    MetricDef(
+        "activation",
+        "Activation",
+        "new",
+        "Followed a show and got delivered value (an inbox episode, a briefing or a connector call) "
+        "on a later day than signup, within 7 days.",
+    ),
+    MetricDef(
+        "engagement",
+        "Engagement",
+        "existing",
+        "Members with value on 2 or more days in the week. Members signed up at least 7 days before "
+        "the week and had a value day in the 28 days before it.",
+    ),
+    MetricDef(
+        "retention_w4",
+        "Week-4 retention",
+        "new",
+        "A value day in days 28–35 after signup.",
+    ),
+    MetricDef(
+        "weekly_return",
+        "Weekly return",
+        "existing",
+        "Members with a value day last week who had one again this week.",
+    ),
+)
+# Points per Scorecard series.
+SCORECARD_WEEKS = 8
+# Value days in a week that make a member engaged (spec #111 §3.2).
+ENGAGED_DAYS = 2
+# Week k after signup is days [7k, 7k + 7) (the cohort table's convention),
+# so week-4 retention needs 35 days after signup.
+RETENTION_WEEK = 4
+
+SCORECARD_NOTES = (
+    "A value day is a day, in the reader's briefing timezone (UTC without a schedule), with an "
+    "episode read or first opened, audio played, a briefing opened or a successful connector call. "
+    "Follows, searches and shares don't count (spec #111 D1, D4).",
+    "Readers who turned usage analytics off, or whose browser sends Global Privacy Control, are "
+    "counted with inbox reads and briefing opens only, so they are undercounted, never dropped (D2).",
+    "Activation and week-4 retention points are signup weeks (UTC); engagement and weekly return "
+    "points are complete calendar weeks of reader-local days.",
+)
+
+
+class MetricPoint(BaseModel):
+    week_start: date  # Monday
+    eligible: int  # graded readers: mature new readers, or members
+    reached: int
+    pct: Optional[float]  # None when eligible == 0
+
+
+class MetricSeries(BaseModel):
+    key: str
+    label: str
+    readers: str
+    definition: str
+    points: List[MetricPoint]  # SCORECARD_WEEKS weeks, oldest first
+
+
+class GuardrailStat(BaseModel):
+    """A number that must not get worse while a metric improves (spec #111
+    §3.5). Layer B guardrails have no value here: they are read in PostHog."""
+
+    key: str
+    label: str
+    layer: str  # "A" (computed here) or "B" (PostHog)
+    value: Optional[int]
+    detail: str
+
+
+class ScorecardReport(BaseModel):
+    metrics: List[MetricSeries]  # SCORECARD_METRICS order
+    guardrails: List[GuardrailStat]
+    opted_out: int  # readers with usage analytics off (D2)
+    connector_days_since: Optional[date]  # first stored connector day, any account
+    notes: List[str] = Field(default_factory=lambda: list(SCORECARD_NOTES))
+
+
 class AnalyticsReport(BaseModel):
     generated_at: datetime
     range: str
     window: AnalyticsWindow
+    scorecard: ScorecardReport
     signups: SignupsReport
     activation: ActivationReport
     cohorts: CohortsReport

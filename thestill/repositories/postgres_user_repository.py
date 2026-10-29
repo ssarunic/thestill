@@ -53,9 +53,9 @@ SELECT_COLS = (
 def consents_to_measurement(conn, user_id: str) -> bool:
     """The user's usage-analytics switch, read in ``conn``'s transaction
     under a row lock that ``update_usage_analytics`` waits for (and that
-    waits for it). Measurement writes (spec #103 views, ``listened_at``)
-    check it in the same transaction, so none lands after an opt-out's
-    erase."""
+    waits for it). Measurement writes (spec #103 views, ``listened_at``,
+    spec #111 connector days) check it in the same transaction, so none
+    lands after an opt-out's erase."""
     row = conn.execute("SELECT usage_analytics_enabled FROM users WHERE id = %s FOR SHARE", (user_id,)).fetchone()
     return bool(row and row["usage_analytics_enabled"])
 
@@ -162,6 +162,7 @@ class PostgresUserRepository(UserRepository):
             cursor = conn.execute("UPDATE users SET usage_analytics_enabled = %s WHERE id = %s", (enabled, user_id))
             if not enabled:
                 conn.execute("DELETE FROM user_episode_views WHERE user_id = %s", (user_id,))
+                conn.execute("DELETE FROM user_connector_days WHERE user_id = %s", (user_id,))
                 conn.execute(
                     "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = %s AND listened_at IS NOT NULL",
                     (user_id,),

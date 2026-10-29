@@ -5,7 +5,7 @@
 > **Updated:** 2026-10-16 (v2: PostHog replaces the first-party event log; Phases 0–2 built)
 > **Priority:** Medium, but Phases 0 and 1 must land before any launch driven by spec #94: a launch nobody can measure teaches nothing.
 > **Author:** Product & Engineering
-> **Related:** [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP `connect-src 'self'`), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) (read state), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#50 scheduled-briefings](50-scheduled-briefings.md) / [#84 scheduled-only-briefings](84-scheduled-only-briefings.md), [#66 aws-single-ec2-hosting](66-aws-single-ec2-hosting.md) (Caddy in front), [#75 llm-call-tracing](75-llm-call-tracing.md) (rejected PostHog for traces), [#78 remote-mcp-access](78-remote-mcp-access.md), [#80 share-to-thestill](80-share-to-thestill.md) (`next` through login), [#86 quality-feedback-loop](86-quality-feedback-loop.md), [#91 transcript-summary-export](91-transcript-summary-export.md), [#94 public-pages](94-public-pages.md), [#102 sign-in-page](102-sign-in-page.md)
+> **Related:** [#13 multi-user-shared-podcasts](13-multi-user-shared-podcasts.md), [#25 security-audit-and-hardening](25-security-audit-and-hardening.md) (CSP `connect-src 'self'`), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) (read state), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md), [#50 scheduled-briefings](50-scheduled-briefings.md) / [#84 scheduled-only-briefings](84-scheduled-only-briefings.md), [#66 aws-single-ec2-hosting](66-aws-single-ec2-hosting.md) (Caddy in front), [#75 llm-call-tracing](75-llm-call-tracing.md) (rejected PostHog for traces), [#78 remote-mcp-access](78-remote-mcp-access.md), [#80 share-to-thestill](80-share-to-thestill.md) (`next` through login), [#86 quality-feedback-loop](86-quality-feedback-loop.md), [#91 transcript-summary-export](91-transcript-summary-export.md), [#94 public-pages](94-public-pages.md), [#102 sign-in-page](102-sign-in-page.md), [#111 product-health-metrics](111-product-health-metrics.md) (the Scorecard: activation, engagement, retention definitions)
 
 ---
 
@@ -130,7 +130,11 @@ drift into collecting things it does not need.
 | Engagement | Episodes read per active user per week | A | inbox read transitions |
 | Engagement | Searches, exports, shares, narration plays, entity page opens per week | B | events below |
 | Engagement | Remote MCP tool calls per user per week, by tool | B | server `mcp_tool_call` |
-| Retention | For each signup week: % active in weeks 1, 2, 4, 8 | A | cohort = `users.created_at`; active = a read transition, a follow or a briefing opened |
+| Retention | For each signup week: % active in weeks 1, 2, 4, 8 | A | cohort = `users.created_at`; active = a read transition, a follow or a briefing opened; since spec #111, active = a value day |
+| Scorecard | % of new readers activated: follow ≥1 show and delivered value on a later day, within 7 days (spec #111 §3.1) | A | follows, inbox, views, briefings, `user_connector_days` |
+| Scorecard | % of members with ≥2 value days a week; weekly return (spec #111 §3.2, §3.4) | A | value days (spec #111 §2) |
+| Scorecard | % of new readers with a value day in days 28–35 (spec #111 §3.3) | A | value days |
+| Engagement | Days with a successful connector call per reader | A | `user_connector_days` (spec #111 §4) |
 | Quality | Spec #86 reports per 1,000 episode reads | A | #86 report table ÷ read transitions |
 
 Anything not in this table is not collected. Adding a row means editing
