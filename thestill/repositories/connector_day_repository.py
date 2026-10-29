@@ -29,10 +29,10 @@ class ConnectorDayRepository(ABC):
 
     @abstractmethod
     def record_day(self, user_id: str, at: datetime) -> bool:
-        """Store the reader-local day of ``at`` unless it is already stored.
-        The day is taken in the timezone of the reader's briefing schedule,
-        UTC without one. Stores nothing for an unknown or malformed user, or
-        one whose ``usage_analytics_enabled`` is off when the statement runs
-        (checked so that it serializes with
-        ``UserRepository.update_usage_analytics``). Returns True when a row
-        was added."""
+        """Store the reader-local day of ``at``, with ``at`` as its first
+        call, unless the day is already stored. The day is taken in the
+        timezone of the reader's briefing schedule, UTC without one. Stores
+        nothing for an unknown or malformed user, or one whose
+        ``usage_analytics_enabled`` is off when the statement runs (checked
+        so that it serializes with ``UserRepository.update_usage_analytics``).
+        Returns True when a row was added."""

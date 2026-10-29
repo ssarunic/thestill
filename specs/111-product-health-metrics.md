@@ -218,6 +218,7 @@ spec #109's OAuth grants have the same shape.
 CREATE TABLE IF NOT EXISTS user_connector_days (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     day date NOT NULL,             -- the reader's local day (§2)
+    first_at timestamptz NOT NULL, -- the day's first successful call
     PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
@@ -466,8 +467,9 @@ where it differs from or adds to the sections above:
   weeks ending five weeks before the current one. Engagement and weekly
   return: the last 8 complete activity weeks. The page's "latest" is the
   newest week with anyone graded.
-- **A connector day stands at local midnight** for the activation time,
-  since the table stores only the day.
+- **A connector day's moment is its first call** (`first_at`), so the
+  168 h activation deadline compares real times: a first call later on
+  the deadline's local day is past it (Codex review, PR #447).
 - **Guardrails shown:** activated readers in the newest graded signup
   week, briefings switched off in the past 7 days (Layer A), and sign-in
   completion and follows undone in 7 days (Layer B, no value, read in

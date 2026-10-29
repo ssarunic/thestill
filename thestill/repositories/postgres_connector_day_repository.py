@@ -48,12 +48,12 @@ class PostgresConnectorDayRepository(ConnectorDayRepository):
             # for every other value fact (spec #111 §2).
             cursor = conn.execute(
                 """
-                INSERT INTO user_connector_days (user_id, day)
-                SELECT u.id, (%s::timestamptz AT TIME ZONE COALESCE(s.timezone, 'UTC'))::date
+                INSERT INTO user_connector_days (user_id, day, first_at)
+                SELECT u.id, (%(at)s::timestamptz AT TIME ZONE COALESCE(s.timezone, 'UTC'))::date, %(at)s
                   FROM users u LEFT JOIN user_briefing_schedules s ON s.user_id = u.id
-                 WHERE u.id = %s
+                 WHERE u.id = %(user_id)s
                 ON CONFLICT (user_id, day) DO NOTHING
                 """,
-                (at, user_id),
+                {"at": at, "user_id": user_id},
             )
             return cursor.rowcount == 1

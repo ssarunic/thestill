@@ -486,6 +486,7 @@ CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_view
 CREATE TABLE IF NOT EXISTS user_connector_days (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     day date NOT NULL,
+    first_at timestamptz NOT NULL,
     PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);

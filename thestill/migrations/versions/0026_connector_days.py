@@ -15,8 +15,9 @@
 """Connector days (spec #111 §4).
 
 ``user_connector_days`` holds the reader-local days on which a reader made
-at least one successful remote MCP (Claude connector) call. It exists only
-to measure, so it follows the usage opt-out and GPC like
+at least one successful remote MCP (Claude connector) call, with the first
+call's time (activation's 168 h deadline needs the moment, not the day). It
+exists only to measure, so it follows the usage opt-out and GPC like
 ``user_episode_views`` (spec #103 D5). No backfill: PostHog has the
 history but can't be joined to tables and misses opted-out readers.
 
@@ -38,6 +39,7 @@ _DDL = """
 CREATE TABLE IF NOT EXISTS user_connector_days (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     day date NOT NULL,
+    first_at timestamptz NOT NULL,
     PRIMARY KEY (user_id, day)
 );
 CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);

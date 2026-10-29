@@ -42,10 +42,10 @@ class SqliteConnectorDayRepository(ConnectorDayRepository):
         with connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO user_connector_days (user_id, day)
-                SELECT id, ? FROM users WHERE id = ? AND usage_analytics_enabled = 1
+                INSERT INTO user_connector_days (user_id, day, first_at)
+                SELECT id, ?, ? FROM users WHERE id = ? AND usage_analytics_enabled = 1
                 ON CONFLICT (user_id, day) DO NOTHING
                 """,
-                (day, user_id),
+                (day, at.isoformat(), user_id),
             )
             return cursor.rowcount == 1

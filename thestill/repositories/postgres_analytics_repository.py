@@ -110,8 +110,8 @@ reader_tz AS (
 # value was delivered (an inbox episode, a briefing or a connector call)
 # rather than found. Inbox reads and briefing opens are kept for everyone;
 # opens, playback and connector days only for readers who allow usage
-# analytics (spec #103 D5, spec #111 D2). A connector day has no moment, so
-# it stands at the start of its local day.
+# analytics (spec #103 D5, spec #111 D2). A connector day's moment is its
+# first call, so activation's deadline compares real times.
 _VALUE_FACTS = """
 value_facts AS (
     SELECT x.user_id, x.at, (x.at AT TIME ZONE t.tz)::date AS day, x.delivered
@@ -137,7 +137,7 @@ value_facts AS (
       ) x
       JOIN reader_tz t ON t.id = x.user_id
     UNION ALL
-    SELECT c.user_id, c.day::timestamp AT TIME ZONE t.tz, c.day, true
+    SELECT c.user_id, c.first_at, c.day, true
       FROM user_connector_days c JOIN reader_tz t ON t.id = c.user_id
 )"""
 

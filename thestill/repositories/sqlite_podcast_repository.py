@@ -1615,8 +1615,9 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS user_connector_days (
-                user_id TEXT NOT NULL,
-                day     TEXT NOT NULL,
+                user_id  TEXT NOT NULL,
+                day      TEXT NOT NULL,
+                first_at TIMESTAMP NOT NULL,
                 PRIMARY KEY (user_id, day),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )

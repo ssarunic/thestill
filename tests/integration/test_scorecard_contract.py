@@ -49,8 +49,12 @@ class _ScorecardSeed(_Seed):
             (user[0], tz, enabled, updated_at or NOW - 60 * D),
         )
 
-    def connector_day(self, user, day):
-        self.conn.execute("INSERT INTO user_connector_days (user_id, day) VALUES (%s, %s)", (user[0], day))
+    def connector_day(self, user, day, first_at=None):
+        """A connector day; its first call at noon UTC unless given."""
+        first_at = first_at or datetime(day.year, day.month, day.day, 12, tzinfo=timezone.utc)
+        self.conn.execute(
+            "INSERT INTO user_connector_days (user_id, day, first_at) VALUES (%s, %s, %s)", (user[0], day, first_at)
+        )
 
     def found(self, user, at):
         """A first open of an episode that isn't in the reader's inbox."""
@@ -99,6 +103,13 @@ def scorecard():
         r5 = s.reader("r5", _utc(10, 25))
         s.follow(r5, _utc(10, 25, 13))
         s.read(r5, _utc(10, 26))
+
+        # R6 (week of 10-05): follow, then a first connector call at 18:00 on
+        # 10-12, 174 h after signup: past the 168 h deadline, though on the
+        # deadline's local day. Not activated.
+        r6 = s.reader("r6", _utc(10, 5))
+        s.follow(r6, _utc(10, 5, 13))
+        s.connector_day(r6, date(2026, 10, 12), _utc(10, 12, 18))
 
         # --- Members for the week of 10-19 (signed up by 10-12) -----------
         # All signed up 09-01 (week of 08-31; week 4 = local days 09-29..10-05).
@@ -176,6 +187,8 @@ def test_activation_needs_a_follow_and_a_delivered_later_day(scorecard):
     # Graded: R1-R4 and M5 (signed up 10-15, never followed); R1, R3 activated.
     week = _point(scorecard, "activation", date(2026, 10, 12))
     assert (week.eligible, week.reached, week.pct) == (5, 2, 0.4)
+    late = _point(scorecard, "activation", date(2026, 10, 5))  # R6 called after its deadline
+    assert (late.eligible, late.reached) == (1, 0)
     young = _point(scorecard, "activation", date(2026, 10, 19))  # R5: 96 h old, not graded
     assert (young.eligible, young.reached, young.pct) == (0, 0, None)
 
@@ -183,15 +196,16 @@ def test_activation_needs_a_follow_and_a_delivered_later_day(scorecard):
 @pg_only
 def test_engagement_counts_value_days_of_members(scorecard):
     week = _point(scorecard, "engagement", date(2026, 10, 19))
-    # Members M1 M2 M3 M6 M7 M8 (not M4 lapsed, M5 too new, M9 no value day,
-    # R* too new, admin); engaged M1 M6 M7.
-    assert (week.eligible, week.reached, week.pct) == (6, 3, 0.5)
+    # Members M1 M2 M3 M6 M7 M8 and R6 (signed up 10-05, connector day
+    # 10-12); not M4 lapsed, M5 too new, M9 no value day, R1-R5 too new,
+    # admin. Engaged M1 M6 M7.
+    assert (week.eligible, week.reached) == (7, 3)
 
 
 @pg_only
 def test_weekly_return(scorecard):
-    week = _point(scorecard, "weekly_return", date(2026, 10, 19))  # last week M2 M3 M8; returned M2 M3
-    assert (week.eligible, week.reached) == (3, 2)
+    week = _point(scorecard, "weekly_return", date(2026, 10, 19))  # last week M2 M3 M8 R6; returned M2 M3
+    assert (week.eligible, week.reached) == (4, 2)
 
 
 @pg_only
