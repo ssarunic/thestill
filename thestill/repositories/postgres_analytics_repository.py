@@ -20,9 +20,10 @@ notes:
 
 - ``user_episode_inbox.state_changed_at`` keeps only the latest change, so
   an episode read and later saved or dismissed no longer counts as read.
-- "Active" means a read, a follow or a briefing opened; other use leaves
-  no state to count. A read is an inbox read, a first open or a playback
-  (``_EPISODE_READS``), so a reader who follows nothing still counts.
+- "Active" means a value day (spec #111 §2): a reader-local day with an
+  inbox read, a first open, a playback, a briefing opened or a connector
+  call (``_VALUE_FACTS``). A follow is setup, not value, so it no longer
+  counts; other use leaves no state to count.
 """
 
 from __future__ import annotations
@@ -34,9 +35,14 @@ from typing import Dict, List, Sequence
 from structlog import get_logger
 
 from ..models.analytics import (
+    ACTIVATION_HOURS,
     BEFORE_TRACKING,
     COHORT_ROWS,
     COHORT_WEEKS,
+    ENGAGED_DAYS,
+    RETENTION_WEEK,
+    SCORECARD_METRICS,
+    SCORECARD_WEEKS,
     STEPS,
     UNCATEGORISED,
     ActivationGroup,
@@ -49,7 +55,11 @@ from ..models.analytics import (
     ContentReport,
     EngagementReport,
     EpisodeStat,
+    GuardrailStat,
+    MetricPoint,
+    MetricSeries,
     PodcastStat,
+    ScorecardReport,
     SignupDay,
     SignupsReport,
     StepStat,
@@ -88,17 +98,72 @@ episode_reads AS (
      WHERE p.listened_at IS NOT NULL
 )"""
 
-# Activity that counts towards retention and active users.
-_EVENTS = f"""
-{_EPISODE_READS.strip()},
-events AS (
-    SELECT user_id, at FROM episode_reads
+# Spec #111 §2: each reader's timezone for bucketing days, from their
+# briefing schedule (validated IANA names), UTC without one.
+_READER_TZ = """
+reader_tz AS (
+    SELECT ru.id, ru.created_at, ru.source, COALESCE(s.timezone, 'UTC') AS tz
+      FROM real_users ru LEFT JOIN user_briefing_schedules s ON s.user_id = ru.id
+)"""
+
+# Every value fact with its moment, its reader-local day, and whether the
+# value was delivered (an inbox episode, a briefing or a connector call)
+# rather than found. Inbox reads and briefing opens are kept for everyone;
+# opens, playback and connector days only for readers who allow usage
+# analytics (spec #103 D5, spec #111 D2). A connector day has no moment, so
+# it stands at the start of its local day.
+_VALUE_FACTS = """
+value_facts AS (
+    SELECT x.user_id, x.at, (x.at AT TIME ZONE t.tz)::date AS day, x.delivered
+      FROM (
+            SELECT i.user_id, i.state_changed_at AS at, true AS delivered
+              FROM user_episode_inbox i
+             WHERE i.state = 'read' AND i.state_changed_at IS NOT NULL
+            UNION ALL
+            SELECT v.user_id, v.first_viewed_at,
+                   EXISTS (SELECT 1 FROM user_episode_inbox i
+                            WHERE i.user_id = v.user_id AND i.episode_id = v.episode_id)
+              FROM user_episode_views v
+            UNION ALL
+            SELECT p.user_id, p.listened_at,
+                   EXISTS (SELECT 1 FROM user_episode_inbox i
+                            WHERE i.user_id = p.user_id AND i.episode_id = p.episode_id)
+              FROM user_episode_progress p
+             WHERE p.listened_at IS NOT NULL
+            UNION ALL
+            SELECT b.user_id, b.opened_at, true
+              FROM user_briefings b
+             WHERE b.opened_at IS NOT NULL
+      ) x
+      JOIN reader_tz t ON t.id = x.user_id
     UNION ALL
-    SELECT f.user_id, f.created_at FROM podcast_followers f JOIN real_users ru ON ru.id = f.user_id
-    UNION ALL
-    SELECT b.user_id, b.opened_at
-      FROM user_briefings b JOIN real_users ru ON ru.id = b.user_id
-     WHERE b.opened_at IS NOT NULL
+    SELECT c.user_id, c.day::timestamp AT TIME ZONE t.tz, c.day, true
+      FROM user_connector_days c JOIN reader_tz t ON t.id = c.user_id
+)"""
+
+# One row per reader and value day.
+_VALUE_DAYS = f"""
+{_VALUE_FACTS.strip()},
+value_days AS (
+    SELECT user_id, day FROM value_facts GROUP BY user_id, day
+)"""
+
+# Spec #111 §3.1: the moment a reader became activated, the later of their
+# first follow and their first delivered value on a local day after the
+# signup day (both needed, in either order). Postgres's greatest() skips
+# NULLs, hence the CASE.
+_ACTIVATION_FACTS = """
+activation_facts AS (
+    SELECT t.id AS user_id,
+           CASE WHEN ff.at IS NOT NULL AND fr.at IS NOT NULL THEN greatest(ff.at, fr.at) END AS activated_at
+      FROM reader_tz t
+      LEFT JOIN LATERAL (
+            SELECT min(f.created_at) AS at FROM podcast_followers f WHERE f.user_id = t.id
+      ) ff ON true
+      LEFT JOIN LATERAL (
+            SELECT min(v.at) AS at FROM value_facts v
+             WHERE v.user_id = t.id AND v.delivered AND v.day > (t.created_at AT TIME ZONE t.tz)::date
+      ) fr ON true
 )"""
 
 # One VALUES row per step; ``c.<fact>_at`` is the cohort CTE's column.
@@ -117,11 +182,15 @@ SELECT (created_at AT TIME ZONE 'UTC')::date AS day, source, count(*) AS n
 _ACTIVATION_SQL = f"""
 WITH {_REAL_USERS},
 {_EPISODE_READS.strip()},
+{_READER_TZ.strip()},
+{_VALUE_FACTS.strip()},
+{_ACTIVATION_FACTS.strip()},
 cohort AS (
     SELECT ru.id, ru.created_at, ru.source,
            (SELECT min(f.created_at) FROM podcast_followers f WHERE f.user_id = ru.id) AS first_follow_at,
            fb.created_at AS first_briefing_at,
            fb.opened_at AS first_opened_at,
+           af.activated_at,
            (SELECT r.at FROM (
                     SELECT min(r.at) AS at FROM episode_reads r
                      WHERE r.user_id = ru.id
@@ -134,6 +203,7 @@ cohort AS (
             SELECT b.created_at, b.opened_at FROM user_briefings b
              WHERE b.user_id = ru.id ORDER BY b.created_at LIMIT 1
       ) fb ON true
+      LEFT JOIN activation_facts af ON af.user_id = ru.id
      WHERE ru.created_at >= %(start)s AND ru.created_at < %(end)s
 ),
 steps AS (
@@ -159,22 +229,27 @@ SELECT key, grouping(source) = 1 AS overall, source,
  GROUP BY GROUPING SETS ((key), (key, source))
 """
 
+# Week k after signup is local days [signup day + 7k, signup day + 7k + 7),
+# graded once the whole week has passed. Also the Scorecard's week-4
+# retention series (``weeks = [RETENTION_WEEK]``).
 _COHORTS_SQL = f"""
 WITH {_REAL_USERS},
-{_EVENTS.strip()},
+{_READER_TZ.strip()},
+{_VALUE_DAYS.strip()},
 cohort AS (
-    SELECT id, created_at, (date_trunc('week', created_at AT TIME ZONE 'UTC'))::date AS week_start
-      FROM real_users
+    SELECT id, created_at, (created_at AT TIME ZONE tz)::date AS signup_day,
+           (date_trunc('week', created_at AT TIME ZONE 'UTC'))::date AS week_start
+      FROM reader_tz
      WHERE created_at >= %(start)s AND created_at < %(as_of)s
 ),
 cells AS (
     SELECT c.week_start, k.week,
            c.created_at + (k.week + 1) * interval '7 days' <= %(as_of)s AS eligible,
            EXISTS (
-               SELECT 1 FROM events e
-                WHERE e.user_id = c.id
-                  AND e.at >= c.created_at + k.week * interval '7 days'
-                  AND e.at < c.created_at + (k.week + 1) * interval '7 days'
+               SELECT 1 FROM value_days d
+                WHERE d.user_id = c.id
+                  AND d.day >= c.signup_day + 7 * k.week
+                  AND d.day < c.signup_day + 7 * (k.week + 1)
            ) AS active
       FROM cohort c
      CROSS JOIN unnest(%(weeks)s::int[]) AS k(week)
@@ -189,9 +264,11 @@ SELECT week_start, week,
 
 _ENGAGEMENT_SQL = f"""
 WITH {_REAL_USERS},
-{_EVENTS.strip()}
+{_EPISODE_READS.strip()},
+{_READER_TZ.strip()},
+{_VALUE_FACTS.strip()}
 SELECT
-    (SELECT count(DISTINCT user_id) FROM events
+    (SELECT count(DISTINCT user_id) FROM value_facts
       WHERE at >= %(start)s AND at < %(end)s) AS active_users,
     (SELECT count(DISTINCT (user_id, episode_id)) FROM episode_reads
       WHERE at >= %(start)s AND at < %(end)s) AS reads,
@@ -201,6 +278,63 @@ SELECT
       WHERE b.created_at >= %(start)s AND b.created_at < %(end)s AND b.opened_at IS NOT NULL) AS briefings_opened,
     (SELECT count(*) FROM podcast_followers f JOIN real_users ru ON ru.id = f.user_id
       WHERE f.created_at >= %(start)s AND f.created_at < %(end)s) AS follows
+"""
+
+# Spec #111 §3.1: activation per signup week (UTC Monday), maturity-gated.
+_SCORECARD_ACTIVATION_SQL = f"""
+WITH {_REAL_USERS},
+{_READER_TZ.strip()},
+{_VALUE_FACTS.strip()},
+{_ACTIVATION_FACTS.strip()}
+SELECT (date_trunc('week', t.created_at AT TIME ZONE 'UTC'))::date AS week_start,
+       count(*) FILTER (WHERE t.created_at <= %(as_of)s - %(hours)s * interval '1 hour') AS eligible,
+       count(*) FILTER (WHERE t.created_at <= %(as_of)s - %(hours)s * interval '1 hour'
+                          AND a.activated_at <= t.created_at + %(hours)s * interval '1 hour') AS reached
+  FROM reader_tz t JOIN activation_facts a ON a.user_id = t.id
+ WHERE t.created_at >= %(start)s AND t.created_at < %(as_of)s
+ GROUP BY 1
+"""
+
+# Spec #111 §3.2 and §3.4, per activity week (Monday, reader-local days).
+# A member signed up at least 7 days before the week and had a value day in
+# the 28 days before it; engaged = ``engaged_days`` or more value days in the
+# week; returned = a value day last week and again this week.
+_SCORECARD_WEEKS_SQL = f"""
+WITH {_REAL_USERS},
+{_READER_TZ.strip()},
+{_VALUE_DAYS.strip()},
+weeks AS (
+    SELECT unnest(%(weeks)s::date[]) AS week_start
+),
+members AS (
+    SELECT w.week_start,
+           EXISTS (SELECT 1 FROM value_days d
+                    WHERE d.user_id = t.id AND d.day >= w.week_start - 7 AND d.day < w.week_start) AS active_last_week,
+           (SELECT count(*) FROM value_days d
+             WHERE d.user_id = t.id AND d.day >= w.week_start AND d.day < w.week_start + 7) AS days
+      FROM weeks w
+      JOIN reader_tz t ON t.created_at <= (w.week_start - 7)::timestamp AT TIME ZONE 'UTC'
+     WHERE EXISTS (SELECT 1 FROM value_days d
+                    WHERE d.user_id = t.id AND d.day >= w.week_start - 28 AND d.day < w.week_start)
+)
+SELECT week_start,
+       count(*) AS members,
+       count(*) FILTER (WHERE days >= %(engaged_days)s) AS engaged,
+       count(*) FILTER (WHERE active_last_week) AS active_last_week,
+       count(*) FILTER (WHERE active_last_week AND days > 0) AS returned
+  FROM members
+ GROUP BY week_start
+"""
+
+# Spec #111 §3.5 Layer A guardrails and the D2 opted-out count.
+_SCORECARD_GUARDRAILS_SQL = f"""
+WITH {_REAL_USERS}
+SELECT
+    (SELECT count(*) FROM users u JOIN real_users ru ON ru.id = u.id
+      WHERE NOT u.usage_analytics_enabled) AS opted_out,
+    (SELECT count(*) FROM user_briefing_schedules s JOIN real_users ru ON ru.id = s.user_id
+      WHERE NOT s.enabled AND s.updated_at >= %(since)s) AS briefings_switched_off,
+    (SELECT min(day) FROM user_connector_days) AS connector_days_since
 """
 
 # Spec #103: a reader of an episode opened it (``user_episode_views``,
@@ -490,6 +624,105 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
             opened_ratio=ratio(opened, generated),
             follows=follows,
             follows_per_active_user=ratio(follows, active),
+        )
+
+    def scorecard(self, as_of: datetime) -> ScorecardReport:
+        this_monday = _monday(as_of.astimezone(timezone.utc).date())
+
+        def weeks_ending(newest: date) -> List[date]:
+            return [newest - timedelta(weeks=i) for i in range(SCORECARD_WEEKS - 1, -1, -1)]
+
+        def midnight(day: date) -> datetime:
+            return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+        # Activation: signup weeks up to this one (the newest are part-graded).
+        # Week-4 retention: signup weeks old enough to have reached week 4.
+        # Engagement and return: the last complete activity weeks.
+        signup_weeks = weeks_ending(this_monday)
+        retention_weeks = weeks_ending(this_monday - timedelta(weeks=RETENTION_WEEK + 1))
+        activity_weeks = weeks_ending(this_monday - timedelta(weeks=1))
+
+        activation = {
+            row["week_start"]: (_n(row, "eligible"), _n(row, "reached"))
+            for row in self._rows(
+                _SCORECARD_ACTIVATION_SQL, start=midnight(signup_weeks[0]), as_of=as_of, hours=ACTIVATION_HOURS
+            )
+        }
+        retention = {
+            row["week_start"]: (_n(row, "eligible"), _n(row, "active"))
+            for row in self._rows(_COHORTS_SQL, start=midnight(retention_weeks[0]), as_of=as_of, weeks=[RETENTION_WEEK])
+        }
+        engagement: Dict[date, tuple] = {}
+        weekly_return: Dict[date, tuple] = {}
+        for row in self._rows(_SCORECARD_WEEKS_SQL, weeks=activity_weeks, engaged_days=ENGAGED_DAYS):
+            engagement[row["week_start"]] = (_n(row, "members"), _n(row, "engaged"))
+            weekly_return[row["week_start"]] = (_n(row, "active_last_week"), _n(row, "returned"))
+
+        def series(definition, weeks: List[date], counts: Dict[date, tuple]) -> MetricSeries:
+            points = []
+            for week in weeks:
+                eligible, reached = counts.get(week, (0, 0))
+                points.append(
+                    MetricPoint(week_start=week, eligible=eligible, reached=reached, pct=ratio(reached, eligible))
+                )
+            return MetricSeries(
+                key=definition.key,
+                label=definition.label,
+                readers=definition.readers,
+                definition=definition.definition,
+                points=points,
+            )
+
+        weeks_and_counts = {
+            "activation": (signup_weeks, activation),
+            "engagement": (activity_weeks, engagement),
+            "retention_w4": (retention_weeks, retention),
+            "weekly_return": (activity_weeks, weekly_return),
+        }
+        metrics = [series(d, *weeks_and_counts[d.key]) for d in SCORECARD_METRICS]
+
+        guard = self._rows(_SCORECARD_GUARDRAILS_SQL, since=as_of - timedelta(days=7))[0]
+        graded = [p for p in metrics[0].points if p.eligible]
+        latest = graded[-1] if graded else None
+        guardrails = [
+            GuardrailStat(
+                key="activated_count",
+                label="Activated readers",
+                layer="A",
+                value=latest.reached if latest else None,
+                detail=(
+                    f"in the newest graded signup week ({latest.week_start:%Y-%m-%d})"
+                    if latest
+                    else "no signup week graded yet"
+                ),
+            ),
+            GuardrailStat(
+                key="briefings_switched_off",
+                label="Briefings switched off",
+                layer="A",
+                value=_n(guard, "briefings_switched_off"),
+                detail="schedules off and last edited in the past 7 days",
+            ),
+            GuardrailStat(
+                key="sign_in_completion",
+                label="Sign-in completion",
+                layer="B",
+                value=None,
+                detail="PostHog: login_started → login_completed",
+            ),
+            GuardrailStat(
+                key="early_unfollows",
+                label="Follows undone within 7 days",
+                layer="B",
+                value=None,
+                detail="PostHog: follow then unfollow by the same reader",
+            ),
+        ]
+        return ScorecardReport(
+            metrics=metrics,
+            guardrails=guardrails,
+            opted_out=_n(guard, "opted_out"),
+            connector_days_since=guard.get("connector_days_since"),
         )
 
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:

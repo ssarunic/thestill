@@ -481,6 +481,15 @@ CREATE TABLE IF NOT EXISTS user_episode_views (
 );
 CREATE INDEX IF NOT EXISTS idx_episode_views_at ON user_episode_views(first_viewed_at);
 
+-- Spec #111 — reader-local days with a successful remote connector call
+-- (analytics only; alembic 0026).
+CREATE TABLE IF NOT EXISTS user_connector_days (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day date NOT NULL,
+    PRIMARY KEY (user_id, day)
+);
+CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
+
 -- Spec #103 Phase 2 — signed-out views per public page per UTC day, keyed
 -- by object id ('' for landing and top). No visitor id, IP or referrer.
 CREATE TABLE IF NOT EXISTS public_page_daily_views (

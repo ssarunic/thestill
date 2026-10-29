@@ -1,11 +1,7 @@
 import type { AnalyticsReport } from '../../api/types'
 import Panel from '../Panel'
 import PctCell from './PctCell'
-import { isSmallGroup } from '../../utils/analyticsFormat'
-
-function formatWeek(day: string): string {
-  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
+import { formatWeek, isSmallGroup } from '../../utils/analyticsFormat'
 
 /**
  * Weekly cohort retention: the last 12 signup weeks (independent of the
@@ -21,7 +17,8 @@ export default function RetentionSection({ cohorts }: { cohorts: AnalyticsReport
           Retention
         </h2>
         <p className="text-sm text-muted">
-          Share of each signup week active in week N after signing up. Always the last {cohorts.rows.length} weeks.
+          Share of each signup week with a value day in week N after signing up. Always the last{' '}
+          {cohorts.rows.length} weeks.
         </p>
       </div>
       <div className="overflow-x-auto -mx-4 px-4" data-testid="cohort-scroll">

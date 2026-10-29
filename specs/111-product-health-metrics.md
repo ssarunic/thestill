@@ -1,6 +1,6 @@
 # Product Health Metrics: Activation, Engagement, Retention
 
-> **Status:** 📝 Draft (2026-10-29)
+> **Status:** 🚧 Phases 0–2 implemented (2026-10-29); Phase 3 waits for ≥50 graded readers
 > **Created:** 2026-10-29
 > **Updated:** 2026-10-29 (open questions settled as D1–D4)
 > **Priority:** Medium. New readers are arriving (three on 2026-10-29), and the next product changes (a post-sign-in follow step, a tutorial, connector banners) need a number that says whether they worked.
@@ -112,7 +112,7 @@ episode opened, a settings change. They leave the reader no better
 informed.
 
 **Timezone.** A day is the reader's local day from
-`user_briefing_schedules.timezone_name`, or UTC when the reader has no
+`user_briefing_schedules.timezone`, or UTC when the reader has no
 schedule. UTC alone would split a California reader's evening into two
 days.
 
@@ -203,7 +203,7 @@ guardrail has not succeeded.
 | Sign-in completion, `login_started` → `login_completed` | B | Guards against friction added before sign-in |
 | Follows undone within 7 days | B (`follow`, `unfollow` by person) | A follow deletes its row on unfollow, so Layer A can't see it |
 | Briefing schedules switched off | A, `user_briefing_schedules.enabled = false` with `updated_at` in the window | Approximate: any edit to an off schedule bumps `updated_at` |
-| Quality reports per 1,000 reads | A, once spec #86 ships | Guards against pushing more, worse content |
+| Quality reports per 1,000 reads | A, once spec #86 ships (not shown until then) | Guards against pushing more, worse content |
 
 Layer B guardrails are read in PostHog and linked from the page. They
 are directional, because opted-out readers send nothing.
@@ -230,9 +230,13 @@ CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
   PostHog being configured. It writes
   `INSERT … ON CONFLICT DO NOTHING` through a new
   `ConnectorDayRepository`.
-- **Write volume.** One row per reader per day. An in-process
-  `(user_id, day)` set skips the database after the first call of the
-  day, and `ON CONFLICT` covers multiple workers.
+- **Write volume.** One row per reader per day. The day is the reader's
+  local day, which the process doesn't know without a lookup, so an
+  in-process set keyed by **UTC hour** skips the database after the
+  first call of each hour: at most one insert per reader per hour, and a
+  whole-hour local midnight is never missed. `ON CONFLICT` covers
+  multiple workers. The repository computes the local day in SQL from
+  the reader's schedule.
 - **Opt-outs (spec #103 D5).**
   - Rows are not written for a reader with
     `usage_analytics_enabled = false`, or for a call carrying `Sec-GPC: 1`.
@@ -272,9 +276,14 @@ CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
 - "Reads per active user per week" and "Briefings opened ÷ generated"
   stay, labelled **diagnostic**. They help explain a change, never
   decide one.
-- The retention cohort table switches "active" to "has a value day"
-  (§2): follows drop out and connector days come in. The page marks the
-  switch date, because older cells were computed the old way.
+- The retention cohort table and "Active users" switch "active" to "has
+  a value day" (§2): follows drop out and connector days come in. Both
+  are recomputed from tables on every load, so every cell uses the new
+  definition and no switch date is needed; numbers read before the
+  release can differ from today's.
+- Activation also appears as the last step of the existing activation
+  funnel ("Activated within 7 days"), so it is broken down by
+  `signup_source` and the selected window with no second definition.
 
 **CLI.** `thestill analytics` prints the Scorecard first, and `--json`
 gains a `scorecard` object. A `--scorecard` flag prints only that
@@ -333,7 +342,7 @@ been graded for both activation and week-4 retention:
 |---|---|---|
 | 0 | This spec. Spec #95's question table gains the Scorecard rows and points here. README index. | Yes (docs) |
 | 1 | `user_connector_days` (Alembic `0026`, `SCHEMA_SQL`, SQLite guard), write path, opt-out delete; `scorecard()` repository, models and service; `/analytics` Scorecard section; CLI `--scorecard` and `--json`; Postgres contract tests | Yes |
-| 2 | Cohort table switches to value days with the marked switch date; diagnostic labels; `docs/analytics.md` definitions; `docs/experiments.md` with its first row (the post-sign-in follow step, built in its own PR) | Yes |
+| 2 | Cohort table and active users switch to value days; diagnostic labels; `docs/analytics.md` definitions; `docs/experiments.md` with its first row (the post-sign-in follow step, built in its own PR) | Yes |
 | 3 | Data-gated (≥50 graded readers): §7 validation, threshold review, Decisions updated | Yes (docs, maybe a definition change) |
 
 ## Acceptance
@@ -437,3 +446,35 @@ leave it out, and let the §7 proxy check decide whether to add it.
      `signup_source = 'share'` already records.
    - **Revisit** if sharing becomes common and §7 shows that readers who
      share retain better.
+
+## Phases 1–2 implementation notes
+
+What was built (2026-10-29, branch `feat/111-product-health-metrics`),
+where it differs from or adds to the sections above:
+
+- **One definition per fact.** `postgres_analytics_repository.py` builds
+  `_READER_TZ`, `_VALUE_FACTS` (with a `delivered` flag), `_VALUE_DAYS`
+  and `_ACTIVATION_FACTS` once. The Scorecard, the activation step, the
+  cohort table and "Active users" all read them. Week-4 retention reuses
+  the cohort statement with `weeks = [4]`.
+- **Activation time** is the later of the first follow and the first
+  delivered value on a later local day. Postgres's `greatest()` skips
+  NULLs, so a reader with only one of the two gets none.
+- **Series windows.** Activation: the last 8 signup weeks up to the
+  current one (the newest are part-graded). Week-4 retention: 8 signup
+  weeks ending five weeks before the current one. Engagement and weekly
+  return: the last 8 complete activity weeks. The page's "latest" is the
+  newest week with anyone graded.
+- **A connector day stands at local midnight** for the activation time,
+  since the table stores only the day.
+- **Guardrails shown:** activated readers in the newest graded signup
+  week, briefings switched off in the past 7 days (Layer A), and sign-in
+  completion and follows undone in 7 days (Layer B, no value, read in
+  PostHog). Quality reports wait for spec #86.
+- **Phone layout.** The weekly bars sit under each metric's latest value
+  rather than in a third column, so nothing is clipped at 393 px.
+- **Tests:** `tests/integration/test_scorecard_contract.py` (Postgres
+  Scorecard seed, local-day connector writes, opt-out erase, SQLite
+  store), an "activated" case in the existing analytics contract suite,
+  connector-day write rules in `tests/unit/mcp/test_tool_call_events.py`,
+  and CLI, service and page tests.

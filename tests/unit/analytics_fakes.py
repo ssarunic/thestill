@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 
 from thestill.models.analytics import (
     COHORT_WEEKS,
+    SCORECARD_METRICS,
     STEPS,
     ActivationGroup,
     ActivationReport,
@@ -19,7 +20,11 @@ from thestill.models.analytics import (
     ContentReport,
     EngagementReport,
     EpisodeStat,
+    GuardrailStat,
+    MetricPoint,
+    MetricSeries,
     PodcastStat,
+    ScorecardReport,
     SignupDay,
     SignupsReport,
     StepStat,
@@ -78,6 +83,25 @@ class FakeAnalyticsRepository(AnalyticsRepository):
             opened_ratio=0.75,
             follows=5,
             follows_per_active_user=2.5,
+        )
+
+    def scorecard(self, as_of: datetime) -> ScorecardReport:
+        self.calls.append(("scorecard", as_of))
+        points = [
+            MetricPoint(week_start=date(2026, 9, 28), eligible=4, reached=1, pct=0.25),
+            MetricPoint(week_start=date(2026, 10, 5), eligible=0, reached=0, pct=None),
+        ]
+        return ScorecardReport(
+            metrics=[
+                MetricSeries(key=d.key, label=d.label, readers=d.readers, definition=d.definition, points=points)
+                for d in SCORECARD_METRICS
+            ],
+            guardrails=[
+                GuardrailStat(key="activated_count", label="Activated readers", layer="A", value=1, detail="d"),
+                GuardrailStat(key="sign_in_completion", label="Sign-in completion", layer="B", value=None, detail="d"),
+            ],
+            opted_out=2,
+            connector_days_since=date(2026, 10, 29),
         )
 
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:

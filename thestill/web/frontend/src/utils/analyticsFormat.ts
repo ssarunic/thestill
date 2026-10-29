@@ -51,3 +51,8 @@ export function formatRatio(value: number | null, digits = 1): string {
 export function isSmallGroup(n: number): boolean {
   return n < SMALL_GROUP
 }
+
+/** A Monday ``2026-10-12`` → ``Oct 12`` (UTC, so it never shifts a day). */
+export function formatWeek(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+}

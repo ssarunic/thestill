@@ -275,6 +275,12 @@ def test_activation_overall_is_maturity_gated(service):
     reads = _step(overall, "reads_3_first_week")
     assert (reads.eligible, reads.reached, reads.median_hours) == (3, 2, 72.0)
 
+    # Spec #111: a follow and a delivered read on a later day, in either
+    # order. A at 24h (follow 2h, inbox read +1d); B at 30h (read +1d, follow
+    # 30h); C never follows (its opens aren't delivered either).
+    activated = _step(overall, "activated")
+    assert (activated.eligible, activated.reached, activated.median_hours) == (3, 2, 27.0)
+
 
 @pg_only
 def test_activation_per_source(service):

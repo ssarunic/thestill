@@ -171,6 +171,7 @@ class SqliteUserRepository(UserRepository):
             )
             if not enabled:
                 conn.execute("DELETE FROM user_episode_views WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM user_connector_days WHERE user_id = ?", (user_id,))
                 conn.execute(
                     "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = ? AND listened_at IS NOT NULL",
                     (user_id,),

@@ -130,7 +130,7 @@ drift into collecting things it does not need.
 | Engagement | Episodes read per active user per week | A | inbox read transitions |
 | Engagement | Searches, exports, shares, narration plays, entity page opens per week | B | events below |
 | Engagement | Remote MCP tool calls per user per week, by tool | B | server `mcp_tool_call` |
-| Retention | For each signup week: % active in weeks 1, 2, 4, 8 | A | cohort = `users.created_at`; active = a read transition, a follow or a briefing opened (spec #111 Phase 2 changes active to a value day) |
+| Retention | For each signup week: % active in weeks 1, 2, 4, 8 | A | cohort = `users.created_at`; active = a read transition, a follow or a briefing opened; since spec #111, active = a value day |
 | Scorecard | % of new readers activated: follow ≥1 show and delivered value on a later day, within 7 days (spec #111 §3.1) | A | follows, inbox, views, briefings, `user_connector_days` |
 | Scorecard | % of members with ≥2 value days a week; weekly return (spec #111 §3.2, §3.4) | A | value days (spec #111 §2) |
 | Scorecard | % of new readers with a value day in days 28–35 (spec #111 §3.3) | A | value days |

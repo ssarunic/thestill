@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -69,9 +70,27 @@ async def test_every_call_is_observed_with_its_outcome():
     assert seen == [(STDIO, "echo", True), (STDIO, "boom", False)]
 
 
-def _runtime(sink) -> McpHttpRuntime:
+class _ConnectorDays:
+    """Records ``record_day`` calls; ``fail`` makes the next one raise."""
+
+    def __init__(self):
+        self.calls = []
+        self.fail = False
+
+    def record_day(self, user_id, at):
+        if self.fail:
+            self.fail = False
+            raise RuntimeError("database down")
+        self.calls.append((user_id, at))
+        return True
+
+
+def _runtime(sink, connector_days=None) -> McpHttpRuntime:
     runtime = McpHttpRuntime.__new__(McpHttpRuntime)  # the counter needs no server
     runtime._analytics = sink
+    runtime._connector_days = connector_days or _ConnectorDays()
+    runtime._connector_hour = None
+    runtime._connector_seen = set()
     return runtime
 
 
@@ -107,3 +126,49 @@ def test_calls_without_a_user_or_with_odd_names_are_skipped_quietly():
     runtime._count_tool_call(SimpleNamespace(user=User(email="a@example.com"), gpc=False), "Not A Tool!", False)
     assert sink.captured == []
     _runtime(None)._count_tool_call(SimpleNamespace(user=User(email="a@example.com"), gpc=False), "x", True)
+
+
+# ----- spec #111 connector days -------------------------------------------
+
+
+def _at(hour, minute=0):
+    return datetime(2026, 10, 29, hour, minute, tzinfo=timezone.utc)
+
+
+def test_a_successful_call_records_the_day_once_per_hour(monkeypatch):
+    clock = iter([_at(9, 5), _at(9, 40), _at(10, 1)])
+    monkeypatch.setattr("thestill.web.mcp_http.now_utc", lambda: next(clock))
+    days = _ConnectorDays()
+    runtime = _runtime(None, days)  # no PostHog: connector days still count
+    caller = SimpleNamespace(user=User(id="u-1", email="a@example.com"), gpc=False)
+    for _ in range(3):
+        runtime._count_tool_call(caller, "search_corpus", True)
+    assert days.calls == [("u-1", _at(9, 5)), ("u-1", _at(10, 1))]
+
+
+@pytest.mark.parametrize(
+    ("user", "gpc", "ok"),
+    [
+        (User(id="u-1", email="a@example.com"), False, False),  # failed call
+        (User(id="u-1", email="a@example.com"), True, True),  # Global Privacy Control
+        (User(id="u-1", email="a@example.com", usage_analytics_enabled=False), False, True),  # opted out
+        (None, False, True),  # no identity
+    ],
+)
+def test_no_connector_day_without_a_consenting_successful_call(user, gpc, ok):
+    days = _ConnectorDays()
+    _runtime(RecordingSink(), days)._count_tool_call(SimpleNamespace(user=user, gpc=gpc), "search_corpus", ok)
+    assert days.calls == []
+
+
+def test_a_failing_write_never_fails_the_call_and_is_retried(monkeypatch):
+    monkeypatch.setattr("thestill.web.mcp_http.now_utc", lambda: _at(9))
+    days = _ConnectorDays()
+    days.fail = True
+    sink = RecordingSink()
+    runtime = _runtime(sink, days)
+    caller = SimpleNamespace(user=User(id="u-1", email="a@example.com"), gpc=False)
+    runtime._count_tool_call(caller, "search_corpus", True)
+    assert days.calls == [] and len(sink.captured) == 1  # the usage event still went out
+    runtime._count_tool_call(caller, "search_corpus", True)
+    assert days.calls == [("u-1", _at(9))]

@@ -25,7 +25,7 @@ from typing import Callable, Dict, Final, List
 
 from structlog import get_logger
 
-from ..models.analytics import AnalyticsReport, AnalyticsWindow
+from ..models.analytics import AnalyticsReport, AnalyticsWindow, ScorecardReport
 from ..repositories.analytics_repository import AnalyticsRepository, AnalyticsUnavailableError
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ NOTES: Final[List[str]] = [
     "Admin accounts and the single-user local account are excluded.",
     "Each activation step counts only users who signed up at least that step's horizon ago.",
     "Reads and retention are lower bounds: an episode read and later saved or dismissed no longer counts as read.",
-    "Active means an episode read, a show followed or a briefing opened. A read is an inbox read, an open or a listen, so a reader who follows nothing counts too.",
+    "Active means a value day (spec #111): an episode read or opened, audio played, a briefing opened or a connector call. A follow is setup, so it doesn't count.",
     "Briefing opens are recorded from spec #95 onwards; earlier ones count only if they were marked listened.",
 ]
 
@@ -101,14 +101,14 @@ class AnalyticsService:
             AnalyticsUnavailableError: when ``available`` is False.
             InvalidRangeError: when ``range_`` is not allowed.
         """
-        if not self.available:
-            raise AnalyticsUnavailableError("Product analytics is off (needs multi-user mode on Postgres)")
+        self._require_available()
         now = self._clock()
         window = self.window_for(range_, now=now)
         report = AnalyticsReport(
             generated_at=now,
             range=range_,
             window=window,
+            scorecard=self._repository.scorecard(now),
             signups=self._repository.signups(window),
             activation=self._repository.activation(window),
             cohorts=self._repository.cohorts(now),
@@ -118,3 +118,16 @@ class AnalyticsService:
         )
         logger.info("analytics_report_built", range=range_, signups=report.signups.total)
         return report
+
+    def scorecard(self) -> ScorecardReport:
+        """Only the spec #111 Scorecard (``thestill analytics --scorecard``).
+
+        Raises:
+            AnalyticsUnavailableError: when ``available`` is False.
+        """
+        self._require_available()
+        return self._repository.scorecard(self._clock())
+
+    def _require_available(self) -> None:
+        if not self.available:
+            raise AnalyticsUnavailableError("Product analytics is off (needs multi-user mode on Postgres)")

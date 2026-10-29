@@ -53,6 +53,42 @@ const REPORT: AnalyticsReport = {
   generated_at: '2026-10-14T12:00:00Z',
   range: '28d',
   window: { start: '2026-09-17T00:00:00Z', end: '2026-10-14T12:00:00Z', days: 28 },
+  scorecard: {
+    metrics: [
+      {
+        key: 'activation',
+        label: 'Activation',
+        readers: 'new',
+        definition: 'Followed a show and got delivered value on a later day, within 7 days.',
+        points: [
+          { week_start: '2026-09-28', eligible: 10, reached: 4, pct: 0.4 },
+          { week_start: '2026-10-05', eligible: 3, reached: 0, pct: 0 },
+          { week_start: '2026-10-12', eligible: 0, reached: 0, pct: null },
+        ],
+      },
+      {
+        key: 'engagement',
+        label: 'Engagement',
+        readers: 'existing',
+        definition: 'Members with value on 2 or more days in the week.',
+        points: [{ week_start: '2026-10-05', eligible: 8, reached: 6, pct: 0.75 }],
+      },
+      {
+        key: 'retention_w4',
+        label: 'Week-4 retention',
+        readers: 'new',
+        definition: 'A value day in days 28–35 after signup.',
+        points: [{ week_start: '2026-08-31', eligible: 0, reached: 0, pct: null }],
+      },
+    ],
+    guardrails: [
+      { key: 'activated_count', label: 'Activated readers', layer: 'A', value: 4, detail: 'newest graded week' },
+      { key: 'sign_in_completion', label: 'Sign-in completion', layer: 'B', value: null, detail: 'PostHog' },
+    ],
+    opted_out: 1,
+    connector_days_since: null,
+    notes: ['A value day is a day with an episode read.'],
+  },
   signups: {
     total: 12,
     by_source: { episode: 9, before_tracking: 3 },
@@ -236,6 +272,50 @@ describe('Analytics page (spec #95)', () => {
     mockGetAnalytics.mockRejectedValue(new Error('API error: 500 Internal Server Error'))
     renderPage()
     expect(await screen.findByText('Error loading analytics')).toBeInTheDocument()
+  })
+})
+
+describe('Analytics scorecard (spec #111)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetAnalytics.mockResolvedValue(available())
+  })
+
+  it('leads the page, showing each metric at its newest graded week', async () => {
+    renderPage()
+    const heading = await screen.findByRole('heading', { name: 'Scorecard' })
+    expect(heading.compareDocumentPosition(screen.getByRole('heading', { name: 'Signups' }))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    const scorecard = heading.closest('section')!
+    // The newest week (10-12) has nobody graded yet, so 10-05 is the latest.
+    const activation = within(scorecard).getByRole('row', { name: /Activation/ })
+    expect(activation).toHaveTextContent('0.0% (0/3)')
+    expect(activation).toHaveTextContent('New readers')
+    expect(within(scorecard).getByRole('row', { name: /^Engagement/ })).toHaveTextContent('75.0% (6/8)')
+  })
+
+  it('shows a dash for a metric with no graded week', async () => {
+    renderPage()
+    const scorecard = (await screen.findByRole('heading', { name: 'Scorecard' })).closest('section')!
+    const row = within(scorecard).getByRole('row', { name: /Week-4 retention/ })
+    expect(within(row).getAllByText('—').length).toBeGreaterThan(0)
+  })
+
+  it('describes every week in the bars for screen readers', async () => {
+    renderPage()
+    const scorecard = (await screen.findByRole('heading', { name: 'Scorecard' })).closest('section')!
+    const bars = within(scorecard).getByRole('img', { name: /Last 3 weeks/ })
+    expect(bars.getAttribute('aria-label')).toContain('40.0% (4/10)')
+    expect(bars.getAttribute('aria-label')).toContain('not graded yet')
+  })
+
+  it('lists guardrails, PostHog ones without a value, and the opted-out count', async () => {
+    renderPage()
+    const scorecard = (await screen.findByRole('heading', { name: 'Scorecard' })).closest('section')!
+    expect(within(scorecard).getByText('Activated readers:').closest('li')).toHaveTextContent('4')
+    expect(within(scorecard).getByText('Sign-in completion:').closest('li')).toHaveTextContent('in PostHog')
+    expect(within(scorecard).getByText(/1 reader has usage analytics off/)).toBeInTheDocument()
   })
 })
 

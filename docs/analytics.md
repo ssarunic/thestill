@@ -8,7 +8,45 @@ Thestill measures use in two layers ([spec #95](../specs/95-product-analytics.md
 | B. Usage events | PostHog Cloud (EU) | PostHog |
 
 Layer A needs no configuration: it works on any multi-user Postgres
-install. This page is mostly about Layer B.
+install. This page is mostly about Layer B, after the Scorecard.
+
+## Scorecard (Layer A, spec #111)
+
+The first section of `/analytics`, and `thestill analytics --scorecard`.
+Each metric is the share of readers who cross a threshold, never an
+average, with the count beside it. Groups under five readers are greyed
+out, not hidden.
+
+A **value day** is a day in the reader's briefing timezone (UTC without a
+schedule) with an episode read or first opened, audio played, a briefing
+opened, or a successful Claude connector call. Follows, searches and
+shares don't count.
+
+| Metric | Readers | Definition | Points |
+|---|---|---|---|
+| Activation | New | Followed a show and got delivered value (an inbox episode, a briefing or a connector call) on a later day than signup, within 7 days | Signup weeks, graded 7 days after signup |
+| Engagement (main metric) | Existing | Members with ≥2 value days in the week. A member signed up at least 7 days before the week and had a value day in the 28 days before it | Complete activity weeks |
+| Week-4 retention | New | A value day in days 28–35 after signup | Signup weeks, graded 35 days after signup |
+| Weekly return | Existing | Members with a value day last week who had one again this week | Complete activity weeks |
+
+Guardrails sit under the metrics: activated readers (a count, so a
+change can't raise activation by shrinking signups) and briefings
+switched off in the past 7 days from Layer A; sign-in completion and
+follows undone within 7 days from PostHog (the "Sign-in completion"
+insight below; follows undone is a funnel `follow` → `unfollow` by
+person within 7 days).
+
+Readers who turned usage analytics off, or whose browser sends GPC, stay
+in every denominator but count only inbox reads and briefing opens, so
+they are undercounted, never dropped. The page shows how many have it
+off.
+
+Connector days come from `user_connector_days`, written by the remote MCP
+mount for successful calls (at most once per reader per hour), from the
+release that added it; there is no backfill.
+
+Product changes aimed at a metric are logged in
+[experiments.md](experiments.md) before they ship.
 
 ## What Layer B sends
 
