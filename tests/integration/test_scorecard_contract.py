@@ -305,3 +305,45 @@ def test_sqlite_connector_days_store_the_utc_day_and_follow_the_opt_out(tmp_path
     assert execute("SELECT user_id, day FROM user_connector_days") == [(opted_in_id, "2026-10-29")]
     SqliteUserRepository(db).update_usage_analytics(opted_in_id, False)
     assert execute("SELECT * FROM user_connector_days") == []
+
+
+# ----- reader-local week boundaries -------------------------------------------
+
+
+@pytest.fixture
+def local_weeks():
+    import psycopg
+
+    from thestill.repositories.postgres_analytics_repository import PostgresAnalyticsRepository
+    from thestill.repositories.postgres_schema import ensure_schema
+
+    ensure_schema(PG_DSN)
+    with psycopg.connect(PG_DSN) as conn:
+        conn.execute("TRUNCATE users, podcasts, episodes CASCADE")
+        s = _ScorecardSeed(conn)
+        # Signed up 10-12 03:00 UTC = 10-11 20:00 in Los Angeles: 7 days and
+        # 4 hours old when its local week of 10-19 starts (10-19 07:00 UTC),
+        # with a value day the week before (10-14) and one in the week.
+        la = s.reader("la", _utc(10, 12, 3))
+        s.schedule(la, "America/Los_Angeles")
+        s.read(la, _utc(10, 14))
+        s.read(la, _utc(10, 20))
+    return PostgresAnalyticsRepository(PG_DSN)
+
+
+@pg_only
+def test_membership_cutoff_uses_the_readers_week_start(local_weeks):
+    week = _point(local_weeks.scorecard(NOW), "engagement", date(2026, 10, 19))
+    assert (week.eligible, week.reached) == (1, 0)  # a member with one value day
+    back = _point(local_weeks.scorecard(NOW), "weekly_return", date(2026, 10, 19))
+    assert (back.eligible, back.reached) == (1, 1)
+
+
+@pg_only
+def test_an_activity_week_is_graded_once_it_has_ended_everywhere(local_weeks):
+    # Monday 01:00 UTC is still Sunday evening in Los Angeles.
+    early = local_weeks.scorecard(datetime(2026, 10, 26, 1, tzinfo=timezone.utc))
+    assert _metric(early, "engagement").points[-1].week_start == date(2026, 10, 12)
+    later = local_weeks.scorecard(datetime(2026, 10, 26, 12, tzinfo=timezone.utc))
+    assert _metric(later, "engagement").points[-1].week_start == date(2026, 10, 19)
+    assert _metric(later, "weekly_return").points[-1].week_start == date(2026, 10, 19)

@@ -296,8 +296,8 @@ SELECT (date_trunc('week', t.created_at AT TIME ZONE 'UTC'))::date AS week_start
 """
 
 # Spec #111 §3.2 and §3.4, per activity week (Monday, reader-local days).
-# A member signed up at least 7 days before the week and had a value day in
-# the 28 days before it; engaged = ``engaged_days`` or more value days in the
+# A member signed up at least 7 days before the week's local start and had a
+# value day in the 28 days before it; engaged = ``engaged_days`` or more value days in the
 # week; returned = a value day last week and again this week.
 _SCORECARD_WEEKS_SQL = f"""
 WITH {_REAL_USERS},
@@ -313,7 +313,7 @@ members AS (
            (SELECT count(*) FROM value_days d
              WHERE d.user_id = t.id AND d.day >= w.week_start AND d.day < w.week_start + 7) AS days
       FROM weeks w
-      JOIN reader_tz t ON t.created_at <= (w.week_start - 7)::timestamp AT TIME ZONE 'UTC'
+      JOIN reader_tz t ON t.created_at <= (w.week_start - 7)::timestamp AT TIME ZONE t.tz
      WHERE EXISTS (SELECT 1 FROM value_days d
                     WHERE d.user_id = t.id AND d.day >= w.week_start - 28 AND d.day < w.week_start)
 )
@@ -520,6 +520,11 @@ SELECT COALESCE(top.name, %(uncategorised)s) AS category,
 """
 
 
+# Activity weeks are reader-local, so a week has ended everywhere only once
+# the westernmost offset in use (UTC-12, ``Etc/GMT+12``) has left it.
+_LAST_LOCAL_OFFSET = timedelta(hours=12)
+
+
 def _monday(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
@@ -637,10 +642,12 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
 
         # Activation: signup weeks up to this one (the newest are part-graded).
         # Week-4 retention: signup weeks old enough to have reached week 4.
-        # Engagement and return: the last complete activity weeks.
+        # Engagement and return: the last activity weeks that have ended in
+        # every reader's timezone.
         signup_weeks = weeks_ending(this_monday)
         retention_weeks = weeks_ending(this_monday - timedelta(weeks=RETENTION_WEEK + 1))
-        activity_weeks = weeks_ending(this_monday - timedelta(weeks=1))
+        ended_everywhere = _monday((as_of - _LAST_LOCAL_OFFSET).astimezone(timezone.utc).date())
+        activity_weeks = weeks_ending(ended_everywhere - timedelta(weeks=1))
 
         activation = {
             row["week_start"]: (_n(row, "eligible"), _n(row, "reached"))

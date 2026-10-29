@@ -465,7 +465,11 @@ where it differs from or adds to the sections above:
 - **Series windows.** Activation: the last 8 signup weeks up to the
   current one (the newest are part-graded). Week-4 retention: 8 signup
   weeks ending five weeks before the current one. Engagement and weekly
-  return: the last 8 complete activity weeks. The page's "latest" is the
+  return: the last 8 activity weeks that have ended in every timezone, so
+  a week is published 12 hours after it ends in UTC (UTC−12 is the
+  westernmost offset). Membership's "7 days before the week" is measured
+  to the week's start in the reader's timezone, like the week itself
+  (Codex review, PR #447). The page's "latest" is the
   newest week with anyone graded.
 - **A connector day's moment is its first call** (`first_at`), so the
   168 h activation deadline compares real times: a first call later on
