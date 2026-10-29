@@ -232,9 +232,10 @@ CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
   `ConnectorDayRepository`.
 - **Write volume.** One row per reader per day. The day is the reader's
   local day, which the process doesn't know without a lookup, so an
-  in-process set keyed by **UTC hour** skips the database after the
-  first call of each hour: at most one insert per reader per hour, and a
-  whole-hour local midnight is never missed. `ON CONFLICT` covers
+  in-process set keyed by **UTC quarter hour** skips the database after
+  the first call of each slot: at most four inserts per reader per hour.
+  Every IANA offset in use is a whole number of quarter hours (+05:30,
+  +05:45), so a local midnight always starts a new slot. `ON CONFLICT` covers
   multiple workers. The repository computes the local day in SQL from
   the reader's schedule.
 - **Opt-outs (spec #103 D5).**

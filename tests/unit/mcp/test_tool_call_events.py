@@ -89,7 +89,7 @@ def _runtime(sink, connector_days=None) -> McpHttpRuntime:
     runtime = McpHttpRuntime.__new__(McpHttpRuntime)  # the counter needs no server
     runtime._analytics = sink
     runtime._connector_days = connector_days or _ConnectorDays()
-    runtime._connector_hour = None
+    runtime._connector_slot = None
     runtime._connector_seen = set()
     return runtime
 
@@ -135,8 +135,8 @@ def _at(hour, minute=0):
     return datetime(2026, 10, 29, hour, minute, tzinfo=timezone.utc)
 
 
-def test_a_successful_call_records_the_day_once_per_hour(monkeypatch):
-    clock = iter([_at(9, 5), _at(9, 40), _at(10, 1)])
+def test_a_successful_call_records_the_day_once_per_quarter_hour(monkeypatch):
+    clock = iter([_at(9, 5), _at(9, 14), _at(10, 1)])
     monkeypatch.setattr("thestill.web.mcp_http.now_utc", lambda: next(clock))
     days = _ConnectorDays()
     runtime = _runtime(None, days)  # no PostHog: connector days still count
@@ -172,3 +172,17 @@ def test_a_failing_write_never_fails_the_call_and_is_retried(monkeypatch):
     assert days.calls == [] and len(sink.captured) == 1  # the usage event still went out
     runtime._count_tool_call(caller, "search_corpus", True)
     assert days.calls == [("u-1", _at(9))]
+
+
+def test_calls_either_side_of_a_half_hour_local_midnight_both_record(monkeypatch):
+    # Asia/Kolkata (+05:30): 18:20 UTC is 23:50 on one local day, 18:40 UTC
+    # is 00:10 on the next. Offsets are whole quarter hours, so each quarter
+    # hour may write.
+    clock = iter([_at(18, 20), _at(18, 40)])
+    monkeypatch.setattr("thestill.web.mcp_http.now_utc", lambda: next(clock))
+    days = _ConnectorDays()
+    runtime = _runtime(None, days)
+    caller = SimpleNamespace(user=User(id="u-1", email="a@example.com"), gpc=False)
+    runtime._count_tool_call(caller, "search_corpus", True)
+    runtime._count_tool_call(caller, "search_corpus", True)
+    assert days.calls == [("u-1", _at(18, 20)), ("u-1", _at(18, 40))]

@@ -42,7 +42,7 @@ they are undercounted, never dropped. The page shows how many have it
 off.
 
 Connector days come from `user_connector_days`, written by the remote MCP
-mount for successful calls (at most once per reader per hour), from the
+mount for successful calls (at most once per reader per quarter hour), from the
 release that added it; there is no backfill.
 
 Product changes aimed at a metric are logged in

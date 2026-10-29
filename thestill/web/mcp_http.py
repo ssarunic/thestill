@@ -99,9 +99,10 @@ class McpHttpRuntime:
         self._analytics = analytics_sink
         self._users = repos.user
         # Spec #111 — connector days for the Scorecard, written at most once
-        # per reader per UTC hour from this process (see _record_connector_day).
+        # per reader per UTC quarter hour from this process (see
+        # _record_connector_day).
         self._connector_days = repos.connector_day
-        self._connector_hour: Optional[datetime] = None
+        self._connector_slot: Optional[datetime] = None
         self._connector_seen: Set[str] = set()
         # Spec #104 — the same account-status rule as the web session check.
         self._access = AccessGuard(repos.user, None, multi_user=config.multi_user)
@@ -148,17 +149,19 @@ class McpHttpRuntime:
     def _record_connector_day(self, identity, ok: bool) -> None:
         """Spec #111 §4: a successful remote call puts today on the reader's
         connector days. The day is local to the reader, so the in-process
-        memo is keyed by UTC hour rather than date: at most one insert per
-        reader per hour, and a whole-hour local midnight is never skipped.
-        Opted-out readers and GPC calls store nothing (spec #103 D5); the
-        repository re-checks the switch under the opt-out's lock."""
+        memo is keyed by UTC quarter hour rather than date: every IANA
+        offset in use is a whole number of quarter hours (+05:30, +05:45),
+        so a local midnight always starts a new slot and is never skipped,
+        at the cost of at most four inserts per reader per hour. Opted-out
+        readers and GPC calls store nothing (spec #103 D5); the repository
+        re-checks the switch under the opt-out's lock."""
         user = identity.user
         if not ok or user is None or identity.gpc or not user.usage_analytics_enabled:
             return
         now = now_utc()
-        hour = now.replace(minute=0, second=0, microsecond=0)
-        if hour != self._connector_hour:
-            self._connector_hour, self._connector_seen = hour, set()
+        slot = now.replace(minute=now.minute - now.minute % 15, second=0, microsecond=0)
+        if slot != self._connector_slot:
+            self._connector_slot, self._connector_seen = slot, set()
         if user.id in self._connector_seen:
             return
         try:
