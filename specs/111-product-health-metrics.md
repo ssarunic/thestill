@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft (2026-10-29)
 > **Created:** 2026-10-29
-> **Updated:** 2026-10-29
+> **Updated:** 2026-10-29 (open questions settled as D1–D4)
 > **Priority:** Medium. New readers are arriving (three on 2026-10-29), and the next product changes (a post-sign-in follow step, a tutorial, connector banners) need a number that says whether they worked.
 > **Author:** Product & Engineering
 > **Related:** [#95 product-analytics](95-product-analytics.md) (Layer A, `/analytics`, the opt-out rules), [#103 content-popularity](103-content-popularity.md) (`user_episode_views`, `listened_at`, decision D5), [#29 per-user-inbox-fanout](29-per-user-inbox-fanout.md) (delivered episodes), [#50 scheduled-briefings](50-scheduled-briefings.md) (reader timezone), [#78 remote-mcp-access](78-remote-mcp-access.md) / [#108 claude-connector-page](108-claude-connector-page.md) / [#109 mcp-oauth](109-mcp-oauth.md) (the connector), [#86 quality-feedback-loop](86-quality-feedback-loop.md) (quality reports)
@@ -381,17 +381,59 @@ prints all four metrics with counts (`@live`).
   is for measurement, like `user_episode_views`.
 - Revenue or paid-plan metrics.
 
-## Open questions
+## Decisions
 
-1. **Does a search with results count as value?** Proposed no: it
-   leaves no state, and a search that opens nothing didn't inform the
-   reader. Revisit if the connector or search becomes the main way
-   people use the product.
-2. **Should opted-out readers be dropped from the day-based
-   denominators** rather than counted with fewer facts? Proposed no,
-   while they are a small share (the page shows the count).
-3. **Activation window: 7 or 14 days?** A reader who follows a
-   fortnightly show may not get a new episode in 7 days, though the
-   back-catalogue seed covers most of that. Start at 7 and check in §7.
-4. **Is a share a value day?** It's an event only today. Proposed no
-   until sharing shows up as a real behaviour.
+Settled on 2026-10-29. The common rule: count only facts that are
+already stored and that mean the reader was informed. When in doubt,
+leave it out, and let the §7 proxy check decide whether to add it.
+
+1. **D1. A search is not a value day, even with results.**
+   - **Results aren't value yet.** Value comes when the reader opens a
+     result, and the open already counts. Counting the search too would
+     count the same day twice.
+   - **Nothing is stored.** A search leaves only a PostHog event, and
+     the Scorecard is built from product tables.
+   - **Easy to game.** Search-as-you-type or "related searches" would
+     add days without informing anyone.
+   - **Revisit** if search or the connector becomes the main way people
+     use the product.
+2. **D2. Opted-out readers stay in every denominator.** They are
+   counted with only the facts kept for everyone: inbox reads and
+   briefing opens.
+   - **Dropping them is worse.** If they differ from other readers
+     (more privacy-minded, maybe more loyal), removing them shifts the
+     population in ways nobody can see. Keeping them gives an undercount
+     whose direction is known.
+   - **It matches the rules already in place:** spec #95 D2 (state-based
+     metrics count everyone) and spec #103 D5 (facts that exist only to
+     measure follow the opt-outs).
+   - **The problem is small for now.** The opted-out share is small and
+     the page shows the count.
+   - **Revisit** if that share grows large, for example from more
+     readers on Brave, which sends GPC by default. Then drop them from
+     the day-based metrics only.
+3. **D3. The activation window is 7 days (168 h).**
+   - **The first week decides.** A new reader who doesn't come back
+     within a week mostly never does.
+   - **Results arrive sooner.** Cohorts can be graded after 7 days
+     instead of 14, and at current volume every week of waiting delays
+     an experiment's read.
+   - **Following gives a reason to return at once.** A follow puts
+     `INBOX_SEED_ON_FOLLOW` (2) back-catalogue episodes in the inbox,
+     and the daily briefing gives a reason to return even when a show
+     hasn't published.
+   - **Revisit** if §7 finds that readers activated on days 8–14 retain
+     as well as those activated in days 1–7. That would mean 7 days cuts
+     off real activation, for example for readers who mostly follow
+     fortnightly shows.
+4. **D4. A share is not a value day.**
+   - **It would be counted twice.** A reader shares after reading, and
+     the read already made it a value day.
+   - **Nothing is stored.** A share is a PostHog event only, and one
+     share (2026-10-29, probably the reader testing their own link) is
+     no reason to store a new fact.
+   - **It's a growth signal, not engagement.** It belongs in
+     acquisition, as signups through shared links, which
+     `signup_source = 'share'` already records.
+   - **Revisit** if sharing becomes common and §7 shows that readers who
+     share retain better.
