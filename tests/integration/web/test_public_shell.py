@@ -322,9 +322,10 @@ def test_a_retyped_entity_moves_its_old_url_to_the_current_one(site, app_state):
     app_state.entity_repository.upsert_entity(
         EntityRecord(id="company:nvidia", type=EntityType.PRODUCT, canonical_name="Nvidia")
     )
-    moved = site.get("/entities/company/nvidia?about=x", follow_redirects=False)
+    moved = site.get("/entities/company/nvidia?about=x&utm_source=a", follow_redirects=False)
     assert moved.status_code == 301
-    assert moved.headers["location"] == "/entities/product/nvidia?about=x"
+    # One hop: the legacy ?about= moves to the fragment on the way.
+    assert moved.headers["location"] == "/entities/product/nvidia?utm_source=a#about=x"
     assert "no-cache" in moved.headers["cache-control"]
     current = site.get("/entities/product/nvidia", follow_redirects=False)
     assert current.status_code == 200
@@ -369,7 +370,7 @@ def test_a_twice_retyped_entity_moves_a_url_at_neither_type(site, app_state):
     )
     moved = site.get("/entities/topic/artificial-intelligence?about=x", follow_redirects=False)
     assert moved.status_code == 301
-    assert moved.headers["location"] == "/entities/product/artificial-intelligence?about=x"
+    assert moved.headers["location"] == "/entities/product/artificial-intelligence#about=x"
     assert "no-cache" in moved.headers["cache-control"]
     assert site.get("/entities/person/artificial-intelligence", follow_redirects=False).status_code == 301
     current = site.get("/entities/product/artificial-intelligence", follow_redirects=False)
@@ -444,3 +445,34 @@ def test_served_pages_carry_no_template_comments(site, app_state):
     for path in ("/", "/podcasts/public-show/episodes/summarised", "/inbox"):
         comments = set(re.findall(r"<!--(.*?)-->", site.get(path).text, re.S))
         assert comments <= {"thestill:body", "/thestill:body"}, (path, comments)
+
+
+def test_legacy_query_deep_links_move_to_the_fragment(site, app_state):
+    """Google indexed ``?t=``/``?about=`` variants as pages of their own,
+    splitting a page's ranking. A full load of one goes permanently to the
+    clean URL, the value in the fragment, other parameters kept."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed(app_state)
+    _seed_people(app_state)
+    episode = "/podcasts/public-show/episodes/summarised"
+
+    moved = site.get(f"{episode}?t=901", follow_redirects=False)
+    assert moved.status_code == 301
+    assert moved.headers["location"] == f"{episode}#t=901"
+    assert moved.headers["cache-control"] == "public, max-age=86400"
+
+    kept = site.get(f"{episode}?view=transcript&t=901.5", follow_redirects=False)
+    assert kept.headers["location"] == f"{episode}?view=transcript#t=901.5"
+
+    # A malformed value is dropped: the URL is still a duplicate.
+    assert site.get(f"{episode}?t=soon", follow_redirects=False).headers["location"] == episode
+
+    person = site.get("/entities/person/scott-galloway?about=nvidia", follow_redirects=False)
+    assert person.status_code == 301
+    assert person.headers["location"] == "/entities/person/scott-galloway#about=nvidia"
+
+    # The clean URL itself answers, and a missing page stays a 404.
+    assert site.get(episode, follow_redirects=False).status_code == 200
+    assert site.get(f"{episode}?view=transcript", follow_redirects=False).status_code == 200
+    assert site.get("/podcasts/public-show/episodes/nope?t=1", follow_redirects=False).status_code == 404
