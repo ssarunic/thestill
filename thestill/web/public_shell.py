@@ -37,6 +37,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Tuple
+from urllib.parse import parse_qsl, urlencode
 from xml.sax.saxutils import escape as xml_escape
 
 import structlog
@@ -92,6 +93,45 @@ def shell_kind(path: str) -> Optional[str]:
     if parts[0] == "entities" and len(parts) == 3:
         return "entity"
     return None
+
+
+# Deep links that used to ride in the query: spec #72's ``?t=<seconds>`` on
+# episode pages and spec #94's ``?about=<slug>`` on entity pages. PR #390
+# moved public links to the fragment, but Google had already indexed the
+# query variants as pages of their own, each its own canonical despite
+# ``rel=canonical``, splitting a page's ranking across copies. A full page
+# load of one is sent permanently to the clean URL with the value moved to
+# the fragment, which the app reads either way (``deepLinkParam``) and
+# search engines ignore.
+_LEGACY_DEEP_LINKS = {
+    "t": re.compile(r"^\d{1,6}(\.\d{1,3})?$"),
+    "about": _SLUG_RE,
+}
+
+
+def has_legacy_deep_link(query: str) -> bool:
+    return any(key in _LEGACY_DEEP_LINKS for key, _ in parse_qsl(query, keep_blank_values=True))
+
+
+def move_deep_links_to_fragment(query: str) -> Tuple[str, str]:
+    """``query`` without the legacy deep-link parameters (``"?…"`` or ``""``)
+    and a fragment carrying their values (``"#…"`` or ``""``).
+
+    Only the first well-formed value of each is kept; a malformed one is
+    dropped, since the URL it rode on is still a duplicate of the page.
+    Every other parameter stays in the query, in order.
+    """
+    kept: List[Tuple[str, str]] = []
+    moved: Dict[str, str] = {}
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        pattern = _LEGACY_DEEP_LINKS.get(key)
+        if pattern is None:
+            kept.append((key, value))
+        elif key not in moved and pattern.match(value):
+            moved[key] = value
+    rest = urlencode(kept)
+    fragment = urlencode([(key, moved[key]) for key in _LEGACY_DEEP_LINKS if key in moved])
+    return (f"?{rest}" if rest else ""), (f"#{fragment}" if fragment else "")
 
 
 def log_shell_served(

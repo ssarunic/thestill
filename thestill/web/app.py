@@ -101,9 +101,12 @@ from .public_shell import (
     ShellTemplate,
     get_shell_renderer,
     get_sitemap_builder,
+    has_legacy_deep_link,
     inject,
     log_shell_served,
+    move_deep_links_to_fragment,
     render_head,
+    shell_kind,
 )
 from .routes import (
     api_admin,
@@ -1020,9 +1023,27 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                     no_cache = {**no_cache, "Retry-After": "120"}
             if tags.redirect_path:
                 # no-cache so a browser rechecks it: a re-type can be undone.
+                # Legacy ?t= / ?about= move to the fragment in the same hop.
                 log_shell_served(full_path, tags.status_code, user_agent, started)
-                query = f"?{request.url.query}" if request.url.query else ""
-                return RedirectResponse(tags.redirect_path + query, status_code=tags.status_code, headers=no_cache)
+                rest, fragment = move_deep_links_to_fragment(request.url.query)
+                return RedirectResponse(
+                    tags.redirect_path + rest + fragment, status_code=tags.status_code, headers=no_cache
+                )
+            if (
+                tags.status_code == 200
+                and shell_kind(full_path) in ("episode", "entity")
+                and has_legacy_deep_link(request.url.query)
+            ):
+                # A legacy query deep link is a duplicate of the page in
+                # search results: one permanent hop to the clean URL, the
+                # value carried in the fragment (move_deep_links_to_fragment).
+                log_shell_served(full_path, 301, user_agent, started)
+                rest, fragment = move_deep_links_to_fragment(request.url.query)
+                return RedirectResponse(
+                    f"/{full_path}{rest}{fragment}",
+                    status_code=301,
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
             html_text = inject(shell_template.text(), render_head(tags, state.config.public_base_url or None))
             # Spec #105: anonymous requests to a public page also get its
             # main content as HTML plus a data block. Signed-in requests

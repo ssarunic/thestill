@@ -199,13 +199,19 @@ Anonymous responses are `Cache-Control: public, max-age=300,
 stale-while-revalidate=300`; a request carrying a credential gets
 `private, no-cache`, and `Vary: Cookie, Authorization` is always set.
 
+Deep links ride in the page URL's fragment (`#t=<seconds>` on an episode,
+`#about=<slug>` on an entity). A full page load of the old query form
+(`?t=` or `?about=`) answers `301` to the clean URL with the value moved to
+the fragment and other parameters kept, so search engines see one page
+instead of a copy per moment. Malformed values are dropped.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/public/podcasts/{slug}` | GET | Show metadata, hosts, recurring guests, summarised-episode count |
 | `/api/public/podcasts/{slug}/episodes` | GET | Summarised episodes, newest first (`?limit=` ≤50, `?offset=`) |
 | `/api/public/podcasts/{slug}/episodes/{episode}` | GET | Episode metadata, hosts/guests, platform links, `has_transcript` |
 | `/api/public/podcasts/{slug}/episodes/{episode}/summary` | GET | Stored summary (`?lang=` only if already translated; never calls an LLM) |
-| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes, 6 per page (spec #105 decision 2); `?q=<seconds>` returns the quote within 5 s as `linked` (the page's URL carries it as `?t=`, the reader's deep-link parameter); `?speaker=<slug>` and `?page=` page through the rest |
+| `/api/public/podcasts/{slug}/episodes/{episode}/quotes` | GET | Attributed quotes, 6 per page (spec #105 decision 2); `?q=<seconds>` returns the quote within 5 s as `linked` (the page's URL carries it in the fragment as `#t=`, the reader's deep-link parameter); `?speaker=<slug>` and `?page=` page through the rest |
 | `/api/public/recent-summaries` | GET | Latest summarised episodes across public shows (≤12) |
 | `/api/public/top-podcasts` | GET | Apple chart; hidden shows lose their link |
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |

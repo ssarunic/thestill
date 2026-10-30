@@ -276,7 +276,9 @@ def public_prerender_quote_page() -> int:
     return api_public._EPISODE_QUOTE_PAGE  # noqa: SLF001 - the budget under test
 
 
-@pytest.mark.parametrize("query", ["?speaker=scott-galloway", "?view=transcript", "?about=nvidia"])
+# ``?about=`` and ``?t=`` are not here: they redirect to the clean URL with
+# the value in the fragment (test_public_shell, legacy deep links).
+@pytest.mark.parametrize("query", ["?speaker=scott-galloway", "?view=transcript", "?utm_source=x"])
 def test_a_query_string_gets_only_the_header_block(site, app_state, query):
     _seed_people(app_state)
     page = _parse(site.get(EPISODE + query).text)
@@ -609,7 +611,7 @@ def test_podcast_and_entity_pages_are_ua_blind(site, app_state, path):
     assert len({site.get(path, headers={"User-Agent": ua}).text for ua in USER_AGENTS}) == 1
 
 
-@pytest.mark.parametrize("path", [SHOW + "?x=1", "/entities/company/nvidia?about=x"])
+@pytest.mark.parametrize("path", [SHOW + "?x=1", "/entities/company/nvidia?x=1"])
 def test_podcast_and_entity_query_strings_get_the_header_block(site, app_state, path):
     _seed_people(app_state)
     page = _parse(site.get(path).text)
