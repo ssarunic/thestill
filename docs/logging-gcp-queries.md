@@ -17,8 +17,8 @@ Thestill logs use the following GCP Cloud Logging format:
   "message": "task_completed_successfully",
   "time": "2026-01-25T16:34:04.073930Z",
   "severity": "INFO",
-  "episode_id": 123,
-  "task_id": 456,
+  "episode_id": "abc-123",
+  "task_id": "def-456",
   "stage": "transcribe",
   "retry_count": 0,
   "worker_id": "3fb0e2a4",
@@ -47,13 +47,13 @@ Google Cloud Logging uses a simplified query language. Access it via:
 Trace all operations for a single episode:
 
 ```
-jsonPayload.episode_id=123
+jsonPayload.episode_id="abc-123"
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read "jsonPayload.episode_id=123" \
+gcloud logging read 'jsonPayload.episode_id="abc-123"' \
   --format=json \
   --freshness=7d \
   --order=asc
@@ -295,14 +295,14 @@ gcloud logging read 'jsonPayload.episode_id="abc-123"' \
 Find errors for a specific episode:
 
 ```
-jsonPayload.episode_id=123
+jsonPayload.episode_id="abc-123"
 severity=ERROR
 ```
 
 **CLI Command:**
 
 ```bash
-gcloud logging read 'jsonPayload.episode_id=123 AND severity=ERROR' \
+gcloud logging read 'jsonPayload.episode_id="abc-123" AND severity=ERROR' \
   --format=json
 ```
 
@@ -522,7 +522,7 @@ Create metrics for important KPIs and add to Cloud Monitoring dashboards.
 If custom fields (episode_id, worker_id) are missing:
 
 1. Verify structlog is properly configured
-2. Check field binding: `structlog.contextvars.bind_contextvars(episode_id=123)`
+2. Check field binding: `structlog.contextvars.bind_contextvars(episode_id="abc-123")`
 3. Ensure fields are logged with key-value pairs
 
 ### Query Too Slow

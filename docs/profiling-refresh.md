@@ -184,24 +184,24 @@ good enough — only reach for this if something looks pathological.
 
 ## Interpreting the data
 
-Expected shape of a healthy-but-unoptimized run:
+Phase-1 of spec #19 (parse-once, conditional GET, and the parallel
+worker pool) has already shipped. Expected shape of a healthy run
+today, not a baseline to justify further work:
 
-- `feed_refresh_batch_summary.duration_ms` ≈ sum of per-podcast
-  `duration_ms` (serial execution).
-- `http_fetch` events per RSS podcast = 2 (double-fetch). This describes
-  the historical pre-refactor state — current code fetches once per
-  podcast (`media_source.py` `fetch_and_parse`), so today the expected
-  count is exactly 1 (`http_fetch` or `conditional_get_hit`).
+- `http_fetch` events per RSS podcast = 1 (`media_source.py`
+  `fetch_and_parse` fetches once, not the historical double-fetch).
+  Seeing 2 `http_fetch` events for the same podcast in a run would be a
+  regression.
+- Unchanged feeds return 304, emitting a near-zero `conditional_get_hit`
+  phase event instead of `http_fetch`, and skip `parse` entirely for
+  that podcast.
+- With the default `REFRESH_MAX_WORKERS=1`,
+  `feed_refresh_batch_summary.duration_ms` ≈ sum of per-podcast
+  `duration_ms` (serial execution). Raising `REFRESH_MAX_WORKERS` drops
+  batch `duration_ms` roughly N× for pool size N, via the
+  `ThreadPoolExecutor` in `PodcastFeedManager` (bounded by its per-host
+  cap).
 - `http_fetch` dominates `duration_ms` per podcast.
 - `persist_batch` is small (tens of ms) and appears once per refresh.
 - `parse` is small-to-moderate (tens of ms for small feeds, hundreds
   for huge archives).
-
-If the data matches, phase-1 work from spec #19 is justified:
-
-1. Parse-once refactor → halves `http_fetch` event count.
-2. `ThreadPoolExecutor` → batch `duration_ms` drops roughly N× for pool
-   size N (bounded by per-host cap).
-3. Conditional GET → unchanged feeds return 304, emitting a near-zero
-   `conditional_get_hit` phase event instead of `http_fetch` and
-   skipping `parse` entirely for that podcast.
