@@ -18,8 +18,8 @@ Thestill logs use the following ECS field structure:
   "log.level": "info",
   "message": "task_completed_successfully",
   "ecs.version": "1.6.0",
-  "episode_id": 123,
-  "task_id": 456,
+  "episode_id": "abc-123",
+  "task_id": "def-456",
   "stage": "transcribe",
   "retry_count": 0,
   "worker_id": "3fb0e2a4"
@@ -39,7 +39,7 @@ GET /thestill-logs-*/_search
 {
   "query": {
     "term": {
-      "episode_id": 123
+      "episode_id": "abc-123"
     }
   },
   "sort": [
@@ -51,7 +51,7 @@ GET /thestill-logs-*/_search
 **Kibana Query (KQL):**
 
 ```
-episode_id: 123
+episode_id: "abc-123"
 ```
 
 ### All Logs from a Specific Worker
@@ -146,7 +146,7 @@ GET /thestill-logs-*/_search
   "query": {
     "bool": {
       "must": [
-        { "term": { "episode_id": 123 } },
+        { "term": { "episode_id": "abc-123" } },
         { "exists": { "field": "duration_ms" } }
       ]
     }
@@ -177,7 +177,7 @@ GET /thestill-logs-*/_search
 
 ### Group Errors by Type
 
-Identify the most common error types. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `validation_error`, ...). Task worker failures are the events `task_fatal_error` / `task_transient_error` and carry `error_class` (`infra` vs `item`) instead:
+Identify the most common error types. The `error_type` field holds the Python exception class name (e.g. `TransientError`, `FatalError`, `TranscriptCleaningError`, `ConnectionError`) on CLI and HTTP failure events (`cli_command_failed`, `http_request_failed`); `mcp_stdio_failed` uses category strings (`protocol_error`, `validation_error`, ...). Task worker failures are different: `task_transient_error` / `task_unexpected_error` carry an `error_class` field instead (`fatal` | `infra` | `item`); `task_fatal_error` does not log an `error_class` field at all:
 
 ```json
 GET /thestill-logs-*/_search
