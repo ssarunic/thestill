@@ -29,6 +29,44 @@ class TestPersonRule:
         assert classify_entity_type(["Q15632617"], EntityType.TOPIC) is EntityType.PERSON
 
 
+class TestKindOfPersonDemotion:
+    """Linked common nouns the a16z rail showed under "People": the item
+    is a profession, position, kinship or population group, not a person."""
+
+    def test_profession_p31_demotes_to_topic_from_person(self):
+        # "entrepreneur" (Q131524): profession + legal status.
+        assert classify_entity_type(["Q28640", "Q2628882"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_occupation_p31_demotes_to_topic(self):
+        # "Photographer" (Q33231): occupation + ISCO-08 group.
+        assert classify_entity_type(["Q12737077", "Q108300140"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_academic_rank_and_position_demote_to_topic(self):
+        # "Professor" (Q121594).
+        p31 = ["Q480319", "Q5767753", "Q486983", "Q12737077", "Q4164871", "Q3529618"]
+        assert classify_entity_type(p31, EntityType.PERSON) is EntityType.TOPIC
+
+    def test_population_group_demotes_to_topic(self):
+        # "child" (Q7569): population group + class of human.
+        assert classify_entity_type(["Q851990", "Q134264207"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_kinship_demotes_to_topic(self):
+        # "parent" (Q7566): kinship + social role.
+        assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_the_human_class_itself_is_a_topic(self):
+        # "Human" (Q5) is the class every person is an instance of; its own
+        # P31 is a taxonomy class no list names, so the QID decides.
+        assert classify_entity_type(["Q55983715"], EntityType.PERSON, qid="Q5") is EntityType.TOPIC
+
+    def test_a_real_human_with_a_position_stays_a_person(self):
+        # A person row can carry a role class beside Q5; the person rule wins.
+        assert classify_entity_type(["Q5", "Q4164871"], EntityType.PERSON, qid="Q937") is EntityType.PERSON
+
+    def test_a_kind_of_person_labelled_topic_stays_a_topic(self):
+        assert classify_entity_type(["Q28640"], EntityType.TOPIC) is EntityType.TOPIC
+
+
 class TestCountryDemotion:
     def test_country_p31_demotes_to_topic_from_company(self):
         # The "Israel as Company" / "United States as Company" cases

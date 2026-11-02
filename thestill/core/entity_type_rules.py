@@ -144,6 +144,33 @@ SOFTWARE_P31 = frozenset(
 )
 _PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
 
+# Kinds of person, not persons. "entrepreneur", "professor", "photographer"
+# and "child" are real Wikidata items the linker finds, but their P31 is a
+# profession, position, kinship or population-group class, and GLiNER's
+# ``person`` label stood because none of the lists below named those
+# classes. A kind of person is a topic: "Politician" or "Entrepreneur"
+# reads fine as a topic chip and is wrong under "People in this episode".
+# Checked right after ``PERSON_P31`` so a fictional human (a person) wins,
+# and before the topic list, which already catches some of these
+# ("student" is a social group) but not most.
+KIND_OF_PERSON_P31 = frozenset(
+    {
+        "Q28640",  # profession
+        "Q12737077",  # occupation
+        "Q108300140",  # occupation group according to ISCO-08
+        "Q4164871",  # position
+        "Q480319",  # title of authority
+        "Q486983",  # academic rank
+        "Q3529618",  # academic title
+        "Q189533",  # academic degree
+        "Q214339",  # social role
+        "Q171318",  # kinship
+        "Q851990",  # population group
+        "Q134264207",  # class of human
+        "Q16334295",  # group of humans
+    }
+)
+
 # Topics is the broad catch-all bucket: places, concepts, events,
 # fields of study, religions, ethnic groups, ideologies, etc. We
 # enumerate the *common* P31s here so we can demote things that
@@ -291,6 +318,8 @@ def classify_entity_type(
     p31_qids: Iterable[str],
     fallback: EntityType,
     superclasses: Optional[Callable[[str], List[str]]] = None,
+    *,
+    qid: Optional[str] = None,
 ) -> Optional[EntityType]:
     """Return the bucket this entity should land in based on its P31 set.
 
@@ -300,6 +329,10 @@ def classify_entity_type(
        least ambiguous bucket and the most expensive to misclassify
        (the rail's ``People in this episode`` section is the most
        conspicuous).
+    1a. Else if ``qid`` is itself one of the person classes (the item
+       "human", Q5) or any P31 is in ``KIND_OF_PERSON_P31`` → ``TOPIC``,
+       whatever the fallback: a profession, position, kinship or
+       population group is a kind of person, not a person.
     2. Else if any P31 is in ``WORK_P31`` → ``PRODUCT``, whatever the
        fallback: a film, series, book or podcast is a product even when
        GLiNER tagged it ``topic`` (spec #92 Phase 0).
@@ -333,6 +366,9 @@ def classify_entity_type(
 
     if p31_set & PERSON_P31:
         return EntityType.PERSON
+
+    if qid in PERSON_P31 or p31_set & KIND_OF_PERSON_P31:
+        return EntityType.TOPIC
 
     if p31_set & WORK_P31:
         return EntityType.PRODUCT

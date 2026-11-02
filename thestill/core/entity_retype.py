@@ -49,7 +49,7 @@ def plan_retype(
     if only_works:
         works = set(p31) & WORK_P31 and not set(p31) & PERSON_P31
         return EntityType.PRODUCT if works and entity.type != EntityType.PRODUCT else None
-    classified = classify_entity_type(p31, entity.type, superclasses) or entity.type
+    classified = classify_entity_type(p31, entity.type, superclasses, qid=entity.wikidata_qid) or entity.type
     return None if classified == entity.type else classified
 
 

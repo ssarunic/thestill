@@ -147,7 +147,7 @@ def linked_result(
         p31_qids = wikidata_client.fetch_p31(qid)
         # Test fakes may implement only ``fetch_p31``.
         superclasses = getattr(wikidata_client, "fetch_superclasses", None)
-        classified = classify_entity_type(p31_qids, fallback_type, superclasses)
+        classified = classify_entity_type(p31_qids, fallback_type, superclasses, qid=qid)
         if fallback_type is EntityType.PERSON and classified not in (None, EntityType.PERSON):
             logger.info(
                 "entity_person_demotion_held",
