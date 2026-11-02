@@ -124,3 +124,14 @@ class TestPersonDemotionsAreHeld:
 
     def test_a_human_stays_a_person_and_is_not_held(self):
         assert list(plan_backfill([_entity("person:ada", EntityType.PERSON, ["Q5"])], None)) == []
+
+    def test_a_kind_of_person_is_not_held(self):
+        # "child" (population group) and the class item "human" (Q5) are
+        # common nouns, not name collisions: they move without review.
+        child = _entity("person:child", EntityType.PERSON, ["Q851990", "Q134264207"], qid="Q7569")
+        human = _entity("person:human", EntityType.PERSON, ["Q55983715"], qid="Q5")
+        plans = list(plan_backfill([child, human], None))
+        assert [(p.entity.id, p.new_type, p.held) for p in plans] == [
+            ("person:child", EntityType.TOPIC, False),
+            ("person:human", EntityType.TOPIC, False),
+        ]

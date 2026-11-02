@@ -320,6 +320,19 @@ ALLOWED_P31_BY_TYPE = {
 }
 
 
+def is_kind_of_person(p31_qids: Iterable[str], qid: Optional[str] = None) -> bool:
+    """True when the item is a profession, title, kinship or age group, or
+    is the class "human" itself: a common noun, never a name collision.
+
+    The resolver and ``backfill-entity-types`` hold every other person
+    demotion for a curator, because "Bellingham" tagged person and linked
+    to the US city is a wrong link, not a wrong tag. "the photographer"
+    linked to the occupation is the opposite: the link is fine and the tag
+    is wrong, so the demotion goes through.
+    """
+    return qid in PERSON_P31 or bool({q for q in p31_qids if q} & KIND_OF_PERSON_P31)
+
+
 def classify_entity_type(
     p31_qids: Iterable[str],
     fallback: EntityType,
@@ -373,7 +386,7 @@ def classify_entity_type(
     if p31_set & PERSON_P31:
         return EntityType.PERSON
 
-    if qid in PERSON_P31 or p31_set & KIND_OF_PERSON_P31:
+    if is_kind_of_person(p31_set, qid):
         return EntityType.TOPIC
 
     if p31_set & WORK_P31:

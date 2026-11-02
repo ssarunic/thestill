@@ -29,7 +29,7 @@ from structlog import get_logger
 
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
-from ..entity_type_rules import classify_entity_type
+from ..entity_type_rules import classify_entity_type, is_kind_of_person
 
 logger = get_logger(__name__)
 
@@ -139,7 +139,10 @@ def linked_result(
     or work, the name was usually matched to the wrong item (Bellingham the
     footballer → the US city), the same call ``backfill-entity-types``
     holds. The entity review queue flags the disagreement
-    (``p31_says_other_type``) for a curator.
+    (``p31_says_other_type``) for a curator. The exception is a kind of
+    person (profession, title, kinship, age group): "the photographer"
+    linked to the occupation is a right link and a wrong tag, so it moves
+    to topic at once.
     """
     p31_qids: List[str] = []
     entity_type = fallback_type
@@ -148,7 +151,11 @@ def linked_result(
         # Test fakes may implement only ``fetch_p31``.
         superclasses = getattr(wikidata_client, "fetch_superclasses", None)
         classified = classify_entity_type(p31_qids, fallback_type, superclasses, qid=qid)
-        if fallback_type is EntityType.PERSON and classified not in (None, EntityType.PERSON):
+        if (
+            fallback_type is EntityType.PERSON
+            and classified not in (None, EntityType.PERSON)
+            and not is_kind_of_person(p31_qids, qid)
+        ):
             logger.info(
                 "entity_person_demotion_held",
                 surface_form=mention.surface_form,

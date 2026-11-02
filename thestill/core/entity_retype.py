@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Callable, Collection, Iterable, Iterator, List, Optional
 
 from ..models.entities import EntityRecord, EntityType
-from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type
+from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type, is_kind_of_person
 
 
 def plan_retype(
@@ -84,7 +84,9 @@ def plan_backfill(
     A person whose P31 says place, work or company is ``held``: the prod
     dry run of 2026-10-27 showed the person tag is usually right and the
     link wrong (Bellingham the footballer → the US city, Amol Avasare →
-    the Iranian city). Only ids in ``release`` (reviewed) move.
+    the Iranian city). Only ids in ``release`` (reviewed) move. A kind of
+    person (profession, title, kinship, age group) is never held: that is
+    a common noun with a right link and a wrong tag.
     """
     for entity in entities:
         p31 = entity.wikidata_instance_of
@@ -97,7 +99,12 @@ def plan_backfill(
         new_type = plan_retype(entity, p31, only_works=only_works, superclasses=superclasses)
         if new_type is None and entity.wikidata_instance_of == p31:
             continue
-        held = new_type is not None and entity.type is EntityType.PERSON and entity.id not in release
+        held = (
+            new_type is not None
+            and entity.type is EntityType.PERSON
+            and entity.id not in release
+            and not is_kind_of_person(p31, entity.wikidata_qid)
+        )
         yield RetypePlan(entity, p31, new_type, held)
 
 
