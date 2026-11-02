@@ -144,15 +144,15 @@ SOFTWARE_P31 = frozenset(
 )
 _PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
 
-# Kinds of person, not persons. "entrepreneur", "professor", "photographer"
-# and "child" are real Wikidata items the linker finds, but their P31 is a
-# profession, position, kinship or population-group class, and GLiNER's
-# ``person`` label stood because none of the lists below named those
-# classes. A kind of person is a topic: "Politician" or "Entrepreneur"
-# reads fine as a topic chip and is wrong under "People in this episode".
-# Checked right after ``PERSON_P31`` so a fictional human (a person) wins,
-# and before the topic list, which already catches some of these
-# ("student" is a social group) but not most.
+# Kinds of person, not persons. "child", "parent", "Professor" and
+# "billionaire" are real Wikidata items the linker finds, but their P31 is
+# a kinship, population-group, title, rank, degree, social-status or
+# life-phase class, which no list named, so GLiNER's ``person`` label
+# stood. A kind of person is a topic: "Politician" or "Entrepreneur" reads
+# fine as a topic chip and is wrong under "People in this episode".
+# Profession, occupation and position already sat in ``TOPIC_P31``; they
+# are repeated here so the whole family is read in one place and checked
+# right after ``PERSON_P31``, so a fictional human (a person) still wins.
 KIND_OF_PERSON_P31 = frozenset(
     {
         "Q28640",  # profession
