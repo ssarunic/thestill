@@ -54,6 +54,12 @@ class TestKindOfPersonDemotion:
         # "parent" (Q7566): kinship + social role.
         assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
 
+    def test_social_status_and_life_phase_demote_to_topic(self):
+        # "billionaire" (Q189970 social status) and "Adult" (Q785260 phase
+        # of human life) from the local person bucket.
+        assert classify_entity_type(["Q189970", "Q5932254"], EntityType.PERSON) is EntityType.TOPIC
+        assert classify_entity_type(["Q785260", "Q185836"], EntityType.PERSON) is EntityType.TOPIC
+
     def test_the_human_class_itself_is_a_topic(self):
         # "Human" (Q5) is the class every person is an instance of; its own
         # P31 is a taxonomy class no list names, so the QID decides.

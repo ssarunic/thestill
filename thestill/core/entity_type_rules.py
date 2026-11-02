@@ -163,9 +163,15 @@ KIND_OF_PERSON_P31 = frozenset(
         "Q486983",  # academic rank
         "Q3529618",  # academic title
         "Q189533",  # academic degree
+        "Q66715801",  # musical profession
+        "Q1781513",  # position (sports)
         "Q214339",  # social role
+        "Q189970",  # social status ("billionaire")
         "Q171318",  # kinship
         "Q851990",  # population group
+        "Q5932254",  # demographic profile
+        "Q785260",  # phase of human life ("adult")
+        "Q185836",  # age of a person
         "Q134264207",  # class of human
         "Q16334295",  # group of humans
     }
