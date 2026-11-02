@@ -197,6 +197,32 @@ def test_split_renumbers_and_lands_on_a_raw_word(world):
     assert effective.transcript.segments[3].text == "Today we talk about"
 
 
+def test_split_children_without_word_anchors_stay_addressable(world):
+    """Children of a split share ids and span when the segment had no word
+    span; their text hashes tell them apart on later ops."""
+    ad = world["sidecar"].segments[2]
+    assert ad.kind == "ad_break" and ad.source_word_span is None
+    _add(world, "segment.split", segment_anchor(ad), {"text_word_index": 4})
+    effective = _load(world)
+    left, right = effective.transcript.segments[2], effective.transcript.segments[3]
+    assert left.source_segment_ids == right.source_segment_ids and left.source_word_span is None
+    _add(
+        world,
+        "segment.set_text",
+        segment_anchor(right),
+        {"old_text": right.text, "new_text": "by Sponsor Corp, really"},
+    )
+    _add(world, "segment.set_kind", segment_anchor(left), {"kind": "intro"})
+    effective = _load(world)
+    assert effective.conflicts == []
+    assert effective.transcript.segments[2].kind == "intro"
+    assert effective.transcript.segments[3].text == "by Sponsor Corp, really"
+    # An anchor whose text matches neither child is a text change, not ambiguity.
+    stale = effective.transcript.segments[2].model_copy(update={"text": "something else entirely"})
+    row = _add(world, "segment.set_kind", segment_anchor(stale), {"kind": "outro"})
+    assert [c.reason for c in _load(world).conflicts if c.edit_id == row.id] == ["text_changed"]
+
+
 def test_merge_joins_adjacent_segments_and_rejects_others(world):
     sidecar = world["sidecar"]
     a, b = sidecar.segments[3], sidecar.segments[4]

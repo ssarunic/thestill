@@ -219,6 +219,62 @@ def test_revert_then_redo(world):
     assert state.effective.transcript.segments[1].speaker == "Grace Hopper"
 
 
+def test_batch_validates_ops_after_a_revert_against_the_reverted_state(world):
+    service = world["service"]
+    target = world["sidecar"].segments[0]
+    first = service.apply(
+        EPISODE_ID,
+        actor=ADMIN,
+        session_id="s1",
+        base_seq=0,
+        ops=[
+            {
+                "op": "segment.set_text",
+                "anchor": segment_anchor(target),
+                "args": {"old_text": target.text, "new_text": "B"},
+            }
+        ],
+    ).applied[0]
+    current = service.get_state(EPISODE_ID).effective.transcript.segments[0]
+    assert current.text == "B"
+    # Anchored on B, but the revert in the same batch restores A first.
+    with pytest.raises(TranscriptEditError) as exc:
+        service.apply(
+            EPISODE_ID,
+            actor=ADMIN,
+            session_id="s1",
+            base_seq=1,
+            ops=[
+                {"op": "revert", "anchor": {"edit_id": first.id}, "args": {}},
+                {
+                    "op": "segment.set_text",
+                    "anchor": segment_anchor(current),
+                    "args": {"old_text": "B", "new_text": "C"},
+                },
+            ],
+        )
+    assert exc.value.kind == "rejected" and exc.value.detail["conflict"]["reason"] == "text_changed"
+    # The revert was written; the rejected op was not.
+    assert [e.op for e in world["edits"].list_for_episode(EPISODE_ID)] == ["segment.set_text", "revert"]
+    # Anchored on the restored text, the follow-up applies.
+    result = service.apply(
+        EPISODE_ID,
+        actor=ADMIN,
+        session_id="s1",
+        base_seq=2,
+        ops=[
+            {
+                "op": "segment.set_text",
+                "anchor": segment_anchor(target),
+                "args": {"old_text": target.text, "new_text": "C"},
+            }
+        ],
+    )
+    assert result.last_seq == 3
+    state = service.get_state(EPISODE_ID)
+    assert state.effective.conflicts == [] and state.effective.transcript.segments[0].text == "C"
+
+
 def test_revert_of_unknown_edit_is_invalid(world):
     with pytest.raises(TranscriptEditError) as exc:
         world["service"].revert(EPISODE_ID, "nope", actor=ADMIN, session_id="s1", base_seq=0)
@@ -269,6 +325,34 @@ def test_summary_stale_counts_ops_newer_than_the_last_summary(world):
     world["clock"]["now"] = NOW + timedelta(hours=2)
     _rename(world, name="Grace B. Hopper")
     assert world["service"].get_state(EPISODE_ID).summary_stale_edits == 1
+
+
+def test_summary_stale_counts_undo_and_redo_after_the_summary(world):
+    service = world["service"]
+    rename = _rename(world).applied[0]
+    world["queue"].tasks.append(
+        Task(
+            id="s",
+            episode_id=EPISODE_ID,
+            stage=TaskStage.SUMMARIZE,
+            status=TaskStatus.COMPLETED,
+            completed_at=NOW + timedelta(hours=1),
+        )
+    )
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 0
+    # Undoing what the summary saw makes it stale.
+    world["clock"]["now"] = NOW + timedelta(hours=2)
+    undo = service.revert(EPISODE_ID, rename.id, actor=ADMIN, session_id="s1", base_seq=1).applied[0]
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 1
+    # Redoing it puts the transcript back to what the summary saw.
+    world["clock"]["now"] = NOW + timedelta(hours=3)
+    service.revert(EPISODE_ID, undo.id, actor=ADMIN, session_id="s1", base_seq=2)
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 0
+    # An edit made and undone after the summary cancels out.
+    later = _rename(world, name="Grace B. Hopper").applied[0]
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 1
+    service.revert(EPISODE_ID, later.id, actor=ADMIN, session_id="s1", base_seq=4)
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 0
 
 
 def test_save_as_host_writes_facts_and_links_the_entity(world):

@@ -122,8 +122,15 @@ def setup_tools(
 
     embedding_model = EmbeddingModel(config.embedding_model)
     search_backend = make_search_backend(config, embedding_model)
+    # Spec #110 — get_transcript serves the edited transcript, like the web API.
     podcast_service = PodcastService(
-        storage_path, repository, path_manager, file_storage=config.file_storage, access=abuse.guard, quota=abuse.quota
+        storage_path,
+        repository,
+        path_manager,
+        file_storage=config.file_storage,
+        access=abuse.guard,
+        quota=abuse.quota,
+        transcript_edits=repos.transcript_edit,
     )
     stats_service = StatsService(storage_path, repository, path_manager)
     feed_manager = PodcastFeedManager(

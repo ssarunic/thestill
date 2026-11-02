@@ -364,7 +364,16 @@ class _Replayer:
         if not candidates:
             return None, EditConflict("", 0, "", "anchor_missing", {"source_segment_ids": want})
         if len(candidates) > 1:
-            return None, EditConflict("", 0, "", "anchor_ambiguous", {"source_segment_ids": want})
+            # The children of a split without word-level anchors share ids
+            # and span; the text hash is what tells them apart.
+            by_text = [i for i in candidates if text_sha256(self.segments[i].text) == anchor.text_sha256]
+            if len(by_text) > 1:
+                return None, EditConflict("", 0, "", "anchor_ambiguous", {"source_segment_ids": want})
+            if not by_text:
+                return None, EditConflict(
+                    "", 0, "", "text_changed", {"current_text": self.segments[candidates[0]].text}
+                )
+            return by_text[0], None
         index = candidates[0]
         current = self.segments[index].text
         if text_sha256(current) != anchor.text_sha256:

@@ -55,8 +55,12 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
     # Spec #44 — backend-resolved through the factory.
     from ..repositories.factory import make_repositories
 
-    repository = make_repositories(config).podcast
-    podcast_service = PodcastService(storage_path, repository, path_manager, file_storage=config.file_storage)
+    repos = make_repositories(config)
+    repository = repos.podcast
+    # Spec #110 — the transcript resource serves the edited transcript.
+    podcast_service = PodcastService(
+        storage_path, repository, path_manager, file_storage=config.file_storage, transcript_edits=repos.transcript_edit
+    )
 
     async def list_resources(identity: McpIdentity) -> list[Resource]:
         """
