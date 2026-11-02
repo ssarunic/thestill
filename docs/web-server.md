@@ -63,6 +63,7 @@ Commands below).
 | `/api/episodes/{id}/transcript/edits/finish` | POST | Close an editing session: audit row + the spec #106 entity refresh |
 | `/api/episodes/{id}/transcript/edits/save-host` | POST | Add a named speaker to the podcast's facts hosts (audited) |
 | `/api/episodes/{id}/transcript/edits/people` | GET | Person entities for the rename-or-link picker (`?q=`) |
+| `/api/episodes/{id}/transcript/edits/audio` | GET | The episode's downloaded audio copy for the editor's player (404 when gone) |
 | `/api/episodes/{id}/transcript/edits/{edit_id}/revert` | POST | Undo (or redo, by reverting a revert) as a new op-log row |
 
 ### Commands (`/api/commands`)

@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { AnnotatedSegment, SegmentKind } from '../../api/types'
+import type { AnnotatedSegment } from '../../api/types'
 import { useDismissablePopover } from '../../hooks/useDismissablePopover'
-import { SEGMENT_KINDS, wordIndexAtCaret, type SegmentEditing } from './segmentEditing'
+import { wordIndexAtCaret, type SegmentEditing } from './segmentEditing'
 
-// Spec #110 §5 "Segments" — the editing affordances on one transcript row:
-// click the speaker name to reassign, edit text inline (Enter splits at the
-// caret on a word boundary, Backspace at the start merges with the previous
-// segment), a kind picker. The row's layout, colours and timestamp are the
-// viewer's; this component only replaces its body in edit mode.
+// Spec #110 §5.4 — the two editing controls that live on a transcript row:
+// the speaker name as a picker, and the text as an in-place field (Enter
+// saves; Enter with the caret inside unchanged text splits there on a word
+// boundary; Escape cancels; leaving the field saves). Merging is the handle
+// between rows, not a keystroke in the field.
 
 interface SpeakerPickerProps {
   segment: AnnotatedSegment
@@ -31,7 +31,7 @@ export function SpeakerPicker({ segment, editing, color }: SpeakerPickerProps) {
         aria-haspopup="true"
         aria-expanded={open}
         title="Change speaker"
-        className="rounded px-1 -mx-1 font-sans font-semibold tracking-tight underline decoration-dotted underline-offset-4 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:opacity-60"
+        className="max-w-full truncate rounded px-1 -mx-1 text-left font-sans text-sm font-semibold tracking-tight hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:opacity-60"
         style={{ color }}
       >
         {name}
@@ -76,33 +76,6 @@ export function SpeakerPicker({ segment, editing, color }: SpeakerPickerProps) {
   )
 }
 
-interface KindPickerProps {
-  segment: AnnotatedSegment
-  editing: SegmentEditing
-}
-
-export function KindPicker({ segment, editing }: KindPickerProps) {
-  return (
-    <select
-      value={segment.kind}
-      disabled={editing.disabled}
-      aria-label="Segment kind"
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => {
-        const kind = e.target.value as SegmentKind
-        if (kind !== segment.kind) editing.onSetKind(segment, kind)
-      }}
-      className="ml-2 rounded border border-gray-200 bg-white px-1 py-0 align-baseline font-mono text-[10px] uppercase tracking-wider text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-    >
-      {SEGMENT_KINDS.map(({ kind, label }) => (
-        <option key={kind} value={kind}>
-          {label}
-        </option>
-      ))}
-    </select>
-  )
-}
-
 interface EditableTextProps {
   segment: AnnotatedSegment
   editing: SegmentEditing
@@ -110,12 +83,6 @@ interface EditableTextProps {
   children: React.ReactNode
 }
 
-/**
- * The segment body: plain text that opens into a textarea on click. Enter
- * saves the text and, with the caret inside it, splits there on a word
- * boundary; Backspace at the very start merges with the previous segment;
- * Escape cancels; leaving the field saves a change.
- */
 export function EditableText({ segment, editing, children }: EditableTextProps) {
   const isOpen = editing.editingSegmentId === segment.id
   const [draft, setDraft] = useState(segment.text)
@@ -164,39 +131,10 @@ export function EditableText({ segment, editing, children }: EditableTextProps) 
         editing.onSplit(segment, index)
       }
       editing.onEditSegment(null)
-      return
-    }
-    if (e.key === 'Backspace' && el.selectionStart === 0 && el.selectionEnd === 0 && draft === segment.text) {
-      e.preventDefault()
-      editing.onEditSegment(null)
-      editing.onMergeWithPrevious(segment)
     }
   }
 
-  if (!isOpen) {
-    return (
-      <span
-        role="button"
-        tabIndex={editing.disabled ? -1 : 0}
-        aria-label="Edit text"
-        title="Click to edit text"
-        onClick={(e) => {
-          e.stopPropagation()
-          if (!editing.disabled) editing.onEditSegment(segment.id)
-        }}
-        onKeyDown={(e) => {
-          if ((e.key === 'Enter' || e.key === ' ') && !editing.disabled) {
-            e.preventDefault()
-            e.stopPropagation()
-            editing.onEditSegment(segment.id)
-          }
-        }}
-        className="rounded px-0.5 -mx-0.5 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
-      >
-        {children}
-      </span>
-    )
-  }
+  if (!isOpen) return <>{children}</>
 
   return (
     <textarea

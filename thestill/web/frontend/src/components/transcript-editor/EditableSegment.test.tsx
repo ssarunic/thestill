@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { EditableText, KindPicker, SpeakerPicker } from './EditableSegment'
+import { EditableText, SpeakerPicker } from './EditableSegment'
 import { wordIndexAtCaret, type SegmentEditing } from './segmentEditing'
 import type { AnnotatedSegment } from '../../api/types'
 
-// Spec #110 §5 "Segments" — click the speaker to reassign, edit text inline
-// (Enter splits at the caret on a word boundary, Backspace at the start
-// merges with the previous segment), the kind picker.
+// Spec #110 §5.4 — the speaker picker on the row and the in-place text
+// field (Enter saves, Enter inside unchanged text splits, Escape cancels).
 
 function seg(overrides: Partial<AnnotatedSegment> = {}): AnnotatedSegment {
   return {
@@ -79,25 +78,15 @@ describe('SpeakerPicker', () => {
   })
 })
 
-describe('KindPicker', () => {
-  it('changes the kind', async () => {
-    const e = editing()
-    render(<KindPicker segment={seg()} editing={e} />)
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Segment kind' }), 'ad_break')
-    expect(e.onSetKind).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }), 'ad_break')
-  })
-})
-
 describe('EditableText', () => {
-  it('opens on click', async () => {
-    const e = editing()
+  it('renders its children while closed', () => {
     render(
-      <EditableText segment={seg()} editing={e}>
-        Welcome back to the show everyone
+      <EditableText segment={seg()} editing={editing()}>
+        <span>plain body</span>
       </EditableText>,
     )
-    await userEvent.click(screen.getByRole('button', { name: 'Edit text' }))
-    expect(e.onEditSegment).toHaveBeenCalledWith(7)
+    expect(screen.getByText('plain body')).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
   })
 
   it('Enter with changed text saves it', async () => {
@@ -130,7 +119,7 @@ describe('EditableText', () => {
     expect(e.onSetText).not.toHaveBeenCalled()
   })
 
-  it('Backspace at the start merges with the previous segment', () => {
+  it('Backspace at the start no longer merges (the handle does)', () => {
     const e = editing({ editingSegmentId: 7 })
     render(
       <EditableText segment={seg()} editing={e}>
@@ -140,7 +129,7 @@ describe('EditableText', () => {
     const field = screen.getByRole('textbox', { name: 'Segment text' }) as HTMLTextAreaElement
     field.setSelectionRange(0, 0)
     fireEvent.keyDown(field, { key: 'Backspace' })
-    expect(e.onMergeWithPrevious).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }))
+    expect(e.onMergeWithPrevious).not.toHaveBeenCalled()
   })
 
   it('Escape cancels without saving', async () => {
@@ -155,16 +144,5 @@ describe('EditableText', () => {
     fireEvent.keyDown(field, { key: 'Escape' })
     expect(e.onSetText).not.toHaveBeenCalled()
     expect(e.onEditSegment).toHaveBeenLastCalledWith(null)
-  })
-
-  it('a disabled editor does not open', async () => {
-    const e = editing({ disabled: true })
-    render(
-      <EditableText segment={seg()} editing={e}>
-        x
-      </EditableText>,
-    )
-    await userEvent.click(screen.getByRole('button', { name: 'Edit text' }))
-    expect(e.onEditSegment).not.toHaveBeenCalled()
   })
 })

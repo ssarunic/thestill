@@ -9,6 +9,8 @@ export const APP_ROUTE_PATTERNS = [
   '/podcasts',
   '/podcasts/:podcastSlug',
   '/podcasts/:podcastSlug/episodes/:episodeSlug',
+  // Spec #110: the admin transcript editor screen.
+  '/podcasts/:podcastSlug/episodes/:episodeSlug/edit',
   '/episodes',
   '/top',
   '/briefings',

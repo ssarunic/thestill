@@ -1,22 +1,20 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import Button, { MoreIcon } from '../Button'
+import { useState, type ReactNode } from 'react'
+import Button, { MoreIcon, PlayIcon } from '../Button'
 import { useDismissablePopover } from '../../hooks/useDismissablePopover'
-import type { AnnotatedSegment, TranscriptSpeaker } from '../../api/types'
-import { buildSpeakerColorMap, resolveSpeakerColor } from '../../utils/speakerColors'
+import type { TranscriptSpeaker } from '../../api/types'
 import { isUnnamed } from './segmentEditing'
 
-// Spec #110 §5 "Speaker panel" — one row per diarization label with its
-// colour, current name, entity chip and segment count. Row menu: Rename or
-// link, Merge into…, Save as podcast host. Clicking a row filters the
-// transcript to that label's segments, so an admin can listen to a few
-// before naming.
+// Spec #110 §5.3 — one row per diarization label with the instruments for
+// judging a voice: play a sample, step through its turns, focus it (dims
+// the others, never filters), and the menu to name, merge or save it.
 
 interface SpeakerPanelProps {
   speakers: TranscriptSpeaker[]
-  /** Segments as the transcript renders them: the colour map must match the viewer's. */
-  segments: AnnotatedSegment[]
-  selectedLabel: string | null
-  onSelect: (label: string | null) => void
+  colors: Map<string, string>
+  focusLabel: string | null
+  onFocus: (label: string | null) => void
+  onPlaySample: (speaker: TranscriptSpeaker) => void
+  onStep: (speaker: TranscriptSpeaker, delta: -1 | 1) => void
   onRename: (speaker: TranscriptSpeaker) => void
   onMerge: (speaker: TranscriptSpeaker, into: TranscriptSpeaker) => void
   onSaveAsHost: (speaker: TranscriptSpeaker) => void
@@ -58,13 +56,14 @@ function RowMenu({
     action()
   }
   const unnamed = isUnnamed(speaker)
+  const display = speaker.name ?? speaker.label
   return (
     <div ref={wrapRef} className="relative">
       <Button
         variant="ghost"
         size="sm"
         icon={<MoreIcon />}
-        aria-label={`Actions for ${speaker.name ?? speaker.label}`}
+        aria-label={`Actions for ${display}`}
         aria-expanded={open}
         disabled={disabled}
         onClick={(e) => {
@@ -76,7 +75,7 @@ function RowMenu({
       {open && (
         <div
           role="group"
-          aria-label={`Actions for ${speaker.name ?? speaker.label}`}
+          aria-label={`Actions for ${display}`}
           className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
@@ -105,76 +104,100 @@ function RowMenu({
 
 export default function SpeakerPanel({
   speakers,
-  segments,
-  selectedLabel,
-  onSelect,
+  colors,
+  focusLabel,
+  onFocus,
+  onPlaySample,
+  onStep,
   onRename,
   onMerge,
   onSaveAsHost,
   disabled = false,
 }: SpeakerPanelProps) {
-  const colors = useMemo(
-    () => buildSpeakerColorMap(segments.filter((s) => s.kind === 'content' || s.kind === 'filler').map((s) => s.speaker)),
-    [segments],
-  )
   if (speakers.length === 0) return null
+  const stepClass =
+    'inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 disabled:opacity-40'
   return (
-    <section aria-label="Speakers" className="mb-3 rounded-lg border border-hairline bg-surface">
+    <section aria-label="Speakers">
       <div className="flex items-center justify-between px-3 py-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Speakers</h3>
-        {selectedLabel && (
-          <button type="button" onClick={() => onSelect(null)} className="text-xs text-primary-700 hover:underline">
-            Show all segments
+        {focusLabel && (
+          <button type="button" onClick={() => onFocus(null)} className="text-xs text-primary-700 hover:underline">
+            Clear focus
           </button>
         )}
       </div>
-      <ul className="divide-y divide-hairline">
+      <ul className="divide-y divide-hairline border-y border-hairline">
         {speakers.map((speaker) => {
           const unnamed = isUnnamed(speaker)
           const display = speaker.name ?? speaker.label
-          const color = unnamed ? '#4b5563' : resolveSpeakerColor(display, colors)
-          const selected = selectedLabel === speaker.label
+          const color = colors.get(speaker.label) ?? '#4b5563'
+          const focused = focusLabel === speaker.label
           return (
             <li key={speaker.label}>
               <div
                 role="button"
                 tabIndex={0}
-                aria-pressed={selected}
-                onClick={() => onSelect(selected ? null : speaker.label)}
+                aria-pressed={focused}
+                onClick={() => onFocus(focused ? null : speaker.label)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault()
-                    onSelect(selected ? null : speaker.label)
+                    onFocus(focused ? null : speaker.label)
                   }
                 }}
-                className={`flex items-center gap-3 px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 ${
-                  selected ? 'bg-primary-50' : 'hover:bg-gray-50'
+                className={`px-3 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 ${
+                  focused ? 'bg-primary-50' : 'hover:bg-gray-50'
                 }`}
                 data-testid={`speaker-row-${speaker.label}`}
               >
-                <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
-                <span className="min-w-0 flex-1">
-                  <span className={`block truncate font-medium ${unnamed ? 'italic text-muted' : 'text-ink'}`}>
-                    {unnamed ? 'Unnamed speaker' : display}
+                <div className="flex items-center gap-2.5">
+                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: color }} aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={`block truncate font-medium ${unnamed ? 'italic text-muted' : 'text-ink'}`}
+                      title={unnamed ? 'Nobody has named this voice yet' : display}
+                    >
+                      {unnamed ? 'Unnamed' : display}
+                    </span>
+                    <span className="block truncate text-xs text-muted">
+                      {speaker.label} · {speaker.segment_ids.length} segment{speaker.segment_ids.length === 1 ? '' : 's'}
+                      {speaker.entity_id && (
+                        <>
+                          {' · '}
+                          <span className="rounded bg-primary-50 px-1 text-primary-800">linked</span>
+                        </>
+                      )}
+                    </span>
                   </span>
-                  <span className="block truncate text-xs text-muted">
-                    {speaker.label} · {speaker.segment_ids.length} segment{speaker.segment_ids.length === 1 ? '' : 's'}
-                    {speaker.entity_id && (
-                      <>
-                        {' · '}
-                        <span className="rounded bg-primary-50 px-1 text-primary-800">linked</span>
-                      </>
-                    )}
-                  </span>
-                </span>
-                <RowMenu
-                  speaker={speaker}
-                  others={speakers.filter((s) => s.label !== speaker.label)}
-                  onRename={() => onRename(speaker)}
-                  onMerge={(into) => onMerge(speaker, into)}
-                  onSaveAsHost={() => onSaveAsHost(speaker)}
-                  disabled={disabled}
-                />
+                  <RowMenu
+                    speaker={speaker}
+                    others={speakers.filter((s) => s.label !== speaker.label)}
+                    onRename={() => onRename(speaker)}
+                    onMerge={(into) => onMerge(speaker, into)}
+                    onSaveAsHost={() => onSaveAsHost(speaker)}
+                    disabled={disabled}
+                  />
+                </div>
+                <div className="mt-1 flex items-center gap-1 pl-[1.4rem]" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => onPlaySample(speaker)}
+                    aria-label={`Play a sample of ${display}`}
+                    title="Play a sample of this voice"
+                    className={`${stepClass} text-primary-700`}
+                  >
+                    <span className="h-4 w-4">
+                      <PlayIcon />
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => onStep(speaker, -1)} aria-label={`Previous turn of ${display}`} title="Previous turn" className={stepClass}>
+                    ◀
+                  </button>
+                  <button type="button" onClick={() => onStep(speaker, 1)} aria-label={`Next turn of ${display}`} title="Next turn" className={stepClass}>
+                    ▶
+                  </button>
+                </div>
               </div>
             </li>
           )

@@ -42,16 +42,8 @@ import EntityFilterBar from './episode-entities/EntityFilterBar'
 import EntityBranchProgress from './EntityBranchProgress'
 import ReprocessDialog from './ReprocessDialog'
 import ReprocessStatus from './ReprocessStatus'
-import TranscriptEditorBar from './transcript-editor/TranscriptEditorBar'
-import SpeakerPanel from './transcript-editor/SpeakerPanel'
-import SpeakerDialog from './transcript-editor/SpeakerDialog'
-import ReportProposalBanner from './transcript-editor/ReportProposalBanner'
-import { parseReportProposal } from './transcript-editor/reportProposal'
-import type { SegmentEditing } from './transcript-editor/segmentEditing'
-import { useTranscriptEditor, useTranscriptEditorState } from '../hooks/useTranscriptEditor'
-import { useToast } from './Toast'
+import { useTranscriptEditorState } from '../hooks/useTranscriptEditor'
 import type {
-  AnnotatedSegment,
   FailureType,
   EntityType,
   EpisodeEntity,
@@ -59,9 +51,7 @@ import type {
   EpisodeTask,
   MentionLite,
   ReprocessFromStage,
-  SegmentKind,
   SummaryCitation,
-  TranscriptSpeaker,
 } from '../api/types'
 import { ENTITY_BRANCH_STAGES } from '../constants/stages'
 import { buildPlayerTrack } from '../utils/playerTrack'
@@ -532,211 +522,16 @@ export default function EpisodeReader({
     onTarget: handleDeepLinkTarget,
   })
 
-  // Spec #110 — the transcript editor. Desktop-only, for sessions holding
-  // ``transcript.edit`` (never ``isAdmin``), on episodes with a segmented
-  // transcript. Edit mode lives in the URL (``?view=transcript&edit=1``) so
-  // a spec #86 report deep link can open it with its proposal staged.
-  const { showToast } = useToast()
+  // Spec #110 — the transcript editor is its own screen (§5.1). The page
+  // offers the entry point to sessions holding ``transcript.edit`` on
+  // desktop, for episodes with a segmented transcript, and shows them the
+  // stale-summary badge; readers see neither.
   const canEditTranscript = can('transcript.edit') && isSmUp && Boolean(transcriptData?.segments)
-  const editing = canEditTranscript && searchParams.get('edit') === '1'
-  const setEditing = useCallback(
-    (on: boolean) => {
-      const params = new URLSearchParams(searchParams)
-      if (on) {
-        params.set('view', 'transcript')
-        params.set('edit', '1')
-      } else {
-        for (const key of ['edit', 'report', 'segment', 'fix', 'value']) params.delete(key)
-      }
-      const search = params.toString()
-      navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true, state: location.state })
-    },
-    [searchParams, navigate, location.pathname, location.state],
+  const openTranscriptEditor = useCallback(
+    () => navigate(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/edit`),
+    [navigate, podcastSlug, episodeSlug],
   )
-  const editor = useTranscriptEditor(episode?.id, refreshSlugs, { enabled: editing })
-  // The stale badge needs the state outside an editing session; same query
-  // key, so the editor's own read never doubles the request.
   const { data: editorBadge } = useTranscriptEditorState(episode?.id, can('transcript.edit') && Boolean(episode?.has_summary))
-  const [speakerFilter, setSpeakerFilter] = useState<string | null>(null)
-  const [editingSegmentId, setEditingSegmentId] = useState<number | null>(null)
-  const [speakerDialog, setSpeakerDialog] = useState<
-    { kind: 'label'; speaker: TranscriptSpeaker } | { kind: 'segment'; segment: AnnotatedSegment } | null
-  >(null)
-  const [finishing, setFinishing] = useState(false)
-  const editorSpeakers = useMemo(() => editor.state?.speakers ?? [], [editor.state])
-  const labelsBySegmentId = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const speaker of editorSpeakers) for (const id of speaker.segment_ids) map.set(id, speaker.label)
-    return map
-  }, [editorSpeakers])
-  const editorVisibleSegmentIds = useMemo(() => {
-    if (!editing || !speakerFilter) return null
-    const speaker = editorSpeakers.find((s) => s.label === speakerFilter)
-    return speaker ? new Set(speaker.segment_ids) : null
-  }, [editing, speakerFilter, editorSpeakers])
-  const editorLocked = Boolean(editor.state?.busy)
-  const editorDisabled = editorLocked || editor.pending
-  const segmentEditing = useMemo<SegmentEditing | null>(
-    () =>
-      editing
-        ? {
-            labelsBySegmentId,
-            speakers: editorSpeakers,
-            editingSegmentId,
-            onEditSegment: setEditingSegmentId,
-            onSetSpeaker: (segment, target) => void editor.setSegmentSpeaker(segment, target),
-            onPickSpeakerName: (segment) => setSpeakerDialog({ kind: 'segment', segment }),
-            onSetText: (segment, text) => void editor.setSegmentText(segment, text),
-            onSetKind: (segment, kind: SegmentKind) => void editor.setSegmentKind(segment, kind),
-            onSplit: (segment, index) => void editor.splitSegment(segment, index),
-            onMergeWithPrevious: (segment) => {
-              const segments = transcriptSegments ?? []
-              const index = segments.findIndex((s) => s.id === segment.id)
-              const previous = index > 0 ? segments[index - 1] : null
-              if (!previous || previous.kind !== segment.kind) {
-                showToast('Only two neighbouring segments of the same kind can be merged', 'error')
-                return
-              }
-              void editor.mergeSegments(previous, segment)
-            },
-            disabled: editorDisabled,
-          }
-        : null,
-    [editing, labelsBySegmentId, editorSpeakers, editingSegmentId, editor, transcriptSegments, editorDisabled, showToast],
-  )
-  // Spec #110 Phase 3 — a report deep link stages its proposal on the
-  // anchored segment; the editor scrolls there once per report.
-  const reportProposal = useMemo(() => (editing ? parseReportProposal(searchParams) : null), [editing, searchParams])
-  const scrolledReportRef = useRef<string | null>(null)
-  useEffect(() => {
-    if (!reportProposal || !transcriptSegments || scrolledReportRef.current === reportProposal.reportId) return
-    scrolledReportRef.current = reportProposal.reportId
-    setCitationScrollTarget((prev) => ({ segmentId: reportProposal.segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
-  }, [reportProposal, transcriptSegments])
-  const reportSegment = useMemo(
-    () => (reportProposal ? (transcriptSegments ?? []).find((s) => s.id === reportProposal.segmentId) ?? null : null),
-    [reportProposal, transcriptSegments],
-  )
-  const dismissReport = useCallback(() => {
-    const params = new URLSearchParams(searchParams)
-    for (const key of ['report', 'segment', 'fix', 'value']) params.delete(key)
-    const search = params.toString()
-    navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true, state: location.state })
-  }, [searchParams, navigate, location.pathname, location.state])
-  const acceptReport = useCallback(async () => {
-    if (!reportProposal || !reportSegment || reportProposal.value === null) return
-    const anchor = {
-      source_segment_ids: reportSegment.source_segment_ids,
-      source_word_span: reportSegment.source_word_span,
-      start_s: reportSegment.start,
-      end_s: reportSegment.end,
-      text: reportSegment.text,
-    }
-    const op =
-      reportProposal.fix === 'wrong_speaker'
-        ? { op: 'segment.set_speaker' as const, anchor, args: { name: reportProposal.value, entity_id: null } }
-        : reportProposal.fix === 'wrong_words'
-          ? { op: 'segment.set_text' as const, anchor, args: { old_text: reportSegment.text, new_text: reportProposal.value } }
-          : { op: 'segment.set_kind' as const, anchor, args: { kind: reportProposal.value } }
-    const applied = await editor.apply([op], reportProposal.reportId)
-    if (applied) dismissReport()
-  }, [reportProposal, reportSegment, editor, dismissReport])
-  const handleFinishEditing = useCallback(async () => {
-    setFinishing(true)
-    const result = await editor.finish()
-    setFinishing(false)
-    if (!result) return
-    showToast(
-      result.refresh === 'queued'
-        ? 'Edits saved. People, quotes and search are refreshing.'
-        : result.refresh === 'deferred'
-          ? 'Edits saved. The refresh runs once the episode is idle.'
-          : 'No edits to apply.',
-      'success',
-    )
-    setSpeakerFilter(null)
-    setEditingSegmentId(null)
-    setEditing(false)
-  }, [editor, showToast, setEditing])
-  const handleCloseEditor = useCallback(() => {
-    setSpeakerFilter(null)
-    setEditingSegmentId(null)
-    setEditing(false)
-  }, [setEditing])
-  const handleSpeakerDialogConfirm = useCallback(
-    async ({ name, entityId }: { name: string; entityId: string | null }) => {
-      if (!speakerDialog) return
-      if (speakerDialog.kind === 'label') await editor.renameLabel(speakerDialog.speaker.label, name, entityId)
-      else await editor.setSegmentSpeaker(speakerDialog.segment, { name, entityId })
-      setSpeakerDialog(null)
-    },
-    [speakerDialog, editor],
-  )
-  const handleSaveAsHost = useCallback(
-    async (speaker: TranscriptSpeaker) => {
-      if (!speaker.name) return
-      const hosts = await editor.saveAsHost(speaker.name, speaker.entity_id)
-      if (hosts) showToast(`${speaker.name} saved as a host of this show`, 'success')
-    },
-    [editor, showToast],
-  )
-  const editorChrome = editing ? (
-    <>
-      <TranscriptEditorBar
-        saveStatus={editor.saveStatus}
-        saveError={editor.saveError}
-        canUndo={editor.canUndo}
-        canRedo={editor.canRedo}
-        busy={editor.pending}
-        conflicts={editor.state?.conflicts ?? []}
-        edits={editor.state?.edits ?? []}
-        locked={editorLocked}
-        finishing={finishing}
-        onUndo={() => void editor.undo()}
-        onRedo={() => void editor.redo()}
-        onDropConflict={(editId) => void editor.revert(editId)}
-        onFinish={() => void handleFinishEditing()}
-        onClose={handleCloseEditor}
-      />
-      {reportProposal && (
-        <ReportProposalBanner
-          proposal={reportProposal}
-          segmentMissing={reportSegment === null}
-          busy={editor.pending}
-          onAccept={() => void acceptReport()}
-          onDismiss={dismissReport}
-        />
-      )}
-      <SpeakerPanel
-        speakers={editorSpeakers}
-        segments={transcriptSegments ?? []}
-        selectedLabel={speakerFilter}
-        onSelect={setSpeakerFilter}
-        onRename={(speaker) => setSpeakerDialog({ kind: 'label', speaker })}
-        onMerge={(speaker, into) => void editor.mergeLabels(speaker.label, into.label)}
-        onSaveAsHost={(speaker) => void handleSaveAsHost(speaker)}
-        disabled={editorDisabled}
-      />
-      {episode && (
-        <SpeakerDialog
-          isOpen={speakerDialog !== null}
-          title={speakerDialog?.kind === 'segment' ? 'Who is speaking here?' : 'Name this speaker'}
-          episodeId={episode.id}
-          initialName={
-            speakerDialog?.kind === 'label'
-              ? speakerDialog.speaker.name && !/^SPEAKER_\d+$/i.test(speakerDialog.speaker.name)
-                ? speakerDialog.speaker.name
-                : ''
-              : ''
-          }
-          initialEntityId={speakerDialog?.kind === 'label' ? speakerDialog.speaker.entity_id : null}
-          busy={editor.pending}
-          onConfirm={(result) => void handleSpeakerDialogConfirm(result)}
-          onCancel={() => setSpeakerDialog(null)}
-        />
-      )}
-    </>
-  ) : null
   const summaryStaleEdits = editorBadge?.summary_stale_edits ?? 0
 
   // Spec #76 §3.5 — a People chip for a plain speaker label is a transcript
@@ -811,7 +606,7 @@ export default function EpisodeReader({
             onPlayFromStart={handlePlayFromStart}
             onMarkPlayed={handleMarkPlayed}
             onReprocess={canReprocess ? () => openReprocess('clean') : undefined}
-            onEditTranscript={canEditTranscript && !editing ? () => setEditing(true) : undefined}
+            onEditTranscript={canEditTranscript ? openTranscriptEditor : undefined}
           />
           {/* A reader who follows nothing yet is offered this show; an
               imported file's synthetic show has nothing to follow. */}
@@ -1014,12 +809,12 @@ export default function EpisodeReader({
                   onSegmentSeek={handleSegmentSeek}
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
-                  visibleSegmentIds={editing ? editorVisibleSegmentIds : visibleSegmentIds}
+                  visibleSegmentIds={visibleSegmentIds}
                   scrollToSegment={citationScrollTarget}
                   focusedEntityId={focusedEntityId}
                   onFocusEntity={setFocusedEntityId}
                   entityFilterBar={
-                    entities.length > 0 && !editing ? (
+                    entities.length > 0 ? (
                       <EntityFilterBar
                         entities={entities}
                         selectedEntityIds={filterEntityIds}
@@ -1028,9 +823,7 @@ export default function EpisodeReader({
                       />
                     ) : null
                   }
-                  editorChrome={editorChrome}
-                  editing={segmentEditing}
-                  karaokeEnabled={karaokeEffectivelyOn && !editing}
+                  karaokeEnabled={karaokeEffectivelyOn}
                   karaokeWords={karaokeWordsQuery.data}
                   karaokeChipChecked={karaokeChipOn}
                   karaokeChipDisabled={karaokeUnavailable}
@@ -1103,10 +896,6 @@ interface TranscriptPanelProps {
   // Slot for the filter bar — rendered above the segmented viewer so
   // it shares the panel's padding and lives under the sub-tab toggle.
   entityFilterBar?: React.ReactNode
-  // Spec #110 — the editor's bar, speaker panel and dialogs (edit mode
-  // only), and the per-segment editing callbacks for the viewer.
-  editorChrome?: React.ReactNode
-  editing?: SegmentEditing | null
   // Spec #38 karaoke wipe — threaded through from EpisodeReader which
   // owns the chip state + the words query.
   karaokeEnabled?: boolean
@@ -1193,8 +982,6 @@ function TranscriptPanel({
   focusedEntityId,
   onFocusEntity,
   entityFilterBar,
-  editorChrome,
-  editing,
   karaokeEnabled,
   karaokeWords,
   karaokeChipChecked,
@@ -1241,7 +1028,6 @@ function TranscriptPanel({
       )}
       {transcriptData?.segments ? (
         <>
-          {editorChrome}
           {entityFilterBar && <div className="mb-3">{entityFilterBar}</div>}
           <SegmentedTranscriptViewer
             transcript={transcriptData.segments}
@@ -1258,7 +1044,6 @@ function TranscriptPanel({
             karaokeChipChecked={karaokeChipChecked}
             karaokeChipDisabled={karaokeChipDisabled}
             onKaraokeToggle={onKaraokeToggle}
-            editing={editing}
           />
         </>
       ) : (

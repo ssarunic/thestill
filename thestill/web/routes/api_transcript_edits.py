@@ -22,9 +22,11 @@ which serves the effective transcript; these routes carry the op log,
 conflicts and the speaker panel, and take writes.
 """
 
+import mimetypes
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
@@ -137,6 +139,7 @@ def _state_json(state: EditorState) -> Dict[str, Any]:
         ],
         "summary_stale_edits": state.summary_stale_edits,
         "algorithm_version": effective.transcript.algorithm_version,
+        "local_audio": state.local_audio,
     }
 
 
@@ -219,6 +222,27 @@ def search_people(
 ) -> Dict[str, Any]:
     """Person entities for the rename-or-link picker."""
     return api_response({"people": _service(state).search_people(q)})
+
+
+@router.get("/{episode_id}/transcript/edits/audio")
+def get_editor_audio(
+    episode_id: str,
+    state: AppState = Depends(get_app_state),
+    _: User = _EDITOR,
+) -> FileResponse:
+    """Spec #110 §5.6 — the episode's downloaded audio, the file the
+    timestamps were made from (the publisher's URL may carry other ads).
+    404 when the copy is gone or the deployment keeps audio off local disk."""
+    service = _service(state)
+    try:
+        _podcast, episode = service._episode(episode_id)  # pylint: disable=protected-access
+    except TranscriptEditError as error:
+        raise _refused(error) from error
+    path = service.local_audio_path(episode)
+    if path is None:
+        raise HTTPException(status_code=404, detail={"error": "no_local_audio", "message": "No local audio copy"})
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type="inline")
 
 
 @router.post("/{episode_id}/transcript/edits/{edit_id}/revert")

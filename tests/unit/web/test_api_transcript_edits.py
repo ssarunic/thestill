@@ -26,6 +26,7 @@ ENDPOINTS = [
     ("POST", "/api/episodes/ep-1/transcript/edits/finish", {"session_id": "s"}),
     ("POST", "/api/episodes/ep-1/transcript/edits/save-host", {"name": "Grace"}),
     ("GET", "/api/episodes/ep-1/transcript/edits/people?q=gr", None),
+    ("GET", "/api/episodes/ep-1/transcript/edits/audio", None),
     ("POST", "/api/episodes/ep-1/transcript/edits/e-1/revert", {"base_seq": 1, "session_id": "s"}),
 ]
 
@@ -185,6 +186,24 @@ def test_finish_save_host_people_and_revert_delegate():
     response = client.post("/api/episodes/ep-1/transcript/edits/e-1/revert", json={"base_seq": 4, "session_id": "s"})
     assert response.status_code == 200 and response.json()["last_seq"] == 5
     assert service.revert.call_args.args[:2] == ("ep-1", "e-1")
+
+
+def test_audio_route_serves_the_local_copy_or_404(tmp_path):
+    """Spec #110 §5.6 — the editor plays the file the timestamps were made from."""
+    service = MagicMock()
+    service._episode.return_value = (MagicMock(), MagicMock(id="ep-1"))
+    audio = tmp_path / "ep.mp3"
+    audio.write_bytes(b"ID3fake-mp3-bytes")
+    service.local_audio_path.return_value = audio
+    client = _client(service)
+    response = client.get("/api/episodes/ep-1/transcript/edits/audio")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/mpeg")
+    assert response.content == b"ID3fake-mp3-bytes"
+
+    service.local_audio_path.return_value = None
+    response = client.get("/api/episodes/ep-1/transcript/edits/audio")
+    assert response.status_code == 404 and response.json()["detail"]["error"] == "no_local_audio"
 
 
 def test_missing_service_is_503():

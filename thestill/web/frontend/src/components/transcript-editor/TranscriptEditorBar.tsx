@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
-import Button, { CloseIcon, RedoIcon, UndoIcon } from '../Button'
+import { Link } from 'react-router-dom'
+import Button, { RedoIcon, UndoIcon } from '../Button'
 import type { SaveStatus } from '../../hooks/useTranscriptEditor'
 import type { TranscriptEditConflict, TranscriptEdit } from '../../api/types'
 import ConflictsList from './ConflictsList'
 
-// Spec #110 §5 "Header" — the editing session's chrome: undo / redo (⌘Z,
-// ⇧⌘Z), the save status, the conflicts count and Finish editing. Sits at
-// the top of the transcript tab in edit mode; the viewer's own toolbar
-// (search, kind toggles) stays beneath it.
+// Spec #110 §5.2 — the editor screen's top bar: Back, the episode, undo /
+// redo (⌘Z, ⇧⌘Z), the save status, the live edit count, the conflicts chip
+// and Finish editing as the one primary button.
 
 interface TranscriptEditorBarProps {
+  backTo: string
+  title: string
+  subtitle?: string | null
   saveStatus: SaveStatus
   saveError: string | null
   canUndo: boolean
@@ -24,7 +27,6 @@ interface TranscriptEditorBarProps {
   onRedo: () => void
   onDropConflict: (editId: string) => void
   onFinish: () => void
-  onClose: () => void
 }
 
 function SaveIndicator({ status, error }: { status: SaveStatus; error: string | null }) {
@@ -63,10 +65,13 @@ function SaveIndicator({ status, error }: { status: SaveStatus; error: string | 
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
 }
 
 export default function TranscriptEditorBar({
+  backTo,
+  title,
+  subtitle,
   saveStatus,
   saveError,
   canUndo,
@@ -80,7 +85,6 @@ export default function TranscriptEditorBar({
   onRedo,
   onDropConflict,
   onFinish,
-  onClose,
 }: TranscriptEditorBarProps) {
   const [showConflicts, setShowConflicts] = useState(false)
 
@@ -102,17 +106,24 @@ export default function TranscriptEditorBar({
   const liveEdits = edits.filter((e) => e.status === 'applied').length
 
   return (
-    <div
-      data-testid="transcript-editor-bar"
-      className="mb-3 rounded-lg border border-primary-200 bg-primary-50/60 px-3 py-2"
-    >
+    <header data-testid="transcript-editor-bar" className="border-b border-hairline bg-surface px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="text-sm font-semibold text-primary-900">Editing transcript</span>
-        <SaveIndicator status={saveStatus} error={saveError} />
-        <span className="text-xs text-muted">
-          {liveEdits} edit{liveEdits === 1 ? '' : 's'}
-        </span>
+        <Link
+          to={backTo}
+          className="inline-flex min-h-[36px] items-center gap-1 rounded-lg px-2 text-sm text-gray-600 hover:bg-gray-100 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          aria-label="Back to the episode"
+        >
+          <span aria-hidden="true">←</span> Back
+        </Link>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-ink">{title}</p>
+          {subtitle && <p className="truncate text-xs text-muted">{subtitle}</p>}
+        </div>
         <div className="ml-auto flex items-center gap-1.5">
+          <SaveIndicator status={saveStatus} error={saveError} />
+          <span className="text-xs text-muted">
+            {liveEdits} edit{liveEdits === 1 ? '' : 's'}
+          </span>
           <Button
             variant="ghost"
             size="sm"
@@ -144,7 +155,6 @@ export default function TranscriptEditorBar({
           <Button variant="primary" size="sm" onClick={onFinish} isLoading={finishing} disabled={busy || locked}>
             Finish editing
           </Button>
-          <Button variant="ghost" size="sm" icon={<CloseIcon />} aria-label="Close editor" title="Close editor" onClick={onClose} />
         </div>
       </div>
       {locked && (
@@ -155,6 +165,6 @@ export default function TranscriptEditorBar({
       {showConflicts && conflicts.length > 0 && (
         <ConflictsList conflicts={conflicts} edits={edits} onDrop={onDropConflict} className="mt-3" />
       )}
-    </div>
+    </header>
   )
 }

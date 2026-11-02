@@ -1,6 +1,6 @@
 # Transcript Editor (Admin Correction Workbench)
 
-> **Status:** 🚧 Phases 0–3 implemented (2026-11-02); §5 editor UI revised the same day — Phase 3b (dedicated editor screen) next, Phase 4 not started
+> **Status:** 🚧 Phases 0–3, 3b (dedicated editor screen) and 3c (local audio) implemented (2026-11-02); Phase 4 not started
 > **Created:** 2026-10-27
 > **Updated:** 2026-11-02 — §5 rewritten around a dedicated editor screen (transport dock, lane timeline, play-a-sample, focus-not-filter, segment inspector, merge handle) after the in-place build proved unusable; Phases 3b/3c added. Earlier the same day: Phases 0–3 built: op log + loader (`thestill/core/transcript_edits.py`), the seven read sites and the summarizer moved, `transcript.edit` permission, routes, `thestill transcript` CLI, editor UI (speaker panel, inline text, split/merge, kind, undo/redo, conflicts, Finish), report deep link. Implementation notes under §Phases
 > **Priority:** Medium. Wrong and unnamed speakers are the most visible transcript defect, and today the only fix is editing episode facts and re-running the cleaner, which also re-runs the LLM.
@@ -613,12 +613,25 @@ departs from or narrows the text above:
   and the admin re-applies by hand.
 - **CLI** adds `rename-speaker` and `refresh` to the four commands listed
   in §6; `revert --by` takes an email.
-- **The in-place editor is a stopgap.** PR #461's UI (edit mode on the
-  transcript tab, speaker panel that filters, inline speaker button and
-  kind select) was judged unusable on a real episode — no audio near the
-  text, no surrounding turns, no timeline — and §5 was rewritten around
-  a dedicated screen. Phase 3b replaces it; the op log, routes and the
-  `useTranscriptEditor` hook carry over unchanged.
+- **The in-place editor was a stopgap.** PR #461's first UI (edit mode on
+  the transcript tab, speaker panel that filters, inline speaker button
+  and kind select) was judged unusable on a real episode — no audio near
+  the text, no surrounding turns, no timeline — and §5 was rewritten
+  around a dedicated screen, built the same day as Phase 3b
+  (`pages/TranscriptEditorPage.tsx`, `components/transcript-editor/`).
+  The op log, routes and the `useTranscriptEditor` hook carried over
+  unchanged; the reader's viewer lost its editing props again.
+- **Phase 3b narrowings.** The lanes are an SVG over a time window
+  (default 120 s, ⌘-scroll zoom, scroll pan) rather than the full
+  episode; words render only on the selected and active rows (the words
+  API payload is per segment, so this keeps the DOM small); a single
+  click on a word plays from it and a double-click (or Enter, or the
+  inspector's Edit text) opens the text, since the two gestures share
+  the same target; Backspace-at-start merge was dropped for the handle
+  and the M key. Start and end in the inspector are read-only (Phase 4).
+- **Phase 3c.** `GET …/transcript/edits/audio` serves `original_audio`
+  from local disk only; the state carries `local_audio` and the dock
+  switches the player's source to the route when it is true.
 
 ## Success metrics
 

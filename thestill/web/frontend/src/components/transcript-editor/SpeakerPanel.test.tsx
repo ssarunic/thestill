@@ -3,26 +3,10 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SpeakerPanel from './SpeakerPanel'
 import { isUnnamed } from './segmentEditing'
-import type { AnnotatedSegment, TranscriptSpeaker } from '../../api/types'
+import type { TranscriptSpeaker } from '../../api/types'
 
-// Spec #110 §5 — the speaker panel: one row per diarization label, a row
-// click filters, the row menu renames, merges and saves a host.
-
-function seg(id: number, speaker: string): AnnotatedSegment {
-  return {
-    id,
-    start: id * 10,
-    end: id * 10 + 5,
-    speaker,
-    text: `segment ${id}`,
-    kind: 'content',
-    sponsor: null,
-    source_segment_ids: [id],
-    source_word_span: null,
-    user_segment_id: null,
-    metadata: {},
-  }
-}
+// Spec #110 §5.3 — the speakers column: name over raw label and count, play
+// a sample, step through turns, focus (never filter), and the row menu.
 
 const SPEAKERS: TranscriptSpeaker[] = [
   { label: 'SPEAKER_00', name: 'Ada Lovelace', entity_id: 'person:ada-lovelace', segment_ids: [1, 3] },
@@ -32,9 +16,14 @@ const SPEAKERS: TranscriptSpeaker[] = [
 function setup(overrides: Partial<Parameters<typeof SpeakerPanel>[0]> = {}) {
   const props = {
     speakers: SPEAKERS,
-    segments: [seg(1, 'Ada Lovelace'), seg(2, 'SPEAKER_01'), seg(3, 'Ada Lovelace')],
-    selectedLabel: null,
-    onSelect: vi.fn(),
+    colors: new Map([
+      ['SPEAKER_00', '#0064A6'],
+      ['SPEAKER_01', '#C24400'],
+    ]),
+    focusLabel: null,
+    onFocus: vi.fn(),
+    onPlaySample: vi.fn(),
+    onStep: vi.fn(),
     onRename: vi.fn(),
     onMerge: vi.fn(),
     onSaveAsHost: vi.fn(),
@@ -45,27 +34,39 @@ function setup(overrides: Partial<Parameters<typeof SpeakerPanel>[0]> = {}) {
 }
 
 describe('SpeakerPanel', () => {
-  it('lists every label with its name, count and link state', () => {
+  it('lists every voice with its name, raw label, count and link state', () => {
     setup()
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
     expect(screen.getByText(/SPEAKER_00 · 2 segments/)).toBeInTheDocument()
     expect(screen.getByText('linked')).toBeInTheDocument()
-    expect(screen.getByText('Unnamed speaker')).toBeInTheDocument()
+    expect(screen.getByText('Unnamed')).toBeInTheDocument()
     expect(screen.getByText(/SPEAKER_01 · 1 segment$/)).toBeInTheDocument()
   })
 
-  it('clicking a row filters to that label and clicking again clears', async () => {
+  it('clicking a row focuses the voice and clicking again clears it', async () => {
     const props = setup()
     await userEvent.click(screen.getByTestId('speaker-row-SPEAKER_01'))
-    expect(props.onSelect).toHaveBeenCalledWith('SPEAKER_01')
+    expect(props.onFocus).toHaveBeenCalledWith('SPEAKER_01')
   })
 
-  it('a selected row offers Show all segments', async () => {
-    const props = setup({ selectedLabel: 'SPEAKER_01' })
-    await userEvent.click(screen.getByRole('button', { name: 'Show all segments' }))
-    expect(props.onSelect).toHaveBeenCalledWith(null)
+  it('a focused row offers Clear focus and toggles off', async () => {
+    const props = setup({ focusLabel: 'SPEAKER_01' })
+    expect(screen.getByTestId('speaker-row-SPEAKER_01')).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(screen.getByRole('button', { name: 'Clear focus' }))
+    expect(props.onFocus).toHaveBeenCalledWith(null)
     await userEvent.click(screen.getByTestId('speaker-row-SPEAKER_01'))
-    expect(props.onSelect).toHaveBeenLastCalledWith(null)
+    expect(props.onFocus).toHaveBeenLastCalledWith(null)
+  })
+
+  it('play a sample and the turn steppers do not change the focus', async () => {
+    const props = setup()
+    await userEvent.click(screen.getByRole('button', { name: 'Play a sample of SPEAKER_01' }))
+    expect(props.onPlaySample).toHaveBeenCalledWith(SPEAKERS[1])
+    await userEvent.click(screen.getByRole('button', { name: 'Next turn of Ada Lovelace' }))
+    expect(props.onStep).toHaveBeenCalledWith(SPEAKERS[0], 1)
+    await userEvent.click(screen.getByRole('button', { name: 'Previous turn of Ada Lovelace' }))
+    expect(props.onStep).toHaveBeenCalledWith(SPEAKERS[0], -1)
+    expect(props.onFocus).not.toHaveBeenCalled()
   })
 
   it('row menu: name, merge into another label, save as host', async () => {
@@ -74,7 +75,7 @@ describe('SpeakerPanel', () => {
     expect(screen.queryByRole('button', { name: 'Save as podcast host' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Name or link…' }))
     expect(props.onRename).toHaveBeenCalledWith(SPEAKERS[1])
-    expect(props.onSelect).not.toHaveBeenCalled()
+    expect(props.onFocus).not.toHaveBeenCalled()
 
     await userEvent.click(screen.getByRole('button', { name: 'Actions for SPEAKER_01' }))
     await userEvent.click(screen.getByRole('button', { name: 'Merge into…' }))

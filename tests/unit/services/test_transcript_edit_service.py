@@ -381,6 +381,18 @@ def test_revert_by_actor_reverts_live_ops_since(world):
     assert world["audit"].record.call_args.args[1] == "transcript.revert_bulk"
 
 
+def test_local_audio_is_reported_only_while_the_copy_exists(world):
+    service = world["service"]
+    assert service.get_state(EPISODE_ID).local_audio is False
+    world["repository"].get_episode.return_value = (world["podcast"], make_episode(audio_path="show/ep.mp3"))
+    assert service.get_state(EPISODE_ID).local_audio is False  # path set, file gone
+    audio = world["paths"].original_audio_file("show/ep.mp3")
+    audio.parent.mkdir(parents=True, exist_ok=True)
+    audio.write_bytes(b"ID3")
+    state = service.get_state(EPISODE_ID)
+    assert state.local_audio is True and service.local_audio_path(state.episode) == audio
+
+
 def test_conflicts_and_speaker_stats(world):
     _rename(world)
     assert world["service"].conflicts() == []

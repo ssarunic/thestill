@@ -1,9 +1,10 @@
 /**
- * Spec #110 — the transcript editor, hermetic. Every /api/** call is
- * stubbed; the op log lives in this file. A session holding
+ * Spec #110 §5 — the transcript editor screen, hermetic. Every /api/** call
+ * is stubbed; the op log lives in this file. A session holding
  * ``transcript.edit`` opens the editor from the ⋯ menu, names the unnamed
- * speaker from the panel, sees the viewer re-render with the name, and
- * finishes; a session without the permission never sees the entry point.
+ * voice from the speakers column, sees the transcript re-render with the
+ * name, and finishes back on the episode page; a session without the
+ * permission never sees the entry point and the route sends it back.
  */
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { EPISODE_PATH, mockEpisodeApi } from './episode-hero-fixture'
@@ -67,11 +68,12 @@ function editorBackend(page: Page) {
     ],
     summary_stale_edits: edits.length,
     algorithm_version: 'v1',
+    local_audio: false,
   })
 
   const register = async () => {
     // Registered after mockEpisodeApi: Playwright matches the newest route first.
-    await page.route(`**/api/podcasts/prof-g-markets/episodes/why-nobody-trusts-the-news/transcript*`, (route) =>
+    await page.route(`**/api/podcasts/prof-g-markets/episodes/why-nobody-trusts-the-news/transcript`, (route) =>
       route.fulfill({
         json: {
           status: 'ok',
@@ -93,6 +95,7 @@ function editorBackend(page: Page) {
         },
       }),
     )
+    await page.route('**/transcript/words', (route) => route.fulfill({ status: 404, json: { detail: 'no words' } }))
     await page.route('**/api/episodes/ep-uuid-1/transcript/edits/finish', (route: Route) => {
       finished = route.request().postDataJSON()
       route.fulfill({ json: { status: 'ok', session_ops: edits.length, refresh: 'queued', task_id: 't-1' } })
@@ -133,7 +136,7 @@ function editorBackend(page: Page) {
   return { register, posted, get finished() { return finished } }
 }
 
-test('an editor names an unnamed speaker from the panel and finishes', async ({ page }) => {
+test('an editor opens the screen, names an unnamed voice and finishes', async ({ page }) => {
   await mockEpisodeApi(page)
   await mockAuth(page, ['transcript.edit'])
   const backend = editorBackend(page)
@@ -144,12 +147,22 @@ test('an editor names an unnamed speaker from the panel and finishes', async ({ 
 
   await page.getByRole('button', { name: 'More actions' }).click()
   await page.getByRole('button', { name: 'Edit transcript' }).click()
-  await expect(page.getByTestId('transcript-editor-bar')).toBeVisible()
-  await expect(page).toHaveURL(/edit=1/)
+  await expect(page).toHaveURL(/\/edit$/)
+  await expect(page.getByTestId('transcript-editor-page')).toBeVisible()
+  // No episode chrome: the screen is the bar, the tools, the turns and the dock.
+  await expect(page.getByRole('button', { name: 'More actions' })).toHaveCount(0)
+  await expect(page.getByTestId('transport-dock')).toBeVisible()
+  await expect(page.getByTestId('lane-timeline')).toBeVisible()
+  await expect(page.getByTestId('lane-block-3')).toBeVisible()
 
-  // The speaker panel lists the leak; the row menu names it.
+  // The speakers column lists the leak; focusing it keeps the other turns in view.
   const row = page.getByTestId('speaker-row-SPEAKER_02')
-  await expect(row).toContainText('Unnamed speaker')
+  await expect(row).toContainText('Unnamed')
+  await row.click()
+  await expect(page.getByTestId('editor-row-1')).toBeVisible()
+  await expect(page.getByTestId('editor-row-1')).toHaveClass(/opacity-40/)
+  await expect(page.getByTestId('editor-row-3')).not.toHaveClass(/opacity-40/)
+
   await row.getByRole('button', { name: 'Actions for SPEAKER_02' }).click()
   await page.getByRole('button', { name: 'Name or link…' }).click()
   await page.getByRole('textbox', { name: 'Speaker name' }).fill('Ad Narrator')
@@ -160,18 +173,16 @@ test('an editor names an unnamed speaker from the panel and finishes', async ({ 
     base_seq: 0,
     ops: [{ op: 'speaker.rename_label', anchor: { label: 'SPEAKER_02' }, args: { name: 'Ad Narrator', entity_id: null } }],
   })
-  // The transcript query refetches the effective transcript.
-  await expect(page.getByTestId('segment-content-3')).toContainText('Ad Narrator')
+  await expect(page.getByTestId('editor-row-3')).toContainText('Ad Narrator')
   await expect(page.getByTestId('transcript-editor-bar')).toContainText('1 edit')
 
   await page.getByRole('button', { name: 'Finish editing' }).click()
   await expect.poll(() => backend.finished).not.toBeNull()
-  await expect(page.getByTestId('transcript-editor-bar')).toHaveCount(0)
-  await expect(page).not.toHaveURL(/edit=1/)
+  await expect(page).toHaveURL(/view=transcript/)
   await expect(page.getByText(/People, quotes and search are refreshing/)).toBeVisible()
 })
 
-test('a reader without the permission has no entry point and ignores ?edit=1', async ({ page }) => {
+test('a reader without the permission has no entry point and the route sends them back', async ({ page }) => {
   await mockEpisodeApi(page)
   await mockAuth(page, [])
   let editorStateRequests = 0
@@ -180,10 +191,13 @@ test('a reader without the permission has no entry point and ignores ?edit=1', a
     route.fulfill({ status: 403, json: { detail: 'Permission required: transcript.edit' } })
   })
 
-  await page.goto(`${EPISODE_PATH}?view=transcript&edit=1`)
+  await page.goto(`${EPISODE_PATH}?view=transcript`)
   await expect(page.getByTestId('segment-content-1')).toBeVisible()
-  await expect(page.getByTestId('transcript-editor-bar')).toHaveCount(0)
   await page.getByRole('button', { name: 'More actions' }).click()
   await expect(page.getByRole('button', { name: 'Edit transcript' })).toHaveCount(0)
+
+  await page.goto(`${EPISODE_PATH}/edit`)
+  await expect(page).toHaveURL(/view=transcript/)
+  await expect(page.getByTestId('transcript-editor-page')).toHaveCount(0)
   expect(editorStateRequests).toBe(0)
 })

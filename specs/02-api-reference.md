@@ -967,6 +967,14 @@ row. Response `{ "hosts": [...] }`.
 Person entities matching `q` for the rename-or-link picker:
 `{ "people": [{ "id": "person:…", "canonical_name": "…", "matched_alias": null }] }`.
 
+#### GET /api/episodes/{episode_id}/transcript/edits/audio
+
+The episode's downloaded `original_audio` file, the one the timestamps
+were made from, for the editor's player (the publisher's URL can carry
+different ads). The editor state's `local_audio` says whether it exists;
+404 `no_local_audio` when the copy was deleted after processing or the
+deployment keeps audio off local disk.
+
 ---
 
 ## Commands

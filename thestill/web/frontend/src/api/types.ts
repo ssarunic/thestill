@@ -1909,6 +1909,9 @@ export interface TranscriptEditorState {
   speakers: TranscriptSpeaker[]
   summary_stale_edits: number
   algorithm_version: string
+  // Spec #110 §5.6 — our downloaded audio copy is on disk; the editor
+  // plays it through /transcript/edits/audio.
+  local_audio: boolean
 }
 
 export interface TranscriptEditsApplyResponse {

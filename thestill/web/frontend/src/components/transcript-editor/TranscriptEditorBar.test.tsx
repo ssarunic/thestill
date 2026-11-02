@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import TranscriptEditorBar from './TranscriptEditorBar'
 import type { TranscriptEdit, TranscriptEditConflict } from '../../api/types'
 
-// Spec #110 §5 "Header" — save status, undo / redo (⌘Z, ⇧⌘Z), conflicts
-// count with the list behind it, Finish editing.
+// Spec #110 §5.2 — Back, save status, undo / redo (⌘Z, ⇧⌘Z), the
+// conflicts count with the list behind it, Finish editing.
 
 function edit(seq: number, status: TranscriptEdit['status'], op: TranscriptEdit['op'] = 'speaker.rename_label'): TranscriptEdit {
   return {
@@ -28,6 +29,9 @@ function edit(seq: number, status: TranscriptEdit['status'], op: TranscriptEdit[
 
 function setup(overrides: Partial<Parameters<typeof TranscriptEditorBar>[0]> = {}) {
   const props = {
+    backTo: '/podcasts/show/episodes/ep?view=transcript',
+    title: 'OKRs',
+    subtitle: 'Product Thinking',
     saveStatus: 'saved' as const,
     saveError: null,
     canUndo: true,
@@ -41,16 +45,21 @@ function setup(overrides: Partial<Parameters<typeof TranscriptEditorBar>[0]> = {
     onRedo: vi.fn(),
     onDropConflict: vi.fn(),
     onFinish: vi.fn(),
-    onClose: vi.fn(),
     ...overrides,
   }
-  render(<TranscriptEditorBar {...props} />)
+  render(
+    <MemoryRouter>
+      <TranscriptEditorBar {...props} />
+    </MemoryRouter>,
+  )
   return props
 }
 
 describe('TranscriptEditorBar', () => {
-  it('shows the save status and the live edit count', () => {
+  it('shows the episode, the save status and the live edit count', () => {
     setup()
+    expect(screen.getByText('OKRs')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to the episode' })).toHaveAttribute('href', '/podcasts/show/episodes/ep?view=transcript')
     expect(screen.getByRole('status')).toHaveTextContent('Saved')
     expect(screen.getByText('2 edits')).toBeInTheDocument()
   })
@@ -98,16 +107,10 @@ describe('TranscriptEditorBar', () => {
     expect(screen.getByRole('button', { name: 'Finish editing' })).toBeDisabled()
   })
 
-  it('Finish and Close call back', async () => {
-    const props = setup()
+  it('Finish calls back and errors are announced', async () => {
+    const props = setup({ saveStatus: 'stale', saveError: 'The transcript changed elsewhere.' })
     await userEvent.click(screen.getByRole('button', { name: 'Finish editing' }))
     expect(props.onFinish).toHaveBeenCalledTimes(1)
-    await userEvent.click(screen.getByRole('button', { name: 'Close editor' }))
-    expect(props.onClose).toHaveBeenCalledTimes(1)
-  })
-
-  it('errors and reloads are announced', () => {
-    setup({ saveStatus: 'stale', saveError: 'The transcript changed elsewhere.' })
     expect(screen.getByRole('alert')).toHaveTextContent('The transcript changed elsewhere.')
   })
 })

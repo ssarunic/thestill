@@ -28,6 +28,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from pydantic import ValidationError
@@ -93,6 +94,9 @@ class EditorState:
     effective: EffectiveTranscript
     busy: bool
     summary_stale_edits: int
+    # Spec #110 §5.6 — our downloaded copy of the audio is still on disk, so
+    # the editor can play the file the timestamps were made from.
+    local_audio: bool = False
 
 
 @dataclass
@@ -187,7 +191,17 @@ class TranscriptEditService:
             effective=effective,
             busy=self.is_busy(episode.id),
             summary_stale_edits=self._summary_stale_edits(episode, effective),
+            local_audio=self.local_audio_path(episode) is not None,
         )
+
+    def local_audio_path(self, episode: Episode) -> Optional[Path]:
+        """The episode's ``original_audio`` file when it is still on local disk
+        (§5.6). ``delete_audio_after_processing`` removes it after transcription
+        and S3 deployments never hold it locally, so ``None`` is the common case."""
+        if not episode.audio_path:
+            return None
+        path = self._paths.original_audio_file(episode.audio_path)
+        return path if path.is_file() else None
 
     def _summary_stale_edits(self, episode: Episode, effective: EffectiveTranscript) -> int:
         """Changes to the transcript since the last completed summary (§4 "Stale badge").
