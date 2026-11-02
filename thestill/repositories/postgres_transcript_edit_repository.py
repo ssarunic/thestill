@@ -16,7 +16,7 @@
 
 Follows the ``utils.postgres_ext`` conventions: native ``uuid`` ids,
 ``timestamptz`` datetimes, ``jsonb`` columns written through ``Jsonb``.
-Schema in ``postgres_schema.py`` and alembic ``0026_transcript_edits``.
+Schema in ``postgres_schema.py`` and alembic ``0027_transcript_edits``.
 """
 
 from __future__ import annotations

@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
 
--- Spec #110 (alembic 0026) — the transcript editor's append-only op log,
+-- Spec #110 (alembic 0027) — the transcript editor's append-only op log,
 -- keyed to spec #18's segment anchors, and the last op each episode's
 -- downstream refresh was queued for.
 CREATE TABLE IF NOT EXISTS transcript_edits (

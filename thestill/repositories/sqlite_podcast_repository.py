@@ -723,7 +723,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
             CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
 
-            -- Spec #110 (Postgres 0026): the transcript editor's append-only
+            -- Spec #110 (Postgres 0027): the transcript editor's append-only
             -- op log and the last op each episode's refresh was queued for.
             -- JSON is TEXT; created_at is ISO-8601 with +00:00.
             CREATE TABLE IF NOT EXISTS transcript_edits (
