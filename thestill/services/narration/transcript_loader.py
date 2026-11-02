@@ -107,9 +107,11 @@ class TranscriptTurnLoader:
 
     AD_ADJACENT_WINDOW_S = 30.0
 
-    def __init__(self, path_manager: PathManager, facts_manager: FactsManager):
+    def __init__(self, path_manager: PathManager, facts_manager: FactsManager, transcript_edits=None):
         self.path_manager = path_manager
         self.facts_manager = facts_manager
+        # Spec #110 — the op log; quotes come from the edited transcript.
+        self.transcript_edits = transcript_edits
         # Cache facts per (podcast_slug, episode_slug) so a single
         # generator run that asks for both speaker mapping and episode
         # facts (keywords, sponsors) reads the Markdown file once.
@@ -126,7 +128,7 @@ class TranscriptTurnLoader:
         sidecar_path = self._resolve_sidecar_path(podcast, episode)
         if sidecar_path is None:
             return []
-        transcript = self._load_sidecar(sidecar_path, episode)
+        transcript = self._load_sidecar(episode)
         if transcript is None:
             return []
 
@@ -222,18 +224,22 @@ class TranscriptTurnLoader:
             return None
         return path
 
-    @staticmethod
-    def _load_sidecar(path: Path, episode: Episode) -> Optional[AnnotatedTranscript]:
+    def _load_sidecar(self, episode: Episode) -> Optional[AnnotatedTranscript]:
+        """The effective transcript (spec #110): the sidecar plus the admin's edits."""
+        from ...core.transcript_edits import load_effective_transcript
+
         try:
-            return AnnotatedTranscript.model_validate_json(path.read_text(encoding="utf-8"))
+            effective = load_effective_transcript(
+                episode, edits=self.transcript_edits, path_manager=self.path_manager, on_log_error="fallback"
+            )
         except Exception as exc:  # noqa: BLE001 — write-once disk artefact, log + continue
             logger.warning(
                 "narration: failed to load clean transcript json",
                 episode_id=episode.id,
-                path=str(path),
                 error=str(exc),
             )
             return None
+        return effective.transcript if effective is not None else None
 
     def _speaker_lookup(self, podcast: Podcast, episode: Episode) -> Tuple[Dict[str, str], Dict[str, str]]:
         """Facts Speaker Mapping keyed both by raw label and by resolved name."""

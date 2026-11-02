@@ -36,7 +36,8 @@ vi.mock('../hooks/useApi', () => ({
 let mockIsAdmin = false
 vi.mock('../contexts/AuthContext', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../contexts/AuthContext')>()),
-  useAuth: () => ({ isAdmin: mockIsAdmin }),
+  // Spec #110 — the editor entry point checks the named permission.
+  useAuth: () => ({ isAdmin: mockIsAdmin, can: () => mockIsAdmin }),
 }))
 
 vi.mock('./EntityBranchProgress', () => ({ default: () => null }))

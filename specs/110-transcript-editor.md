@@ -1,8 +1,8 @@
 # Transcript Editor (Admin Correction Workbench)
 
-> **Status:** 💡 Proposal
+> **Status:** 🚧 Phases 0–3 implemented (2026-11-02); Phase 4 not started
 > **Created:** 2026-10-27
-> **Updated:** 2026-10-27
+> **Updated:** 2026-11-02 — Phases 0–3 built: op log + loader (`thestill/core/transcript_edits.py`), the seven read sites and the summarizer moved, `transcript.edit` permission, routes, `thestill transcript` CLI, editor UI (speaker panel, inline text, split/merge, kind, undo/redo, conflicts, Finish), report deep link. Implementation notes under §Phases
 > **Priority:** Medium. Wrong and unnamed speakers are the most visible transcript defect, and today the only fix is editing episode facts and re-running the cleaner, which also re-runs the LLM.
 > **Author:** Product & Engineering
 > **Related:** [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) (`source_segment_ids`, `WordSpan`, the reserved `user_segment_id`), [#59 transcript-summary-feedback](59-transcript-summary-feedback.md) (Tier 2 workbench, carved out into this spec), [#86 quality-feedback-loop](86-quality-feedback-loop.md) (reports, the `transcript.overlay` fix op, cases), [#106 episode-reprocess](106-episode-reprocess.md) (downstream refresh), [#104 abuse-prevention-and-user-admin](104-abuse-prevention-and-user-admin.md) (admin role, audit log), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (chunks, entity mentions, `speaking` mentions), [#54 summary-segment-citations](54-summary-segment-citations.md) (citation sidecar), [#97 episode-chapters](97-episode-chapters.md) (forced alignment as a follow-up), [#96 prompt-injection-hardening](96-prompt-injection-hardening.md), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md)
@@ -427,6 +427,54 @@ be a second permission (`reports.triage`) under the same scheme.
 
 Phase 0 changes the read path for every episode, so it ships alone and
 soaks before Phase 1's UI.
+
+### Implementation notes (2026-11-02)
+
+Phases 0–3 landed together on one branch, in that order, so the Phase 0
+soak is the review window rather than a separate release. Where the build
+departs from or narrows the text above:
+
+- **Anchors carry text on the wire.** A segment anchor the editor sends
+  holds the segment `text` it showed; `SegmentAnchor` hashes it into
+  `text_sha256` on validation, so the row never stores transcript text
+  twice and the client needs no hashing.
+- **Split addressing.** The client sends `text_word_index` (the
+  whitespace word the split lands before); the service fills the raw
+  `at` reference by proportional mapping across the segment's word span,
+  so a replay lands on the same raw word and audio boundary.
+- **Busy guard is stage-aware.** Editing is refused while download,
+  downsample, transcribe or clean is in flight; an entity-branch task
+  (our own refresh) does not block.
+- **Idle refresh and the nightly sweep are one job.** A
+  `transcript_edit_refresh` periodic job (every 5 minutes) queues the
+  `--from entities` refresh for any episode whose newest op is ≥ 15
+  minutes old and newer than its last queued refresh
+  (`transcript_edit_refreshes`); Finish queues immediately. A busy
+  episode is retried by the same job.
+- **Stale badge** counts live ops newer than the last completed
+  `summarize` task (`summary_stale_edits` on the editor state); it is
+  fetched only for sessions holding `transcript.edit`.
+- **Speaker ops touch speaker rows only.** A rename or merge changes
+  `content`/`filler` segments of the label; an `ad_break` built from the
+  same raw segment keeps its empty speaker.
+- **Word timings after a text edit** are dropped: the segment is marked
+  `words_stale` and the words API omits it, so the karaoke wipe falls
+  back to segment highlighting there (open question 4, v1 answer).
+- **Linked speaker entities** ride on `metadata.speaker_entity_id`; the
+  extractor's synthesized `speaking` mention uses it ahead of the anchor
+  name match, so quotes-by and the People rail follow the admin's choice
+  after the refresh.
+- **Phase 3 without #86.** The reports table does not exist yet, so the
+  editor implements the deep-link contract only:
+  `?view=transcript&edit=1&report=<id>&segment=<segment id>&fix=wrong_speaker|wrong_words|wrong_kind[&value=…]`
+  opens the editor scrolled to the segment with the proposal staged;
+  Accept writes the op with `report_id`. Setting the report's `fix_json`
+  is #86's half and waits for its table.
+- **Retranscribe remap suggestions** (the "suggested new label" in §3
+  rule 1) are not built; conflicts list the op with its `before` snapshot
+  and the admin re-applies by hand.
+- **CLI** adds `rename-speaker` and `refresh` to the four commands listed
+  in §6; `revert --by` takes an email.
 
 ## Success metrics
 

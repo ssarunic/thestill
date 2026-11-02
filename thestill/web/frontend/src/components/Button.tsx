@@ -254,3 +254,27 @@ export const MoreIcon = () => (
     <circle cx="19" cy="12" r="1.75" />
   </svg>
 )
+
+// Spec #110 — the transcript editor's entry point and its undo / redo.
+export const EditIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2}
+      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+    />
+  </svg>
+)
+
+export const UndoIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 010 10h-3M3 10l4-4m-4 4l4 4" />
+  </svg>
+)
+
+export const RedoIcon = () => (
+  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 10H11a5 5 0 000 10h3m7-10l-4-4m4 4l-4 4" />
+  </svg>
+)

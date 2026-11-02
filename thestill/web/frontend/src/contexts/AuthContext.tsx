@@ -36,7 +36,14 @@ interface AuthStatus {
   // reads as signed out, and /login says why (with the operator contact).
   account_disabled?: boolean
   admin_contact_email?: string | null
+  // Spec #110: the named permissions this session holds (e.g.
+  // "transcript.edit"). Entry points check ``can(permission)``, not
+  // ``isAdmin``, so a moderator role later changes nothing here.
+  permissions?: string[]
 }
+
+/** Spec #110 — the named permissions the app knows about. */
+export type Permission = 'transcript.edit'
 
 interface AuthContextType {
   user: User | null
@@ -47,6 +54,8 @@ interface AuthContextType {
   // auth status is still loading, and always false in single-user mode).
   isAnonymous: boolean
   isAdmin: boolean
+  // Spec #110 — whether the session holds a named permission.
+  can: (permission: Permission) => boolean
   emailDeliveryAvailable: boolean
   // Spec #95 — see AuthStatus.
   usageAnalyticsAvailable: boolean
@@ -86,6 +95,7 @@ export function AuthProvider({
   const [analyticsKey, setAnalyticsKey] = useState<string | null>(null)
   const [accountDisabled, setAccountDisabled] = useState(false)
   const [adminContactEmail, setAdminContactEmail] = useState<string | null>(null)
+  const [permissions, setPermissions] = useState<string[]>([])
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -103,9 +113,11 @@ export function AuthProvider({
       setAnalyticsKey(authStatus.analytics?.key ?? null)
       setAccountDisabled(authStatus.account_disabled === true)
       setAdminContactEmail(authStatus.admin_contact_email ?? null)
+      setPermissions(Array.isArray(authStatus.permissions) ? authStatus.permissions : [])
     } catch (error) {
       console.error('Auth status check failed:', error)
       setUser(null)
+      setPermissions([])
     } finally {
       setIsLoading(false)
     }
@@ -165,6 +177,7 @@ export function AuthProvider({
       resetAnalytics()
       setUser(null)
       setAnalyticsKey(null)
+      setPermissions([])
       // In multi-user mode, redirect to login page after logout
       if (isMultiUser) {
         window.location.href = '/login'
@@ -182,6 +195,9 @@ export function AuthProvider({
   // the stored flag is unset on a pre-existing database. In multi-user mode,
   // admin is gated on the server-provided is_admin flag.
   const isAdmin = isMultiUser ? user?.is_admin === true : true
+  // Spec #110 — the server lists the session's permissions; the app never
+  // derives one from ``isAdmin`` so the two can diverge later (moderators).
+  const can = useCallback((permission: Permission) => permissions.includes(permission), [permissions])
 
   return (
     <AuthContext.Provider
@@ -192,6 +208,7 @@ export function AuthProvider({
         isAuthenticated,
         isAnonymous,
         isAdmin,
+        can,
         emailDeliveryAvailable,
         usageAnalyticsAvailable,
         analyticsKey,

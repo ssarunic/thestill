@@ -70,10 +70,13 @@ class ResourceSource:
         path_manager: PathManager,
         file_storage: FileStorage,
         window_s: float = DEFAULT_GROUNDING_WINDOW_S,
+        transcript_edits=None,
     ):
         self._path_manager = path_manager
         self._file_storage = file_storage
         self._window_s = window_s
+        # Spec #110 — the op log, so a transcript read here is the edited one.
+        self._transcript_edits = transcript_edits
 
     def read_summary(self, episode: Episode) -> Optional[str]:
         if not episode.summary_path:
@@ -111,7 +114,10 @@ class ResourceSource:
             return None
         if transcript is None:
             transcript = load_annotated_for_episode(
-                episode=episode, path_manager=self._path_manager, file_storage=self._file_storage
+                episode=episode,
+                path_manager=self._path_manager,
+                file_storage=self._file_storage,
+                edits=self._transcript_edits,
             )
             if transcript is None:
                 logger.info("resource_seeds_skipped", episode_id=episode.id, stage=stage, reason="no_transcript")
@@ -187,7 +193,7 @@ def _warn_failed(episode: Episode, stage: str, exc: Exception) -> None:
     )
 
 
-def make_resource_source(config, path_manager: PathManager) -> Optional[ResourceSource]:
+def make_resource_source(config, path_manager: PathManager, *, transcript_edits=None) -> Optional[ResourceSource]:
     """The configured source, or ``None`` when ``ENTITY_RESOURCE_SEEDS_ENABLED`` is off."""
     if getattr(config, "entity_resource_seeds_enabled", False) is not True:
         return None
@@ -195,4 +201,5 @@ def make_resource_source(config, path_manager: PathManager) -> Optional[Resource
         path_manager=path_manager,
         file_storage=config.file_storage,
         window_s=float(getattr(config, "resource_grounding_window_s", DEFAULT_GROUNDING_WINDOW_S)),
+        transcript_edits=transcript_edits,
     )

@@ -67,6 +67,8 @@ export interface ReprocessDialogProps {
   duration: string | null;
   busy?: boolean;
   error?: string | null;
+  /** Spec #110 — the stale-summary badge opens the dialog on "summarize". */
+  initialStage?: ReprocessFromStage;
   onConfirm: (request: EpisodeReprocessRequest) => void;
   onCancel: () => void;
 }
@@ -77,22 +79,22 @@ export default function ReprocessDialog({
   duration,
   busy,
   error,
+  initialStage = "clean",
   onConfirm,
   onCancel,
 }: ReprocessDialogProps) {
-  const [stage, setStage] = useState<ReprocessFromStage>("clean");
+  const [stage, setStage] = useState<ReprocessFromStage>(initialStage);
   const [refreshFacts, setRefreshFacts] = useState(false);
   const option = STAGES.find((s) => s.stage === stage)!;
 
   // Reset when the dialog closes, not on confirm: a refused request (409)
-  // leaves the dialog open with the choice intact.
+  // leaves the dialog open with the choice intact. Opening re-reads the
+  // caller's starting stage.
   useEffect(() => {
-    if (!isOpen) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStage("clean");
-      setRefreshFacts(false);
-    }
-  }, [isOpen]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStage(initialStage);
+    if (!isOpen) setRefreshFacts(false);
+  }, [isOpen, initialStage]);
 
   return (
     <ConfirmDialog

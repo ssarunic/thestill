@@ -25,7 +25,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Protocol
+from typing import TYPE_CHECKING, List, Optional, Protocol
 from urllib.parse import urlencode
 
 from pydantic import BaseModel, Field
@@ -35,6 +35,9 @@ from thestill.models.annotated_transcript import AnnotatedSegment, AnnotatedTran
 from thestill.models.podcast import Episode
 from thestill.utils.file_storage import FileStorage
 from thestill.utils.path_manager import PathManager
+
+if TYPE_CHECKING:
+    from thestill.repositories.transcript_edit_repository import TranscriptEditRepository
 
 logger = get_logger(__name__)
 
@@ -226,6 +229,7 @@ def resolve_and_persist_summary_citations(
     summary_path: Path,
     path_manager: PathManager,
     file_storage: FileStorage,
+    edits: Optional["TranscriptEditRepository"] = None,
 ) -> PersistedSummaryCitations:
     """Persist a summary and its citations sidecar when an annotated transcript exists."""
 
@@ -234,6 +238,7 @@ def resolve_and_persist_summary_citations(
         episode=episode,
         path_manager=path_manager,
         file_storage=file_storage,
+        edits=edits,
     )
     if annotated is None:
         file_storage.write_text(summary_key, summary_markdown)
@@ -270,6 +275,7 @@ def backfill_summary_citations_for_episode(
     file_storage: FileStorage,
     write: bool = False,
     force: bool = False,
+    edits: Optional["TranscriptEditRepository"] = None,
 ) -> BackfillCitationResult:
     """Resolve citations for an existing summary without calling the LLM."""
 
@@ -330,6 +336,7 @@ def backfill_summary_citations_for_episode(
         episode=episode,
         path_manager=path_manager,
         file_storage=file_storage,
+        edits=edits,
     )
     if annotated is None:
         return BackfillCitationResult(
@@ -784,20 +791,29 @@ def load_annotated_for_episode(
     episode: Episode,
     path_manager: PathManager,
     file_storage: FileStorage,
+    edits: Optional["TranscriptEditRepository"] = None,
 ) -> Optional[AnnotatedTranscript]:
+    """The episode's effective transcript (spec #110), or ``None`` without one.
+
+    ``edits`` is the op log; without it the sidecar is read as written.
+    """
+    from .transcript_edits import EditLogUnavailable, load_effective_transcript
+
     if not episode.clean_transcript_json_path:
         return None
-    sidecar_path = path_manager.clean_transcript_file(episode.clean_transcript_json_path)
     try:
-        annotated = AnnotatedTranscript.model_validate_json(
-            file_storage.read_text(path_manager.to_relative(sidecar_path))
+        effective = load_effective_transcript(
+            episode, edits=edits, path_manager=path_manager, file_storage=file_storage
         )
-    except FileNotFoundError:
-        logger.warning("summary_citations.annotated_missing", episode_id=episode.id)
-        return None
+    except EditLogUnavailable:
+        raise
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning("summary_citations.annotated_invalid", episode_id=episode.id, error=str(exc))
         return None
+    if effective is None:
+        logger.warning("summary_citations.annotated_missing", episode_id=episode.id)
+        return None
+    annotated = effective.transcript
     annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
     return annotated
 

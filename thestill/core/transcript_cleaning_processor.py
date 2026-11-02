@@ -45,6 +45,7 @@ from ..models.annotated_transcript import SegmentKind
 from ..utils.console import ConsoleOutput
 from .llm_provider import LLMProvider
 from .segmented_transcript_cleaner import SegmentedTranscriptCleaner
+from .transcript_edits import SUMMARIZER_EXCLUDED_KINDS
 from .transcript_formatter import TranscriptFormatter
 from .transcript_segmenter import TranscriptSegmenter
 
@@ -65,9 +66,11 @@ class DegenerateTranscriptError(RuntimeError):
 # Kinds stripped from the canonical blended-Markdown projection that
 # feeds the summariser. The JSON sidecar always carries every kind
 # (including full ad text) — the web viewer filters for display
-# instead. Adding a kind here is the one edit required when a new
-# kind should be hidden from summarisation.
-_ADS_STRIPPED_KINDS: frozenset[SegmentKind] = frozenset({"ad_break"})
+# instead. Defined with the effective-transcript loader (spec #110) so
+# an edited episode's Markdown strips exactly the same kinds as
+# ``_cleaned.md``; adding a kind there is the one edit required when a
+# new kind should be hidden from summarisation.
+_ADS_STRIPPED_KINDS: frozenset[SegmentKind] = SUMMARIZER_EXCLUDED_KINDS
 
 
 class TranscriptCleaningProcessor:

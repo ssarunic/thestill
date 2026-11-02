@@ -184,11 +184,13 @@ class NarrationGenerator:
         anchor_prompt: Optional[str] = None,
         material_max_words: int = DEFAULT_MATERIAL_MAX_WORDS,
         stated_target_ratio: float = DEFAULT_STATED_TARGET_RATIO,
+        transcript_edits=None,
     ):
         self.path_manager = path_manager
         self.file_storage = file_storage
         self.facts_manager = facts_manager or FactsManager(path_manager)
-        self.loader = loader or TranscriptTurnLoader(path_manager, self.facts_manager)
+        # Spec #110 — quotes come from the edited transcript.
+        self.loader = loader or TranscriptTurnLoader(path_manager, self.facts_manager, transcript_edits)
         self.selector = selector or QuoteSelector()
         self.url_generator = url_generator or UrlGenerator()
         self.markdown_renderer = markdown_renderer or NarrationMarkdownRenderer(url_generator=self.url_generator)

@@ -72,6 +72,8 @@ def _build_state(tmp_path, episode, podcast, sidecar_relpath: str | None):
     # repo stub so we don't end up with MagicMock-typed anchor ids.
     state.entity_repository.get_episode_anchors.return_value = []
     state.entity_extractor = EntityExtractor(preloaded_model=StubGLiNER())
+    # Spec #110 — a hand-built state has no op log; readers see the sidecar as written.
+    state.transcript_edit_repository = None
     return state
 
 

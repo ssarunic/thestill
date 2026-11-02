@@ -49,6 +49,8 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from ..core.llm_provider import LLMProvider
+    from ..core.transcript_edits import EffectiveTranscript
+    from ..repositories.transcript_edit_repository import TranscriptEditRepository
     from .abuse.quota_service import QuotaService
 
 # Type alias for transcript type
@@ -305,6 +307,7 @@ class PodcastService:
         file_storage: FileStorage,
         access: AccessGuard = NULL_GUARD,
         quota: Optional["QuotaService"] = None,
+        transcript_edits: Optional["TranscriptEditRepository"] = None,
     ) -> None:
         """
         Initialize podcast service.
@@ -317,9 +320,12 @@ class PodcastService:
             access: Spec #104 guard; gates generating a summary translation.
             quota: Spec #104 Phase 2; charges a generated translation to the
                 requesting user's ``translations_per_day``.
+            transcript_edits: Spec #110 op log; transcript reads apply it.
+                ``None`` (hand-built fixtures) reads the sidecar as written.
         """
         self._access = access
         self._quota = quota
+        self._transcript_edits = transcript_edits
         self.storage_path: Path = Path(storage_path) if isinstance(storage_path, str) else storage_path
         self.path_manager: PathManager = path_manager
         self.repository: PodcastRepository = podcast_repository
@@ -718,6 +724,14 @@ class PodcastService:
         ``Episode`` (the web route is one) — skips the podcast/episode
         re-lookup the id-based variant pays.
         """
+        # Spec #110 — an edited episode renders its effective transcript;
+        # the Markdown file on disk predates the edits. Unedited episodes
+        # read ``_cleaned.md`` exactly as before.
+        edited = self._edited_transcript(episode)
+        if edited is not None:
+            logger.info("Retrieved edited transcript", episode_id=episode.id, edits=len(edited.applied))
+            return TranscriptResult(content=edited.to_summarizer_markdown(), transcript_type="cleaned")
+
         # Try cleaned transcript first (preferred). Spec #35 — route reads
         # through FileStorage; the require_file_exists guard becomes a
         # try/FileNotFoundError so we don't pay two S3 round-trips per call.
@@ -774,18 +788,51 @@ class PodcastService:
         if not episode.clean_transcript_json_path:
             return None
 
-        json_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
         try:
-            annotated = AnnotatedTranscript.model_validate_json(self._read_relative(json_path))
-        except FileNotFoundError:
-            logger.warning(f"Segmented transcript JSON missing on disk: {json_path}")
-            return None
+            effective = self._load_effective(episode)
         except Exception as error:  # pylint: disable=broad-except
             logger.error(f"Error reading segmented transcript JSON: {error}")
             return None
+        if effective is None:
+            logger.warning(
+                "Segmented transcript JSON missing on disk: "
+                f"{self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)}"
+            )
+            return None
 
+        annotated = effective.transcript
         annotated.playback_time_offset_seconds = episode.playback_time_offset_seconds
         return SegmentedTranscriptResult(annotated=annotated)
+
+    def _load_effective(self, episode: Episode) -> Optional["EffectiveTranscript"]:
+        """Spec #110 — the sidecar with the op log replayed, through the one
+        loader every reader uses. A reader view falls back to the base
+        transcript when the log cannot be read (``overlay_failed``)."""
+        from ..core.transcript_edits import load_effective_transcript
+
+        return load_effective_transcript(
+            episode,
+            edits=self._transcript_edits,
+            path_manager=self.path_manager,
+            file_storage=self.file_storage,
+            on_log_error="fallback",
+        )
+
+    def _edited_transcript(self, episode: Episode) -> Optional["EffectiveTranscript"]:
+        """The effective transcript when at least one edit applies, else ``None``."""
+        if self._transcript_edits is None or not episode.clean_transcript_json_path:
+            return None
+        try:
+            if self._transcript_edits.last_seq(episode.id) == 0:
+                return None
+            effective = self._load_effective(episode)
+        except Exception as error:  # pylint: disable=broad-except
+            logger.error("transcript_edits.read_failed", episode_id=episode.id, error=str(error))
+            return None
+        if effective is None or not effective.has_applied_edits:
+            return None
+        effective.transcript.playback_time_offset_seconds = episode.playback_time_offset_seconds
+        return effective
 
     def get_transcript_words_for_episode(self, episode: Episode) -> Optional[TranscriptWordsResult]:
         """Load per-segment word-level timestamps for the karaoke wipe (spec #38).
@@ -809,18 +856,17 @@ class PodcastService:
         if not episode.clean_transcript_json_path or not episode.raw_transcript_path:
             return None
 
-        annotated_path = self.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
         raw_path = self.path_manager.raw_transcript_file(episode.raw_transcript_path)
 
         # Spec #35 — collapse the prior exists+read into a single read,
         # treating FileNotFoundError on either file as the same "missing"
         # signal. The structured log line keeps the same shape so any
         # alerting rules on it continue to work.
+        from ..core.transcript_edits import WORDS_STALE_KEY
         from ..models.transcript import Transcript
 
-        try:
-            annotated_payload = self._read_relative(annotated_path)
-        except FileNotFoundError:
+        effective = self._load_effective(episode)
+        if effective is None:
             logger.warning(
                 "transcript_words.file_missing",
                 episode_id=episode.id,
@@ -839,7 +885,7 @@ class PodcastService:
             )
             return None
 
-        annotated = AnnotatedTranscript.model_validate_json(annotated_payload)
+        annotated = effective.transcript
         raw = Transcript.model_validate_json(raw_payload)
 
         raw_by_id: dict[int, RawSegment] = {seg.id: seg for seg in raw.segments}
@@ -847,7 +893,9 @@ class PodcastService:
         segments_out: List[SegmentWordsResult] = []
         for ann_seg in annotated.segments:
             span = ann_seg.source_word_span
-            if span is None:
+            # Spec #110 — an edited segment's raw words no longer match its
+            # text; it falls back to segment-level highlighting.
+            if span is None or ann_seg.metadata.get(WORDS_STALE_KEY):
                 continue
             words = _collect_words_in_span(span, raw_by_id)
             if not words:
@@ -1095,6 +1143,7 @@ class PodcastService:
                 summary_path=translation_path,
                 path_manager=self.path_manager,
                 file_storage=self.file_storage,
+                edits=self._transcript_edits,
             )
             write_translation_metadata(
                 self.file_storage,

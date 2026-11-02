@@ -41,6 +41,8 @@ import {
   type SegmentMentionSet,
 } from './episode-entities/applyHighlights'
 import { track as trackEvent } from '../analytics/client'
+import { EditableText, KindPicker, SpeakerPicker } from './transcript-editor/EditableSegment'
+import type { SegmentEditing } from './transcript-editor/segmentEditing'
 
 const SHOW_FILLER_STORAGE_KEY = 'thestill:transcript:showFiller'
 // Global preference, not per-episode: matches reader intent ("I never
@@ -182,6 +184,11 @@ interface SegmentedTranscriptViewerProps {
   karaokeChipChecked?: boolean
   karaokeChipDisabled?: boolean
   onKaraokeToggle?: () => void
+  // Spec #110 — edit mode. When set, segment rows grow editing affordances
+  // (speaker picker, inline text, kind picker) and stop seeking on click;
+  // the timestamp still seeks. Absent for every reader without the
+  // ``transcript.edit`` permission, so the viewer is unchanged for them.
+  editing?: SegmentEditing | null
 }
 
 function formatTimestamp(seconds: number): string {
@@ -259,6 +266,7 @@ interface BlockSegmentProps {
   segmentMentions: SegmentMentionSet | null
   entityHighlightsEnabled: boolean
   onFocusEntity?: (entityId: string) => void
+  editing?: SegmentEditing | null
 }
 
 const BlockSegment = memo(function BlockSegment({
@@ -275,6 +283,7 @@ const BlockSegment = memo(function BlockSegment({
   segmentMentions,
   entityHighlightsEnabled,
   onFocusEntity,
+  editing,
 }: BlockSegmentProps) {
   const style = BLOCK_STYLES[kind]
   const baseLabel = kind === 'ad_break' ? 'Ad break' : KIND_LABELS[kind]
@@ -282,12 +291,15 @@ const BlockSegment = memo(function BlockSegment({
     kind === 'ad_break' && segment.sponsor ? ` — ${segment.sponsor}` : ''
   const absoluteSeconds = segment.start + offset
   const dimClass = dimmed ? 'opacity-70' : ''
+  // In edit mode the row itself no longer seeks (clicks edit); the
+  // timestamp keeps click-to-play.
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ${baseLabel}${sponsorSuffix}`,
-    onSeek,
+    editing ? undefined : onSeek,
     absoluteSeconds,
   )
-  const seekableClasses = onSeek ? `cursor-pointer ${style.hoverRing}` : ''
+  const seekableClasses = onSeek && !editing ? `cursor-pointer ${style.hoverRing}` : ''
+  const kindPicker = editing ? <KindPicker segment={segment} editing={editing} /> : null
 
   if (collapsed) {
     const activeRing = isActive ? style.bgActive : ''
@@ -310,6 +322,7 @@ const BlockSegment = memo(function BlockSegment({
             {baseLabel}
             {highlightMatches(sponsorSuffix, searchQuery)}
           </span>
+          {kindPicker}
         </div>
       </div>
     )
@@ -336,6 +349,7 @@ const BlockSegment = memo(function BlockSegment({
           onCopy={onCopyTimestamp}
           className={`mr-2 font-mono text-[11px] tabular-nums align-baseline ${style.accent}`}
         />
+        {kindPicker}
         {segment.text
           ? applyEntityHighlights({
               text: segment.text,
@@ -383,6 +397,8 @@ interface ContentSegmentProps {
   // smooth" and "the highlight handoff between words is also smooth".
   karaokeWords?: WordTimestamp[]
   karaokeGetCurrentTime?: () => number
+  // Spec #110 — editing affordances; absent outside the editor.
+  editing?: SegmentEditing | null
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -401,6 +417,7 @@ const ContentSegment = memo(function ContentSegment({
   onFocusEntity,
   karaokeWords,
   karaokeGetCurrentTime,
+  editing,
 }: ContentSegmentProps) {
   // Per-frame karaoke cursor: which word is currently spoken (-1 during
   // pauses) and how far through the segment the audio has progressed.
@@ -426,14 +443,35 @@ const ContentSegment = memo(function ContentSegment({
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   const dimClass = dimmed ? 'opacity-70' : ''
   const bodyClass = isFiller ? 'text-gray-500 italic' : 'text-gray-800'
+  // In edit mode the row itself no longer seeks (clicks edit); the
+  // timestamp keeps click-to-play.
   const interactive = seekableProps(
     `Seek to ${formatTimestamp(absoluteSeconds)} — ${speaker}`,
-    onSeek,
+    editing ? undefined : onSeek,
     absoluteSeconds,
   )
-  const seekableClasses = onSeek
+  const seekableClasses = onSeek && !editing
     ? 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400'
     : ''
+  const body = karaokeWords && karaokeGetCurrentTime
+    ? karaokeWords.map((w, i) => (
+        <Fragment key={i}>
+          <KaraokeWord
+            word={w}
+            read={i <= karaokeReadUpTo}
+            isActive={i === karaokeActiveWordIdx}
+          />
+          {i < karaokeWords.length - 1 ? ' ' : ''}
+        </Fragment>
+      ))
+    : applyEntityHighlights({
+        text: segment.text,
+        segmentMentions,
+        enabled: entityHighlightsEnabled,
+        searchQuery,
+        onSeek,
+        onFocusEntity,
+      })
   return (
     <div
       {...interactive}
@@ -441,6 +479,7 @@ const ContentSegment = memo(function ContentSegment({
       data-testid={`segment-content-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
+      data-edited={segment.metadata?.edited ? 'true' : undefined}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <p
@@ -456,7 +495,9 @@ const ContentSegment = memo(function ContentSegment({
           className="font-sans font-semibold tracking-tight"
           style={{ color: speakerColor }}
         >
-          {speakerMention ? (
+          {editing ? (
+            <SpeakerPicker segment={segment} editing={editing} color={speakerColor} />
+          ) : speakerMention ? (
             <EntityHighlight
               variant="speaker"
               episodeEntity={speakerMention.entity}
@@ -476,27 +517,21 @@ const ContentSegment = memo(function ContentSegment({
               filler
             </span>
           )}
+          {editing && segment.metadata?.edited ? (
+            <span className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wider text-primary-600">
+              edited
+            </span>
+          ) : null}
+          {editing && <KindPicker segment={segment} editing={editing} />}
           :
         </span>{' '}
-        {karaokeWords && karaokeGetCurrentTime
-          ? karaokeWords.map((w, i) => (
-              <Fragment key={i}>
-                <KaraokeWord
-                  word={w}
-                  read={i <= karaokeReadUpTo}
-                  isActive={i === karaokeActiveWordIdx}
-                />
-                {i < karaokeWords.length - 1 ? ' ' : ''}
-              </Fragment>
-            ))
-          : applyEntityHighlights({
-              text: segment.text,
-              segmentMentions,
-              enabled: entityHighlightsEnabled,
-              searchQuery,
-              onSeek,
-              onFocusEntity,
-            })}
+        {editing ? (
+          <EditableText segment={segment} editing={editing}>
+            {body}
+          </EditableText>
+        ) : (
+          body
+        )}
       </p>
     </div>
   )
@@ -613,6 +648,7 @@ export default function SegmentedTranscriptViewer({
   karaokeChipChecked,
   karaokeChipDisabled,
   onKaraokeToggle,
+  editing = null,
 }: SegmentedTranscriptViewerProps) {
   const offset = transcript.playback_time_offset_seconds ?? 0
   // Assign speaker colours by order of appearance so each distinct (resolved)
@@ -1145,6 +1181,7 @@ export default function SegmentedTranscriptViewer({
                   karaokeGetCurrentTime={
                     isKaraokeSegment ? getCurrentTime : undefined
                   }
+                  editing={editing}
                 />
               )
             }
@@ -1165,6 +1202,7 @@ export default function SegmentedTranscriptViewer({
                 segmentMentions={segmentMentions}
                 entityHighlightsEnabled={entityHighlightsEnabled}
                 onFocusEntity={onFocusEntity}
+                editing={editing}
               />
             )
           })}
