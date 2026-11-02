@@ -38,6 +38,21 @@ class TestOnlyWorks:
         assert plan_retype(_entity("topic:x", EntityType.TOPIC), ["Q5", "Q11424"], only_works=True) is None
 
 
+class TestKindsOfPerson:
+    def test_a_profession_typed_person_becomes_a_topic(self):
+        # "entrepreneur" from the a16z rail: a profession is a kind of person.
+        row = _entity("topic:entrepreneur", EntityType.PERSON, ["Q28640", "Q2628882"], qid="Q131524")
+        assert plan_retype(row, row.wikidata_instance_of) is EntityType.TOPIC
+
+    def test_the_human_class_typed_person_becomes_a_topic(self):
+        human = _entity("person:human", EntityType.PERSON, ["Q55983715"], qid="Q5")
+        assert plan_retype(human, human.wikidata_instance_of) is EntityType.TOPIC
+
+    def test_only_works_leaves_kinds_of_person_alone(self):
+        row = _entity("topic:entrepreneur", EntityType.PERSON, ["Q28640"], qid="Q131524")
+        assert plan_retype(row, row.wikidata_instance_of, only_works=True) is None
+
+
 class TestSuperclasses:
     def test_a_town_typed_company_becomes_a_topic(self):
         knin = _entity("company:knin", EntityType.PERSON, ["Q15105893"], qid="Q208514")
@@ -109,3 +124,14 @@ class TestPersonDemotionsAreHeld:
 
     def test_a_human_stays_a_person_and_is_not_held(self):
         assert list(plan_backfill([_entity("person:ada", EntityType.PERSON, ["Q5"])], None)) == []
+
+    def test_a_kind_of_person_is_not_held(self):
+        # "child" (population group) and the class item "human" (Q5) are
+        # common nouns, not name collisions: they move without review.
+        child = _entity("person:child", EntityType.PERSON, ["Q851990", "Q134264207"], qid="Q7569")
+        human = _entity("person:human", EntityType.PERSON, ["Q55983715"], qid="Q5")
+        plans = list(plan_backfill([child, human], None))
+        assert [(p.entity.id, p.new_type, p.held) for p in plans] == [
+            ("person:child", EntityType.TOPIC, False),
+            ("person:human", EntityType.TOPIC, False),
+        ]

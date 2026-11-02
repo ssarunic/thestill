@@ -202,7 +202,7 @@ def scan_entities_for_review(
         # GLiNER surface_label majority rather than Wikidata P31.
         p31_disagrees = False
         if p31:
-            classified = classify_entity_type(p31, fallback=etype)
+            classified = classify_entity_type(p31, fallback=etype, qid=row["wikidata_qid"])
             if classified is not None and classified != etype:
                 p31_disagrees = True
                 kinds.append("p31_says_other_type")

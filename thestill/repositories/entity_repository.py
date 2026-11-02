@@ -264,12 +264,15 @@ class EntityRepository(ABC):
         *,
         episode_id: Optional[str] = None,
         podcast_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[EntityRecord]:
         """Entities with a Wikidata QID and at least one mention, ordered by id.
 
         Scoped to entities mentioned in ``episode_id`` and/or in an episode
-        of ``podcast_id`` when given. ``backfill-entity-types`` walks this.
+        of ``podcast_id`` when given, and to rows currently stored as
+        ``entity_type`` (a bucket name, not an id prefix) when given.
+        ``backfill-entity-types`` walks this.
         """
 
     @abstractmethod

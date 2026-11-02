@@ -347,13 +347,15 @@ class PostgresEntityRepository(EntityRepository):
         *,
         episode_id: Optional[str] = None,
         podcast_id: Optional[str] = None,
+        entity_type: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> List[EntityRecord]:
-        sql = (
-            "SELECT * FROM entities ent WHERE ent.wikidata_qid IS NOT NULL "
-            "AND EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = ent.id"
-        )
+        sql = "SELECT * FROM entities ent WHERE ent.wikidata_qid IS NOT NULL"
         params: list = []
+        if entity_type is not None:
+            sql += " AND ent.type = %s"
+            params.append(entity_type)
+        sql += " AND EXISTS (SELECT 1 FROM entity_mentions m WHERE m.entity_id = ent.id"
         if episode_id is not None:
             sql += " AND m.episode_id = %s"
             params.append(episode_id)

@@ -144,6 +144,39 @@ SOFTWARE_P31 = frozenset(
 )
 _PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
 
+# Kinds of person, not persons. "child", "parent", "Professor" and
+# "billionaire" are real Wikidata items the linker finds, but their P31 is
+# a kinship, population-group, title, rank, degree, social-status or
+# life-phase class, which no list named, so GLiNER's ``person`` label
+# stood. A kind of person is a topic: "Politician" or "Entrepreneur" reads
+# fine as a topic chip and is wrong under "People in this episode".
+# Profession, occupation and position already sat in ``TOPIC_P31``; they
+# are repeated here so the whole family is read in one place and checked
+# right after ``PERSON_P31``, so a fictional human (a person) still wins.
+KIND_OF_PERSON_P31 = frozenset(
+    {
+        "Q28640",  # profession
+        "Q12737077",  # occupation
+        "Q108300140",  # occupation group according to ISCO-08
+        "Q4164871",  # position
+        "Q480319",  # title of authority
+        "Q486983",  # academic rank
+        "Q3529618",  # academic title
+        "Q189533",  # academic degree
+        "Q66715801",  # musical profession
+        "Q1781513",  # position (sports)
+        "Q214339",  # social role
+        "Q189970",  # social status ("billionaire")
+        "Q171318",  # kinship
+        "Q851990",  # population group
+        "Q5932254",  # demographic profile
+        "Q785260",  # phase of human life ("adult")
+        "Q185836",  # age of a person
+        "Q134264207",  # class of human
+        "Q16334295",  # group of humans
+    }
+)
+
 # Topics is the broad catch-all bucket: places, concepts, events,
 # fields of study, religions, ethnic groups, ideologies, etc. We
 # enumerate the *common* P31s here so we can demote things that
@@ -287,10 +320,25 @@ ALLOWED_P31_BY_TYPE = {
 }
 
 
+def is_kind_of_person(p31_qids: Iterable[str], qid: Optional[str] = None) -> bool:
+    """True when the item is a profession, title, kinship or age group, or
+    is the class "human" itself: a common noun, never a name collision.
+
+    The resolver and ``backfill-entity-types`` hold every other person
+    demotion for a curator, because "Bellingham" tagged person and linked
+    to the US city is a wrong link, not a wrong tag. "the photographer"
+    linked to the occupation is the opposite: the link is fine and the tag
+    is wrong, so the demotion goes through.
+    """
+    return qid in PERSON_P31 or bool({q for q in p31_qids if q} & KIND_OF_PERSON_P31)
+
+
 def classify_entity_type(
     p31_qids: Iterable[str],
     fallback: EntityType,
     superclasses: Optional[Callable[[str], List[str]]] = None,
+    *,
+    qid: Optional[str] = None,
 ) -> Optional[EntityType]:
     """Return the bucket this entity should land in based on its P31 set.
 
@@ -300,6 +348,10 @@ def classify_entity_type(
        least ambiguous bucket and the most expensive to misclassify
        (the rail's ``People in this episode`` section is the most
        conspicuous).
+    1a. Else if ``qid`` is itself one of the person classes (the item
+       "human", Q5) or any P31 is in ``KIND_OF_PERSON_P31`` → ``TOPIC``,
+       whatever the fallback: a profession, position, kinship or
+       population group is a kind of person, not a person.
     2. Else if any P31 is in ``WORK_P31`` → ``PRODUCT``, whatever the
        fallback: a film, series, book or podcast is a product even when
        GLiNER tagged it ``topic`` (spec #92 Phase 0).
@@ -333,6 +385,9 @@ def classify_entity_type(
 
     if p31_set & PERSON_P31:
         return EntityType.PERSON
+
+    if is_kind_of_person(p31_set, qid):
+        return EntityType.TOPIC
 
     if p31_set & WORK_P31:
         return EntityType.PRODUCT
