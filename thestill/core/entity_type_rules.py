@@ -159,6 +159,7 @@ KIND_OF_PERSON_P31 = frozenset(
         "Q12737077",  # occupation
         "Q108300140",  # occupation group according to ISCO-08
         "Q4164871",  # position
+        "Q11488158",  # corporate title ("chief product officer")
         "Q480319",  # title of authority
         "Q486983",  # academic rank
         "Q3529618",  # academic title

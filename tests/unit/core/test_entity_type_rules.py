@@ -16,7 +16,7 @@ the resolver's tentative type unchanged.
 
 from __future__ import annotations
 
-from thestill.core.entity_type_rules import classify_entity_type
+from thestill.core.entity_type_rules import classify_entity_type, is_kind_of_person
 from thestill.models.entities import EntityType
 
 
@@ -53,6 +53,13 @@ class TestKindOfPersonDemotion:
     def test_kinship_demotes_to_topic(self):
         # "parent" (Q7566): kinship + social role.
         assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_a_corporate_title_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "chief product officer" carries only the
+        # corporate-title class, which the topic list names but the hold
+        # exemption did not, so it sat held like a name collision.
+        assert classify_entity_type(["Q11488158"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q11488158"])
 
     def test_social_status_and_life_phase_demote_to_topic(self):
         # "billionaire" (Q189970 social status) and "Adult" (Q785260 phase
