@@ -54,6 +54,20 @@ class TestKindOfPersonDemotion:
         # "parent" (Q7566): kinship + social role.
         assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
 
+    def test_a_people_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "Russians", "Iraqis", "Samaritans" tagged
+        # person sat held; a demonym is never a person's name.
+        assert classify_entity_type(["Q41710", "Q2472587"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q33829", "Q6266"])
+        assert is_kind_of_person(["Q11197007"])
+
+    def test_a_disputed_or_pseudonymous_human_stays_a_person(self):
+        # Satoshi Nakamoto (Q15924): pseudonym + disputed human + "group of
+        # humans", no Q5. The person rule must win over the group class.
+        p31 = ["Q61002", "Q21070568", "Q16334295"]
+        assert classify_entity_type(p31, EntityType.PERSON, qid="Q15924") is EntityType.PERSON
+        assert classify_entity_type(p31, EntityType.TOPIC, qid="Q15924") is EntityType.PERSON
+
     def test_a_corporate_title_is_a_kind_of_person(self):
         # Prod dry run 2026-11-03: "chief product officer" carries only the
         # corporate-title class, which the topic list names but the hold
