@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Callable, Collection, Iterable, Iterator, List, Optional
 
 from ..models.entities import EntityRecord, EntityType
-from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type, is_kind_of_person
+from .entity_type_rules import PERSON_P31, WORK_P31, classify_entity_type, is_ai_model, is_kind_of_person
 
 
 def plan_retype(
@@ -86,7 +86,8 @@ def plan_backfill(
     link wrong (Bellingham the footballer → the US city, Amol Avasare →
     the Iranian city). Only ids in ``release`` (reviewed) move. A kind of
     person (profession, title, kinship, age group) is never held: that is
-    a common noun with a right link and a wrong tag.
+    a common noun with a right link and a wrong tag. Nor is a named AI
+    model ("Sora", "Claude"), for the same reason.
     """
     for entity in entities:
         p31 = entity.wikidata_instance_of
@@ -104,6 +105,7 @@ def plan_backfill(
             and entity.type is EntityType.PERSON
             and entity.id not in release
             and not is_kind_of_person(p31, entity.wikidata_qid)
+            and not is_ai_model(p31)
         )
         yield RetypePlan(entity, p31, new_type, held)
 

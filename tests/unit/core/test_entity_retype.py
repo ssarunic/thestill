@@ -135,3 +135,13 @@ class TestPersonDemotionsAreHeld:
             ("person:child", EntityType.TOPIC, False),
             ("person:human", EntityType.TOPIC, False),
         ]
+
+    def test_an_ai_model_typed_person_is_not_held(self):
+        # "Sora" and "Claude" tagged person by GLiNER: right link, wrong tag.
+        sora = _entity("company:sora-text-to-video-model", EntityType.PERSON, ["Q115517227"], qid="Q124544998")
+        claude = _entity("product:claude-ai", EntityType.PERSON, ["Q870780", "Q124629760"], qid="Q118876059")
+        plans = list(plan_backfill([sora, claude], None))
+        assert [(p.entity.id, p.new_type, p.held) for p in plans] == [
+            ("company:sora-text-to-video-model", EntityType.PRODUCT, False),
+            ("product:claude-ai", EntityType.PRODUCT, False),
+        ]
