@@ -56,6 +56,8 @@ from ..models.entities import EntityType
 PERSON_P31 = frozenset(
     {
         "Q5",  # human
+        "Q21070568",  # human whose existence is disputed (Satoshi Nakamoto)
+        "Q61002",  # pseudonym (Satoshi again; Wikidata gives him no Q5)
         "Q15632617",  # fictional human
         "Q95074",  # fictional character
         "Q3658341",  # literary character
@@ -159,6 +161,7 @@ KIND_OF_PERSON_P31 = frozenset(
         "Q12737077",  # occupation
         "Q108300140",  # occupation group according to ISCO-08
         "Q4164871",  # position
+        "Q11488158",  # corporate title ("chief product officer")
         "Q480319",  # title of authority
         "Q486983",  # academic rank
         "Q3529618",  # academic title
@@ -174,6 +177,13 @@ KIND_OF_PERSON_P31 = frozenset(
         "Q185836",  # age of a person
         "Q134264207",  # class of human
         "Q16334295",  # group of humans
+        # Peoples. "Russians", "Iraqis", "Samaritans" tagged person are a
+        # wrong tag on a right link, like the professions; no person is
+        # named after an ethnic group the way one is after a city or a film.
+        "Q41710",  # ethnic group
+        "Q33829",  # human population
+        "Q11197007",  # people (collective)
+        "Q2472587",  # people (demographic)
     }
 )
 

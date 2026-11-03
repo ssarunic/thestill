@@ -16,7 +16,7 @@ the resolver's tentative type unchanged.
 
 from __future__ import annotations
 
-from thestill.core.entity_type_rules import classify_entity_type
+from thestill.core.entity_type_rules import classify_entity_type, is_kind_of_person
 from thestill.models.entities import EntityType
 
 
@@ -53,6 +53,27 @@ class TestKindOfPersonDemotion:
     def test_kinship_demotes_to_topic(self):
         # "parent" (Q7566): kinship + social role.
         assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_a_people_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "Russians", "Iraqis", "Samaritans" tagged
+        # person sat held; a demonym is never a person's name.
+        assert classify_entity_type(["Q41710", "Q2472587"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q33829", "Q6266"])
+        assert is_kind_of_person(["Q11197007"])
+
+    def test_a_disputed_or_pseudonymous_human_stays_a_person(self):
+        # Satoshi Nakamoto (Q15924): pseudonym + disputed human + "group of
+        # humans", no Q5. The person rule must win over the group class.
+        p31 = ["Q61002", "Q21070568", "Q16334295"]
+        assert classify_entity_type(p31, EntityType.PERSON, qid="Q15924") is EntityType.PERSON
+        assert classify_entity_type(p31, EntityType.TOPIC, qid="Q15924") is EntityType.PERSON
+
+    def test_a_corporate_title_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "chief product officer" carries only the
+        # corporate-title class, which the topic list names but the hold
+        # exemption did not, so it sat held like a name collision.
+        assert classify_entity_type(["Q11488158"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q11488158"])
 
     def test_social_status_and_life_phase_demote_to_topic(self):
         # "billionaire" (Q189970 social status) and "Adult" (Q785260 phase
