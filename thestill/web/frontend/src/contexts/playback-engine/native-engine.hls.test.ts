@@ -90,6 +90,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('isHlsSource', () => {
@@ -122,12 +123,42 @@ describe('NativeEngine HLS', () => {
     expect(hls.config.workerPath).not.toMatch(/^blob:/)
   })
 
-  it('plays HLS natively where canPlayType says so (Safari/iOS)', async () => {
+  it('plays HLS natively on Apple WebKit (Safari, iOS) even with MSE', async () => {
+    vi.stubGlobal('MediaSource', class {})
+    vi.stubGlobal('WebKitPlaybackTargetAvailabilityEvent', class {})
     const t = makeEngine({ nativeHls: true })
     t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
     await flush()
     expect(t.el.getAttribute('src')).toBe(HLS_URL)
     expect(FakeHls.instances).toHaveLength(0)
+  })
+
+  it('plays HLS natively where canPlayType says so and MSE is missing', async () => {
+    const t = makeEngine({ nativeHls: true })
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    expect(t.el.getAttribute('src')).toBe(HLS_URL)
+    expect(FakeHls.instances).toHaveLength(0)
+  })
+
+  it("uses hls.js on Chromium despite its canPlayType 'maybe' (built-in HLS breaks seeks)", async () => {
+    vi.stubGlobal('MediaSource', class {})
+    const t = makeEngine({ nativeHls: true })
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    expect(FakeHls.instances).toHaveLength(1)
+    expect(t.el.getAttribute('src')).toBeNull()
+  })
+
+  it('falls back to native HLS when hls.js cannot play here', async () => {
+    vi.stubGlobal('MediaSource', class {})
+    FakeHls.supported = false
+    const t = makeEngine({ nativeHls: true })
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    expect(FakeHls.instances).toHaveLength(0)
+    expect(t.el.getAttribute('src')).toBe(HLS_URL)
+    expect(t.spy('onError')).not.toHaveBeenCalled()
   })
 
   it('leaves non-HLS sources on the plain src path', async () => {

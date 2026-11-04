@@ -9,7 +9,7 @@
 // hls.js only feeds the element; every transport call and media event
 // below works unchanged on top of it.
 
-import { loadHls, loadedHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
+import { canPlayHlsNatively, loadHls, loadedHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 
 // Numeric codes rather than the MediaError constants — the global is not
@@ -295,7 +295,10 @@ export class NativeEngine implements PlaybackEngine {
 
   private startHls({ Hls, workerPath }: HlsModule, url: string): void {
     if (!Hls.isSupported()) {
-      this.events.onError(HLS_UNSUPPORTED)
+      // MSE exists but cannot play this (codecs): native HLS, if any, is
+      // the better bet than an error.
+      if (canPlayHlsNatively(this.el)) this.el.src = url
+      else this.events.onError(HLS_UNSUPPORTED)
       return
     }
     const hls = new Hls({

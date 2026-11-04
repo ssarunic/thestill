@@ -179,8 +179,21 @@ carries a poster.
 
 - **`hls.ts` (new):**
   - `isHlsMime(mime)`.
-  - `needsHlsJs(el, mime)`: HLS, and `el.canPlayType('application/vnd.apple.mpegurl')`
-    is `''`.
+  - `needsHlsJs(el, url, mime)`: an HLS source uses hls.js wherever
+    Media Source Extensions (`MediaSource` / `ManagedMediaSource`) exist,
+    except on Apple WebKit (`WebKitPlaybackTargetAvailabilityEvent` in
+    `window`: Safari and every iOS browser). There, native HLS keeps
+    AirPlay, lock-screen and background audio. Native HLS is also used
+    where MSE is missing but `canPlayType` says yes.
+    - *Revised during the Phase C browser check, 2026-11-04.* Chrome 156
+      reports `canPlayType('application/vnd.apple.mpegurl') === 'maybe'`.
+      Its built-in HLS then fails **every** seek on Flightcast VOD
+      (`PipelineStatus::DEMUXER_ERROR_COULD_NOT_PARSE`, before or during
+      playback). hls.js seeks the same stream fine in the same browser.
+      So `canPlayType` alone can't decide.
+    - If `Hls.isSupported()` turns out false after loading, the engine
+      falls back to native `src` when `canPlayType` allows it, else
+      reports the error.
   - `loadHls()`: a memoised dynamic `import('hls.js/light')` plus the
     worker URL (`hls.js/dist/hls.worker.js?url`, a same-origin Vite
     asset).
@@ -193,7 +206,8 @@ carries a poster.
   `load`.
 - **`NativeEngine.load`:** any prior hls.js instance is destroyed first.
   Then:
-  - **Native path** (Safari/iOS, or non-HLS): `el.src = url` as today.
+  - **Native path** (Apple WebKit, no MSE, or non-HLS): `el.src = url`
+    as today.
   - **hls.js path:** `el.removeAttribute('src')`. When the module loads,
     construct `Hls({ workerPath, capLevelToPlayerSize: true })`, call
     `attachMedia(el)` and `loadSource(url)`. A load superseded while the
@@ -327,10 +341,11 @@ present). Chromium via Playwright, private port:
 
 ## Open questions
 
-- **Does Chrome's native HLS now report `canPlayType` 'maybe' on
-  desktop?** If it does, Chrome takes the native path automatically. The
-  detection handles either answer. Recorded during the Phase C browser
-  check.
+- ~~Does Chrome's native HLS report `canPlayType` 'maybe' on desktop?~~
+  **Settled 2026-11-04:** yes (Chrome 156), and it fails seeks on
+  Flightcast streams. Chromium uses hls.js (see the `needsHlsJs` rule).
+  Worth re-testing when Chrome's built-in HLS matures. The rule could
+  then narrow back to `canPlayType`.
 - **Publisher download counts.** Video-first playback fetches no MP3, so
   the publisher's MP3 analytics don't see these plays. That's accepted
   with Clarification 2 and is the same as Apple's behaviour.

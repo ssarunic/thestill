@@ -29,9 +29,34 @@ export function isHlsSource(url: string, mimeType?: string | null): boolean {
   }
 }
 
-/** True when this source has to go through hls.js on this element. */
+export function canPlayHlsNatively(el: HTMLMediaElement): boolean {
+  return el.canPlayType('application/vnd.apple.mpegurl') !== ''
+}
+
+function hasMediaSource(): boolean {
+  return typeof window !== 'undefined' && ('MediaSource' in window || 'ManagedMediaSource' in window)
+}
+
+// Safari and every iOS browser. Their native HLS is first-class (AirPlay,
+// lock screen, background audio); this AirPlay event exists nowhere else.
+function isAppleWebKit(): boolean {
+  return typeof window !== 'undefined' && 'WebKitPlaybackTargetAvailabilityEvent' in window
+}
+
+/**
+ * True when this source has to go through hls.js on this element.
+ *
+ * `canPlayType` alone cannot decide: Chromium reports native HLS support
+ * ('maybe', Chrome 156) yet its built-in HLS fails every seek on Flightcast
+ * VOD streams (DEMUXER_ERROR_COULD_NOT_PARSE, 2026-11-04) while hls.js
+ * seeks them fine. So hls.js wherever Media Source Extensions exist, except
+ * on Apple WebKit; native only there, or where MSE is missing.
+ */
 export function needsHlsJs(el: HTMLMediaElement, url: string, mimeType?: string | null): boolean {
-  return isHlsSource(url, mimeType) && el.canPlayType('application/vnd.apple.mpegurl') === ''
+  if (!isHlsSource(url, mimeType)) return false
+  const native = canPlayHlsNatively(el)
+  if (native && (isAppleWebKit() || !hasMediaSource())) return false
+  return true
 }
 
 let loaded: HlsModule | null = null
