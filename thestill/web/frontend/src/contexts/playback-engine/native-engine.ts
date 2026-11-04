@@ -3,7 +3,13 @@
 // event logic that previously lived inline in PlayerContext; behavior is
 // deliberately identical (the pre-extraction PlayerContext test suite is
 // the parity check).
+//
+// Spec #113 — HLS sources play natively where the browser supports it
+// (Safari/iOS) and through hls.js on the same element everywhere else.
+// hls.js only feeds the element; every transport call and media event
+// below works unchanged on top of it.
 
+import { loadHls, loadedHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 
 // Numeric codes rather than the MediaError constants — the global is not
@@ -26,12 +32,28 @@ function describeMediaError(error: MediaError | null): string {
 // A late resume seek only moves a source that has barely started.
 const LATE_SEEK_WINDOW_SECONDS = 5
 
+const HLS_UNSUPPORTED = 'This media format is not supported by your browser.'
+
+// hls.js ErrorTypes values (stable strings) for the two fatal kinds the
+// engine treats differently.
+const HLS_NETWORK_ERROR = 'networkError'
+const HLS_MEDIA_ERROR = 'mediaError'
+
 // What a replaced engine on the same element hands to its successor: the
 // element keeps its source across the swap, the engine's own state would not.
 export interface NativeEngineState {
   url: string | null
   pendingSeek: number | null
   userSeeked: boolean
+  // Spec #113 — the hls.js instance feeding the element, or the URL of an
+  // attach still waiting for the hls.js chunk.
+  hls?: HlsInstance | null
+  hlsPendingUrl?: string | null
+}
+
+interface HlsErrorData {
+  fatal: boolean
+  type: string
 }
 
 export class NativeEngine implements PlaybackEngine {
@@ -49,6 +71,14 @@ export class NativeEngine implements PlaybackEngine {
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
   private unbind: () => void
+  // Spec #113 — hls.js state. `hlsGeneration` invalidates an attach still
+  // waiting for the chunk when the source changes underneath it.
+  private hls: HlsInstance | null = null
+  private hlsAttach: Promise<void> | null = null
+  private hlsPendingUrl: string | null = null
+  private hlsGeneration = 0
+  private hlsRecovered = false
+  private readonly onHlsError = (_event: unknown, data: HlsErrorData) => this.handleHlsError(data)
 
   constructor(el: HTMLVideoElement, events: EngineEvents, carried?: NativeEngineState | null) {
     this.el = el
@@ -96,16 +126,37 @@ export class NativeEngine implements PlaybackEngine {
     this.unbind = () => {
       for (const [name, listener] of listeners) el.removeEventListener(name, listener)
     }
+
+    // Take over the predecessor's hls.js feed (StrictMode remount).
+    const hlsModule = loadedHls()
+    if (carried?.hls && hlsModule) {
+      this.hls = carried.hls
+      this.hls.on(hlsModule.Hls.Events.ERROR, this.onHlsError)
+    } else if (carried?.hlsPendingUrl) {
+      this.attachHls(carried.hlsPendingUrl)
+    }
   }
 
   // Assign a new source and (optionally) carry seek/rate across the
   // transition.
   load(source: EngineSource, opts?: LoadOptions): void {
     if (!source.url) return
-    this.el.src = source.url
-    this.url = source.url
+    this.detachHls()
     this.pendingSeek = opts?.seekTo ?? null
     this.userSeeked = false
+    if (needsHlsJs(this.el, source.url, source.mimeType)) {
+      // Stop the outgoing source now: hls.js attaches once its chunk has
+      // loaded, and the old file must not keep playing in the meantime.
+      if (this.el.hasAttribute('src')) {
+        this.el.removeAttribute('src')
+        this.el.load()
+      }
+      this.url = source.url
+      this.attachHls(source.url)
+    } else {
+      this.el.src = source.url
+      this.url = source.url
+    }
     const rate = opts?.rate
     if (rate != null && Number.isFinite(rate) && rate > 0) {
       // Loading resets playbackRate to defaultPlaybackRate; set both so
@@ -118,6 +169,7 @@ export class NativeEngine implements PlaybackEngine {
   // Detach the source (session stop). Keeps the element itself alive —
   // it is the one stable media node (spec #61 invariant 2).
   unload(): void {
+    this.detachHls()
     this.el.pause()
     this.el.removeAttribute('src')
     this.el.load()
@@ -127,6 +179,12 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   play(): Promise<void> {
+    // An hls.js attach still waiting for its chunk: play once it lands.
+    // Chrome and Firefox keep the user activation across the await; Safari
+    // never takes this path (native HLS).
+    if (this.hlsAttach) {
+      return this.hlsAttach.then(() => (this.url !== null ? this.el.play() : undefined))
+    }
     return this.el.play()
   }
 
@@ -200,6 +258,84 @@ export class NativeEngine implements PlaybackEngine {
    */
   destroy(): NativeEngineState {
     this.unbind()
-    return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked }
+    const hls = this.hls
+    const hlsPendingUrl = this.hlsAttach ? this.hlsPendingUrl : null
+    const hlsModule = loadedHls()
+    if (hls && hlsModule) hls.off(hlsModule.Hls.Events.ERROR, this.onHlsError)
+    // Hand over, don't tear down: the element keeps playing for the successor.
+    this.hls = null
+    this.hlsAttach = null
+    this.hlsGeneration++
+    return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked, hls, hlsPendingUrl }
+  }
+
+  // --- Spec #113: hls.js ---------------------------------------------------
+
+  private attachHls(url: string): void {
+    const generation = ++this.hlsGeneration
+    this.hlsPendingUrl = url
+    this.hlsRecovered = false
+    const attach = loadHls().then(
+      (hlsModule) => {
+        if (generation !== this.hlsGeneration) return
+        this.startHls(hlsModule, url)
+      },
+      () => {
+        if (generation !== this.hlsGeneration) return
+        this.events.onError('The video player could not be loaded.')
+      },
+    )
+    this.hlsAttach = attach.finally(() => {
+      if (generation === this.hlsGeneration) {
+        this.hlsAttach = null
+        this.hlsPendingUrl = null
+      }
+    })
+  }
+
+  private startHls({ Hls, workerPath }: HlsModule, url: string): void {
+    if (!Hls.isSupported()) {
+      this.events.onError(HLS_UNSUPPORTED)
+      return
+    }
+    const hls = new Hls({
+      workerPath,
+      // Fetch no more resolution than the slot shows; a hidden video
+      // (zero-size media layer) drops to the lowest rung.
+      capLevelToPlayerSize: true,
+      // Start fetching where the deferred seek will land, not at 0.
+      startPosition: this.pendingSeek ?? -1,
+    })
+    this.hls = hls
+    hls.on(Hls.Events.ERROR, this.onHlsError)
+    hls.attachMedia(this.el)
+    hls.loadSource(url)
+  }
+
+  private handleHlsError(data: HlsErrorData): void {
+    const hls = this.hls
+    if (!data.fatal || !hls) return
+    if (data.type === HLS_MEDIA_ERROR && !this.hlsRecovered) {
+      this.hlsRecovered = true
+      hls.recoverMediaError()
+      return
+    }
+    this.detachHls()
+    this.events.onError(
+      data.type === HLS_NETWORK_ERROR ? 'A network error interrupted playback.' : 'The media could not be decoded.',
+    )
+  }
+
+  // Tear down hls.js (and invalidate a pending attach). Leaves `url`
+  // alone: callers decide what the element plays next.
+  private detachHls(): void {
+    this.hlsGeneration++
+    this.hlsAttach = null
+    this.hlsPendingUrl = null
+    if (this.hls) {
+      const hls = this.hls
+      this.hls = null
+      hls.destroy()
+    }
   }
 }

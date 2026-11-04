@@ -18,6 +18,7 @@
     "@fontsource-variable/inter": "^5.3.0",
     "@tanstack/react-query": "^5.105.0",
     "dompurify": "^3.4.17",
+    "hls.js": "^1.7.3",
     "posthog-js": "^1.442.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
