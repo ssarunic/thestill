@@ -8,6 +8,7 @@
 // blob: worker-src.
 
 import type Hls from 'hls.js'
+import type { Events } from 'hls.js'
 
 export type HlsConstructor = typeof Hls
 export type HlsInstance = Hls
@@ -59,13 +60,11 @@ export function needsHlsJs(el: HTMLMediaElement, url: string, mimeType?: string 
   return true
 }
 
-let loaded: HlsModule | null = null
-let pending: Promise<HlsModule> | null = null
+// hls.js's Events.ERROR value as a literal, so an engine can move a
+// listener between instances without the lazily loaded module at hand.
+export const HLS_ERROR_EVENT = 'hlsError' as Events.ERROR
 
-/** The hls.js module once it has loaded, else null (synchronous). */
-export function loadedHls(): HlsModule | null {
-  return loaded
-}
+let pending: Promise<HlsModule> | null = null
 
 /**
  * Load hls.js (light build: no subtitles, alternate audio or DRM — none
@@ -75,10 +74,7 @@ export function loadedHls(): HlsModule | null {
 export function loadHls(): Promise<HlsModule> {
   if (!pending) {
     pending = Promise.all([import('hls.js/light'), import('hls.js/dist/hls.worker.js?url')]).then(
-      ([mod, worker]) => {
-        loaded = { Hls: mod.default, workerPath: worker.default }
-        return loaded
-      },
+      ([mod, worker]) => ({ Hls: mod.default, workerPath: worker.default }),
       (err: unknown) => {
         pending = null
         throw err

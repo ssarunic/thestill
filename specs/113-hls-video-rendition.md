@@ -178,7 +178,8 @@ carries a poster.
 ### Engine (`playback-engine/`)
 
 - **`hls.ts` (new):**
-  - `isHlsMime(mime)`.
+  - `isHlsSource(url, mime)`: by MIME type, falling back to an `.m3u8`
+    path when the asset carries none. `canPlayHlsNatively(el)`.
   - `needsHlsJs(el, url, mime)`: an HLS source uses hls.js wherever
     Media Source Extensions (`MediaSource` / `ManagedMediaSource`) exist,
     except on Apple WebKit (`WebKitPlaybackTargetAvailabilityEvent` in
@@ -276,11 +277,11 @@ The spec #95 test keeps its intent: no analytics host is listed, and
 | # | File | Change |
 |---|---|---|
 | B1 | `web/frontend/package.json` + lock | `hls.js` `^1.7.3`, released 2026-09-11; 1.7.4 is only 7 days old. It has no dependencies, so the lock entry is added surgically (macOS `npm install` prunes Linux optionals). Validate with `npm ci` |
-| B2 | `src/contexts/playback-engine/hls.ts` (new) | `isHlsMime`, `needsHlsJs`, `loadHls`, `preloadHls` |
+| B2 | `src/contexts/playback-engine/hls.ts` (new) | `isHlsSource`, `canPlayHlsNatively`, `needsHlsJs`, `loadHls`, `preloadHls`, `HLS_ERROR_EVENT` |
 | B3 | `src/contexts/playback-engine/types.ts` | `EngineSource.mimeType` |
 | B4 | `src/contexts/playback-engine/native-engine.ts` | hls.js attach/detach/handoff, pending-attach play, fatal-error mapping |
 | B5 | `src/contexts/PlayerContext.tsx` | `ActiveSource.mimeType` through `selectSource` → `beginSource` → `load` |
-| B6 | `src/contexts/playback-engine/native-engine.test.ts` | fake Hls module: attach on HLS+no native, native path when `canPlayType` says yes, superseded load, unload destroys, fatal → onError, recover once |
+| B6 | `src/contexts/playback-engine/native-engine.hls.test.ts` (new) | fake Hls module: attach on HLS+no native, native path when `canPlayType` says yes, superseded load, unload destroys, fatal → onError, recover once |
 
 **Gate:** `npx vitest run src/contexts`, `npx tsc --noEmit`, `npx eslint` on touched files, and `npx vite build` showing hls.js in its own chunk, separate from the entry chunk.
 

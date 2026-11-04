@@ -303,6 +303,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onPlaying: () => {
         setIsPlaying(true)
         setIsLoading(false)
+        // Playback is flowing again, so any earlier error has been
+        // recovered from (spec #113: hls.js recoverMediaError after the
+        // element already reported MEDIA_ERR_DECODE).
+        setMediaError(null)
       },
       onWaiting: () => setIsLoading(true),
       onCanPlay: () => setIsLoading(false),

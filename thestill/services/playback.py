@@ -99,7 +99,7 @@ def _select_youtube_asset(
 def _is_native_video_alternate(mime_type: str) -> bool:
     """True for alternates the native <video> engine can play (spec #113)."""
     mime = mime_type.lower()
-    return mime in _HLS_MIME_TYPES or (mime.startswith(_VIDEO_MIME_PREFIX) and mime != _YOUTUBE_MIME_TYPE)
+    return mime in _HLS_MIME_TYPES or (is_video_enclosure(mime) and mime != _YOUTUBE_MIME_TYPE)
 
 
 def _select_video_asset(

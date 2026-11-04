@@ -428,7 +428,7 @@ export default function EpisodeReader({
   // without native HLS, so the first play click finds it cached.
   const videoAsset = episode?.playback?.kind === 'video' ? episode.playback.video : null
   useEffect(() => {
-    if (!videoAsset || typeof document === 'undefined') return
+    if (!videoAsset) return
     if (needsHlsJs(document.createElement('video'), videoAsset.url, videoAsset.mime_type)) preloadHls()
   }, [videoAsset])
 
