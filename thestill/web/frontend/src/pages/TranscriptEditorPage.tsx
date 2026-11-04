@@ -12,6 +12,7 @@ import SpeakerPanel from '../components/transcript-editor/SpeakerPanel'
 import SegmentInspector from '../components/transcript-editor/SegmentInspector'
 import EditorTranscript from '../components/transcript-editor/EditorTranscript'
 import TransportDock from '../components/transcript-editor/TransportDock'
+import { SKIP_SECONDS, useEditorPlayback } from '../components/transcript-editor/useEditorPlayback'
 import LaneTimeline from '../components/transcript-editor/LaneTimeline'
 import SpeakerDialog from '../components/transcript-editor/SpeakerDialog'
 import ReportProposalBanner from '../components/transcript-editor/ReportProposalBanner'
@@ -108,26 +109,20 @@ export default function TranscriptEditorPage() {
     }
     return track
   }, [episode, editor.state?.local_audio])
-  const isCurrent = episode ? player.isCurrent(episode.id) : false
-  const onOurSource = isCurrent && player.track?.audioUrl === desiredTrack?.audioUrl
-  const seekTo = useCallback(
-    (seconds: number) => {
-      if (!desiredTrack) return
-      if (onOurSource) {
-        player.seek(seconds)
-        if (!player.isPlaying) player.resume()
-        return
-      }
-      player.play(desiredTrack, { startAt: seconds })
-    },
-    [desiredTrack, onOurSource, player],
-  )
-  const togglePlay = useCallback(() => {
-    if (!desiredTrack) return
-    if (onOurSource) player.toggle()
-    else player.play(desiredTrack, { startAt: isCurrent ? player.getCurrentTime() : (selected ? selected.start + offset : 0) })
-  }, [desiredTrack, onOurSource, isCurrent, player, selected, offset])
-  const duration = onOurSource && player.duration > 0 ? player.duration : (episode?.duration ?? 0)
+  const {
+    isCurrent,
+    duration,
+    seekTo,
+    togglePlay,
+    skipBy,
+    pause: pausePlayback,
+  } = useEditorPlayback({
+    desiredTrack,
+    player,
+    currentTime,
+    fallbackStart: selected ? selected.start + offset : 0,
+    episodeDuration: episode?.duration ?? 0,
+  })
   const activeId = useMemo(() => {
     if (!isCurrent || segments.length === 0) return null
     const index = findActiveSegmentIndex(segments, currentTime + HIGHLIGHT_LEAD_SECONDS, offset)
@@ -285,15 +280,15 @@ export default function TranscriptEditorPage() {
           return
         case 'j':
         case 'J':
-          player.skip(-5)
+          skipBy(-SKIP_SECONDS)
           return
         case 'k':
         case 'K':
-          if (player.isPlaying) player.pause()
+          pausePlayback()
           return
         case 'l':
         case 'L':
-          player.skip(5)
+          skipBy(SKIP_SECONDS)
           return
         case 'ArrowDown':
         case 'ArrowUp': {
@@ -321,7 +316,7 @@ export default function TranscriptEditorPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [segments, selectedId, selected, disabled, togglePlay, player, selectRow, mergeWithPrevious])
+  }, [segments, selectedId, selected, disabled, togglePlay, skipBy, pausePlayback, selectRow, mergeWithPrevious])
 
   // --- gates --------------------------------------------------------------------
   if (!authLoading && !allowed) return <Navigate to={backTo} replace />
@@ -452,7 +447,7 @@ export default function TranscriptEditorPage() {
           availableRates={player.availableRates}
           localAudio={Boolean(editor.state?.local_audio)}
           onToggle={togglePlay}
-          onSkip={(delta) => (onOurSource ? player.skip(delta) : seekTo(Math.max(0, (isCurrent ? currentTime : 0) + delta)))}
+          onSkip={skipBy}
           onRate={player.setRate}
         />
         <div className="mt-2">
