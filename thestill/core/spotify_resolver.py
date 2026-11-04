@@ -73,7 +73,8 @@ logger = get_logger(__name__)
 class SpotifyResolutionError(Exception):
     """A Spotify link was recognised but could not be mapped to a feed / episode.
 
-    The message is user-facing: the import API surfaces it verbatim.
+    The message is user-facing: the import API surfaces it verbatim, so it
+    never embeds exception text (spec #112); log the detail instead.
     """
 
     def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
@@ -206,7 +207,10 @@ def _guarded_get(
         with guarded_session(user_agent=user_agent, retries=_retry_policy()) as session:
             resp = session.get(url, timeout=_HTTP_TIMEOUT, headers=headers)
     except requests.RequestException as exc:
-        raise SpotifyResolutionError(f"{label} fetch failed: {exc}") from exc
+        # Spec #112: the message is user-facing, so exception text stays in
+        # the log and on __cause__.
+        logger.warning("spotify_fetch_failed", label=label, error=str(exc))
+        raise SpotifyResolutionError(f"{label} fetch failed") from exc
     if resp.status_code != 200:
         raise SpotifyResolutionError(f"{label} returned HTTP {resp.status_code}", status_code=resp.status_code)
     return resp
@@ -237,7 +241,8 @@ def _itunes_json(url: str, *, label: str) -> list:
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise SpotifyResolutionError(f"{label} returned non-JSON: {exc}") from exc
+        logger.warning("spotify_non_json", label=label, error=str(exc))
+        raise SpotifyResolutionError(f"{label} returned non-JSON") from exc
     results = payload.get("results") if isinstance(payload, dict) else None
     return results if isinstance(results, list) else []
 
@@ -459,13 +464,15 @@ class SpotifyWebApi:
                     timeout=_HTTP_TIMEOUT,
                 )
         except requests.RequestException as exc:
-            raise SpotifyResolutionError(f"Spotify token request failed: {exc}") from exc
+            logger.warning("spotify_token_request_failed", error=str(exc))
+            raise SpotifyResolutionError("Spotify token request failed") from exc
         if resp.status_code != 200:
             raise SpotifyResolutionError(f"Spotify token request returned HTTP {resp.status_code}")
         try:
             body = resp.json()
         except ValueError as exc:
-            raise SpotifyResolutionError(f"Spotify token response was not JSON: {exc}") from exc
+            logger.warning("spotify_token_non_json", error=str(exc))
+            raise SpotifyResolutionError("Spotify token response was not JSON") from exc
         token = body.get("access_token") if isinstance(body, dict) else None
         if not isinstance(token, str) or not token:
             raise SpotifyResolutionError("Spotify token response carried no access_token")
@@ -482,7 +489,8 @@ class SpotifyWebApi:
         try:
             payload = resp.json()
         except ValueError as exc:
-            raise SpotifyResolutionError(f"Spotify API returned non-JSON: {exc}") from exc
+            logger.warning("spotify_api_non_json", path=path, error=str(exc))
+            raise SpotifyResolutionError("Spotify API returned non-JSON") from exc
         if not isinstance(payload, dict):
             raise SpotifyResolutionError("Spotify API returned an unexpected payload")
         return payload

@@ -223,7 +223,7 @@ create / rotate time. They only ever narrow the session ceiling above.
 | Scope | Grants | Default | Offered to |
 |---|---|---|---|
 | `read` | `list_podcasts`, `list_episodes`, `get_status`, `get_transcript`, `get_summary`, `get_episode_clip`, `search_corpus`, `find_mentions`, `list_quotes_by`, `get_entity`, `list_episodes_by_entity`, all `thestill://` resources | on, cannot be removed | everyone |
-| `follows` | `add_podcast` (add + auto-follow), `remove_podcast` (unfollow) | **off** | everyone |
+| `follows` | `add_podcast` (add + auto-follow), `remove_podcast` (unfollow); `import_episode`, `send_to_inbox` ([#112](112-mcp-inbox-import.md)) | **off** | everyone |
 | `pipeline` | `refresh_feeds`, `download_episodes`, `downsample_audio`, `transcribe_episodes`, `clean_transcripts`, `process_episode`, `summarize_episodes` | off | admins only; silently dropped for non-admins |
 
 - `tools/list` returns only the tools the token's scopes grant, so Claude

@@ -1,6 +1,6 @@
 # MCP Inbox Import: `import_episode` and `send_to_inbox`
 
-> **Status:** 📋 Planned
+> **Status:** 🚧 Phases A–B implemented (2026-11-04); Phase C after merge
 > **Created:** 2026-11-04
 > **Updated:** 2026-11-04
 > **Priority:** Medium. The connector can find episodes but can't act on
@@ -164,18 +164,24 @@ Decided while drafting, not asked:
   error.
 - **Response links:** both tools return `episode_url`, built the same way as
   every other tool, so Claude can link the episode page.
-- **Import error text (Codex P2 on PR #465):** `ImportError` carries two
-  texts. `str(exc)` is the detail and goes only to the log.
-  `exc.public_message` is what a client may see. A raise site sets it with
-  `public=` only when the text was written for a user (the YouTube failure
-  text, the Apple "not a single episode" hint, Apple "no such episode", and
-  `UnsupportedUrlError`). Otherwise it falls back to "Couldn't read that
-  link. Check it's a public episode link and try again." The MCP tool *and*
-  the web route return only `public_message` and log the detail with
-  `exc_info`, so this fixes the web leak too, in the shared service rather
-  than in two callers. A message built only from the caller's own URL and
-  fixed wording counts as authored. One with exception text or upstream
-  bodies in it never does.
+- **Import error text (Codex P2 on PR #465):** the invariant is that
+  `ImportError` and `SpotifyResolutionError` text is user-facing, and **never
+  embeds exception text**. A message may hold fixed wording, the caller's
+  own URL, ids derived from it, and HTTP status codes. The underlying
+  exception rides on `__cause__` (`raise … from exc`) and goes into a
+  `logger.warning` with `error=str(exc)` at the raise site. The eight
+  wrapping sites change: `import_service.py:362`, `:376` and `:1022`, and
+  `spotify_resolver.py:209`, `:240`, `:462`, `:468` and `:485`. The `_resolve`
+  catch-all becomes "Couldn't read that link. Check it's a public episode
+  link and try again." With the invariant at the source, the web route keeps
+  relaying `str(exc)`, now safely, and the MCP tool does the same through
+  `also_authored=(ImportError,)`. One rule in the shared service, not a
+  second message channel in two callers.
+  *Drafted first as* an `ImportError.public_message` attribute with opt-in
+  `public=` per raise site. That was dropped while implementing: it changes
+  more raise sites, needs the Spotify error type to grow the same attribute,
+  and leaves two texts to keep in sync. Fixing the eight sites makes the
+  existing contract true instead.
 
 ## Execution plan
 
@@ -183,14 +189,14 @@ Decided while drafting, not asked:
 
 | # | File | Change |
 |---|------|--------|
-| A0 | `thestill/services/import_service.py`, `thestill/web/routes/api_imports.py` | `ImportError.__init__(detail, *, public=None)` and a `public_message` property (generic fallback; `UnsupportedUrlError` is authored by default). Pass `public=` at the authored raise sites only. The web route returns `public_message` and logs the detail. Tests: each wrapping site (`:362`, `:376`, `:780`, `:1022`) yields the generic text with no exception text in it; the authored sites keep their wording; the web 400 body for a `requests` failure has no exception text |
-| A1 | `thestill/mcp/inbox_tools.py` (new) | `INBOX_TOOL_NAMES`, `inbox_tool_definitions()`, `dispatch_inbox_tool(name, arguments, *, user_id, import_service, inbox_service, podcast_repository, base_url)`. `import_episode` maps `ImportResult` to `{success, outcome, message, episode: {id, title, podcast_title, state, failed, episode_url}}`, and an `ImportError` becomes `{success: false, error: exc.public_message}`, with the detail logged. `send_to_inbox` resolves `episode_id` or `episode_url`, gives a clean "not found", then `deliver_to_user(source="ad_hoc")` → `{success, created, message, episode}` |
+| A0 | `thestill/services/import_service.py`, `thestill/core/spotify_resolver.py` | The eight wrapping raise sites stop embedding `{exc}`, log it, and keep `from exc`. Tests: a `requests` failure, a non-JSON body and a resolver that raises `RuntimeError("kaboom")` each give a message with no exception text, with the cause on `__cause__`. The existing catch-all test, which asserted `"kaboom"` *was* in the message, is inverted |
+| A1 | `thestill/mcp/inbox_tools.py` (new) | `INBOX_TOOL_NAMES`, `inbox_tool_definitions()`, `dispatch_inbox_tool(name, arguments, *, user_id, import_service, inbox_service, podcast_repository, base_url)`. `import_episode` maps `ImportResult` to `{success, outcome, message, episode: {id, title, podcast_title, state, failed, episode_url}}`, and an `ImportError` becomes `{success: false, error: str(exc)}` (user-facing by the A0 invariant). `send_to_inbox` resolves `episode_id` or `episode_url`, gives a clean "not found", then `deliver_to_user(source="ad_hoc")` → `{success, created, message, episode}` |
 | A2 | `thestill/mcp/tools.py` | Build `ImportService` with the web wiring. Add both names to `_MUTATING_TOOLS`. List the definitions. Dispatch after the existing branches with the caller's user id: remote is `identity.user.id`; stdio single-user is the default user; stdio multi-user is refused |
 | A3 | `thestill/mcp/scopes.py` | `import_episode`, `send_to_inbox` → `SCOPE_FOLLOWS` |
 | A4 | `tests/unit/mcp/test_inbox_tools.py` (new) | Unit tests on the dispatcher with fakes: each outcome, `ImportError` text, the `episode_url` parse, not-found, both-or-neither args. End to end through the HTTP harness: a `read` token neither lists nor calls the tools; a `follows` token imports (resolver stubbed) and a repeat import returns `already_in_inbox` with one inbox row and one pipeline task; `send_to_inbox` creates once then returns `created: false`; read-only mode refuses a non-admin |
 | A5 | `tests/unit/mcp/test_scopes.py` | Assert both tools sit in `follows` |
 
-**Gate A:** `./venv/bin/python -m pytest tests/unit/mcp tests/unit/web/test_mcp_http.py tests/unit/services/test_import_service*.py tests/integration/web/test_api_imports.py -q`
+**Gate A:** `./venv/bin/python -m pytest tests/unit/mcp tests/unit/web/test_mcp_http.py tests/unit/services/test_import_service*.py tests/unit/core/test_spotify_resolver.py tests/integration/web/test_api_imports.py -q`
 is green, and `ruff check` passes on the changed files.
 
 ### Phase B: copy and docs
@@ -238,7 +244,7 @@ the changed docs.
 **Created:** `thestill/mcp/inbox_tools.py`, `tests/unit/mcp/test_inbox_tools.py`
 
 **Modified:** `thestill/services/import_service.py`,
-`thestill/web/routes/api_imports.py`, `thestill/mcp/tools.py`,
+`thestill/core/spotify_resolver.py`, `thestill/mcp/tools.py`,
 `thestill/mcp/scopes.py`,
 `tests/unit/mcp/test_scopes.py`,
 `thestill/web/frontend/src/constants/mcpScopes.ts`,
@@ -251,10 +257,16 @@ the changed docs.
 
 ## Open questions
 
-- **The synthetic `audio-imports` parent.** For a bare audio URL the
-  podcast slug may be empty in `ImportResult`, and the episode link may not
-  build. Resolved in Phase A by checking `episode_links` with an empty slug.
-  If it fails, `episode_url` is `null`, not a broken link.
+- **The synthetic `audio-imports` parent** (resolved in Phase A). An empty
+  slug makes `episode_links` return `episode_url: null`, not a broken link.
+  The bigger finding: `get_episode()` / `get_episode_by_slug()` build a full
+  `Podcast`, and the synthetic parent's `synthetic://audio-imports` feed URL
+  fails its validation. So both tools describe episodes from
+  `inbox_repository.get_item()`, the inbox join `ImportService` already
+  uses. `send_to_inbox` therefore works for bare-audio imports by
+  `episode_id` but not by `episode_url`, where the slug lookup raises and
+  the client gets a reference-id error. That limitation predates this spec;
+  follow-up: a slug→id lookup that doesn't hydrate the podcast.
 - **Usage events.** Spec #95's `mcp_tool_call` already counts every call,
   and spec #111's `user_connector_days` counts successful ones, so nothing
   new is planned. Revisit if the Scorecard wants imports split by surface.
@@ -265,3 +277,30 @@ Revert the PR. No migrations, no data rewrites, no API changes: the tools
 disappear from `tools/list` on the next deploy. Inbox rows and episodes
 created through them stay, exactly as web imports would. The scope label
 change is copy only.
+
+## Outcome
+
+Phases A and B implemented on `feat/112-mcp-inbox-import` (2026-11-04);
+Phase C (deploy, widen the operator's connector, import the five episodes)
+waits for merge.
+
+- **Built as planned:** `thestill/mcp/inbox_tools.py` (definitions and
+  dispatcher), wired into `tools.py` with the web `ImportService` wiring,
+  both names in `_MUTATING_TOOLS` and in `follows`, "Follows & imports"
+  copy, and docs.
+- **Deviation 1, error text:** the `public_message` attribute drafted after
+  the Codex review was replaced by the "never embed exception text"
+  invariant at the eight raise sites (see Clarifications). The existing
+  catch-all test asserted the leak (`"kaboom" in str(exc)`) and is inverted.
+- **Deviation 2, describing episodes:** both tools read through
+  `inbox_repository.get_item()` instead of `get_episode()`, because of the
+  synthetic parent (see Open questions). The dispatcher gained an
+  `inbox_repository` argument.
+- **Tests:** `tests/unit/mcp/test_inbox_tools.py` (20: dispatcher fakes,
+  remote scope gate, idempotent import with one inbox row and one pipeline
+  task, cross-user send, read-only refusal, stdio single- and multi-user),
+  `tests/unit/services/test_import_error_messages.py` (4), and a scope
+  assertion. Gate A: 302 passed. Gate B: 21 vitest passed, markdownlint
+  clean.
+- **Follow-ups:** a non-hydrating slug→id lookup, so `send_to_inbox` takes
+  page URLs for bare-audio imports.

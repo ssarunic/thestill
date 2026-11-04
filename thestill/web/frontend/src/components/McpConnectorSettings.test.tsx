@@ -84,7 +84,7 @@ describe('McpConnectorSettings', () => {
     // Non-admin: pipeline is not offered; read is locked on.
     expect(screen.getByRole('checkbox', { name: 'Read' })).toBeDisabled()
     expect(screen.queryByRole('checkbox', { name: 'Pipeline' })).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Follows' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Follows & imports' }))
     await userEvent.click(screen.getByRole('button', { name: 'Create' }))
 
     await waitFor(() => expect(mockMint).toHaveBeenCalledWith(['read', 'follows']))
@@ -162,7 +162,7 @@ describe('McpConnectorSettings with OAuth', () => {
     expect(await screen.findByText('Claude and other AI apps')).toBeInTheDocument()
     expect(screen.getByTestId('mcp-address')).toHaveTextContent('https://pods.example.com/mcp')
     expect(await screen.findByText('Claude')).toBeInTheDocument()
-    expect(screen.getByText(/claude\.ai · Read, Follows/)).toBeInTheDocument()
+    expect(screen.getByText(/claude\.ai · Read, Follows & imports/)).toBeInTheDocument()
     expect(screen.getByText('Advanced: personal connector URL')).toBeInTheDocument()
   })
 

@@ -143,6 +143,8 @@ transcript on the instance. Over the connector:
   the stdio server prints is not used remotely.
 - `remove_podcast` **unfollows** — it never deletes a podcast.
 - `add_podcast` adds and follows it for you.
+- `import_episode` and `send_to_inbox` put an episode in **your** inbox.
+  They need the **Follows & imports** scope, like `add_podcast`.
 - `get_status` returns counts over your follows only; admins get the full
   operator payload.
 - Podcast identifiers are `uuid`, `slug` or RSS URL. A bare number is
@@ -1046,6 +1048,84 @@ Claude: "3 episodes discuss agentic engineering, here are the key clips..."
   "total": 3
 }
 ```
+
+---
+
+## Inbox Tools
+
+Put episodes in your Thestill inbox (spec #112). Both tools need the
+**Follows & imports** scope on a connector token. On stdio they deliver to
+the default user in single-user mode, and they refuse in multi-user mode,
+where stdio has no signed-in user.
+
+### 21. `import_episode`
+
+Import one episode from its link: an Apple Podcasts episode link (with
+`?i=…`), a YouTube video, a Spotify episode link, or a direct audio file. This
+is the same import as the web app's import box: the same daily import limit,
+and the same pause switch. Safe to repeat.
+
+**Parameters:**
+
+- `url` (string, required): the episode link. One URL per call.
+
+**Example Usage:**
+
+```
+User: "Add Eric Schmidt's Prof G episode to my inbox"
+Claude: [finds the Apple link, calls import_episode]
+Claude: "Imported “The Risks and Opportunities of an AI Future” into your inbox."
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "outcome": "new_episode",
+  "message": "Imported “…” into your inbox. Processing has started.",
+  "episode": {
+    "id": "…",
+    "title": "…",
+    "podcast_title": "The Prof G Pod with Scott Galloway",
+    "state": "discovered",
+    "failed": false,
+    "episode_url": "https://thestill.me/podcasts/…/episodes/…",
+    "audio_url": "https://…"
+  }
+}
+```
+
+`outcome` is `new_episode` (Thestill didn't have it, so it's being
+processed), `added_existing` (Thestill had it; it's now in your inbox) or
+`already_in_inbox`. Links Thestill can't read come back as
+`{"success": false, "error": "…"}`, with a message you can show to people.
+
+### 22. `send_to_inbox`
+
+Send an episode Thestill already has to your inbox, the twin of the
+episode page's **Send to my inbox**. It fits the results of `search_corpus`,
+`find_mentions` and `list_episodes`.
+
+**Parameters** (exactly one):
+
+- `episode_id` (string): the episode UUID from a citation row.
+- `episode_url` (string): the Thestill episode page link
+  (`…/podcasts/<show>/episodes/<episode>`).
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "created": true,
+  "message": "Sent “…” to your inbox.",
+  "episode": { "id": "…", "title": "…", "podcast_title": "…", "episode_url": "…" }
+}
+```
+
+`created: false` means the episode was already in your inbox. It is left
+untouched: delivery never re-dates or re-reads a row.
 
 ---
 
