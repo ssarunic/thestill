@@ -133,10 +133,10 @@ def test_park_refuses_foreign_resource(env):
         )
 
 
-def test_park_without_scope_defaults_to_read_offline(env):
+def test_park_without_scope_defaults_to_read_follows_offline(env):
     service, *_ = env
     view = service.view_pending(_park(service, scopes=None))
-    assert view.requested_scopes == ("read",) and view.offline_access is True
+    assert view.requested_scopes == ("read", "follows") and view.offline_access is True
     assert view.client_name == "Claude" and view.redirect_host == "claude.ai" and view.loopback_only is False
 
 

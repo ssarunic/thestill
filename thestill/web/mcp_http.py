@@ -44,7 +44,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from ..mcp.identity import STATE_GPC, STATE_IS_ADMIN, STATE_SCOPES, STATE_USER
-from ..models.mcp_token import SCOPE_READ
+from ..models.mcp_token import SCOPE_FOLLOWS, SCOPE_READ
 from ..models.oauth import SCOPE_OFFLINE_ACCESS
 from ..services.abuse.access_guard import AccessGuard
 from ..services.abuse.errors import AccountDisabledError
@@ -291,8 +291,13 @@ class McpBearerGuard:
         self._oauth = oauth
         self._config = runtime.config
         self._users = runtime.users
+        # MCP clients request exactly the challenge's scope, and the consent
+        # screen offers only what was requested, so ``follows`` must be named
+        # here or readers can never tick it. ``pipeline`` stays out: admins
+        # only, and asking for it would put it on every admin's consent.
         self._challenge = (
-            f'Bearer resource_metadata="{resource_metadata_url}", scope="{SCOPE_READ} {SCOPE_OFFLINE_ACCESS}"'
+            f'Bearer resource_metadata="{resource_metadata_url}", '
+            f'scope="{SCOPE_READ} {SCOPE_FOLLOWS} {SCOPE_OFFLINE_ACCESS}"'
         )
 
     def _unauthorized(self, error: Optional[str] = None) -> Response:

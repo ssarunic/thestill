@@ -5,7 +5,7 @@ import { SCOPE_COPY } from '../constants/mcpScopes'
 
 // The MCP scope checkboxes, shared by the Settings connector card (spec #78)
 // and the OAuth consent screen (spec #109). `read` is always on and locked,
-// `follows` is opt-in, `pipeline` is offered to admins only — the server
+// `follows` starts as `initial` says (off in Settings, on at consent), `pipeline` is offered to admins only — the server
 // applies the same rule, so this form only saves a refused round trip.
 
 export default function McpScopeForm({

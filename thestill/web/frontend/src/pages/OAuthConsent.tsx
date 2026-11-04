@@ -112,7 +112,7 @@ export default function OAuthConsent() {
             </div>
             <McpScopeForm
               isAdmin={isAdmin}
-              initial={['read']}
+              initial={['read', 'follows']}
               offer={data.requested_scopes as McpTokenScope[]}
               legend={`What ${appName} may do`}
               busy={busy}
