@@ -118,7 +118,28 @@ WORK_P31 = frozenset(
         "Q7889",  # video game
     }
 )
-PRODUCT_P31 = PRODUCT_P31 | WORK_P31
+# Named AI models and chatbots: Claude, ChatGPT, Gemini, Grok, Copilot,
+# DALL-E, Midjourney, Sora. GLiNER reads a name like "Claude" or "Sora" as a
+# person, and none of these classes was listed, so the person tag stood and
+# Sora sat under "People in this episode". Broad concept classes the same
+# items carry ("generative artificial intelligence", "artificial neural
+# network") are left out: they would pull topics into products.
+AI_MODEL_P31 = frozenset(
+    {
+        "Q870780",  # chatbot
+        "Q116961403",  # conversational AI
+        "Q133284163",  # generative artificial intelligence chatbot
+        "Q119018971",  # generative artificial intelligence website
+        "Q115305900",  # large language model
+        "Q124629760",  # family of large language models
+        "Q116777014",  # generative pre-trained transformer
+        "Q117349473",  # artificial intelligence model
+        "Q113940039",  # text-to-image model
+        "Q115517227",  # text-to-video model
+        "Q114617315",  # diffusion model
+    }
+)
+PRODUCT_P31 = PRODUCT_P31 | WORK_P31 | AI_MODEL_P31
 
 # Commerce classes no country, party or NGO carries. Wikidata often adds the
 # generic "organization" (Q43229, in TOPIC_P31) to real companies — Allianz,
@@ -144,6 +165,7 @@ SOFTWARE_P31 = frozenset(
         "Q1395226",  # mobile app
     }
 )
+SOFTWARE_P31 = SOFTWARE_P31 | AI_MODEL_P31
 _PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
 
 # Kinds of person, not persons. "child", "parent", "Professor" and
@@ -343,6 +365,16 @@ def is_kind_of_person(p31_qids: Iterable[str], qid: Optional[str] = None) -> boo
     return qid in PERSON_P31 or bool({q for q in p31_qids if q} & KIND_OF_PERSON_P31)
 
 
+def is_ai_model(p31_qids: Iterable[str]) -> bool:
+    """True when the item is a named AI model or chatbot ("Claude", "Sora").
+
+    Like a kind of person, it is exempt from the person-demotion hold:
+    GLiNER tags these names person all the time, the link to the model is
+    usually right, and the tag is what is wrong.
+    """
+    return bool({q for q in p31_qids if q} & AI_MODEL_P31)
+
+
 def classify_entity_type(
     p31_qids: Iterable[str],
     fallback: EntityType,
@@ -366,8 +398,8 @@ def classify_entity_type(
        fallback: a film, series, book or podcast is a product even when
        GLiNER tagged it ``topic`` (spec #92 Phase 0).
     3. Else if any P31 is in ``BUSINESS_P31`` (and none is a place) →
-       ``COMPANY``, and else if any is in ``SOFTWARE_P31`` → ``PRODUCT``,
-       whatever the fallback. Checked before the topic list, which holds
+       ``COMPANY``, and else if any is in ``SOFTWARE_P31`` (which holds the
+       AI model classes) → ``PRODUCT``, whatever the fallback. Checked before the topic list, which holds
        the generic "organization" class many real companies also carry.
     4. Else if any P31 is in ``COMPANY_P31`` and ``fallback`` is also
        company-or-product → ``COMPANY``. We require fallback agreement

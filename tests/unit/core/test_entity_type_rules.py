@@ -16,7 +16,7 @@ the resolver's tentative type unchanged.
 
 from __future__ import annotations
 
-from thestill.core.entity_type_rules import classify_entity_type, is_kind_of_person
+from thestill.core.entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
 from thestill.models.entities import EntityType
 
 
@@ -255,6 +255,36 @@ class TestBusinessAndSoftware:
 
         assert _mint_type_from_p31(self.ALLIANZ) is EntityType.COMPANY
         assert _mint_type_from_p31(["Q7397"]) is EntityType.PRODUCT
+
+
+class TestAIModels:
+    """Prod 2026-11-03: "Sora (text-to-video model)" and "Claude (AI)" under
+    "People in this episode", ChatGPT under companies. P31 sets as Wikidata
+    lists them."""
+
+    SORA = ["Q115517227", "Q114617315"]  # text-to-video model, diffusion model
+    CLAUDE = ["Q870780", "Q116961403", "Q124629760", "Q133284163"]
+    CHATGPT = ["Q133284163", "Q116777014", "Q115305900", "Q19967801", "Q35127", "Q870780", "Q117246174"]
+    DALL_E = ["Q96369982", "Q113940039", "Q117349473", "Q116777014", "Q133857185"]
+
+    def test_an_ai_model_is_a_product_whatever_gliner_said(self):
+        for p31 in (self.SORA, self.CLAUDE, self.CHATGPT, self.DALL_E):
+            for fallback in EntityType:
+                assert classify_entity_type(p31, fallback) is EntityType.PRODUCT
+
+    def test_an_ai_model_is_exempt_from_the_person_hold(self):
+        assert is_ai_model(self.SORA) and is_ai_model(self.CLAUDE)
+        assert not is_ai_model(["Q5"]) and not is_ai_model(["Q11424"])
+
+    def test_the_broad_generative_ai_class_alone_is_not_a_model(self):
+        # "generative artificial intelligence" (Q117246174) is also the field.
+        assert not is_ai_model(["Q117246174"])
+        assert classify_entity_type(["Q117246174"], EntityType.TOPIC) is EntityType.TOPIC
+
+    def test_minting_agrees(self):
+        from thestill.core.entity_review import _mint_type_from_p31
+
+        assert _mint_type_from_p31(self.SORA) is EntityType.PRODUCT
 
 
 class TestPlacesAndEventsBySuperclass:

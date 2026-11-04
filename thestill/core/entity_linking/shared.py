@@ -29,7 +29,7 @@ from structlog import get_logger
 
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
-from ..entity_type_rules import classify_entity_type, is_kind_of_person
+from ..entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
 
 logger = get_logger(__name__)
 
@@ -142,7 +142,8 @@ def linked_result(
     (``p31_says_other_type``) for a curator. The exception is a kind of
     person (profession, title, kinship, age group): "the photographer"
     linked to the occupation is a right link and a wrong tag, so it moves
-    to topic at once.
+    to topic at once. A named AI model ("Sora", "Claude") is the same case
+    and moves to product.
     """
     p31_qids: List[str] = []
     entity_type = fallback_type
@@ -155,6 +156,7 @@ def linked_result(
             fallback_type is EntityType.PERSON
             and classified not in (None, EntityType.PERSON)
             and not is_kind_of_person(p31_qids, qid)
+            and not is_ai_model(p31_qids)
         ):
             logger.info(
                 "entity_person_demotion_held",
