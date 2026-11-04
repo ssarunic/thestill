@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Spec #112 — ``import_episode`` and ``send_to_inbox``.
+"""Spec #112 — ``list_inbox``, ``import_episode`` and ``send_to_inbox``.
 
 The dispatcher is unit-tested with fakes; the scope gate, real
 ``ImportService`` / ``InboxService`` wiring and idempotency end to end
@@ -23,6 +23,7 @@ through the mounted Streamable HTTP transport, using a bare audio URL
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +34,7 @@ from tests.unit.web.test_mcp_http import USER_A, USER_B, Harness, isolated_env  
 from thestill.mcp.inbox_tools import dispatch_inbox_tool
 from thestill.mcp.tools import setup_tools
 from thestill.services.import_service import ResolverError
+from thestill.services.inbox_service import InvalidInboxStateError
 from thestill.utils.datetime_utils import now_utc
 
 AUDIO_URL = "https://cdn.example.com/shows/ep-1.mp3"
@@ -187,6 +189,82 @@ class TestSendToInboxDispatch:
         assert inbox.delivered == []
 
 
+_DELIVERED = datetime(2026, 11, 4, 9, 30, tzinfo=timezone.utc)
+
+
+def _item(n, *, state="unread", summary=True):
+    episode = SimpleNamespace(
+        id=f"ep-{n}",
+        title=f"Episode {n}",
+        slug=f"ep-{n}",
+        audio_url=None,
+        state="summarized",
+        is_failed=False,
+        pub_date=datetime(2026, 10, n, tzinfo=timezone.utc),
+        duration=3600,
+        summary_path="s.md" if summary else None,
+    )
+    entry = SimpleNamespace(state=state, source="follow_new", delivered_at=_DELIVERED.replace(minute=n))
+    return SimpleNamespace(entry=entry, episode=episode, podcast=_PODCAST)
+
+
+class _ListInbox(_Inbox):
+    def __init__(self, items=(), *, raises=None):
+        super().__init__()
+        self.items, self.raises, self.calls = list(items), raises, []
+
+    def list(self, user_id, *, state=None, limit=50, before=None, q=None):
+        self.calls.append({"user_id": user_id, "state": state, "limit": limit, "before": before, "q": q})
+        if self.raises:
+            raise self.raises
+        return self.items[:limit]
+
+    def unread_count(self, user_id):
+        return 7
+
+
+class TestListInboxDispatch:
+    def test_rows_carry_inbox_fields_links_and_unread_count(self):
+        inbox = _ListInbox([_item(3), _item(2, state="saved", summary=False)])
+        out = _text(_dispatch("list_inbox", {}, inbox=inbox))
+        assert out["success"] is True and out["unread_count"] == 7 and out["count"] == 2
+        first, second = out["episodes"]
+        assert first["id"] == "ep-3" and first["podcast_title"] == "The Show"
+        assert first["inbox_state"] == "unread" and first["source"] == "follow_new"
+        assert first["delivered_at"] == "2026-11-04T09:03:00+00:00"
+        assert first["published_at"] == "2026-10-03T00:00:00+00:00"
+        assert first["summary_ready"] is True and first["duration_seconds"] == 3600
+        assert first["episode_url"] == f"{BASE}/podcasts/show/episodes/ep-3"
+        assert second["inbox_state"] == "saved" and second["summary_ready"] is False
+        assert out["next_before"] is None
+        assert inbox.calls == [{"user_id": "u1", "state": None, "limit": 10, "before": None, "q": None}]
+
+    def test_full_page_returns_a_cursor_that_round_trips(self):
+        inbox = _ListInbox([_item(5), _item(4)])
+        out = _text(_dispatch("list_inbox", {"limit": 2}, inbox=inbox))
+        assert out["next_before"] == "2026-11-04T09:04:00+00:00"
+        _dispatch("list_inbox", {"before": "2026-11-04T09:04:00Z", "state": "unread", "q": " ai "}, inbox=inbox)
+        call = inbox.calls[-1]
+        assert call["before"] == datetime(2026, 11, 4, 9, 4, tzinfo=timezone.utc)
+        assert call["state"] == "unread" and call["q"] == "ai"
+
+    @pytest.mark.parametrize("limit", [0, 51, "lots"])
+    def test_bad_limit(self, limit):
+        inbox = _ListInbox()
+        out = _text(_dispatch("list_inbox", {"limit": limit}, inbox=inbox))
+        assert out["success"] is False and "limit" in out["error"]
+        assert inbox.calls == []
+
+    def test_bad_cursor(self):
+        out = _text(_dispatch("list_inbox", {"before": "yesterday"}, inbox=_ListInbox()))
+        assert out["success"] is False and "next_before" in out["error"]
+
+    def test_service_validation_text_is_relayed(self):
+        inbox = _ListInbox(raises=InvalidInboxStateError("Invalid state filter: 'new'"))
+        out = _text(_dispatch("list_inbox", {"state": "new"}, inbox=inbox))
+        assert out == {"success": False, "error": "Invalid state filter: 'new'"}
+
+
 # ---------------------------------------------------------------------------
 # End to end over the remote connector
 # ---------------------------------------------------------------------------
@@ -209,6 +287,34 @@ def harness(isolated_env, tmp_path):  # noqa: F811
 
 
 class TestRemote:
+    def test_read_token_lists_its_own_inbox_only(self, harness):
+        # One token per user (minting again rotates): A imports, B only reads.
+        a_writer, b_reader = harness.mint(USER_A, scopes=("follows",)), harness.mint(USER_B)
+        with harness.client() as c:
+            names = {t["name"] for t in Harness.rpc(c, b_reader, "tools/list").json()["result"]["tools"]}
+            assert "list_inbox" in names and "import_episode" not in names
+            episode_id = _payload(_call(c, a_writer, "import_episode", {"url": AUDIO_URL}))["episode"]["id"]
+            mine = _payload(_call(c, a_writer, "list_inbox", {}))
+            theirs = _payload(_call(c, b_reader, "list_inbox", {}))
+        assert mine["success"] is True and mine["unread_count"] == 1
+        assert [(e["id"], e["source"], e["inbox_state"]) for e in mine["episodes"]] == [
+            (episode_id, "import", "unread")
+        ]
+        assert theirs["episodes"] == [] and theirs["unread_count"] == 0
+        # Listing never reads a row (the inbox only changes on the reader's say).
+        assert harness.repos.inbox.get(USER_A, episode_id).state == "unread"
+
+    def test_list_inbox_still_works_in_read_only_mode(self, harness):
+        from thestill.repositories.sqlite_settings_repository import SqliteSettingsRepository
+
+        token = harness.mint(USER_A)
+        SqliteSettingsRepository(harness.config.database_path).upsert(
+            "read_only", True, updated_by=None, updated_at=now_utc()
+        )
+        with harness.client() as c:
+            out = _payload(_call(c, token, "list_inbox", {}))
+        assert out["success"] is True and out["episodes"] == []
+
     def test_read_token_neither_lists_nor_calls(self, harness):
         token = harness.mint(USER_A)
         with harness.client() as c:
@@ -279,6 +385,14 @@ class TestStdio:
         async with Client(server) as session:
             out = json.loads((await session.call_tool("import_episode", {"url": AUDIO_URL})).content[0].text)
         assert out["success"] is True and out["outcome"] == "new_episode"
+
+    @pytest.mark.anyio
+    async def test_single_user_lists_the_default_users_inbox(self, isolated_env, tmp_path):  # noqa: F811
+        server = self._server(tmp_path)
+        async with Client(server) as session:
+            await session.call_tool("import_episode", {"url": AUDIO_URL})
+            out = json.loads((await session.call_tool("list_inbox", {})).content[0].text)
+        assert out["success"] is True and out["count"] == 1 and out["episodes"][0]["source"] == "import"
 
     @pytest.mark.anyio
     async def test_multi_user_stdio_refuses(self, isolated_env, tmp_path):  # noqa: F811
