@@ -6282,6 +6282,102 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             ).fetchone()
             return row["id"] if row else None
 
+    def find_episode_id_by_external_id(self, podcast_id: str, external_id: str) -> Optional[str]:
+        """Return the episode UUID whose feed GUID (``external_id``) matches, within a podcast.
+
+        The import flow's fallback when the audio URL misses: hosts move
+        files (audiomeans re-pathed every enclosure), but Apple's
+        ``episodeGuid`` stays equal to the RSS ``<guid>``.
+        """
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM episodes WHERE podcast_id = ? AND external_id = ? LIMIT 1",
+                (podcast_id, external_id),
+            ).fetchone()
+            return row["id"] if row else None
+
+    # Import twins: an import that missed its feed episode and inserted a
+    # second row for it (same podcast, same slug). See
+    # ``services/episode_curation.py``.
+    _UNTOUCHED_TWIN = """
+        t.canonical_id IS NULL
+        AND t.failed_at_stage IS NULL
+        AND t.audio_path IS NULL
+        AND t.downsampled_audio_path IS NULL
+        AND t.raw_transcript_path IS NULL
+        AND t.clean_transcript_path IS NULL
+        AND t.summary_path IS NULL
+        AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.episode_id = t.id)
+    """
+
+    #: ``(table, key column)`` of every row keyed on an episode that a fold
+    #: moves from the twin to the keeper, unless the keeper already has one
+    #: with the same key. Whatever stays behind cascades with the twin.
+    _TWIN_MOVABLE = (
+        ("user_episode_inbox", "user_id"),
+        ("user_episode_progress", "user_id"),
+        ("user_episode_views", "user_id"),
+        ("episode_alternate_enclosures", "source_uri"),
+        ("episode_platform_links", "platform"),
+        ("episode_transcript_links", "url"),
+    )
+
+    def find_import_twin_candidates(self, podcast_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Rows sharing a podcast and slug where ``keeper`` carries an import
+        ``canonical_id`` and ``twin`` is an untouched feed row (no canonical id,
+        nothing processed, no task, not failed). The caller checks pub dates."""
+        scope = "AND k.podcast_id = ?" if podcast_id else ""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT k.id AS keeper_id, t.id AS twin_id, p.slug AS podcast_slug, k.slug AS episode_slug,
+                       k.pub_date AS keeper_pub_date, t.pub_date AS twin_pub_date,
+                       t.external_id AS twin_external_id, t.audio_url AS twin_audio_url
+                FROM episodes k
+                JOIN episodes t ON t.podcast_id = k.podcast_id AND t.slug = k.slug AND t.id <> k.id
+                JOIN podcasts p ON p.id = k.podcast_id
+                WHERE k.canonical_id IS NOT NULL
+                  AND {self._UNTOUCHED_TWIN}
+                  {scope}
+                ORDER BY p.slug, k.slug
+                """,
+                (podcast_id,) if podcast_id else (),
+            ).fetchall()
+            return [{**dict(row), "keeper_id": str(row["keeper_id"]), "twin_id": str(row["twin_id"])} for row in rows]
+
+    def fold_import_twin(self, keeper_id: str, twin_id: str) -> bool:
+        """Fold the untouched feed ``twin`` into the import ``keeper``, atomically.
+
+        Moves the twin's user rows (inbox, progress, views) and feed rows
+        (alternate enclosures, platform and transcript links) to the keeper
+        where it has none with the same key, deletes the twin (the rest
+        cascade), then gives the keeper the twin's feed GUID and current audio
+        URL so feed refresh updates the keeper from now on. Returns False,
+        changing nothing, when the twin is no longer untouched or either row
+        is gone.
+        """
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")  # the untouched check and the writes are one write transaction
+            twin = conn.execute(
+                f"SELECT t.external_id, t.audio_url FROM episodes t WHERE t.id = ? AND {self._UNTOUCHED_TWIN}",
+                (twin_id,),
+            ).fetchone()
+            keeper = conn.execute("SELECT id FROM episodes WHERE id = ?", (keeper_id,)).fetchone()
+            if twin is None or keeper is None:
+                return False
+            for table, key in self._TWIN_MOVABLE:
+                conn.execute(
+                    f"UPDATE {table} SET episode_id = ? WHERE episode_id = ? "
+                    f"AND {key} NOT IN (SELECT {key} FROM {table} WHERE episode_id = ?)",
+                    (keeper_id, twin_id, keeper_id),
+                )
+            conn.execute("DELETE FROM episodes WHERE id = ?", (twin_id,))
+            conn.execute(
+                "UPDATE episodes SET external_id = ?, audio_url = ?, updated_at = ? WHERE id = ?",
+                (twin["external_id"], twin["audio_url"], datetime.now(timezone.utc).isoformat(), keeper_id),
+            )
+            return True
+
     def list_public_episode_rows(
         self,
         *,

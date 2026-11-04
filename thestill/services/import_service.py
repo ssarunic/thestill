@@ -149,6 +149,10 @@ class CanonicalSource:
     source_handle: str = ""  # display label (host for bare audio, channel for YouTube)
     external_id: str = ""  # episode-level external id (video_id for YouTube)
     parent: Optional[CanonicalParent] = None
+    # The episode's RSS ``<guid>`` when the resolver knows it (iTunes
+    # ``episodeGuid``). Matches the parent feed's ``external_id`` even after
+    # the host moves the enclosure, which exact ``audio_url`` matching misses.
+    feed_guid: Optional[str] = None
 
 
 class Resolver(Protocol):
@@ -760,7 +764,14 @@ class ApplePodcastsResolver:
             source_handle=collection_name,
             external_id=episode_id,
             parent=parent,
+            feed_guid=_clean_guid(info.get("episodeGuid")),
         )
+
+
+def _clean_guid(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
 
 
 class SpotifyResolver:
@@ -924,8 +935,14 @@ class ImportService:
         with reserve_quota(
             self._quota if charge else None, user_id, "imports_per_day", subject_id=canonical.canonical_id
         ) as reservation:
-            episode_id, episode_created, parent_summary = self._find_or_create_episode(canonical)
-            if episode_created:
+            episode_id, episode_created, attached, parent_summary = self._find_or_create_episode(canonical)
+            if attached:
+                # The import landed on a row the parent feed already had. It may
+                # be processed or in flight (a followed show), so it gets the
+                # same guard as a re-import, which also hands the pipeline the
+                # row's current audio URL rather than Apple's possibly stale one.
+                pending = self._pending_for_existing(episode_id)
+            elif episode_created:
                 reservation.commit(subject_id=episode_id)
             inbox_entry, inbox_created = self._inbox_repo.find_or_create(
                 user_id=user_id,
@@ -936,9 +953,9 @@ class ImportService:
             # the same guard publish fan-out uses — an untouched DISCOVERED
             # orphan (feed-discovered, never processed) gets the pipeline;
             # anything processed, in flight or failed is left alone.
-            if not episode_created and pending and self._enqueue_existing(pending):
+            if (attached or not episode_created) and pending and self._enqueue_existing(pending):
                 reservation.commit(subject_id=episode_id)
-        if episode_created:
+        if episode_created and not attached:
             # The shared entry-stage rule, not a hard-coded TRANSCRIBE. Imports
             # used to assume the transcriber could always fetch `audio_url`
             # itself; for a YouTube link that URL is the watch page, Dalston got
@@ -1050,8 +1067,14 @@ class ImportService:
             "(.mp3, .m4a, .opus, .ogg, .wav)."
         )
 
-    def _find_or_create_episode(self, canonical: CanonicalSource) -> Tuple[str, bool, Optional[Tuple[str, str, str]]]:
-        """Return ``(episode_id, created, parent_summary)``.
+    def _find_or_create_episode(
+        self, canonical: CanonicalSource
+    ) -> Tuple[str, bool, bool, Optional[Tuple[str, str, str]]]:
+        """Return ``(episode_id, created, attached, parent_summary)``.
+
+        ``created`` is True the first time this canonical id is imported,
+        whether a row was inserted or the import ``attached`` itself to an
+        episode the parent feed already carried.
 
         ``parent_summary`` is ``(id, title, slug)`` of the real parent for
         both fresh and dedup imports, or ``None`` when the import lives
@@ -1060,7 +1083,7 @@ class ImportService:
         existing_id = self._repository.find_episode_id_by_canonical_id(canonical.canonical_id)
         if existing_id is not None:
             parent_summary = self._repository.get_real_parent_podcast_for_episode(existing_id)
-            return existing_id, False, parent_summary
+            return existing_id, False, False, parent_summary
 
         if canonical.parent is not None:
             parent_summary = self._repository.upsert_auto_added_podcast(
@@ -1075,15 +1098,22 @@ class ImportService:
             # thin metadata ("No description, 1 episode"). Best-effort: a
             # failed fetch must not block the import.
             matched_id = self._ingest_parent_feed(parent_id, canonical)
+            if matched_id is None:
+                matched_id = self._attach_by_feed_guid(parent_id, canonical)
             if matched_id is not None:
-                return matched_id, True, user_visible_parent
+                return matched_id, True, True, user_visible_parent
         else:
             parent_id = self._repository.ensure_synthetic_audio_imports_parent()
             user_visible_parent = None
+        # Under a real parent, store the feed GUID as ``external_id`` when known
+        # (no row holds it — ``_attach_by_feed_guid`` just checked): it is the
+        # key feed refresh upserts on, so a later refresh that does carry this
+        # episode updates this row instead of adding a twin.
+        external_id = (canonical.feed_guid if canonical.parent is not None else None) or canonical.external_id
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,
             canonical_id=canonical.canonical_id,
-            external_id=canonical.external_id or canonical.canonical_id,
+            external_id=external_id or canonical.canonical_id,
             title=canonical.title,
             audio_url=canonical.audio_url,
             description=canonical.description,
@@ -1091,7 +1121,7 @@ class ImportService:
             duration=canonical.duration_seconds,
             image_url=canonical.image_url,
         )
-        return episode_id, True, user_visible_parent
+        return episode_id, True, False, user_visible_parent
 
     def _ingest_parent_feed(self, parent_id: str, canonical: CanonicalSource) -> Optional[str]:
         """Refresh the parent's RSS and return the matched episode id, if any.
@@ -1099,20 +1129,21 @@ class ImportService:
         On success, the parent podcast row gains its full RSS metadata
         (description, cover, categories, etc.) and every episode in the
         feed is inserted as a discovered row. The imported episode is
-        identified inside the freshly-discovered set by ``audio_url``
-        (Apple's iTunes ``episodeUrl`` matches the RSS enclosure URL
-        byte-for-byte; YouTube's webpage URL likewise matches the channel
-        feed link), and its ``canonical_id`` is stamped onto that row so
-        future imports of the same URL dedup correctly.
+        identified among the parent's episodes by ``audio_url`` (Apple's
+        iTunes ``episodeUrl`` usually equals the RSS enclosure URL; YouTube's
+        webpage URL likewise matches the channel feed link; the GUID
+        fallback is ``_attach_by_feed_guid``), and its ``canonical_id`` is
+        stamped onto that row so future imports of the same URL dedup
+        correctly.
 
         Returns the matched episode id, or ``None`` when:
 
         - ``feed_manager`` was not injected (CLI / unit-test paths);
         - the RSS fetch failed (logged warning, falls back to the
           single-episode insert below so the import still succeeds);
-        - the RSS feed does not contain an episode whose ``audio_url``
-          matches ``canonical.audio_url`` (rare — Apple lookup or yt-dlp
-          surfaced an episode the canonical RSS does not carry).
+        - the parent carries no episode with that audio URL (the host moved
+          the file since Apple indexed it, or Apple lookup / yt-dlp surfaced
+          an episode the canonical RSS does not carry).
         """
         if self._feed_manager is None:
             return None
@@ -1136,20 +1167,46 @@ class ImportService:
                 canonical_id=canonical.canonical_id,
             )
             return None
+        return self._attach_canonical_id(matched, parent_id, canonical, matched_by="audio_url")
+
+    def _attach_by_feed_guid(self, parent_id: str, canonical: CanonicalSource) -> Optional[str]:
+        """Attach the import to the parent's episode with the same feed GUID, if any.
+
+        Hosts move files: audiomeans re-pathed every enclosure
+        (``/file/PcNCvtcnHj/<guid>.mp3`` → ``/file/ipcQBypiKu/<guid>.mp3``)
+        while Apple kept the old ``episodeUrl``. The URL match missed, the
+        import inserted a twin of the feed episode and processed that, and
+        the shared slug served the unprocessed feed row (2026-11-04). The RSS
+        ``<guid>`` (iTunes ``episodeGuid``) survives the move, and a GUID is
+        the episode's identity within its show, so this runs whether or not
+        the feed refresh succeeded.
+        """
+        if not canonical.feed_guid:
+            return None
+        matched = self._repository.find_episode_id_by_external_id(parent_id, canonical.feed_guid)
+        if matched is None:
+            return None
+        return self._attach_canonical_id(matched, parent_id, canonical, matched_by="feed_guid")
+
+    def _attach_canonical_id(
+        self, episode_id: str, parent_id: str, canonical: CanonicalSource, *, matched_by: str
+    ) -> Optional[str]:
+        """Stamp ``canonical.canonical_id`` onto an existing parent episode; its id, or None on a race."""
         try:
-            self._repository.set_episode_canonical_id(matched, canonical.canonical_id)
+            self._repository.set_episode_canonical_id(episode_id, canonical.canonical_id)
         except Exception as exc:  # noqa: BLE001 — race with concurrent import
             logger.warning(
                 "import_canonical_id_attach_failed",
-                episode_id=matched,
+                episode_id=episode_id,
                 canonical_id=canonical.canonical_id,
                 error=str(exc),
             )
             return None
         logger.info(
             "import_attached_to_feed_episode",
-            episode_id=matched,
+            episode_id=episode_id,
             parent_id=parent_id,
             canonical_id=canonical.canonical_id,
+            matched_by=matched_by,
         )
-        return matched
+        return episode_id

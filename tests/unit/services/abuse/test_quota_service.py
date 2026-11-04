@@ -351,7 +351,7 @@ def test_re_importing_an_existing_episode_is_free_at_the_limit(tmp_path):
         quota=world.quota,
     )
     service._resolve = lambda url: SimpleNamespace(canonical_id="c-1", kind="audio", title="t", source_handle=None)
-    service._find_or_create_episode = lambda canonical: ("ep-1", False, None)
+    service._find_or_create_episode = lambda canonical: ("ep-1", False, False, None)
     service._pending_for_existing = lambda episode_id: []  # processed or in flight
     service._describe_episode = lambda user_id, episode_id: (None, None, None, False)
 
@@ -370,7 +370,7 @@ def _orphan_import_service(world, enqueued):
         quota=world.quota,
     )
     service._resolve = lambda url: SimpleNamespace(canonical_id="c-1", kind="audio", title="t", source_handle=None)
-    service._find_or_create_episode = lambda canonical: ("ep-1", False, None)
+    service._find_or_create_episode = lambda canonical: ("ep-1", False, False, None)
     service._pending_for_existing = lambda episode_id: [(episode_id, "https://example.com/ep.mp3")]
     service._enqueue_existing = lambda pending: enqueued.extend(pending) or len(pending)
     service._describe_episode = lambda user_id, episode_id: (None, None, None, False)

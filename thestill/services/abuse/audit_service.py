@@ -46,6 +46,8 @@ AUDIT_ACTIONS = (
     "entity.set_type",
     "entity.blacklist",
     "entity.prune_orphans",
+    # Episode repair (thestill.services.episode_curation)
+    "episode.fold_import_twin",
 )
 
 
