@@ -74,6 +74,9 @@ export class NativeEngine implements PlaybackEngine {
   private hls: HlsInstance | null = null
   private hlsAttach: Promise<void> | null = null
   private hlsGeneration = 0
+  // Token of the play() call waiting on an attach; pause() and any source
+  // change bump it so the deferred play is dropped.
+  private deferredPlay = 0
   private hlsRecovered = false
   private readonly onHlsError = (_event: unknown, data: HlsErrorData) => this.handleHlsError(data)
 
@@ -174,12 +177,16 @@ export class NativeEngine implements PlaybackEngine {
     // Chrome and Firefox keep the user activation across the await; Safari
     // never takes this path (native HLS).
     if (this.hlsAttach) {
-      return this.hlsAttach.then(() => (this.url !== null ? this.el.play() : undefined))
+      const token = ++this.deferredPlay
+      return this.hlsAttach.then(() => (token === this.deferredPlay ? this.el.play() : undefined))
     }
     return this.el.play()
   }
 
   pause(): void {
+    // Also cancels a play() still waiting on an hls.js attach — e.g.
+    // playYouTube() pausing this engine must not have it start later.
+    this.deferredPlay++
     this.el.pause()
   }
 
@@ -256,6 +263,7 @@ export class NativeEngine implements PlaybackEngine {
     this.hls = null
     this.hlsAttach = null
     this.hlsGeneration++
+    this.deferredPlay++ // a destroyed engine never starts playback
     return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked, hls, hlsAttaching }
   }
 
@@ -323,6 +331,7 @@ export class NativeEngine implements PlaybackEngine {
   // alone: callers decide what the element plays next.
   private detachHls(): void {
     this.hlsGeneration++
+    this.deferredPlay++
     this.hlsAttach = null
     const hls = this.hls
     this.hls = null

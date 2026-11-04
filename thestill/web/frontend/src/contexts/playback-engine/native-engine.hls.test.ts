@@ -209,6 +209,26 @@ describe('NativeEngine HLS', () => {
     expect(t.el.play).toHaveBeenCalledTimes(1)
   })
 
+  it('pause() during a pending attach cancels the deferred play (Codex #466)', async () => {
+    const t = makeEngine()
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    const played = t.engine.play()
+    t.engine.pause() // e.g. playYouTube() pausing the native engine
+    await played
+    expect(FakeHls.instances).toHaveLength(1) // the attach itself still lands
+    expect(t.el.play).not.toHaveBeenCalled()
+  })
+
+  it('a superseded load cancels the deferred play of the old source', async () => {
+    const t = makeEngine()
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    const stale = t.engine.play()
+    t.engine.load({ url: 'https://episode.flightcast.com/hls/v/other.m3u8', mimeType: HLS_MIME })
+    const current = t.engine.play()
+    await Promise.all([stale, current])
+    expect(t.el.play).toHaveBeenCalledTimes(1)
+  })
+
   it('recovers one fatal media error, then reports the next', async () => {
     const t = makeEngine()
     t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
