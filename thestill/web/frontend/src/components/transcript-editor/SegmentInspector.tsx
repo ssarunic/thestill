@@ -66,6 +66,13 @@ export default function SegmentInspector({
           <option value={SOMEONE_ELSE}>{label ? 'Someone else…' : `${segment.speaker ?? 'Unknown'} (named)`}</option>
         </select>
       </label>
+      {label === null && (
+        // The select already sits on the named option, so picking it
+        // again fires nothing: a button reopens the name dialog.
+        <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onPickSpeakerName(segment)}>
+          Change name or link…
+        </Button>
+      )}
       <label className="block text-xs text-muted">
         Kind
         <select

@@ -70,10 +70,21 @@ export default function LaneTimeline({
   // Follow the playhead while playing, and re-anchor on a new selection.
   // Both are render-time adjustments (no effect, no extra commit): the
   // window only moves when the playhead leaves its middle or the selected
-  // row changes to one outside it.
+  // row changes to one outside it. A manual pan or zoom suspends following
+  // until the playhead leaves the window the user chose, so the timeline
+  // never snaps back under the wheel.
+  const [panned, setPanned] = useState(false)
+  const inWindow = (at: number) => at >= window_.start && at <= window_.start + window_.span
   if (isPlaying) {
-    const start = followWindow(currentTime, window_.start, window_.span, total)
-    if (start !== window_.start) setWindow({ ...window_, start })
+    if (panned) {
+      if (!inWindow(currentTime)) {
+        setPanned(false)
+        setWindow((w) => ({ ...w, start: clampWindow(currentTime - w.span * 0.3, w.span, total) }))
+      }
+    } else {
+      const start = followWindow(currentTime, window_.start, window_.span, total)
+      if (start !== window_.start) setWindow((w) => ({ ...w, start }))
+    }
   }
   const selected = useMemo(() => segments.find((s) => s.id === selectedId) ?? null, [segments, selectedId])
   const [anchoredId, setAnchoredId] = useState<number | null>(null)
@@ -81,14 +92,16 @@ export default function LaneTimeline({
     setAnchoredId(selectedId)
     if (selected) {
       const at = selected.start + offset
-      if (at < window_.start || at > window_.start + window_.span) {
-        setWindow({ ...window_, start: clampWindow(at - window_.span * 0.3, window_.span, total) })
+      if (!inWindow(at)) {
+        setPanned(false)
+        setWindow((w) => ({ ...w, start: clampWindow(at - w.span * 0.3, w.span, total) }))
       }
     }
   }
 
   const onWheel = (e: WheelEvent<SVGSVGElement>) => {
     e.preventDefault()
+    setPanned(true)
     if (e.metaKey || e.ctrlKey) {
       const rect = e.currentTarget.getBoundingClientRect()
       const anchor = xToTime(e.clientX - rect.left, window_.start, window_.span, width)

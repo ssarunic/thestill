@@ -78,13 +78,27 @@ export default function TranscriptEditorPage() {
   }, [speakers])
   const conflictSegmentIds = useMemo(() => {
     // A conflict names a segment by its raw anchors; map those back to rows.
+    // Split children share raw ids, so an anchor may name several rows; a
+    // merge names two anchors.
     const out = new Set<number>()
-    const byAnchor = new Map(segments.map((s) => [s.source_segment_ids.join(','), s.id]))
+    const byAnchor = new Map<string, number[]>()
+    for (const s of segments) {
+      const key = s.source_segment_ids.join(',')
+      byAnchor.set(key, [...(byAnchor.get(key) ?? []), s.id])
+    }
+    const mark = (anchor: unknown) => {
+      const ids = (anchor as { source_segment_ids?: number[] } | undefined)?.source_segment_ids
+      if (ids) for (const id of byAnchor.get(ids.join(',')) ?? []) out.add(id)
+    }
     for (const edit of editor.state?.edits ?? []) {
       if (edit.status !== 'conflict') continue
-      const ids = (edit.anchor as { source_segment_ids?: number[] }).source_segment_ids
-      const id = ids ? byAnchor.get(ids.join(',')) : undefined
-      if (id !== undefined) out.add(id)
+      if (edit.op === 'segment.merge') {
+        const pair = edit.anchor as { first?: unknown; second?: unknown }
+        mark(pair.first)
+        mark(pair.second)
+      } else {
+        mark(edit.anchor)
+      }
     }
     return out
   }, [segments, editor.state])
@@ -476,11 +490,21 @@ export default function TranscriptEditorPage() {
         title={speakerDialog?.kind === 'segment' ? 'Who is speaking here?' : 'Name this speaker'}
         episodeId={episode.id}
         initialName={
-          speakerDialog?.kind === 'label' && speakerDialog.speaker.name && !/^SPEAKER_\d+$/i.test(speakerDialog.speaker.name)
-            ? speakerDialog.speaker.name
-            : ''
+          speakerDialog?.kind === 'label'
+            ? speakerDialog.speaker.name && !/^SPEAKER_\d+$/i.test(speakerDialog.speaker.name)
+              ? speakerDialog.speaker.name
+              : ''
+            : speakerDialog?.kind === 'segment' && speakerDialog.segment.speaker && !/^SPEAKER_\d+$/i.test(speakerDialog.segment.speaker)
+              ? speakerDialog.segment.speaker
+              : ''
         }
-        initialEntityId={speakerDialog?.kind === 'label' ? speakerDialog.speaker.entity_id : null}
+        initialEntityId={
+          speakerDialog?.kind === 'label'
+            ? speakerDialog.speaker.entity_id
+            : speakerDialog?.kind === 'segment'
+              ? ((speakerDialog.segment.metadata?.speaker_entity_id as string | undefined) ?? null)
+              : null
+        }
         busy={editor.pending}
         onConfirm={(result) => void handleSpeakerDialogConfirm(result)}
         onCancel={() => setSpeakerDialog(null)}

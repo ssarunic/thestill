@@ -333,3 +333,76 @@ def test_anchor_hash_matches_the_text_the_editor_showed(world):
 
     anchor = SegmentAnchor.model_validate(segment_anchor(segment))
     assert anchor.text_sha256 == text_sha256(segment.text)
+
+
+def test_label_heard_only_in_an_ad_read_can_be_renamed_once_it_speaks(world):
+    """Antigravity on #461: a label seeded from no speech row was unknown to
+    speaker ops, so re-tagging its ad read to content left it unnameable."""
+    raw = make_raw()
+    raw.segments[1].speaker = "SPEAKER_02"  # a third voice, heard only in the ad
+    sidecar = make_sidecar(raw, with_ad=False)
+    sidecar.segments[1].kind = "ad_break"
+    sidecar.segments[1].speaker = None
+    write_transcripts(world["paths"].storage_path, raw, sidecar)
+    world["raw_sha"] = raw_sha256(world["paths"].raw_transcript_file(RAW_REL).read_text(encoding="utf-8"))
+    effective = _load(world, include_labels=True)
+    assert [s.label for s in effective.speakers] == ["SPEAKER_00", "SPEAKER_01"]  # ad reads are not voices
+    # Named while still an ad read: nothing is renamed yet, but the name is kept.
+    _add(world, "speaker.rename_label", {"label": "SPEAKER_02"}, {"name": "Ad Voice"})
+    _add(world, "segment.set_kind", segment_anchor(sidecar.segments[1]), {"kind": "content"})
+    effective = _load(world, include_labels=True)
+    assert effective.conflicts == []
+    assert effective.transcript.segments[1].speaker == "Ad Voice"
+    assert [s.label for s in effective.speakers] == ["SPEAKER_00", "SPEAKER_02", "SPEAKER_01"]
+
+
+def test_retagged_row_follows_a_merge_of_its_label(world):
+    raw = world["raw"]
+    sidecar = world["sidecar"]
+    ad = sidecar.segments[2]  # built from raw segment 1 (SPEAKER_01)
+    _add(world, "speaker.merge_labels", {"label": "SPEAKER_01"}, {"into_label": "SPEAKER_00"})
+    _add(world, "segment.set_kind", segment_anchor(ad), {"kind": "content"})
+    effective = _load(world, include_labels=True)
+    assert effective.conflicts == []
+    assert effective.transcript.segments[2].speaker == "Ada Lovelace"
+    assert effective.labels_by_segment[2] == "SPEAKER_00"
+    assert raw.segments[1].speaker == "SPEAKER_01"  # the raw file is untouched
+
+
+def test_intro_and_outro_rows_are_voices_too(world):
+    target = world["sidecar"].segments[1]  # SPEAKER_01
+    _add(world, "segment.set_kind", segment_anchor(target), {"kind": "intro"})
+    _add(world, "speaker.rename_label", {"label": "SPEAKER_01"}, {"name": "Grace Hopper"})
+    effective = _load(world, include_labels=True)
+    assert effective.transcript.segments[1].kind == "intro"
+    assert effective.transcript.segments[1].speaker == "Grace Hopper"
+    assert any(s.label == "SPEAKER_01" and 1 in s.segment_ids for s in effective.speakers)
+
+
+def test_split_on_a_raw_segments_first_word_keeps_it_on_the_right(world):
+    sidecar = world["sidecar"]
+    a, b = sidecar.segments[3], sidecar.segments[4]  # raw 2 (9 words) + raw 3
+    _add(world, "segment.merge", {"first": segment_anchor(a), "second": segment_anchor(b)}, {})
+    merged = _load(world).transcript.segments[3]
+    assert merged.source_segment_ids == [2, 3]
+    _add(world, "segment.split", segment_anchor(merged), {"text_word_index": 9})
+    effective = _load(world)
+    left, right = effective.transcript.segments[3], effective.transcript.segments[4]
+    assert (left.text, right.text) == (a.text, b.text)
+    assert left.source_segment_ids == [2] and right.source_segment_ids == [3]
+    assert left.source_word_span.end_segment_id == 2 and right.source_word_span.start_segment_id == 3
+    assert WORDS_STALE_KEY not in left.metadata and WORDS_STALE_KEY not in right.metadata
+
+
+def test_split_without_word_addressing_marks_both_halves_words_stale(world):
+    target = world["sidecar"].segments[0]
+    _add(
+        world,
+        "segment.split",
+        segment_anchor(target),
+        {"text_word_index": 2, "at": {"raw_segment_id": 42, "word_index": 0}},  # a raw segment that is not there
+    )
+    effective = _load(world)
+    left, right = effective.transcript.segments[0], effective.transcript.segments[1]
+    assert left.source_word_span == right.source_word_span == target.source_word_span
+    assert left.metadata[WORDS_STALE_KEY] is True and right.metadata[WORDS_STALE_KEY] is True

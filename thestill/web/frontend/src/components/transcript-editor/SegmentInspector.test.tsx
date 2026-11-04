@@ -73,3 +73,13 @@ describe('SegmentInspector', () => {
     expect(screen.queryByRole('button', { name: 'Hide' })).not.toBeInTheDocument()
   })
 })
+
+describe('SegmentInspector with a named speaker', () => {
+  it('reopens the name dialog from a button, since the select already sits on that option', async () => {
+    // Antigravity on #461: choosing "(named)" again fired no change event.
+    const props = setup({ label: null, segment: { ...SEGMENT, speaker: 'Guest Voice' } })
+    expect(screen.getByRole('combobox', { name: 'Speaker' })).toHaveValue('__someone_else__')
+    await userEvent.click(screen.getByRole('button', { name: 'Change name or link…' }))
+    expect(props.onPickSpeakerName).toHaveBeenCalledWith({ ...SEGMENT, speaker: 'Guest Voice' })
+  })
+})

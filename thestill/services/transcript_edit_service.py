@@ -200,8 +200,18 @@ class TranscriptEditService:
         and S3 deployments never hold it locally, so ``None`` is the common case."""
         if not episode.audio_path:
             return None
-        path = self._paths.original_audio_file(episode.audio_path)
-        return path if path.is_file() else None
+        # Serve only what lives under original_audio: the stored path is
+        # ours, but a stray absolute path, ``..`` or a symlink out of the
+        # directory must never turn this route into a file reader.
+        root = self._paths.original_audio_dir().resolve()
+        try:
+            path = self._paths.original_audio_file(episode.audio_path).resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        if not path.is_file() or not path.is_relative_to(root):
+            logger.warning("transcript_edit_audio_outside_root", episode_id=episode.id)
+            return None
+        return path
 
     def _summary_stale_edits(self, episode: Episode, effective: EffectiveTranscript) -> int:
         """Changes to the transcript since the last completed summary (§4 "Stale badge").
@@ -224,24 +234,18 @@ class TranscriptEditService:
         if summarized_at is not None and summarized_at.tzinfo is None:
             summarized_at = summarized_at.replace(tzinfo=effective.edits[0].created_at.tzinfo)
 
-        def after_summary(edit: TranscriptEdit) -> bool:
-            return summarized_at is None or edit.created_at > summarized_at
+        # The ops the summary saw are the ones live when it ran: replay the
+        # log as it stood then and compare with what is live now. Any undo
+        # and redo chain reduces to the two sets; a row that conflicts
+        # changed nothing, so it counts on neither side.
+        conflicts = {c.edit_id for c in effective.conflicts}
 
-        by_id = {e.id: e for e in effective.edits}
-        count = 0
-        for edit in effective.edits:
-            if edit.id in effective.reverted_ids or not after_summary(edit):
-                continue
-            if edit.op != "revert":
-                if edit.op not in structural:
-                    count += 1
-                continue
-            target = by_id.get(edit.reverts or "")
-            # A live undo of something the summary saw (or a redo of an undo
-            # it saw); an undo of an op written after the summary cancels out.
-            if target is not None and target.op not in structural and not after_summary(target):
-                count += 1
-        return count
+        def counted(rows: List[TranscriptEdit]) -> set:
+            live, _reverted = live_edits(rows)
+            return {e.id for e in live if e.op not in structural and e.id not in conflicts}
+
+        seen = [e for e in effective.edits if summarized_at is not None and e.created_at <= summarized_at]
+        return len(counted(seen) ^ counted(list(effective.edits)))
 
     # -- writes --------------------------------------------------------------
 
@@ -277,8 +281,11 @@ class TranscriptEditService:
         if effective.raw_sha256 is None:
             raise TranscriptEditError("no_transcript", "Episode has no raw transcript to anchor edits to")
 
-        applied: List[TranscriptEdit] = []
-        replayer = self._replayer_for(episode, effective, applied)
+        # Every op is validated against the batch so far before anything is
+        # written: a bad op in the middle refuses the whole batch instead of
+        # leaving the ones before it in the log.
+        rows: List[TranscriptEdit] = []
+        replayer = self._replayer_for(episode, effective, rows)
         last_seq = effective.last_seq
         for index, payload in enumerate(ops):
             try:
@@ -305,7 +312,7 @@ class TranscriptEditService:
                 created_at=self._clock(),
             )
             if op.op == "revert":
-                before = self._check_revert(row, effective, applied)
+                before = self._check_revert(row, effective, rows)
             else:
                 conflict, before = replayer.apply(row)
                 if conflict is not None:
@@ -315,7 +322,15 @@ class TranscriptEditService:
                         index=index,
                         conflict=conflict.to_dict(),
                     )
-            row = row.model_copy(update={"before": before})
+            rows.append(row.model_copy(update={"before": before}))
+            last_seq += 1
+            if op.op == "revert":
+                # A revert changes the transcript the next op in the batch
+                # is validated against; replay the log as it would stand.
+                replayer = self._replayer_for(episode, effective, rows)
+        applied: List[TranscriptEdit] = []
+        last_seq = effective.last_seq
+        for row in rows:
             stored = self._edits.append(row, expected_last_seq=last_seq)
             if stored is None:
                 raise TranscriptEditError(
@@ -323,10 +338,6 @@ class TranscriptEditService:
                 )
             applied.append(stored)
             last_seq = stored.seq
-            if op.op == "revert":
-                # A revert changes the transcript the next op in the batch
-                # is validated against; replay the log as it now stands.
-                replayer = self._replayer_for(episode, effective, applied)
         logger.info(
             "transcript_edits_applied",
             episode_id=episode.id,
@@ -377,9 +388,15 @@ class TranscriptEditService:
         self, row: TranscriptEdit, effective: EffectiveTranscript, pending: List[TranscriptEdit]
     ) -> Dict[str, Any]:
         target_id = row.reverts or ""
-        target = next((e for e in [*effective.edits, *pending] if e.id == target_id), None)
+        log = [*effective.edits, *pending]
+        target = next((e for e in log if e.id == target_id), None)
         if target is None or target.episode_id != row.episode_id:
             raise TranscriptEditError("invalid", f"No edit {target_id!r} on this episode")
+        _live, reverted = live_edits(log)
+        if target.id in reverted:
+            # Already undone (or an undo already redone): a second revert
+            # would pin the row dead against a later redo.
+            raise TranscriptEditError("rejected", f"Edit {target_id!r} is already reverted", conflict=None)
         return {"op": target.op, "seq": target.seq}
 
     def revert(self, episode_id: str, edit_id: str, *, actor: Actor, session_id: str, base_seq: int) -> ApplyResult:
@@ -404,7 +421,9 @@ class TranscriptEditService:
         for episode_id, episode_rows in by_episode.items():
             effective = self._load(self._episode(episode_id)[1], include_labels=False)
             live_ids = {e.id for e in effective.live_edits}
-            for row in episode_rows:
+            # Newest first, so a split or merge is undone after the ops that
+            # anchored to its children.
+            for row in sorted(episode_rows, key=lambda e: e.seq, reverse=True):
                 if row.id not in live_ids:
                     continue
                 self.revert(

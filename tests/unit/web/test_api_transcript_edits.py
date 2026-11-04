@@ -95,13 +95,17 @@ def _client(service):
 def test_get_state_reports_every_edit_status_and_the_speaker_panel():
     applied, conflicting, reverted, revert = _edit(1), _edit(2, "segment.set_text"), _edit(3), _edit(4, "revert")
     revert = revert.model_copy(update={"reverts": reverted.id, "anchor": {"edit_id": reverted.id}})
+    # An undo that was redone: a revert row that is itself reverted.
+    undone, redo = _edit(5, "revert"), _edit(6, "revert")
+    undone = undone.model_copy(update={"reverts": applied.id, "anchor": {"edit_id": applied.id}})
+    redo = redo.model_copy(update={"reverts": undone.id, "anchor": {"edit_id": undone.id}})
     effective = EffectiveTranscript(
         transcript=AnnotatedTranscript(episode_id="ep-1", segments=[]),
-        edits=[applied, conflicting, reverted, revert],
+        edits=[applied, conflicting, reverted, revert, undone, redo],
         applied=[applied],
         conflicts=[EditConflict(conflicting.id, 2, "segment.set_text", "text_changed", {"current_text": "x"})],
-        reverted_ids=frozenset({reverted.id}),
-        last_seq=4,
+        reverted_ids=frozenset({reverted.id, undone.id}),
+        last_seq=6,
         raw_sha256="a" * 64,
         speakers=[SpeakerLabel("SPEAKER_01", "Grace Hopper", None, [1, 3])],
         labels_by_segment={1: "SPEAKER_01", 3: "SPEAKER_01"},
@@ -111,13 +115,13 @@ def test_get_state_reports_every_edit_status_and_the_speaker_panel():
         episode=MagicMock(id="ep-1"), podcast=MagicMock(), effective=effective, busy=False, summary_stale_edits=2
     )
     body = _client(service).get("/api/episodes/ep-1/transcript/edits").json()
-    assert [e["status"] for e in body["edits"]] == ["applied", "conflict", "reverted", "revert"]
+    assert [e["status"] for e in body["edits"]] == ["applied", "conflict", "reverted", "revert", "reverted", "revert"]
     assert body["edits"][1]["conflict"]["reason"] == "text_changed"
     assert body["conflicts"][0]["edit_id"] == conflicting.id
     assert body["speakers"] == [
         {"label": "SPEAKER_01", "name": "Grace Hopper", "entity_id": None, "segment_ids": [1, 3]}
     ]
-    assert body["summary_stale_edits"] == 2 and body["last_seq"] == 4 and body["busy"] is False
+    assert body["summary_stale_edits"] == 2 and body["last_seq"] == 6 and body["busy"] is False
 
 
 def test_apply_returns_the_rows_and_maps_refusals():

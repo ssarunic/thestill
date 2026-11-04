@@ -193,8 +193,8 @@ def test_an_op_that_does_not_apply_is_rejected_and_nothing_written(world):
             ],
         )
     assert exc.value.kind == "rejected" and exc.value.detail["conflict"]["reason"] == "label_missing"
-    # The first op of the batch was written; the refused one was not.
-    assert [e.op for e in world["edits"].list_for_episode(EPISODE_ID)] == ["speaker.rename_label"]
+    # The batch is refused as a whole: the first op was not written either.
+    assert world["edits"].list_for_episode(EPISODE_ID) == []
 
 
 def test_malformed_op_is_invalid(world):
@@ -254,23 +254,24 @@ def test_batch_validates_ops_after_a_revert_against_the_reverted_state(world):
             ],
         )
     assert exc.value.kind == "rejected" and exc.value.detail["conflict"]["reason"] == "text_changed"
-    # The revert was written; the rejected op was not.
-    assert [e.op for e in world["edits"].list_for_episode(EPISODE_ID)] == ["segment.set_text", "revert"]
-    # Anchored on the restored text, the follow-up applies.
+    # Nothing of the refused batch was written, the revert included.
+    assert [e.op for e in world["edits"].list_for_episode(EPISODE_ID)] == ["segment.set_text"]
+    # Anchored on the text the revert restores, the batch applies.
     result = service.apply(
         EPISODE_ID,
         actor=ADMIN,
         session_id="s1",
-        base_seq=2,
+        base_seq=1,
         ops=[
+            {"op": "revert", "anchor": {"edit_id": first.id}, "args": {}},
             {
                 "op": "segment.set_text",
                 "anchor": segment_anchor(target),
                 "args": {"old_text": target.text, "new_text": "C"},
-            }
+            },
         ],
     )
-    assert result.last_seq == 3
+    assert result.last_seq == 3 and [e.op for e in result.applied] == ["revert", "segment.set_text"]
     state = service.get_state(EPISODE_ID)
     assert state.effective.conflicts == [] and state.effective.transcript.segments[0].text == "C"
 
@@ -405,3 +406,96 @@ def test_conflicts_and_speaker_stats(world):
     with pytest.raises(TranscriptEditError) as exc:
         world["service"].get_state(EPISODE_ID)
     assert exc.value.kind == "no_transcript"
+
+
+def test_local_audio_never_leaves_the_audio_directory(world):
+    """Antigravity on #461: the stored path is joined under original_audio
+    without a containment check, so it must never read outside it."""
+    service = world["service"]
+    secret = world["paths"].storage_path / "podcasts.db"
+    assert secret.is_file()
+    for escape in ("../podcasts.db", str(secret)):
+        world["repository"].get_episode.return_value = (world["podcast"], make_episode(audio_path=escape))
+        assert service.local_audio_path(service.get_state(EPISODE_ID).episode) is None
+    link = world["paths"].original_audio_file("show/link.mp3")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(secret)
+    world["repository"].get_episode.return_value = (world["podcast"], make_episode(audio_path="show/link.mp3"))
+    assert service.local_audio_path(service.get_state(EPISODE_ID).episode) is None
+
+
+def test_a_batch_with_a_bad_op_writes_nothing(world):
+    service = world["service"]
+    target = world["sidecar"].segments[0]
+    with pytest.raises(TranscriptEditError) as exc:
+        service.apply(
+            EPISODE_ID,
+            actor=ADMIN,
+            session_id="s1",
+            base_seq=0,
+            ops=[
+                {"op": "speaker.rename_label", "anchor": {"label": "SPEAKER_01"}, "args": {"name": "Grace Hopper"}},
+                {"op": "segment.set_kind", "anchor": segment_anchor(target), "args": {"kind": "not-a-kind"}},
+            ],
+        )
+    assert exc.value.kind == "invalid" and exc.value.detail["index"] == 1
+    assert world["edits"].last_seq(EPISODE_ID) == 0
+    assert service.get_state(EPISODE_ID).effective.transcript.segments[1].speaker == "SPEAKER_01"
+
+
+def test_reverting_a_reverted_edit_is_refused(world):
+    service = world["service"]
+    rename = _rename(world).applied[0]
+    undo = service.revert(EPISODE_ID, rename.id, actor=ADMIN, session_id="s1", base_seq=1).applied[0]
+    with pytest.raises(TranscriptEditError) as exc:
+        service.revert(EPISODE_ID, rename.id, actor=ADMIN, session_id="s1", base_seq=2)
+    assert exc.value.kind == "rejected"
+    # Redo (reverting the undo) is still the way back.
+    service.revert(EPISODE_ID, undo.id, actor=ADMIN, session_id="s1", base_seq=2)
+    assert service.get_state(EPISODE_ID).effective.transcript.segments[1].speaker == "Grace Hopper"
+    # And the redone undo cannot be reverted again either.
+    with pytest.raises(TranscriptEditError):
+        service.revert(EPISODE_ID, undo.id, actor=ADMIN, session_id="s1", base_seq=3)
+
+
+def test_summary_stale_follows_an_undo_redo_undo_chain_and_ignores_conflicts(world):
+    service = world["service"]
+    rename = _rename(world).applied[0]
+    world["queue"].tasks.append(
+        Task(
+            id="s",
+            episode_id=EPISODE_ID,
+            stage=TaskStage.SUMMARIZE,
+            status=TaskStatus.COMPLETED,
+            completed_at=NOW + timedelta(hours=1),
+        )
+    )
+    world["clock"]["now"] = NOW + timedelta(hours=2)
+    undo = service.revert(EPISODE_ID, rename.id, actor=ADMIN, session_id="s1", base_seq=1).applied[0]
+    redo = service.revert(EPISODE_ID, undo.id, actor=ADMIN, session_id="s1", base_seq=2).applied[0]
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 0
+    service.revert(EPISODE_ID, redo.id, actor=ADMIN, session_id="s1", base_seq=3)
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 1  # the rename the summary saw is gone again
+    # A text edit that a re-clean turned into a conflict changes nothing.
+    target = world["sidecar"].segments[0]
+    service.apply(
+        EPISODE_ID,
+        actor=ADMIN,
+        session_id="s1",
+        base_seq=4,
+        ops=[
+            {
+                "op": "segment.set_text",
+                "anchor": segment_anchor(target),
+                "args": {"old_text": target.text, "new_text": "B"},
+            }
+        ],
+    )
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 2
+    recleaned = make_sidecar(world["raw"])
+    recleaned.segments[0].text = "Welcome back to the programme, everyone"
+    write_transcripts(world["paths"].storage_path, world["raw"], recleaned)
+    clear_cache()
+    state = service.get_state(EPISODE_ID)
+    assert [c.reason for c in state.effective.conflicts] == ["text_changed"]
+    assert state.summary_stale_edits == 1

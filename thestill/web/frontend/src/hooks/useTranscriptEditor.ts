@@ -21,6 +21,7 @@ import type {
   TranscriptEditorState,
   TranscriptEditsFinishResponse,
 } from '../api/types'
+import { undoRedoTargets } from './transcriptEditorTargets'
 
 export type SaveStatus = 'saved' | 'saving' | 'error' | 'stale'
 
@@ -147,6 +148,9 @@ export function useTranscriptEditor(
         }
         setSaveStatus('error')
         setSaveError(error instanceof Error ? error.message : 'Could not save')
+        // A refused batch wrote nothing, but reload anyway so base_seq and
+        // the log never drift from the server after an error.
+        await invalidate()
         return null
       }
     },
@@ -168,29 +172,11 @@ export function useTranscriptEditor(
     [run, episodeId, sessionId],
   )
 
-  // Undo / redo work on this session's live rows: the last live non-revert
-  // op is undone; the last live revert is redone (reverting the revert).
-  const sessionRows = useMemo(
-    () => (query.data?.edits ?? []).filter((e) => e.session_id === sessionId),
+  // Undo / redo work on this session's live rows (transcriptEditorTargets).
+  const { undo: undoTarget, redo: redoTarget } = useMemo(
+    () => undoRedoTargets(query.data?.edits ?? [], sessionId),
     [query.data, sessionId],
   )
-  const undoTarget = useMemo(
-    () => [...sessionRows].reverse().find((e) => e.op !== 'revert' && e.status !== 'reverted') ?? null,
-    [sessionRows],
-  )
-  const redoTarget = useMemo(() => {
-    const reverted = new Set((query.data?.edits ?? []).filter((e) => e.status === 'reverted').map((e) => e.id))
-    // A live revert is one whose target is still reverted and which no
-    // later revert cancelled.
-    const cancelled = new Set(
-      (query.data?.edits ?? []).filter((e) => e.op === 'revert' && e.status !== 'reverted').map((e) => e.reverts),
-    )
-    return (
-      [...sessionRows]
-        .reverse()
-        .find((e) => e.op === 'revert' && e.reverts && reverted.has(e.reverts) && !cancelled.has(e.id)) ?? null
-    )
-  }, [query.data, sessionRows])
 
   const undo = useCallback(async () => {
     if (undoTarget) await revert(undoTarget.id)

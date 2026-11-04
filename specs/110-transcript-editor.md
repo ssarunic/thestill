@@ -632,6 +632,20 @@ departs from or narrows the text above:
 - **Phase 3c.** `GET …/transcript/edits/audio` serves `original_audio`
   from local disk only; the state carries `local_audio` and the dock
   switches the player's source to the route when it is true.
+- **Review hardening (2026-11-04, Codex + Antigravity on PR #461).** A
+  batch is validated as a whole before any row is written, so a refused
+  op leaves nothing behind. A revert's target must be live: a second
+  undo of the same op is `edit_rejected`, and the editor drops the redo
+  path once a new op follows an undo (a redo then would revive an op the
+  new one was anchored without). Speaker ops know every label the
+  transcript carries, including one heard only in an ad read, and a row
+  re-tagged into a speech kind (`content`, `filler`, `intro`, `outro`)
+  takes its label's current name. The stale-summary count compares the
+  ops live when the summary ran with the ops live now, ignoring rows in
+  conflict. The audio route resolves the stored path and refuses
+  anything outside `original_audio` (absolute paths, `..`, symlinks
+  out). All transport gestures, keys included, act on the episode being
+  edited and leave the YouTube engine before taking the local file.
 
 ## Success metrics
 

@@ -116,10 +116,11 @@ def _state_json(state: EditorState) -> Dict[str, Any]:
     conflicts = {c.edit_id: c.to_dict() for c in effective.conflicts}
     edits = []
     for edit in effective.edits:
-        if edit.op == "revert":
-            status = "revert"
-        elif edit.id in effective.reverted_ids:
+        # A revert that was itself reverted (a redo) is "reverted" too.
+        if edit.id in effective.reverted_ids:
             status = "reverted"
+        elif edit.op == "revert":
+            status = "revert"
         elif edit.id in applied:
             status = "applied"
         else:

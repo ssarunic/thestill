@@ -77,6 +77,10 @@ SPEAKER_ENTITY_KEY = "speaker_entity_id"
 #: Set on a segment whose text was edited: its raw word timings no longer
 #: line up with the text (word re-alignment is a non-goal in v1).
 WORDS_STALE_KEY = "words_stale"
+# Kinds that carry a voice: speaker ops rename and merge these, and only
+# these list in the speaker panel. An ad read is spoken too, but its
+# attribution is the sponsor, not the host (``rename_label`` leaves it).
+SPEECH_KINDS: Tuple[str, ...] = ("content", "filler", "intro", "outro")
 
 _CACHE_SIZE = 64
 
@@ -334,10 +338,17 @@ class _Replayer:
         self.label_entities: Dict[str, Optional[str]] = {}
         by_label: Dict[str, List[Optional[str]]] = defaultdict(list)
         for segment, label in zip(self.segments, self.labels):
-            if label and segment.kind in ("content", "filler"):
-                by_label[label].append(segment.speaker)
+            if not label:
+                continue
+            # Every label is known, even one heard only in an ad read, so a
+            # row re-tagged to speech later can be renamed; its name comes
+            # from the speech rows alone.
+            by_label[label].append(segment.speaker if segment.kind in SPEECH_KINDS else None)
         for label, speakers in by_label.items():
             self.label_names[label] = _majority(speakers)
+        # Labels a speaker op touched: a row re-tagged into a speech kind
+        # afterwards takes the label's current name (``_set_kind``).
+        self.touched_labels: set = set()
         self.structural_seq: Optional[int] = None
 
     # -- labels ------------------------------------------------------------
@@ -432,10 +443,11 @@ class _Replayer:
         before = {"name": self.label_names.get(label), "entity_id": self.label_entities.get(label)}
         self.label_names[label] = op.args.name
         self.label_entities[label] = op.args.entity_id
+        self.touched_labels.add(label)
         for i, segment in enumerate(self.segments):
-            # Only speaker rows: an ad break built from the same raw segment
+            # Only speech rows: an ad break built from the same raw segment
             # keeps its (empty) speaker.
-            if self.labels[i] == label and segment.kind in ("content", "filler"):
+            if self.labels[i] == label and segment.kind in SPEECH_KINDS:
                 segment.speaker = op.args.name
                 segment.metadata[EDITED_KEY] = True
                 if op.args.entity_id:
@@ -450,16 +462,21 @@ class _Replayer:
             return EditConflict("", 0, "", "label_missing", {"label": label}), {}
         if into not in self.label_names:
             return EditConflict("", 0, "", "label_missing", {"label": into}), {}
-        moved = [i for i, l in enumerate(self.labels) if l == label and self.segments[i].kind in ("content", "filler")]
+        moved = [i for i, l in enumerate(self.labels) if l == label]
+        spoken = [i for i in moved if self.segments[i].kind in SPEECH_KINDS]
         before = {
             "name": self.label_names.get(label),
             "entity_id": self.label_entities.get(label),
-            "segments": len(moved),
+            "segments": len(spoken),
         }
         name = self._display_name(into)
         entity_id = self.label_entities.get(into)
+        self.touched_labels.add(into)
         for i in moved:
+            # Every row of the label moves, so an ad read re-tagged to
+            # speech later belongs to ``into``; only speech rows are renamed.
             self.labels[i] = into
+        for i in spoken:
             self.segments[i].speaker = name
             self.segments[i].metadata[EDITED_KEY] = True
             if entity_id:
@@ -512,7 +529,18 @@ class _Replayer:
             return conflict, {}
         segment = self.segments[index]
         before = {"kind": segment.kind}
+        was_speech = segment.kind in SPEECH_KINDS
         segment.kind = op.args.kind
+        label = self.labels[index]
+        if not was_speech and op.args.kind in SPEECH_KINDS and label and label in self.touched_labels:
+            # The row sat out the rename or merge of its voice; it takes the
+            # label's current name now that it speaks.
+            segment.speaker = self._display_name(label)
+            entity_id = self.label_entities.get(label)
+            if entity_id:
+                segment.metadata[SPEAKER_ENTITY_KEY] = entity_id
+            else:
+                segment.metadata.pop(SPEAKER_ENTITY_KEY, None)
         self._mark(segment, row)
         return None, before
 
@@ -543,6 +571,10 @@ class _Replayer:
         right.user_segment_id = None
         for child, part in enumerate((left, right)):
             part.metadata = dict(segment.metadata)
+            if left_span is right_span and left_span is not None:
+                # No word addressing: both halves still name the parent's
+                # whole span, so neither can drive a karaoke wipe.
+                part.metadata[WORDS_STALE_KEY] = True
             self._mark(part, row, child)
         self.segments[index : index + 1] = [left, right]
         self.labels[index : index + 1] = [self.labels[index], self.labels[index]]
@@ -567,7 +599,10 @@ class _Replayer:
             # are told apart by their text hashes on later ops.
             return ids, ids, span, span
         cut = self.raw_order[at.raw_segment_id]
-        left_ids = [sid for sid in ids if self.raw_order.get(sid, cut) <= cut] or ids[:1]
+        # A cut on a raw segment's first word leaves that segment wholly on
+        # the right.
+        left_last = cut if at.word_index > 0 else cut - 1
+        left_ids = [sid for sid in ids if self.raw_order.get(sid, cut) <= left_last] or ids[:1]
         right_ids = [sid for sid in ids if self.raw_order.get(sid, cut) >= cut] or ids[-1:]
         if at.word_index > 0:
             left_span = WordSpan(
@@ -672,7 +707,7 @@ class _Replayer:
         labels_by_segment: Dict[int, str] = {}
         speakers: "OrderedDict[str, SpeakerLabel]" = OrderedDict()
         for segment, label in zip(self.segments, self.labels):
-            if not label or segment.kind not in ("content", "filler"):
+            if not label or segment.kind not in SPEECH_KINDS:
                 continue
             labels_by_segment[segment.id] = label
             entry = speakers.get(label)

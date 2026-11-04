@@ -939,7 +939,9 @@ that does not apply is refused and nothing after it is written.
 **Errors:** 409 `stale_base_seq` with `last_seq` and the newer `edits` when
 `base_seq` moved; 409 `busy` while a download, transcribe or clean is in
 flight; 409 `edit_rejected` with the `conflict` reason when an op does not
-apply; 422 for a malformed op; 400 without a segmented transcript.
+apply, or when a revert targets a row that is already reverted; 422 for a
+malformed op; 400 without a segmented transcript. A refused batch writes
+nothing: every op is validated before the first row is appended.
 
 #### POST /api/episodes/{episode_id}/transcript/edits/{edit_id}/revert
 

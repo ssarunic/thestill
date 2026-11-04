@@ -114,7 +114,10 @@ export default function SpeakerDialog({
               onChange={(e) => {
                 setName(e.target.value)
                 // Typing a different name unlinks: the link belongs to a name.
-                if (entityId && linked && e.target.value.trim() !== linked.canonical_name) setEntityId(null)
+                // Before the typeahead has resolved the linked person, the
+                // name it came in with stands for it.
+                const linkedName = linked?.canonical_name ?? initialName.trim()
+                if (entityId && e.target.value.trim() !== linkedName) setEntityId(null)
               }}
               maxLength={200}
               className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
