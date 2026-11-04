@@ -575,3 +575,144 @@ class TestDefaultAppleLookupChain:
         with pytest.raises(ResolverError) as exc_info:
             _default_apple_episode_lookup("42", "7", None)
         assert "searched 0 entries" in str(exc_info.value)
+
+
+# ============================================================================
+# Feed GUID fallback — the host moved the file after Apple indexed it
+# ============================================================================
+
+_GUID = "064b8c86-1bde-4df5-b84b-432b50a6bd63"
+_APPLE_AUDIO = f"https://audio.audiomeans.fr/file/PcNCvtcnHj/{_GUID}.mp3?_=1790968950"
+_FEED_AUDIO = f"https://audio.audiomeans.fr/file/ipcQBypiKu/{_GUID}.mp3?_=1790968950"
+
+
+@pytest.fixture
+def moved_file_info(fake_apple_episode_info):
+    # GDIY #570 (2026-11-04): Apple still serves the pre-move enclosure URL.
+    return {**fake_apple_episode_info, "episodeUrl": _APPLE_AUDIO, "episodeGuid": _GUID}
+
+
+def _insert_feed_episode(db_path, podcast_id, *, external_id, audio_url, summary_path=None):
+    episode_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO episodes (id, podcast_id, created_at, updated_at, external_id, title, slug,
+                                  description, description_html, audio_url, summary_path)
+            VALUES (?, ?, ?, ?, ?, 'The Friday News Roundup', 'the-friday-news-roundup', '', '', ?, ?)
+            """,
+            (episode_id, podcast_id, now, now, external_id, audio_url, summary_path),
+        )
+        conn.commit()
+    return episode_id
+
+
+class _FeedWithMovedFile:
+    """A feed refresh that discovers the episode under its new enclosure URL."""
+
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.episode_id = None
+
+    def get_new_episodes(self, *, podcast_id):
+        self.episode_id = _insert_feed_episode(self.db_path, podcast_id, external_id=_GUID, audio_url=_FEED_AUDIO)
+        return []
+
+
+def _episode_rows(db_path):
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute("SELECT id, external_id, audio_url, canonical_id FROM episodes").fetchall()
+
+
+def _import_service(repo, inbox_repo, queue, info, feed_manager):
+    return ImportService(
+        repository=repo,
+        inbox_repository=inbox_repo,
+        queue_manager=queue,
+        resolvers=[ApplePodcastsResolver(episode_lookup=lambda tid, cid=None, url=None: info)],
+        feed_manager=feed_manager,
+    )
+
+
+class TestFeedGuidFallback:
+    def test_moved_file_attaches_to_feed_episode_by_guid_not_a_twin(
+        self, repo, inbox_repo, queue, user_repo, db_path, moved_file_info
+    ):
+        alice = _make_user(user_repo, "alice@example.com")
+        feed = _FeedWithMovedFile(db_path)
+
+        result = _import_service(repo, inbox_repo, queue, moved_file_info, feed).import_url(
+            user_id=alice.id, url=_APPLE_URL
+        )
+
+        rows = _episode_rows(db_path)
+        assert len(rows) == 1, "the import must not insert a twin of the feed episode"
+        assert result.episode_id == feed.episode_id
+        assert rows[0]["canonical_id"] == "apple:1000620312000"
+        # The pipeline gets the feed's current URL, not Apple's stale one.
+        tasks = queue.get_tasks_for_episode(feed.episode_id)
+        assert len(tasks) == 1
+
+    def test_guid_match_survives_a_failed_feed_refresh(
+        self, repo, inbox_repo, queue, user_repo, db_path, moved_file_info
+    ):
+        alice = _make_user(user_repo, "alice@example.com")
+        parent_id, _title, _slug = repo.upsert_auto_added_podcast(
+            rss_url=moved_file_info["feedUrl"], title="The Daily", description="", image_url=None
+        )
+        existing = _insert_feed_episode(db_path, parent_id, external_id=_GUID, audio_url=_FEED_AUDIO)
+
+        class BrokenFeedManager:
+            def get_new_episodes(self, *, podcast_id):
+                raise RuntimeError("feed unreachable")
+
+        result = _import_service(repo, inbox_repo, queue, moved_file_info, BrokenFeedManager()).import_url(
+            user_id=alice.id, url=_APPLE_URL
+        )
+
+        assert result.episode_id == existing
+        assert len(_episode_rows(db_path)) == 1
+
+    def test_attaching_to_a_processed_episode_does_not_reprocess_it(
+        self, repo, inbox_repo, queue, user_repo, db_path, moved_file_info
+    ):
+        alice = _make_user(user_repo, "alice@example.com")
+        parent_id, _title, _slug = repo.upsert_auto_added_podcast(
+            rss_url=moved_file_info["feedUrl"], title="The Daily", description="", image_url=None
+        )
+        processed = _insert_feed_episode(
+            db_path, parent_id, external_id=_GUID, audio_url=_FEED_AUDIO, summary_path="summary.md"
+        )
+
+        class NoNewEpisodes:
+            def get_new_episodes(self, *, podcast_id):
+                return []
+
+        result = _import_service(repo, inbox_repo, queue, moved_file_info, NoNewEpisodes()).import_url(
+            user_id=alice.id, url=_APPLE_URL
+        )
+
+        assert result.episode_id == processed
+        assert queue.get_tasks_for_episode(processed) == []
+
+    def test_unmatched_import_under_a_real_parent_stores_the_feed_guid(
+        self, repo, inbox_repo, queue, user_repo, db_path, moved_file_info
+    ):
+        # Stored as external_id, the GUID is what a later feed refresh upserts
+        # on, so the refresh updates this row instead of adding a twin.
+        alice = _make_user(user_repo, "alice@example.com")
+
+        class NoNewEpisodes:
+            def get_new_episodes(self, *, podcast_id):
+                return []
+
+        result = _import_service(repo, inbox_repo, queue, moved_file_info, NoNewEpisodes()).import_url(
+            user_id=alice.id, url=_APPLE_URL
+        )
+
+        (row,) = _episode_rows(db_path)
+        assert row["id"] == result.episode_id
+        assert row["external_id"] == _GUID
+        assert row["audio_url"] == _APPLE_AUDIO

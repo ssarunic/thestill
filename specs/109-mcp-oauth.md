@@ -225,7 +225,7 @@ client.**
 
 - It now checks against the policy scope set in point 1.
 - A request with no `scope` passes through as `None`, and `authorize()`
-  reads that as `read offline_access`.
+  reads that as `read follows offline_access`.
 
 Unit tests cover:
 
@@ -261,7 +261,10 @@ at connection time. CIMD and DCR cover Claude without sharing a secret.
      - a warning when the redirect is loopback only: "a program on this
        computer"
      - the scope checkboxes from the Settings card: `read` locked on,
-       `follows` off, `pipeline` for admins only
+       `follows` on (the reader can untick it), `pipeline` for admins
+       only. Claude requests exactly the challenge's scope, and the
+       screen offers only requested scopes, so the challenge names
+       `follows` or nobody could tick it (found 2026-11-04)
      - Approve and Deny
 4. **Approve.** `POST /api/oauth/pending/{id}/approve` carries the
    chosen scopes and consumes the pending row. It needs the session
@@ -335,7 +338,7 @@ A new bearer guard in `web/mcp_http.py` serves the exact path `/mcp`:
 
 - **No `Authorization: Bearer` header, or an unknown, expired or
   revoked token:** `401` with
-  `WWW-Authenticate: Bearer resource_metadata="https://thestill.me/.well-known/oauth-protected-resource/mcp", scope="read offline_access"`.
+  `WWW-Authenticate: Bearer resource_metadata="https://thestill.me/.well-known/oauth-protected-resource/mcp", scope="read follows offline_access"`.
   Misses count against the existing per-IP `RATE_LIMIT_MCP_MISS_MAX`
   budget.
 - **Valid token:**
@@ -510,7 +513,7 @@ retired more than 30 days ago.
   `source = dcr`.
 - **Claude Code.**
   - Its CIMD document has no `scope`, and it still gets
-    `read offline_access`.
+    `read follows offline_access` offered.
   - It connects through a loopback redirect on a random port.
   - The consent screen shows the loopback warning.
 - **Scopes.**

@@ -87,13 +87,21 @@ describe('OAuthConsent', () => {
     mockPending.mockResolvedValue(pending())
     mockApprove.mockResolvedValue({ status: 'ok', timestamp: '', redirect: 'https://claude.ai/api/mcp/auth_callback?code=x' })
     renderPage()
-    // Follows is offered (the app asked) but off by default.
+    // Follows is offered (the app asked) and on by default.
     const follows = await screen.findByLabelText('Follows & imports')
-    expect(follows).not.toBeChecked()
-    await userEvent.click(follows)
+    expect(follows).toBeChecked()
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
     await waitFor(() => expect(mockApprove).toHaveBeenCalledWith('abc', ['read', 'follows']))
     expect(assign).toHaveBeenCalledWith('https://claude.ai/api/mcp/auth_callback?code=x')
+  })
+
+  it('approves read only when the reader unticks follows', async () => {
+    mockPending.mockResolvedValue(pending())
+    mockApprove.mockResolvedValue({ status: 'ok', timestamp: '', redirect: 'https://claude.ai/api/mcp/auth_callback?code=x' })
+    renderPage()
+    await userEvent.click(await screen.findByLabelText('Follows & imports'))
+    await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(mockApprove).toHaveBeenCalledWith('abc', ['read']))
   })
 
   it('denies and follows the redirect', async () => {

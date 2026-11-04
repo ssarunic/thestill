@@ -5404,7 +5404,44 @@ def podcast_detect_hosts(ctx, podcast_id, limit):
 
 @main.group("episode")
 def episode_group():
-    """Per-episode metadata for the entity layer (guests)."""
+    """Per-episode metadata (guests) and episode repair."""
+
+
+@episode_group.command("fold-import-twins")
+@click.option("--podcast-id", default=None, help="Restrict to one podcast (uuid).")
+@click.option("--apply", is_flag=True, help="Fold the twins (default: report only).")
+@click.pass_context
+@require_config
+@log_command
+def episode_fold_import_twins(ctx, podcast_id, apply):
+    """Fold feed rows an import duplicated into the import's row.
+
+    An import that missed the show's existing feed episode (the host had
+    moved the file since Apple indexed it) inserted a second row with the
+    same slug and processed that one, so the episode page served the
+    unprocessed feed row. For each pair with matching publish dates whose
+    feed row is untouched, the feed row's inbox, progress and view rows and
+    its feed links move to the import's row, the feed row is deleted, and
+    the import's row takes its feed GUID and current audio URL. Reports by
+    default; ``--apply`` folds and audits each pair.
+    """
+    from .services.abuse.actor import Actor
+    from .services.episode_curation import EpisodeCurationService
+
+    service = EpisodeCurationService(ctx.obj.repository, ctx.obj.abuse.audit)
+    result = service.fold_import_twins(actor=Actor.cli(), apply=apply, podcast_id=podcast_id)
+    click.echo(f"{len(result.twins)} import twin{'' if len(result.twins) == 1 else 's'}")
+    for twin in result.twins:
+        click.echo(f"  {twin.podcast_slug}/{twin.episode_slug}  keep {twin.keeper_id}  fold {twin.twin_id}")
+    if not result.applied:
+        if result.twins:
+            click.echo("\nReport only. Re-run with --apply to fold them.")
+        return
+    skipped = len(result.twins) - result.folded
+    click.echo(
+        f"\n✓ {result.folded} folded"
+        + (f" ({skipped} twin(s) changed since the listing and were kept)" if skipped else "")
+    )
 
 
 @episode_group.command("set-guests")

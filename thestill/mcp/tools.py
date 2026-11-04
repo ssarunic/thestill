@@ -48,7 +48,7 @@ from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_
 from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
-from .inbox_tools import INBOX_TOOL_NAMES, dispatch_inbox_tool, inbox_tool_definitions
+from .inbox_tools import INBOX_TOOL_NAMES, INBOX_WRITE_TOOL_NAMES, dispatch_inbox_tool, inbox_tool_definitions
 from .middleware.stdio_adapter import log_mcp_stdio
 from .registration import ToolCalledFn, register_tools
 from .search_tools import dispatch_search_tool, search_tool_definitions
@@ -70,8 +70,8 @@ _MUTATING_TOOLS = frozenset(
         "process_episode",
         "summarize_episodes",
         # Spec #112 — an import (or a send that starts an unprocessed
-        # episode) runs the pipeline.
-        *INBOX_TOOL_NAMES,
+        # episode) runs the pipeline. list_inbox only reads.
+        *INBOX_WRITE_TOOL_NAMES,
     }
 )
 
@@ -451,7 +451,7 @@ def setup_tools(
             *entity_tool_definitions(),
             # Spec #28 §2.10 — sqlite-vec corpus search.
             *search_tool_definitions(),
-            # Spec #112 — import an episode / send one to the inbox.
+            # Spec #112 — list the inbox, import an episode, send one there.
             *inbox_tool_definitions(),
         ]
         # Spec #78 Phase 2 — over the remote connector only the tools the

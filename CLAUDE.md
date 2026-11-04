@@ -86,6 +86,10 @@ thestill transcript revert --edit <id> | --by <email> --since <ISO>  # undo rows
 thestill transcript refresh --podcast-id X --episode <slug>           # queue the entity refresh now
 thestill transcript speaker-stats [--json]                            # the unnamed-speaker share
 
+# Episode repair (admin-only, audited). An import that missed its feed episode
+# left a second row with the same slug; fold the untouched feed row into it:
+thestill episode fold-import-twins [--podcast-id X] [--apply]
+
 # Product analytics from product tables (spec #95; multi-user + Postgres only):
 thestill analytics [--range 7d|28d|90d] [--json] [--scorecard]   # --scorecard: spec #111 metrics only
 

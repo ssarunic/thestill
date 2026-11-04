@@ -51,6 +51,8 @@ AUDIT_ACTIONS = (
     "transcript.edit_session",
     "transcript.revert_bulk",
     "facts.add_host",
+    # Episode repair (thestill.services.episode_curation)
+    "episode.fold_import_twin",
 )
 
 

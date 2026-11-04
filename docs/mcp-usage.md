@@ -143,6 +143,7 @@ transcript on the instance. Over the connector:
   the stdio server prints is not used remotely.
 - `remove_podcast` **unfollows** — it never deletes a podcast.
 - `add_podcast` adds and follows it for you.
+- `list_inbox` reads **your** inbox, newest delivery first.
 - `import_episode` and `send_to_inbox` put an episode in **your** inbox.
   They need the **Follows & imports** scope, like `add_podcast`.
 - `get_status` returns counts over your follows only; admins get the full
@@ -1053,8 +1054,9 @@ Claude: "3 episodes discuss agentic engineering, here are the key clips..."
 
 ## Inbox Tools
 
-Put episodes in your Thestill inbox (spec #112). Both tools need the
-**Follows & imports** scope on a connector token. On stdio they deliver to
+Read your Thestill inbox and put episodes in it (spec #112). `list_inbox`
+needs only `read`. `import_episode` and `send_to_inbox` need the
+**Follows & imports** scope on a connector token. On stdio all three act on
 the default user in single-user mode, and they refuse in multi-user mode,
 where stdio has no signed-in user.
 
@@ -1126,6 +1128,55 @@ episode page's **Send to my inbox**. It fits the results of `search_corpus`,
 
 `created: false` means the episode was already in your inbox. It is left
 untouched: delivery never re-dates or re-reads a row.
+
+### 23. `list_inbox`
+
+Your inbox, newest delivery first, the same rows as the web inbox. It
+answers "what's new in my inbox" and "who was on my latest episode"
+(follow up with `get_summary` on a row's `id`). Listing never marks a row
+read.
+
+**Parameters** (all optional):
+
+- `state` (string): `unread`, `read`, `saved` or `dismissed`. Without it,
+  every row except dismissed ones.
+- `q` (string): words that must all appear in the episode title, show
+  title or description.
+- `limit` (integer): rows to return, 1 to 50. Default 10.
+- `before` (string): the `next_before` of the previous call, for older
+  rows.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "unread_count": 12,
+  "count": 3,
+  "episodes": [
+    {
+      "id": "…",
+      "title": "…",
+      "podcast_title": "…",
+      "inbox_state": "unread",
+      "source": "follow_new",
+      "delivered_at": "2026-11-04T09:30:00+00:00",
+      "published_at": "2026-11-03T05:00:00+00:00",
+      "duration_seconds": 3720,
+      "summary_ready": true,
+      "state": "summarized",
+      "failed": false,
+      "episode_url": "…",
+      "audio_url": "…"
+    }
+  ],
+  "next_before": null
+}
+```
+
+`source` says how the episode arrived: `follow_new` or `follow_seed` (a
+show you follow), `ad_hoc` (sent there) or `import`. `next_before` is
+`null` when there are no older rows.
 
 ---
 

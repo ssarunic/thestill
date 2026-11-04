@@ -213,7 +213,7 @@ def test_unauthenticated_mcp_is_401_with_resource_metadata(h):
             assert r.status_code == 401
             challenge = r.headers["www-authenticate"]
             assert f'resource_metadata="{BASE}/.well-known/oauth-protected-resource/mcp"' in challenge
-            assert 'scope="read offline_access"' in challenge
+            assert 'scope="read follows offline_access"' in challenge
         bad = h.rpc(c, "not-a-token")
         assert bad.status_code == 401 and 'error="invalid_token"' in bad.headers["www-authenticate"]
 

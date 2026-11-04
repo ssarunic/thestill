@@ -42,7 +42,7 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from structlog import get_logger
 
-from ..models.mcp_token import ALL_SCOPES, SCOPE_READ
+from ..models.mcp_token import ALL_SCOPES, SCOPE_FOLLOWS, SCOPE_READ
 from ..models.oauth import (
     SCOPE_OFFLINE_ACCESS,
     OAuthClientRecord,
@@ -73,8 +73,9 @@ TOUCH_INTERVAL_SECONDS = 60
 
 #: Every scope a client may be registered with or request.
 SUPPORTED_SCOPES: Tuple[str, ...] = (*ALL_SCOPES, SCOPE_OFFLINE_ACCESS)
-#: What a request that names no scope gets.
-DEFAULT_REQUEST_SCOPES: Tuple[str, ...] = (SCOPE_READ, SCOPE_OFFLINE_ACCESS)
+#: What a request that names no scope gets. Matches the ``/mcp`` 401
+#: challenge: ``follows`` is requested so the consent screen can offer it.
+DEFAULT_REQUEST_SCOPES: Tuple[str, ...] = (SCOPE_READ, SCOPE_FOLLOWS, SCOPE_OFFLINE_ACCESS)
 
 
 class OAuthRequestError(Exception):
