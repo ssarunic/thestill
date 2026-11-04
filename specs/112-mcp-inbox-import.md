@@ -79,9 +79,18 @@ scope, no new settings.
 - Resolver failures raise `UnsupportedUrlError` / `ResolverError`, both
   subclasses of `ImportError`
   ([import_service.py:95](../thestill/services/import_service.py#L95)). The
-  web route sends their text to the client as a 400
-  ([api_imports.py:55](../thestill/web/routes/api_imports.py#L55)), so the
-  messages are written for users.
+  web route sends `str(exc)` to the client as a 400
+  ([api_imports.py:55](../thestill/web/routes/api_imports.py#L55)). **Not
+  every message is written for users** (Codex, PR #465). Some raise sites
+  wrap raw exception text: the `requests` failure in `_guarded_get`
+  ([import_service.py:362](../thestill/services/import_service.py#L362)), the
+  iTunes JSON parse (`:376`), `SpotifyResolutionError` (`:780`) and the
+  catch-all in `_resolve`, which wraps any resolver exception (`:1022`).
+  Others are authored: the YouTube `describe_youtube_failure` text (`:244`),
+  the Apple "not a single episode" hint (`:706`) and `UnsupportedUrlError`
+  (`:1023`). So the web route already leaks on the wrapping sites, and
+  relaying `ImportError` verbatim over MCP would leak there too, bypassing
+  [errors.py](../thestill/mcp/errors.py).
 - `ImportService` is wired in the web app with the feed manager (to fetch
   the parent feed once), the transcription provider, the access guard and
   the quota ([app.py:336](../thestill/web/app.py#L336)). The MCP server
@@ -155,6 +164,18 @@ Decided while drafting, not asked:
   error.
 - **Response links:** both tools return `episode_url`, built the same way as
   every other tool, so Claude can link the episode page.
+- **Import error text (Codex P2 on PR #465):** `ImportError` carries two
+  texts. `str(exc)` is the detail and goes only to the log.
+  `exc.public_message` is what a client may see. A raise site sets it with
+  `public=` only when the text was written for a user (the YouTube failure
+  text, the Apple "not a single episode" hint, Apple "no such episode", and
+  `UnsupportedUrlError`). Otherwise it falls back to "Couldn't read that
+  link. Check it's a public episode link and try again." The MCP tool *and*
+  the web route return only `public_message` and log the detail with
+  `exc_info`, so this fixes the web leak too, in the shared service rather
+  than in two callers. A message built only from the caller's own URL and
+  fixed wording counts as authored. One with exception text or upstream
+  bodies in it never does.
 
 ## Execution plan
 
@@ -162,13 +183,14 @@ Decided while drafting, not asked:
 
 | # | File | Change |
 |---|------|--------|
-| A1 | `thestill/mcp/inbox_tools.py` (new) | `INBOX_TOOL_NAMES`, `inbox_tool_definitions()`, `dispatch_inbox_tool(name, arguments, *, user_id, import_service, inbox_service, podcast_repository, base_url)`. `import_episode` maps `ImportResult` to `{success, outcome, message, episode: {id, title, podcast_title, state, failed, episode_url}}`, and an `ImportError` becomes `{success: false, error}` with the authored text. `send_to_inbox` resolves `episode_id` or `episode_url`, gives a clean "not found", then `deliver_to_user(source="ad_hoc")` → `{success, created, message, episode}` |
+| A0 | `thestill/services/import_service.py`, `thestill/web/routes/api_imports.py` | `ImportError.__init__(detail, *, public=None)` and a `public_message` property (generic fallback; `UnsupportedUrlError` is authored by default). Pass `public=` at the authored raise sites only. The web route returns `public_message` and logs the detail. Tests: each wrapping site (`:362`, `:376`, `:780`, `:1022`) yields the generic text with no exception text in it; the authored sites keep their wording; the web 400 body for a `requests` failure has no exception text |
+| A1 | `thestill/mcp/inbox_tools.py` (new) | `INBOX_TOOL_NAMES`, `inbox_tool_definitions()`, `dispatch_inbox_tool(name, arguments, *, user_id, import_service, inbox_service, podcast_repository, base_url)`. `import_episode` maps `ImportResult` to `{success, outcome, message, episode: {id, title, podcast_title, state, failed, episode_url}}`, and an `ImportError` becomes `{success: false, error: exc.public_message}`, with the detail logged. `send_to_inbox` resolves `episode_id` or `episode_url`, gives a clean "not found", then `deliver_to_user(source="ad_hoc")` → `{success, created, message, episode}` |
 | A2 | `thestill/mcp/tools.py` | Build `ImportService` with the web wiring. Add both names to `_MUTATING_TOOLS`. List the definitions. Dispatch after the existing branches with the caller's user id: remote is `identity.user.id`; stdio single-user is the default user; stdio multi-user is refused |
 | A3 | `thestill/mcp/scopes.py` | `import_episode`, `send_to_inbox` → `SCOPE_FOLLOWS` |
 | A4 | `tests/unit/mcp/test_inbox_tools.py` (new) | Unit tests on the dispatcher with fakes: each outcome, `ImportError` text, the `episode_url` parse, not-found, both-or-neither args. End to end through the HTTP harness: a `read` token neither lists nor calls the tools; a `follows` token imports (resolver stubbed) and a repeat import returns `already_in_inbox` with one inbox row and one pipeline task; `send_to_inbox` creates once then returns `created: false`; read-only mode refuses a non-admin |
 | A5 | `tests/unit/mcp/test_scopes.py` | Assert both tools sit in `follows` |
 
-**Gate A:** `./venv/bin/python -m pytest tests/unit/mcp tests/unit/web/test_mcp_http.py -q`
+**Gate A:** `./venv/bin/python -m pytest tests/unit/mcp tests/unit/web/test_mcp_http.py tests/unit/services/test_import_service*.py tests/integration/web/test_api_imports.py -q`
 is green, and `ruff check` passes on the changed files.
 
 ### Phase B: copy and docs
@@ -215,7 +237,9 @@ the changed docs.
 
 **Created:** `thestill/mcp/inbox_tools.py`, `tests/unit/mcp/test_inbox_tools.py`
 
-**Modified:** `thestill/mcp/tools.py`, `thestill/mcp/scopes.py`,
+**Modified:** `thestill/services/import_service.py`,
+`thestill/web/routes/api_imports.py`, `thestill/mcp/tools.py`,
+`thestill/mcp/scopes.py`,
 `tests/unit/mcp/test_scopes.py`,
 `thestill/web/frontend/src/constants/mcpScopes.ts`,
 `thestill/web/frontend/src/components/McpConnectorSettings.test.tsx`,
