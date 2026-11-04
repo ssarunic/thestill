@@ -32,9 +32,12 @@ export interface EngineEvents {
   onAvailableRatesChange: (rates: number[] | null) => void
 }
 
-// Native: `url` (the enclosure/asset URL). YouTube: `videoId`.
+// Native: `url` (the enclosure/asset URL) plus its manifest `mimeType`,
+// which routes HLS through hls.js where the browser lacks native HLS
+// (spec #113). YouTube: `videoId`.
 export interface EngineSource {
   url?: string
+  mimeType?: string | null
   videoId?: string
 }
 

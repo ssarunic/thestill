@@ -72,6 +72,8 @@ table and never also sent as an event.
   `thestill/web/frontend/src`. The CSP at
   [security_headers.py:51-63](../thestill/web/middleware/security_headers.py#L51-L63)
   pins `connect-src 'self'` and `script-src 'self'` plus YouTube.
+  ([#113](113-hls-video-rendition.md) later widened `connect-src` to
+  `'self' https:` for hls.js; analytics stay same-origin.)
 - **Edge.** Production runs behind Caddy
   ([deploy/aws-ec2/Caddyfile](../deploy/aws-ec2/Caddyfile)), which
   reverse-proxies everything to `thestill:8000`. Adding a second
@@ -265,7 +267,8 @@ handle_path /ingest/* {
 }
 ```
 
-This keeps `connect-src 'self'` and `script-src 'self'` byte-identical,
+This keeps `connect-src 'self'` and `script-src 'self'` byte-identical
+(at the time; #113 has since added `https:` to `connect-src` for HLS),
 and it keeps content blockers from dropping events, which would make
 PostHog numbers lower than reality by an unknown amount. Locally there
 is no Caddy and no key, so nothing is sent.

@@ -79,6 +79,7 @@ drift is a property of the rendition, not a bug.
 - **`video/mp4` / HLS alternate enclosures.** The corpus has zero today
   (all 14 rows are `video/youtube`). The manifest shape leaves room; the
   native engine picks them up in a later increment when real data exists.
+  Done in [#113](113-hls-video-rendition.md) (Flightcast HLS, 2026-11-04).
 - **Fuzzy episode↔YouTube matching** (description scraping, channel
   search, title matching). Only publisher-declared alternate enclosures.
   The show-level `top_podcasts.youtube_url` is a directory link, not an

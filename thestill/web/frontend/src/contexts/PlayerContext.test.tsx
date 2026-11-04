@@ -258,6 +258,15 @@ describe('playback session basics', () => {
     expect(playSpy).toHaveBeenCalledTimes(2)
   })
 
+  it('clears a media error once playback flows again (spec #113 recovery)', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => { video.dispatchEvent(new Event('error')) })
+    expect(ctx.mediaError).not.toBeNull()
+    act(() => { video.dispatchEvent(new Event('playing')) })
+    expect(ctx.mediaError).toBeNull()
+  })
+
   it('applies startAt on resume of the same source', () => {
     const { video } = renderPlayer()
     act(() => ctx.play(audioTrack))

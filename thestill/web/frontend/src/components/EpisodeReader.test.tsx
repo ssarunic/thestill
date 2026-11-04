@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
@@ -104,7 +104,10 @@ function episodeResponse(): EpisodeDetailResponse {
   }
 }
 
-function renderAtEpisodeRoute(element: React.ReactElement) {
+function renderAtEpisodeRoute(
+  element: React.ReactElement,
+  entry = '/podcasts/sample-pod/episodes/sample-episode',
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -112,7 +115,7 @@ function renderAtEpisodeRoute(element: React.ReactElement) {
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
         <PlayerProvider>
-          <MemoryRouter initialEntries={['/podcasts/sample-pod/episodes/sample-episode']}>
+          <MemoryRouter initialEntries={[entry]}>
             <Routes>
               <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug" element={element} />
             </Routes>
@@ -463,5 +466,98 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Translating to HR…')
     expect(screen.getByRole('button', { name: 'HR (original)' })).toHaveAttribute('aria-pressed', 'true')
     languageSpy.mockRestore()
+  })
+})
+
+describe('EpisodeReader drift banner (spec #113)', () => {
+  const RealAudio = globalThis.Audio
+  let probedDuration = 0
+
+  // The reader's passive duration probe (`new Audio()`, preload metadata).
+  class FakeAudio extends EventTarget {
+    preload = ''
+    duration = NaN
+    set src(value: string) {
+      if (!value) return
+      queueMicrotask(() => {
+        this.duration = probedDuration
+        this.dispatchEvent(new Event('loadedmetadata'))
+      })
+    }
+  }
+
+  function transcriptWith(sourceDuration: number) {
+    return {
+      data: {
+        status: 'ok',
+        timestamp: '',
+        available: true,
+        content: '',
+        segments: {
+          segments: [
+            { id: 1, start: 0, end: 5, speaker: 'Host', text: 'Hi', kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null, metadata: {} },
+          ],
+          transcript_source_duration_s: sourceDuration,
+        },
+      },
+      isLoading: false,
+    }
+  }
+
+  function videoEpisode(): EpisodeDetailResponse {
+    const response = episodeResponse()
+    response.episode.playback = {
+      kind: 'video',
+      audio: { url: 'https://example.com/x.mp3', mime_type: 'audio/mpeg', duration: 6673, timeline_offset: 0 },
+      video: { url: 'https://cdn.example.com/x.mp4', mime_type: 'video/mp4', duration: 6673, timeline_offset: 0 },
+      poster_url: null,
+    }
+    return response
+  }
+
+  const TRANSCRIPT_ROUTE = '/podcasts/sample-pod/episodes/sample-episode?view=transcript'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubGlobal('Audio', FakeAudio)
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve())
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {})
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {})
+    mockUseSummary.mockReturnValue({ data: undefined, isLoading: false, isFetching: false })
+    mockUseEpisode.mockReturnValue({ data: videoEpisode(), isLoading: false, error: null })
+    mockUseTranscript.mockReturnValue(transcriptWith(6673))
+  })
+
+  afterEach(() => {
+    vi.stubGlobal('Audio', RealAudio)
+    vi.restoreAllMocks()
+    mockUseTranscript.mockReturnValue({ data: undefined, isLoading: false })
+  })
+
+  it('probes the audio enclosure while the episode is not loaded', async () => {
+    probedDuration = 7000
+    renderAtEpisodeRoute(<EpisodeReader />, TRANSCRIPT_ROUTE)
+    expect(await screen.findByText('Timestamps may have drifted')).toBeInTheDocument()
+    expect(screen.getByText(/5m 27s\s+longer/)).toBeInTheDocument()
+  })
+
+  it('compares against the rendition the player actually loaded', async () => {
+    probedDuration = 6673 // the MP3 matches the transcript…
+    const user = userEvent.setup()
+    renderAtEpisodeRoute(<EpisodeReader />, TRANSCRIPT_ROUTE)
+    await act(async () => {})
+    expect(screen.queryByText('Timestamps may have drifted')).toBeNull()
+
+    // …but the video rendition it plays first is 535 s shorter (ads only
+    // in the MP3, as on SOLVED).
+    await user.click(screen.getByRole('button', { name: /^Play episode/ }))
+    const media = document.querySelector('video')!
+    expect(media.getAttribute('src')).toBe('https://cdn.example.com/x.mp4')
+    Object.defineProperty(media, 'duration', { configurable: true, get: () => 6138 })
+    act(() => {
+      media.dispatchEvent(new Event('durationchange'))
+    })
+    expect(await screen.findByText('Timestamps may have drifted')).toBeInTheDocument()
+    expect(screen.getByText(/8m 55s\s+shorter/)).toBeInTheDocument()
   })
 })

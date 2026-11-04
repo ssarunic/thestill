@@ -83,6 +83,11 @@ export interface PlayerContextValue {
   isPlaying: boolean
   isLoading: boolean
   duration: number
+  // Spec #113 — the duration the native engine reported for its current
+  // source (the rendition actually loaded), or null until it reports.
+  // Unlike `duration` it never holds the feed's durationHint, so the
+  // reader's drift check can compare the transcript against real media.
+  nativeDuration: number | null
   playbackRate: number
   // Spec #72 §5 — rates the active engine accepts for the current source;
   // null = no restriction (native) or not reported yet. Consumers disable
@@ -171,6 +176,9 @@ const PlayerTimeContext = createContext<number>(0)
 
 interface ActiveSource {
   url: string
+  // The asset's manifest MIME type — routes HLS through hls.js where the
+  // browser has no native HLS (spec #113). Null for the legacy audioUrl.
+  mimeType: string | null
   offset: number
   rendition: RenditionKind
 }
@@ -187,13 +195,14 @@ function selectSource(track: PlayerTrack, preferred: RenditionKind): ActiveSourc
   const pick = (rendition: RenditionKind): ActiveSource | null => {
     const asset = rendition === 'video' ? manifest?.video : manifest?.audio
     return asset
-      ? { url: asset.url, offset: asset.timeline_offset ?? 0, rendition }
+      ? { url: asset.url, mimeType: asset.mime_type ?? null, offset: asset.timeline_offset ?? 0, rendition }
       : null
   }
   return (
     pick(preferred) ??
     pick(preferred === 'video' ? 'audio' : 'video') ?? {
       url: track.audioUrl,
+      mimeType: null,
       offset: 0,
       rendition: 'audio',
     }
@@ -230,6 +239,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [nativeDuration, setNativeDuration] = useState<number | null>(null)
   const [playbackRate, setPlaybackRate] = useState(1)
   const [availableRates, setAvailableRates] = useState<number[] | null>(null)
   // Spec #72 §5 — the one global rate preference, read synchronously inside
@@ -293,6 +303,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onPlaying: () => {
         setIsPlaying(true)
         setIsLoading(false)
+        // Playback is flowing again, so any earlier error has been
+        // recovered from (spec #113: hls.js recoverMediaError after the
+        // element already reported MEDIA_ERR_DECODE).
+        setMediaError(null)
       },
       onWaiting: () => setIsLoading(true),
       onCanPlay: () => setIsLoading(false),
@@ -341,7 +355,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onWaiting: () => active() && base.onWaiting(),
         onCanPlay: () => active() && base.onCanPlay(),
         onTimeUpdate: (seconds) => active() && base.onTimeUpdate(seconds),
-        onDurationChange: (seconds) => active() && base.onDurationChange(seconds),
+        onDurationChange: (seconds) => {
+          if (kind === 'native') setNativeDuration(seconds)
+          if (active()) base.onDurationChange(seconds)
+        },
         onRateChange: (rate) => active() && base.onRateChange(rate),
         onSeeked: () => active() && base.onSeeked(),
         onVolumeChange: (volume, isMuted) => active() && base.onVolumeChange(volume, isMuted),
@@ -384,9 +401,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Assign a new native source and (optionally) carry seek/rate across
   // the transition (the engine defers the seek to loadedmetadata).
-  const beginSource = useCallback((url: string, seekTo: number | null, rate: number | null) => {
-    nativeEngineRef.current?.load({ url }, { seekTo, rate })
-    srcRef.current = url
+  const beginSource = useCallback((source: ActiveSource, seekTo: number | null, rate: number | null) => {
+    nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType }, { seekTo, rate })
+    srcRef.current = source.url
+    setNativeDuration(null)
     setMediaError(null)
   }, [])
 
@@ -421,7 +439,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setTrack(next)
         setCurrentTime(seekTo ?? 0)
         setDuration(next.durationHint ?? 0)
-        beginSource(desired.url, seekTo, preferredRateRef.current)
+        beginSource(desired, seekTo, preferredRateRef.current)
         // Best-effort: a refused autoplay (NotAllowedError) leaves the bar
         // paused at the position — the guaranteed outcome, not an error.
         if (autoplay) native.play().catch(() => setIsPlaying(false))
@@ -493,7 +511,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               : Math.max(0, native.getCurrentTime() - activeOffsetRef.current + desired.offset)
         const rate = native.getRate()
         activeOffsetRef.current = desired.offset
-        beginSource(desired.url, resumeAt, rate)
+        beginSource(desired, resumeAt, rate)
         native.play().catch(() => setIsPlaying(false))
         return
       }
@@ -529,7 +547,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrentTime(seekTo ?? 0)
     setDuration(next.durationHint ?? 0)
     // Spec #72 §5 — a fresh source starts at the persisted preference.
-    beginSource(desired.url, seekTo, preferredRateRef.current)
+    beginSource(desired, seekTo, preferredRateRef.current)
     native.play().catch(() => setIsPlaying(false))
   }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition])
 
@@ -602,6 +620,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
+    setNativeDuration(null)
     setMediaError(null)
     setAvailableRates(null)
   }, [persistence, setEngineKind, setRendition])
@@ -652,7 +671,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         native.seekTo(engineTime)
         native.setRate(rate)
       } else {
-        beginSource(desired.url, engineTime, rate)
+        beginSource(desired, engineTime, rate)
       }
       if (wasPlaying) native.play().catch(() => setIsPlaying(false))
       else setIsPlaying(false)
@@ -670,7 +689,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const resumeAt = Math.max(0, native.getCurrentTime() - activeOffsetRef.current + desired.offset)
     const rate = native.getRate()
     activeOffsetRef.current = desired.offset
-    beginSource(desired.url, resumeAt, rate)
+    beginSource(desired, resumeAt, rate)
     if (wasPlaying) native.play().catch(() => setIsPlaying(false))
   }, [beginSource, setEngineKind, setRendition])
 
@@ -946,6 +965,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       isLoading,
       duration,
+      nativeDuration,
       playbackRate,
       availableRates,
       play,
@@ -988,6 +1008,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       isLoading,
       duration,
+      nativeDuration,
       playbackRate,
       availableRates,
       play,

@@ -45,6 +45,7 @@ import ReprocessStatus from './ReprocessStatus'
 import type { FailureType, EntityType, EpisodeEntity, EpisodeState, EpisodeTask, MentionLite, SummaryCitation } from '../api/types'
 import { ENTITY_BRANCH_STAGES } from '../constants/stages'
 import { buildPlayerTrack } from '../utils/playerTrack'
+import { needsHlsJs, preloadHls } from '../contexts/playback-engine/hls'
 
 type Tab = 'transcript' | 'summary'
 type SegmentScrollTarget = { segmentId: number; nonce: number }
@@ -422,6 +423,14 @@ export default function EpisodeReader({
   // segment seek, theater surface) — includes the spec #61 playback-asset
   // manifest so video episodes start on the video rendition.
   const playerTrack = useMemo(() => (episode ? buildPlayerTrack(episode) : null), [episode])
+
+  // Spec #113 — warm the hls.js chunk for an HLS video episode in a browser
+  // without native HLS, so the first play click finds it cached.
+  const videoAsset = episode?.playback?.kind === 'video' ? episode.playback.video : null
+  useEffect(() => {
+    if (!videoAsset) return
+    if (needsHlsJs(document.createElement('video'), videoAsset.url, videoAsset.mime_type)) preloadHls()
+  }, [videoAsset])
 
   const handleSegmentSeek = useCallback(
     (seconds: number) => {
@@ -941,7 +950,14 @@ function TranscriptPanel({
   karaokeChipDisabled,
   onKaraokeToggle,
 }: TranscriptPanelProps) {
-  const liveAudioDuration = useAudioDuration(audioUrl)
+  // Spec #113 — compare against the rendition actually loaded (the HLS
+  // video on a video-first episode) once the native engine has reported
+  // it; until then, and on the YouTube engine, probe the audio enclosure.
+  const player = usePlayer()
+  const loadedDuration =
+    episodeId && player.isCurrent(episodeId) && player.activeEngine === 'native' ? player.nativeDuration : null
+  const probedAudioDuration = useAudioDuration(loadedDuration == null ? audioUrl : null)
+  const liveAudioDuration = loadedDuration ?? probedAudioDuration
   const drift = classifyDrift(
     transcriptData?.segments?.transcript_source_duration_s,
     liveAudioDuration,
