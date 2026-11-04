@@ -38,6 +38,7 @@ import requests
 from structlog import get_logger
 from urllib3.util.retry import Retry
 
+from ..utils.http_text import response_text
 from ..utils.url_guard import guarded_session
 from ..utils.url_patterns import extract_spotify_entity
 
@@ -82,7 +83,7 @@ def fetch_latest_episode(show_id: str) -> Optional[SpotifyLatestEpisode]:
         resp = session.get(f"https://open.spotify.com/embed/show/{show_id}", timeout=_HTTP_TIMEOUT)
     if resp.status_code != 200:
         raise requests.HTTPError(f"Spotify embed page returned HTTP {resp.status_code}")
-    return parse_embed_page(resp.text)
+    return parse_embed_page(response_text(resp))
 
 
 def parse_embed_page(html: str) -> Optional[SpotifyLatestEpisode]:

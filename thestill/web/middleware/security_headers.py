@@ -48,14 +48,25 @@ from starlette.responses import Response
 # iframe. frame-src has no 'self' fallback issue — without the directive
 # it would inherit default-src 'self' and block the embed outright.
 # frame-ancestors 'none' is unrelated (it stops others framing US).
+#
+# connect-src https: / media-src blob:: spec #113's HLS video rendition.
+# Outside Safari, hls.js fetches playlists and segments with XHR from the
+# publisher's hosts (Flightcast segments 302 to signed third-party object
+# storage, so no stable host list exists) and plays them through a Media
+# Source Extensions blob: URL. connect-src only constrains what an already
+# injected script can talk to; img-src https: already allows one-way
+# exfiltration to any host, so the marginal loss is a two-way channel.
+# blob: URLs can only be minted by same-origin script. worker-src is left
+# unset on purpose: the hls.js worker is a same-origin asset, covered by
+# the script-src fallback.
 _CSP = (
     "default-src 'self'; "
     "script-src 'self' https://www.youtube.com https://s.ytimg.com; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
-    "connect-src 'self'; "
-    "media-src 'self' https:; "
+    "connect-src 'self' https:; "
+    "media-src 'self' https: blob:; "
     "frame-src https://www.youtube.com; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "

@@ -187,6 +187,26 @@ def test_a_person_linked_to_a_work_stays_a_person(decisions):
     assert result.entity.wikidata_instance_of == ["Q11424"]  # kept for the review queue
 
 
+def test_a_person_linked_to_a_kind_of_person_becomes_a_topic(decisions):
+    # "the photographer" → the occupation (Q33231): the link is right and the
+    # tag is wrong, so this demotion is not held.
+    photographer = WikidataSearchHit("Q33231", "photographer", "person who makes photographs")
+    wikidata = FakeWikidata({"photographer": [photographer]}, p31={"Q33231": ["Q12737077", "Q108300140"]})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "photographer", label="person")], context=CTX)
+    assert result.entity.type == EntityType.TOPIC
+
+
+def test_a_person_linked_to_an_ai_model_becomes_a_product(decisions):
+    # "Sora" → OpenAI's text-to-video model: GLiNER reads the name as a
+    # person, the link is right, so this demotion is not held either.
+    sora = WikidataSearchHit("Q124544998", "Sora", "OpenAI text-to-video models")
+    wikidata = FakeWikidata({"Sora": [sora]}, p31={"Q124544998": ["Q115517227", "Q114617315"]})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Sora", label="person")], context=CTX)
+    assert result.entity.type == EntityType.PRODUCT
+
+
 # --- failures ----------------------------------------------------------------
 
 

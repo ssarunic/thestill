@@ -3635,6 +3635,12 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
     multiple=True,
     help="Only these entities (repeatable); also applies their held person → topic/product change",
 )
+@click.option(
+    "--type",
+    "entity_type",
+    type=click.Choice(["person", "company", "product", "topic"]),
+    help="Only entities currently stored in this bucket (e.g. person, to move kinds of person out of People)",
+)
 @click.option("--limit", type=int, help="Cap the number of entities to process")
 @click.option(
     "--in-place",
@@ -3655,7 +3661,9 @@ def rebuild_cooccurrences(ctx, podcast_id, episode_id, full):
 @click.pass_context
 @require_config
 @log_command
-def backfill_entity_types(ctx, episode_id, podcast_id, entity_ids, limit, in_place, only_works, cached_only, dry_run):
+def backfill_entity_types(
+    ctx, episode_id, podcast_id, entity_ids, entity_type, limit, in_place, only_works, cached_only, dry_run
+):
     """Spec #28 §5.2 — fetch Wikidata P31 and re-bucket existing entities.
 
     Walks resolved entities with a ``wikidata_qid`` set, fetches
@@ -3682,14 +3690,17 @@ def backfill_entity_types(ctx, episode_id, podcast_id, entity_ids, limit, in_pla
     stay on it.
 
     Scope by ``--episode-id`` or ``--podcast-id`` to test on a single
-    episode before running corpus-wide. ``--dry-run`` reports the
-    planned changes without writing.
+    episode before running corpus-wide, or by ``--type`` to re-check one
+    bucket only (``--type person`` walks just the People rows). ``--dry-run``
+    reports the planned changes without writing.
 
     A person that Wikidata calls a place, work or company is held, not
     retyped: usually the name was linked to the wrong item (Bellingham the
     footballer → the US city). Held rows only get their P31 cached. Check
     each link; unlink a wrong one with ``entity relink ID none``, and apply
-    a right one by naming it with ``--entity-id``.
+    a right one by naming it with ``--entity-id``. A person whose Wikidata
+    item is a kind of person (profession, title, kinship, age group) is not
+    held: that is a common noun, and it moves to topic.
     """
     from collections import Counter
 
@@ -3717,7 +3728,9 @@ def backfill_entity_types(ctx, episode_id, podcast_id, entity_ids, limit, in_pla
             click.echo(f"⚠️  {missing}: not found or not linked to Wikidata, skipped", err=True)
         entities = [e for e in named.values() if e is not None and e.wikidata_qid]
     else:
-        entities = repo.list_entities_with_qid(episode_id=episode_id, podcast_id=scope_podcast_id, limit=limit)
+        entities = repo.list_entities_with_qid(
+            episode_id=episode_id, podcast_id=scope_podcast_id, entity_type=entity_type, limit=limit
+        )
     if not entities:
         click.echo("No resolved entities with QIDs match the scope.")
         return

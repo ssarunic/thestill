@@ -48,6 +48,7 @@ from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_
 from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
+from .inbox_tools import INBOX_TOOL_NAMES, dispatch_inbox_tool, inbox_tool_definitions
 from .middleware.stdio_adapter import log_mcp_stdio
 from .registration import ToolCalledFn, register_tools
 from .search_tools import dispatch_search_tool, search_tool_definitions
@@ -68,6 +69,9 @@ _MUTATING_TOOLS = frozenset(
         "clean_transcripts",
         "process_episode",
         "summarize_episodes",
+        # Spec #112 — an import (or a send that starts an unprocessed
+        # episode) runs the pipeline.
+        *INBOX_TOOL_NAMES,
     }
 )
 
@@ -182,6 +186,18 @@ def setup_tools(
     )
     follower_service = FollowerService(
         repos.follower, repository, inbox_service=inbox_service, follow_policy=abuse.follow_policy
+    )
+    # Spec #112 — the same wiring as the web app's ``POST /api/imports``.
+    from ..services.import_service import ImportService
+
+    import_service = ImportService(
+        repository=repository,
+        inbox_repository=repos.inbox,
+        queue_manager=repos.queue_manager,
+        feed_manager=feed_manager,
+        transcription_provider=config.transcription_provider,
+        access=abuse.guard,
+        quota=abuse.quota,
     )
 
     @log_mcp_stdio
@@ -435,6 +451,8 @@ def setup_tools(
             *entity_tool_definitions(),
             # Spec #28 §2.10 — sqlite-vec corpus search.
             *search_tool_definitions(),
+            # Spec #112 — import an episode / send one to the inbox.
+            *inbox_tool_definitions(),
         ]
         # Spec #78 Phase 2 — over the remote connector only the tools the
         # token's (effective) scopes grant are listed. Advisory: the
@@ -1716,6 +1734,28 @@ def setup_tools(
             entity_response = dispatch_entity_tool(name, arguments, entity_repository, base_url=config.public_base_url)
             if entity_response is not None:
                 return entity_response
+
+            if name in INBOX_TOOL_NAMES:
+                # Spec #112 — whose inbox: the connector's user; on stdio the
+                # default user in single-user mode (the add_podcast parity).
+                # Multi-user stdio has no caller to deliver to.
+                if identity.is_remote:
+                    inbox_user_id = identity.user.id
+                elif not config.multi_user:
+                    inbox_user_id = _auth_service().get_or_create_default_user().id
+                else:
+                    error = f"{name} needs a signed-in user; use the remote connector on a multi-user instance."
+                    return [TextContent(type="text", text=json.dumps({"success": False, "error": error}))]
+                return dispatch_inbox_tool(
+                    name,
+                    arguments,
+                    user_id=inbox_user_id,
+                    import_service=import_service,
+                    inbox_service=inbox_service,
+                    inbox_repository=repos.inbox,
+                    podcast_repository=repository,
+                    base_url=config.public_base_url,
+                )
 
             if name in {"search_corpus"}:
                 search_response = dispatch_search_tool(

@@ -243,7 +243,8 @@ def test_unsupported_url_raises(service, user_repo):
 
 
 def test_resolver_failure_wraps_in_resolver_error(repo, inbox_repo, queue, user_repo):
-    """A resolver that raises an arbitrary exception is surfaced as ResolverError."""
+    """A resolver that raises an arbitrary exception is surfaced as ResolverError
+    with fixed wording: the original text stays on ``__cause__`` (spec #112)."""
     alice = _make_user(user_repo, "alice@example.com")
 
     class BoomResolver:
@@ -261,7 +262,9 @@ def test_resolver_failure_wraps_in_resolver_error(repo, inbox_repo, queue, user_
     )
     with pytest.raises(ResolverError) as exc_info:
         svc.import_url(user_id=alice.id, url="https://example.com/anything")
-    assert "kaboom" in str(exc_info.value)
+    assert "kaboom" not in str(exc_info.value)
+    assert "public episode link" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 # ---------------------------------------------------------------------------

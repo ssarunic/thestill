@@ -43,6 +43,9 @@ _SCOPE_BY_TOOL: Dict[str, str] = {
     # download + transcription + summarisation, so it spends money.
     "add_podcast": SCOPE_FOLLOWS,
     "remove_podcast": SCOPE_FOLLOWS,
+    # Spec #112 — imports run the pipeline too, so they sit with add_podcast.
+    "import_episode": SCOPE_FOLLOWS,
+    "send_to_inbox": SCOPE_FOLLOWS,
     # pipeline — operator actions, admins only
     "refresh_feeds": SCOPE_PIPELINE,
     "download_episodes": SCOPE_PIPELINE,

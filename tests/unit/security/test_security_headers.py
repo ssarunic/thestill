@@ -82,8 +82,19 @@ class TestSecurityHeaders:
         and the SDK is bundled, so no analytics host is ever allow-listed."""
         csp = TestClient(_make_app(is_production=True)).get("/x").headers["Content-Security-Policy"]
         directives = {c.strip().split(" ")[0]: c.strip() for c in csp.split(";") if c.strip()}
-        assert directives["connect-src"] == "connect-src 'self'"
+        assert "'self'" in directives["connect-src"]
         assert "posthog" not in csp
+
+    def test_csp_allows_hls_video_rendition(self):
+        """Spec #113 — hls.js fetches publisher playlists/segments (https
+        only, no wildcard scheme) and plays them through an MSE blob: URL;
+        its worker is same-origin, so worker-src is not widened."""
+        csp = TestClient(_make_app(is_production=True)).get("/x").headers["Content-Security-Policy"]
+        directives = {c.strip().split(" ")[0]: c.strip() for c in csp.split(";") if c.strip()}
+        assert directives["connect-src"] == "connect-src 'self' https:"
+        assert directives["media-src"] == "media-src 'self' https: blob:"
+        assert "worker-src" not in directives
+        assert "blob:" not in directives["script-src"]
 
     def test_route_set_header_not_overwritten(self):
         """A deliberate per-route header override must win."""

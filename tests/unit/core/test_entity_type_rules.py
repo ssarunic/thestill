@@ -16,7 +16,7 @@ the resolver's tentative type unchanged.
 
 from __future__ import annotations
 
-from thestill.core.entity_type_rules import classify_entity_type
+from thestill.core.entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
 from thestill.models.entities import EntityType
 
 
@@ -27,6 +27,71 @@ class TestPersonRule:
 
     def test_fictional_human_treated_as_person(self):
         assert classify_entity_type(["Q15632617"], EntityType.TOPIC) is EntityType.PERSON
+
+
+class TestKindOfPersonDemotion:
+    """Linked common nouns the a16z rail showed under "People": the item
+    is a profession, position, kinship or population group, not a person."""
+
+    def test_profession_p31_demotes_to_topic_from_person(self):
+        # "entrepreneur" (Q131524): profession + legal status.
+        assert classify_entity_type(["Q28640", "Q2628882"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_occupation_p31_demotes_to_topic(self):
+        # "Photographer" (Q33231): occupation + ISCO-08 group.
+        assert classify_entity_type(["Q12737077", "Q108300140"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_academic_rank_and_position_demote_to_topic(self):
+        # "Professor" (Q121594).
+        p31 = ["Q480319", "Q5767753", "Q486983", "Q12737077", "Q4164871", "Q3529618"]
+        assert classify_entity_type(p31, EntityType.PERSON) is EntityType.TOPIC
+
+    def test_population_group_demotes_to_topic(self):
+        # "child" (Q7569): population group + class of human.
+        assert classify_entity_type(["Q851990", "Q134264207"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_kinship_demotes_to_topic(self):
+        # "parent" (Q7566): kinship + social role.
+        assert classify_entity_type(["Q171318", "Q214339"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_a_people_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "Russians", "Iraqis", "Samaritans" tagged
+        # person sat held; a demonym is never a person's name.
+        assert classify_entity_type(["Q41710", "Q2472587"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q33829", "Q6266"])
+        assert is_kind_of_person(["Q11197007"])
+
+    def test_a_disputed_or_pseudonymous_human_stays_a_person(self):
+        # Satoshi Nakamoto (Q15924): pseudonym + disputed human + "group of
+        # humans", no Q5. The person rule must win over the group class.
+        p31 = ["Q61002", "Q21070568", "Q16334295"]
+        assert classify_entity_type(p31, EntityType.PERSON, qid="Q15924") is EntityType.PERSON
+        assert classify_entity_type(p31, EntityType.TOPIC, qid="Q15924") is EntityType.PERSON
+
+    def test_a_corporate_title_is_a_kind_of_person(self):
+        # Prod dry run 2026-11-03: "chief product officer" carries only the
+        # corporate-title class, which the topic list names but the hold
+        # exemption did not, so it sat held like a name collision.
+        assert classify_entity_type(["Q11488158"], EntityType.PERSON) is EntityType.TOPIC
+        assert is_kind_of_person(["Q11488158"])
+
+    def test_social_status_and_life_phase_demote_to_topic(self):
+        # "billionaire" (Q189970 social status) and "Adult" (Q785260 phase
+        # of human life) from the local person bucket.
+        assert classify_entity_type(["Q189970", "Q5932254"], EntityType.PERSON) is EntityType.TOPIC
+        assert classify_entity_type(["Q785260", "Q185836"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_the_human_class_itself_is_a_topic(self):
+        # "Human" (Q5) is the class every person is an instance of; its own
+        # P31 is a taxonomy class no list names, so the QID decides.
+        assert classify_entity_type(["Q55983715"], EntityType.PERSON, qid="Q5") is EntityType.TOPIC
+
+    def test_a_real_human_with_a_position_stays_a_person(self):
+        # A person row can carry a role class beside Q5; the person rule wins.
+        assert classify_entity_type(["Q5", "Q4164871"], EntityType.PERSON, qid="Q937") is EntityType.PERSON
+
+    def test_a_kind_of_person_labelled_topic_stays_a_topic(self):
+        assert classify_entity_type(["Q28640"], EntityType.TOPIC) is EntityType.TOPIC
 
 
 class TestCountryDemotion:
@@ -190,6 +255,36 @@ class TestBusinessAndSoftware:
 
         assert _mint_type_from_p31(self.ALLIANZ) is EntityType.COMPANY
         assert _mint_type_from_p31(["Q7397"]) is EntityType.PRODUCT
+
+
+class TestAIModels:
+    """Prod 2026-11-03: "Sora (text-to-video model)" and "Claude (AI)" under
+    "People in this episode", ChatGPT under companies. P31 sets as Wikidata
+    lists them."""
+
+    SORA = ["Q115517227", "Q114617315"]  # text-to-video model, diffusion model
+    CLAUDE = ["Q870780", "Q116961403", "Q124629760", "Q133284163"]
+    CHATGPT = ["Q133284163", "Q116777014", "Q115305900", "Q19967801", "Q35127", "Q870780", "Q117246174"]
+    DALL_E = ["Q96369982", "Q113940039", "Q117349473", "Q116777014", "Q133857185"]
+
+    def test_an_ai_model_is_a_product_whatever_gliner_said(self):
+        for p31 in (self.SORA, self.CLAUDE, self.CHATGPT, self.DALL_E):
+            for fallback in EntityType:
+                assert classify_entity_type(p31, fallback) is EntityType.PRODUCT
+
+    def test_an_ai_model_is_exempt_from_the_person_hold(self):
+        assert is_ai_model(self.SORA) and is_ai_model(self.CLAUDE)
+        assert not is_ai_model(["Q5"]) and not is_ai_model(["Q11424"])
+
+    def test_the_broad_generative_ai_class_alone_is_not_a_model(self):
+        # "generative artificial intelligence" (Q117246174) is also the field.
+        assert not is_ai_model(["Q117246174"])
+        assert classify_entity_type(["Q117246174"], EntityType.TOPIC) is EntityType.TOPIC
+
+    def test_minting_agrees(self):
+        from thestill.core.entity_review import _mint_type_from_p31
+
+        assert _mint_type_from_p31(self.SORA) is EntityType.PRODUCT
 
 
 class TestPlacesAndEventsBySuperclass:

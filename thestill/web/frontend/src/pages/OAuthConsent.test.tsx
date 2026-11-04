@@ -71,7 +71,7 @@ describe('OAuthConsent', () => {
     expect(await screen.findByText('Claude wants to connect to your thestill account')).toBeInTheDocument()
     expect(screen.getByTestId('redirect-host')).toHaveTextContent('claude.ai')
     expect(screen.getByLabelText('Read')).toBeChecked()
-    expect(screen.queryByLabelText('Follows')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Follows & imports')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Pipeline')).not.toBeInTheDocument()
     expect(screen.getByText(/Stays connected until you disconnect/)).toBeInTheDocument()
     expect(mockPending).toHaveBeenCalledWith('abc')
@@ -88,7 +88,7 @@ describe('OAuthConsent', () => {
     mockApprove.mockResolvedValue({ status: 'ok', timestamp: '', redirect: 'https://claude.ai/api/mcp/auth_callback?code=x' })
     renderPage()
     // Follows is offered (the app asked) but off by default.
-    const follows = await screen.findByLabelText('Follows')
+    const follows = await screen.findByLabelText('Follows & imports')
     expect(follows).not.toBeChecked()
     await userEvent.click(follows)
     await userEvent.click(screen.getByRole('button', { name: 'Approve' }))
@@ -122,14 +122,14 @@ describe('OAuthConsent', () => {
     authState.isAdmin = true
     mockPending.mockResolvedValue(pending({ requested_scopes: ['read', 'follows'] }))
     renderPage()
-    expect(await screen.findByLabelText('Follows')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Follows & imports')).toBeInTheDocument()
     expect(screen.queryByLabelText('Pipeline')).not.toBeInTheDocument()
   })
 
   it('describes each scope to assistive tech', async () => {
     mockPending.mockResolvedValue(pending())
     renderPage()
-    expect(await screen.findByLabelText('Follows')).toHaveAccessibleDescription(/Adding a feed runs the pipeline/)
+    expect(await screen.findByLabelText('Follows & imports')).toHaveAccessibleDescription(/Both run the pipeline/)
   })
 
   it('shows a failed approval and lets the reader try again', async () => {

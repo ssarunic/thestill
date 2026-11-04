@@ -43,6 +43,7 @@ from ..core.spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..utils.http_text import response_text
 from ..utils.url_guard import guarded_session
 from ..utils.url_patterns import (
     extract_apple_episode_id,
@@ -93,7 +94,13 @@ _TRACKING_PARAMS = frozenset(
 
 
 class ImportError(Exception):
-    """Base exception for import failures."""
+    """Base exception for import failures.
+
+    The message is user-facing: the web import route and the MCP
+    ``import_episode`` tool relay it verbatim (spec #112). So it never embeds
+    exception text — fixed wording, the caller's URL, ids and HTTP status
+    codes only. Raise ``from exc`` and log the detail at the raise site.
+    """
 
 
 class UnsupportedUrlError(ImportError):
@@ -359,7 +366,10 @@ def _guarded_get(url: str, *, label: str):
         with guarded_session(user_agent=_ITUNES_USER_AGENT, retries=retry) as session:
             resp = session.get(url, timeout=10)
     except requests.RequestException as exc:
-        raise ResolverError(f"{label} fetch failed: {exc}") from exc
+        # Spec #112: ImportError text reaches web and MCP clients, so the
+        # exception text stays in the log and on __cause__, never the message.
+        logger.warning("import_fetch_failed", label=label, error=str(exc))
+        raise ResolverError(f"{label} fetch failed") from exc
     if resp.status_code != 200:
         raise ResolverError(f"{label} returned HTTP {resp.status_code}")
     return resp
@@ -373,12 +383,15 @@ def _itunes_lookup(params: str, *, label: str) -> list:
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise ResolverError(f"iTunes lookup returned non-JSON for {label}: {exc}") from exc
+        logger.warning("import_itunes_non_json", label=label, error=str(exc))
+        raise ResolverError(f"iTunes lookup returned non-JSON for {label}") from exc
     return payload.get("results") or []
 
 
 def _fetch_apple_episode_page(url: str) -> str:
-    return _guarded_get(url, label="Apple episode page").text
+    # Apple serves bare ``text/html`` (no charset), which ``.text`` reads as
+    # ISO-8859-1 — every ``—`` became ``â\x80\x94`` in imported titles.
+    return response_text(_guarded_get(url, label="Apple episode page"))
 
 
 def _fetch_apple_feed(url: str) -> bytes:
@@ -1019,7 +1032,18 @@ class ImportService:
                 except ImportError:
                     raise
                 except Exception as exc:
-                    raise ResolverError(f"{type(resolver).__name__} failed to resolve {url!r}: {exc}") from exc
+                    # Anything a resolver didn't author is internal: log it
+                    # in full and give the client fixed wording (spec #112).
+                    logger.warning(
+                        "import_resolver_failed",
+                        resolver=type(resolver).__name__,
+                        url=url,
+                        error=str(exc),
+                        exc_info=True,
+                    )
+                    raise ResolverError(
+                        "Couldn't read that link. Check it's a public episode link and try again."
+                    ) from exc
         raise UnsupportedUrlError(
             f"No resolver matched URL {url!r}. Supported: Apple Podcasts episode links, "
             "YouTube videos, Spotify episode links, and direct audio links "

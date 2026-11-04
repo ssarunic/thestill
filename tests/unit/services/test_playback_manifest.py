@@ -205,3 +205,104 @@ class TestYoutubeAsset:
         manifest = build_playback_manifest(episode, [_yt_alt("https://youtu.be/6wz3LrdMnVo")])
         assert manifest["kind"] == "video"
         assert manifest["youtube"]["video_id"] == "6wz3LrdMnVo"
+
+
+HLS = "https://episode.flightcast.com/hls/v/01M6FYA4GH9W4DYQQG4WV857SE.m3u8"
+
+
+def _video_alt(uri: str = HLS, **overrides) -> AlternateEnclosure:
+    defaults = dict(source_uri=uri, mime_type="application/x-mpegURL", title="HLS Video Stream")
+    defaults.update(overrides)
+    return AlternateEnclosure(**defaults)
+
+
+class TestNativeVideoAlternate:
+    """Spec #113 — HLS / progressive video alternates become the video rendition."""
+
+    def test_hls_alternate_makes_video_kind_and_keeps_audio(self):
+        """The Flightcast shape: MP3 enclosure + HLS alternate enclosure."""
+        episode = _episode(
+            audio_mime_type="audio/mpeg",
+            duration=3473,
+            image_url="https://example.com/art.jpg",
+            playback_time_offset_seconds=0.5,
+        )
+        manifest = build_playback_manifest(episode, [_video_alt(height=1080)])
+
+        assert manifest["kind"] == "video"
+        assert manifest["audio"] == {
+            "url": "https://example.com/ep.mp3",
+            "mime_type": "audio/mpeg",
+            "duration": 3473,
+            "timeline_offset": 0.5,
+        }
+        assert manifest["video"] == {
+            "url": HLS,
+            "mime_type": "application/x-mpegURL",
+            "duration": 3473,
+            "timeline_offset": 0.5,  # shares the episode's offset (drift not corrected)
+            "height": 1080,
+        }
+        assert manifest["poster_url"] == "https://example.com/art.jpg"
+        assert manifest["youtube"] is None
+
+    def test_apple_mime_spelling_and_case_accepted(self):
+        manifest = build_playback_manifest(_episode(), [_video_alt(mime_type="APPLICATION/VND.APPLE.MPEGURL")])
+        assert manifest["kind"] == "video"
+        assert manifest["video"]["url"] == HLS
+
+    def test_progressive_video_alternate(self):
+        manifest = build_playback_manifest(
+            _episode(), [_video_alt("https://cdn.example.com/720.mp4", mime_type="video/mp4")]
+        )
+        assert manifest["kind"] == "video"
+        assert manifest["video"]["url"] == "https://cdn.example.com/720.mp4"
+        assert manifest["youtube"] is None
+
+    def test_default_wins_then_hls_beats_progressive(self):
+        mp4 = _video_alt("https://cdn.example.com/720.mp4", mime_type="video/mp4")
+        assert build_playback_manifest(_episode(), [mp4, _video_alt()])["video"]["url"] == HLS
+
+        default_mp4 = _video_alt("https://cdn.example.com/720.mp4", mime_type="video/mp4", is_default=True)
+        assert (
+            build_playback_manifest(_episode(), [_video_alt(), default_mp4])["video"]["url"]
+            == "https://cdn.example.com/720.mp4"
+        )
+
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "http://episode.flightcast.com/v.m3u8",  # mixed content
+            "ipfs://bafybeigdyrzt/v.m3u8",
+            "https:///no-host.m3u8",
+            "https://[unbalanced/v.m3u8",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_untrusted_uri_skipped_to_next_candidate(self, uri):
+        manifest = build_playback_manifest(_episode(), [_video_alt(uri, is_default=True), _video_alt()])
+        assert manifest["video"]["url"] == HLS
+
+    def test_all_invalid_falls_back_to_audio_kind(self):
+        manifest = build_playback_manifest(_episode(), [_video_alt("http://insecure.example.com/v.m3u8")])
+        assert manifest["kind"] == "audio"
+        assert manifest["video"] is None
+
+    def test_youtube_alternate_is_not_a_native_video(self):
+        manifest = build_playback_manifest(_episode(), [_yt_alt("https://youtu.be/6wz3LrdMnVo")])
+        assert manifest["kind"] == "audio"
+        assert manifest["video"] is None
+
+    def test_hls_and_youtube_alternates_coexist(self):
+        alts = [_yt_alt("https://youtu.be/6wz3LrdMnVo"), _video_alt()]
+        manifest = build_playback_manifest(_episode(), alts)
+        assert manifest["kind"] == "video"
+        assert manifest["video"]["url"] == HLS
+        assert manifest["youtube"]["video_id"] == "6wz3LrdMnVo"
+
+    def test_video_enclosure_ignores_video_alternates(self):
+        episode = _episode(audio_url="https://example.com/ep.mp4", audio_mime_type="video/mp4")
+        manifest = build_playback_manifest(episode, [_video_alt()])
+        assert manifest["kind"] == "video"
+        assert manifest["audio"] is None
+        assert manifest["video"]["url"] == "https://example.com/ep.mp4"

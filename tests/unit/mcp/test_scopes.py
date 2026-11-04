@@ -33,6 +33,12 @@ def test_every_registered_tool_has_a_scope():
     assert extract_mcp_tool_names() == set(registered_tools())
 
 
+def test_inbox_tools_sit_in_follows():
+    """Spec #112: importing runs the pipeline, like add_podcast."""
+    assert scope_for_tool("import_episode") == "follows"
+    assert scope_for_tool("send_to_inbox") == "follows"
+
+
 def test_unknown_tool_has_no_scope():
     assert scope_for_tool("definitely_not_a_tool") is None
 

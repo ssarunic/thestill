@@ -331,6 +331,16 @@ def test_list_entities_with_qid_scoped_by_episode_and_podcast(repo):
     assert [e.id for e in repo.list_entities_with_qid(podcast_id=POD_2)] == ["person:elon-musk"]
     assert [e.id for e in repo.list_entities_with_qid(episode_id=EP_2)] == ["company:spacex", "person:elon-musk"]
     assert [e.id for e in repo.list_entities_with_qid(limit=1)] == ["company:spacex"]
+    # ``entity_type`` is the stored bucket, not the id prefix: a row retyped
+    # in place keeps its old prefix (spec #92) and must still be found.
+    repo.upsert_entity(_entity(id="topic:entrepreneur", name="entrepreneur", qid="Q131524", aliases=[]))
+    repo.insert_mentions([_resolved_mention("topic:entrepreneur", episode_id=EP_1, segment_id=2)])
+    assert [e.id for e in repo.list_entities_with_qid(entity_type="person")] == [
+        "person:elon-musk",
+        "topic:entrepreneur",
+    ]
+    assert [e.id for e in repo.list_entities_with_qid(entity_type="company")] == ["company:spacex"]
+    assert repo.list_entities_with_qid(entity_type="product") == []
 
 
 def test_retype_in_place_keeps_the_id_and_everything_pointing_at_it(repo):

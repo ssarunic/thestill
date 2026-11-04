@@ -157,7 +157,8 @@ class TestPageParsing:
         seen = {}
 
         class _Resp:
-            status_code, text, url = 200, "<html></html>", "https://open.spotify.com/x"
+            status_code, content, url = 200, b"<html></html>", "https://open.spotify.com/x"
+            headers = {"Content-Type": "text/html; charset=utf-8"}
 
         class _Session:
             def __enter__(self):

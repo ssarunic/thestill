@@ -362,6 +362,7 @@ requirement, and it also tells any client which calls write.
 |---|---|---|
 | The 11 `read` tools (`list_podcasts` … `list_episodes_by_entity`) | true | — |
 | `add_podcast` | false | false |
+| `import_episode`, `send_to_inbox` (spec #112) | false | false |
 | `remove_podcast` | false | true (it unfollows) |
 | The 7 `pipeline` tools | false | false |
 
