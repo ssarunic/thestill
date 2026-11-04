@@ -23,7 +23,7 @@ whose cleaned-transcript sidecar changed (or whose chunk rows are damaged)
 is re-written through the configured chunk writer, which re-embeds.
 
 The damage entered through ``requests.Response.text`` guessing a feed
-body's charset (fixed in ``media_source.decode_feed_body``); this module
+body's charset (fixed in ``utils.http_text.decode_feed_body``); this module
 is the repair for what was stored before that fix. Dry run by default —
 the report lists every change and the caller decides whether to apply.
 """

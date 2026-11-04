@@ -381,6 +381,29 @@ class TestApplePageEpisodeLookup:
         with pytest.raises(ResolverError):
             _apple_page_episode_lookup(_DEEP_URL, _DEEP_TRACK_ID, fetch=lambda url: _html_with_payload([node]))
 
+    def test_page_without_charset_keeps_non_ascii_title_intact(self, monkeypatch):
+        # Apple serves episode pages as bare ``text/html`` with a UTF-8 body;
+        # ``Response.text`` read that as ISO-8859-1 and stored
+        # "AI Future \u00e2\x80\x94 with Eric Schmidt" (2026-11-04).
+        import requests
+
+        node = _episode_node(title="The Risks and Opportunities of an AI Future — with Eric Schmidt")
+        body = (
+            '<html><body><script type="application/json" id="serialized-server-data">'
+            + json.dumps([node], ensure_ascii=False)
+            + "</script></body></html>"
+        ).encode("utf-8")
+        resp = requests.Response()
+        resp.status_code = 200
+        resp._content = body
+        resp.headers["Content-Type"] = "text/html"
+        resp.encoding = requests.utils.get_encoding_from_headers(resp.headers)  # as HTTPAdapter does
+        monkeypatch.setattr(import_service, "_guarded_get", lambda url, *, label: resp)
+
+        info = _apple_page_episode_lookup(_DEEP_URL, _DEEP_TRACK_ID)
+
+        assert info["trackName"] == "The Risks and Opportunities of an AI Future — with Eric Schmidt"
+
     def test_bad_optional_fields_dropped_not_fatal(self):
         node = _episode_node(releaseDate={"weird": True}, summary=None)
         node["mediaEnclosures"] = [{"streamUrl": "https://cdn.example.com/deep.mp3", "duration": "2753"}]
