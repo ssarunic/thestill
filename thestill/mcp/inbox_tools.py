@@ -14,15 +14,18 @@
 
 """Inbox tools for the MCP server (spec #112).
 
+- ``list_inbox(state?, q?, limit?, before?)`` — the twin of ``GET /api/inbox``:
+  the caller's inbox, newest delivery first, with the unread count. Read
+  only (``read`` scope); listing never flips a row to read.
 - ``import_episode(url)`` — the twin of ``POST /api/imports``: an Apple
   Podcasts, YouTube, Spotify or audio-file URL becomes an episode in the
   caller's inbox. Idempotent; a repeat says ``already_in_inbox``.
 - ``send_to_inbox(episode_id | episode_url)`` — the twin of the web "Send to
   my inbox" button for an episode Thestill already has.
 
-Both are thin: every rule (imports switch, ``imports_per_day``, immutable
+All three are thin: every rule (imports switch, ``imports_per_day``, immutable
 delivery, the pipeline guard) lives in ``ImportService`` / ``InboxService``.
-Scope (``follows``), read-only mode and the mutation rate limit are applied
+Scope, read-only mode and the mutation rate limit (writes only) are applied
 by the dispatcher in ``tools.py`` before this module is reached.
 """
 
@@ -30,15 +33,25 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, List, Optional
 from urllib.parse import unquote, urlparse
 
 from mcp.types import TextContent, Tool
 
+from ..models.inbox import INBOX_STATES
 from ..services.import_service import ImportError as ImportServiceError
+from ..services.inbox_service import InvalidInboxQueryError, InvalidInboxStateError
+from ..utils.datetime_utils import ensure_utc
 from ..utils.url_generator import episode_links
 
-INBOX_TOOL_NAMES = frozenset({"import_episode", "send_to_inbox"})
+#: The inbox tools that write (and may start the pipeline): rate-limited and
+#: refused in read-only mode, like ``add_podcast``.
+INBOX_WRITE_TOOL_NAMES = frozenset({"import_episode", "send_to_inbox"})
+INBOX_TOOL_NAMES = INBOX_WRITE_TOOL_NAMES | {"list_inbox"}
+
+LIST_DEFAULT_LIMIT = 10
+LIST_MAX_LIMIT = 50
 
 # An episode page on this instance: /podcasts/<podcast-slug>/episodes/<episode-slug>[/…]
 _EPISODE_PATH_RE = re.compile(r"^/podcasts/([^/]+)/episodes/([^/]+)")
@@ -46,6 +59,41 @@ _EPISODE_PATH_RE = re.compile(r"^/podcasts/([^/]+)/episodes/([^/]+)")
 
 def inbox_tool_definitions() -> List[Tool]:
     return [
+        Tool(
+            name="list_inbox",
+            description=(
+                "List your Thestill inbox, newest delivery first: the episodes delivered to you from "
+                "podcasts you follow, plus ones you imported or sent there. Use it for \"what's new in my "
+                'inbox" or "my latest episodes". Each row has the inbox state (unread, read, saved), '
+                "when it arrived, whether its summary is ready, and the episode id for get_summary or "
+                "get_transcript. Dismissed episodes are left out unless state=dismissed. Also returns "
+                "your unread count. Pass next_before back as before for older rows."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "state": {
+                        "type": "string",
+                        "enum": list(INBOX_STATES),
+                        "description": "Only rows in this state (default: all except dismissed)",
+                    },
+                    "q": {
+                        "type": "string",
+                        "description": "Words that must all appear in the episode title, show title or description",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": LIST_MAX_LIMIT,
+                        "description": f"Rows to return (default {LIST_DEFAULT_LIMIT}, max {LIST_MAX_LIMIT})",
+                    },
+                    "before": {
+                        "type": "string",
+                        "description": "next_before from a previous call, for the next (older) page",
+                    },
+                },
+            },
+        ),
         Tool(
             name="import_episode",
             description=(
@@ -103,11 +151,66 @@ def dispatch_inbox_tool(
     ``Podcast``: the synthetic ``audio-imports`` parent of a bare-audio
     import doesn't validate as one (its feed URL is ``synthetic://``).
     """
+    if name == "list_inbox":
+        return _list_inbox(arguments, user_id, inbox_service, base_url)
     if name == "import_episode":
         return _import_episode(arguments, user_id, import_service, inbox_repository, base_url)
     if name == "send_to_inbox":
         return _send_to_inbox(arguments, user_id, inbox_service, inbox_repository, podcast_repository, base_url)
     return None
+
+
+def _list_inbox(arguments, user_id, inbox_service, base_url) -> List[TextContent]:
+    arguments = arguments or {}
+    state = str(arguments.get("state") or "").strip() or None
+    q = str(arguments.get("q") or "").strip() or None
+
+    raw_limit = arguments.get("limit")
+    try:
+        limit = LIST_DEFAULT_LIMIT if raw_limit in (None, "") else int(raw_limit)
+    except (TypeError, ValueError):
+        return _reply({"success": False, "error": f"limit must be a whole number from 1 to {LIST_MAX_LIMIT}."})
+    if not 1 <= limit <= LIST_MAX_LIMIT:
+        return _reply({"success": False, "error": f"limit must be a whole number from 1 to {LIST_MAX_LIMIT}."})
+
+    before = None
+    raw_before = str(arguments.get("before") or "").strip()
+    if raw_before:
+        try:
+            before = ensure_utc(datetime.fromisoformat(raw_before.replace("Z", "+00:00")))
+        except ValueError:
+            return _reply({"success": False, "error": "before must be the next_before value from a previous call."})
+
+    try:
+        items = inbox_service.list(user_id, state=state, limit=limit, before=before, q=q)
+    except (InvalidInboxStateError, InvalidInboxQueryError) as exc:
+        # Authored by InboxService for the web's 400s: safe to relay.
+        return _reply({"success": False, "error": str(exc)})
+
+    rows = []
+    for item in items:
+        row = _describe(item, base_url)
+        episode = item.episode
+        row.update(
+            {
+                "inbox_state": item.entry.state,
+                "source": item.entry.source,
+                "delivered_at": item.entry.delivered_at.isoformat(),
+                "published_at": episode.pub_date.isoformat() if episode.pub_date else None,
+                "duration_seconds": episode.duration,
+                "summary_ready": bool(episode.summary_path),
+            }
+        )
+        rows.append(row)
+    return _reply(
+        {
+            "success": True,
+            "unread_count": inbox_service.unread_count(user_id),
+            "count": len(rows),
+            "episodes": rows,
+            "next_before": items[-1].entry.delivered_at.isoformat() if len(items) == limit else None,
+        }
+    )
 
 
 def _import_episode(arguments, user_id, import_service, inbox_repository, base_url) -> List[TextContent]:
@@ -169,7 +272,7 @@ def _send_to_inbox(
 
 
 def _describe(item, base_url: str) -> dict:
-    """The episode block both tools return; ``{}`` when the item is missing."""
+    """The episode block every inbox tool returns; ``{}`` when the item is missing."""
     if item is None:
         return {}
     episode, podcast = item.episode, item.podcast

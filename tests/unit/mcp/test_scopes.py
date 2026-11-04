@@ -39,6 +39,11 @@ def test_inbox_tools_sit_in_follows():
     assert scope_for_tool("send_to_inbox") == "follows"
 
 
+def test_list_inbox_is_read():
+    """Reading your own inbox is what the web shows a signed-in reader."""
+    assert scope_for_tool("list_inbox") == "read"
+
+
 def test_unknown_tool_has_no_scope():
     assert scope_for_tool("definitely_not_a_tool") is None
 

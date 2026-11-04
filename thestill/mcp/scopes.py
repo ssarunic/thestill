@@ -39,6 +39,8 @@ _SCOPE_BY_TOOL: Dict[str, str] = {
     "list_quotes_by": SCOPE_READ,
     "get_entity": SCOPE_READ,
     "list_episodes_by_entity": SCOPE_READ,
+    # The caller's own inbox: what the web shows them, never another user's.
+    "list_inbox": SCOPE_READ,
     # follows — add_podcast lives here, not read: adding a feed enqueues
     # download + transcription + summarisation, so it spends money.
     "add_podcast": SCOPE_FOLLOWS,
