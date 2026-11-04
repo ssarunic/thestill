@@ -1951,6 +1951,19 @@ class EpisodesMixin(CategoryCacheMixin):
         AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.episode_id = t.id)
     """
 
+    # The keeper is the import's own inserted row: its external_id is still
+    # the resolver's id (``canonical_id`` is ``<kind>:<external_id>``), which a
+    # feed row an import attached to never has. Not failed, no active task.
+    _IMPORT_KEEPER = """
+        k.canonical_id IS NOT NULL
+        AND (k.external_id = k.canonical_id OR right(k.canonical_id, length(k.external_id) + 1) = ':' || k.external_id)
+        AND k.failed_at_stage IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM tasks q
+            WHERE q.episode_id = k.id AND q.status IN ('pending', 'processing', 'retry_scheduled')
+        )
+    """
+
     #: ``(table, key column)`` of every row keyed on an episode that a fold
     #: moves from the twin to the keeper, unless the keeper already has one
     #: with the same key. Whatever stays behind cascades with the twin.
@@ -1963,10 +1976,31 @@ class EpisodesMixin(CategoryCacheMixin):
         ("episode_transcript_links", "url"),
     )
 
+    #: Columns the feed owns. The keeper was built from the resolver's thin
+    #: metadata (no description_html, no MIME type, sometimes a mis-decoded
+    #: title), so a fold takes the feed row's values for all of them.
+    _TWIN_FEED_COLUMNS = (
+        "external_id",
+        "title",
+        "description",
+        "description_html",
+        "pub_date",
+        "audio_url",
+        "audio_mime_type",
+        "audio_file_size",
+        "duration",
+        "image_url",
+        "explicit",
+        "episode_type",
+        "episode_number",
+        "season_number",
+        "website_url",
+    )
+
     def find_import_twin_candidates(self, podcast_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Rows sharing a podcast and slug where ``keeper`` carries an import
-        ``canonical_id`` and ``twin`` is an untouched feed row (no canonical id,
-        nothing processed, no task, not failed). The caller checks pub dates."""
+        """Rows sharing a podcast and slug where ``keeper`` is an import's own
+        row and ``twin`` an untouched feed row (no canonical id, nothing
+        processed, no task, not failed). The caller checks pub dates."""
         scope = "AND k.podcast_id = %s" if podcast_id else ""
         with connect(self.dsn) as conn:
             rows = conn.execute(
@@ -1977,7 +2011,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 FROM episodes k
                 JOIN episodes t ON t.podcast_id = k.podcast_id AND t.slug = k.slug AND t.id <> k.id
                 JOIN podcasts p ON p.id = k.podcast_id
-                WHERE k.canonical_id IS NOT NULL
+                WHERE {self._IMPORT_KEEPER}
                   AND {self._UNTOUCHED_TWIN}
                   {scope}
                 ORDER BY p.slug, k.slug
@@ -1994,39 +2028,34 @@ class EpisodesMixin(CategoryCacheMixin):
         Moves the twin's user rows (inbox, progress, views) and feed rows
         (alternate enclosures, platform and transcript links) to the keeper
         where it has none with the same key, deletes the twin (the rest
-        cascade), then gives the keeper the twin's feed GUID and current
-        enclosure (URL, MIME type, size) so feed refresh updates the keeper
-        from now on. Returns False,
-        changing nothing, when the twin is no longer untouched or either row
-        is gone.
+        cascade), then gives the keeper the twin's feed-owned columns
+        (``_TWIN_FEED_COLUMNS``: GUID, enclosure, metadata) so feed refresh
+        updates the keeper from now on. Returns False, changing nothing, when
+        either row no longer qualifies or is gone.
         """
+        feed_columns = ", ".join(f"t.{col}" for col in self._TWIN_FEED_COLUMNS)
         with connect(self.dsn) as conn:
             twin = conn.execute(
-                "SELECT t.external_id, t.audio_url, t.audio_mime_type, t.audio_file_size FROM episodes t "
-                f"WHERE t.id = %s AND {self._UNTOUCHED_TWIN} FOR UPDATE",
+                f"SELECT {feed_columns} FROM episodes t WHERE t.id = %s AND {self._UNTOUCHED_TWIN} FOR UPDATE",
                 (twin_id,),
             ).fetchone()
-            keeper = conn.execute("SELECT id FROM episodes WHERE id = %s", (keeper_id,)).fetchone()
+            keeper = conn.execute(
+                f"SELECT k.id FROM episodes k WHERE k.id = %s AND {self._IMPORT_KEEPER} FOR UPDATE",
+                (keeper_id,),
+            ).fetchone()
             if twin is None or keeper is None:
                 return False
             for table, key in self._TWIN_MOVABLE:
                 conn.execute(
-                    f"UPDATE {table} SET episode_id = %s WHERE episode_id = %s "
-                    f"AND {key} NOT IN (SELECT {key} FROM {table} WHERE episode_id = %s)",
+                    f"UPDATE {table} SET episode_id = %s WHERE episode_id = %s AND NOT EXISTS "
+                    f"(SELECT 1 FROM {table} AS kept WHERE kept.episode_id = %s AND kept.{key} = {table}.{key})",
                     (keeper_id, twin_id, keeper_id),
                 )
             conn.execute("DELETE FROM episodes WHERE id = %s", (twin_id,))
+            assignments = ", ".join(f"{col} = %s" for col in self._TWIN_FEED_COLUMNS)
             conn.execute(
-                "UPDATE episodes SET external_id = %s, audio_url = %s, audio_mime_type = %s, audio_file_size = %s, "
-                "updated_at = %s WHERE id = %s",
-                (
-                    twin["external_id"],
-                    twin["audio_url"],
-                    twin["audio_mime_type"],  # paired with the URL: playback picks the video rendition from it
-                    twin["audio_file_size"],
-                    datetime.now(timezone.utc),
-                    keeper_id,
-                ),
+                f"UPDATE episodes SET {assignments}, updated_at = %s WHERE id = %s",
+                (*(twin[col] for col in self._TWIN_FEED_COLUMNS), datetime.now(timezone.utc), keeper_id),
             )
             return True
 

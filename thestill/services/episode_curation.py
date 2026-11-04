@@ -44,8 +44,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 #: How far apart the two rows' publish dates may be. Twins carry the same
-#: date; a rerun that shares the slug ("Best of: …") is weeks or years off.
-PUB_DATE_TOLERANCE = timedelta(days=1)
+#: date (Apple's releaseDate is the feed's pubDate); a rerun sharing the slug
+#: ("Best of: …") or a daily show's same-titled episode is a day or more off.
+PUB_DATE_TOLERANCE = timedelta(hours=1)
 
 
 @dataclass(frozen=True)

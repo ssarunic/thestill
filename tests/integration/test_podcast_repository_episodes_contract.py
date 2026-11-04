@@ -950,7 +950,12 @@ def _mk_import_twins(h, uid: str):
     pid = _mk_parent(h, uid)
     guid = f"guid-{uid}"
     keeper = _mk_episode(
-        pid, uid, 1, external_id=f"apple-{uid}", audio_url=f"https://cdn.example.com/old/{guid}.mp3", title="Twin"
+        pid,
+        uid,
+        1,
+        external_id=f"track-{uid}",
+        audio_url=f"https://cdn.example.com/old/{guid}.mp3",
+        title="Twin \u00e2\u0080\u0094 import",  # the import's own (mis-decoded) title
     )
     twin = _mk_episode(
         pid,
@@ -959,11 +964,14 @@ def _mk_import_twins(h, uid: str):
         external_id=guid,
         audio_url=f"https://cdn.example.com/new/{guid}.mp4",
         audio_mime_type="video/mp4",
-        title="Twin",
+        description_html="<p>Feed notes</p>",
+        title="Twin — import",
     )
     h.repo.save_episode(keeper)
     h.repo.save_episode(twin)
-    h.repo.set_episode_canonical_id(keeper.id, f"apple:{uid}")
+    h.repo.set_episode_canonical_id(keeper.id, f"apple:track-{uid}")
+    # The titles differ (the import's is mis-decoded); the slug is what pairs them.
+    h.execute("UPDATE episodes SET slug = ? WHERE id IN (?, ?)", ("twin", keeper.id, twin.id))
     h.execute("UPDATE episodes SET summary_path = ? WHERE id = ?", ("summary.md", keeper.id))
     return pid, keeper, twin
 
@@ -994,6 +1002,29 @@ def test_find_import_twin_candidates_pairs_import_with_untouched_feed_row(h):
     assert h.repo.find_import_twin_candidates(pid) == []
 
 
+def test_a_feed_row_an_import_attached_to_is_not_a_keeper(h):
+    # Two same-titled feed episodes; an import attached cleanly to the first.
+    # Its external_id is the feed GUID, not the resolver's id, so no twin.
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    first = _mk_episode(pid, uid, 1, title="Daily")
+    second = _mk_episode(pid, uid, 2, title="Daily", pub_date=datetime(2026, 6, 1, 12, 30, tzinfo=timezone.utc))
+    h.repo.save_episode(first)
+    h.repo.save_episode(second)
+    h.repo.set_episode_canonical_id(first.id, "apple:1000000000001")
+    h.execute("UPDATE episodes SET slug = ? WHERE id IN (?, ?)", ("daily", first.id, second.id))
+
+    assert h.repo.find_import_twin_candidates(pid) == []
+
+
+def test_a_keeper_with_an_active_task_is_not_a_candidate(h):
+    uid = _nonce()
+    pid, keeper, _twin = _mk_import_twins(h, uid)
+    h.add_task(keeper.id)  # pending
+
+    assert h.repo.find_import_twin_candidates(pid) == []
+
+
 def test_fold_import_twin_moves_inbox_rows_and_takes_the_feed_identity(h):
     uid = _nonce()
     pid, keeper, twin = _mk_import_twins(h, uid)
@@ -1001,6 +1032,16 @@ def test_fold_import_twin_moves_inbox_rows_and_takes_the_feed_identity(h):
     _deliver(h, only_twin, twin.id)
     _deliver(h, both, twin.id)
     _deliver(h, both, keeper.id)
+    now = _now_iso()
+    h.execute(
+        "INSERT INTO user_episode_progress (user_id, episode_id, position_seconds, session_id, seq, updated_at) "
+        "VALUES (?, ?, 120, 's1', 1, ?)",
+        (only_twin, twin.id, now),
+    )
+    h.execute(
+        "INSERT INTO user_episode_views (user_id, episode_id, first_viewed_at) VALUES (?, ?, ?)",
+        (only_twin, twin.id, now),
+    )
 
     assert h.repo.fold_import_twin(keeper.id, twin.id) is True
 
@@ -1009,7 +1050,10 @@ def test_fold_import_twin_moves_inbox_rows_and_takes_the_feed_identity(h):
     assert kept.external_id == twin.external_id
     assert str(kept.audio_url) == str(twin.audio_url)
     assert kept.audio_mime_type == "video/mp4"  # the pair travels together (video rendition)
-    assert kept.canonical_id == f"apple:{uid}"
+    assert kept.title == "Twin — import" and kept.description_html == "<p>Feed notes</p>"
+    assert h.execute("SELECT position_seconds FROM user_episode_progress WHERE episode_id = ?", (keeper.id,))
+    assert h.execute("SELECT 1 FROM user_episode_views WHERE episode_id = ?", (keeper.id,))
+    assert kept.canonical_id == f"apple:track-{uid}"
     inbox = h.execute("SELECT user_id, episode_id FROM user_episode_inbox WHERE user_id IN (?, ?)", (only_twin, both))
     assert sorted((r["user_id"], r["episode_id"]) for r in inbox) == sorted([(only_twin, keeper.id), (both, keeper.id)])
     assert h.repo.find_import_twin_candidates(pid) == []

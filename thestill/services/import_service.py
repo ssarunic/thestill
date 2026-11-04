@@ -1106,10 +1106,12 @@ class ImportService:
             parent_id = self._repository.ensure_synthetic_audio_imports_parent()
             user_visible_parent = None
         # Under a real parent, store the feed GUID as ``external_id`` when known
-        # (no row holds it — ``_attach_by_feed_guid`` just checked): it is the
-        # key feed refresh upserts on, so a later refresh that does carry this
-        # episode updates this row instead of adding a twin.
-        external_id = (canonical.feed_guid if canonical.parent is not None else None) or canonical.external_id
+        # and free: it is the key feed refresh upserts on, so a later refresh
+        # that does carry this episode updates this row instead of adding a twin.
+        guid = canonical.feed_guid if canonical.parent is not None else None
+        if guid and self._repository.find_episode_id_by_external_id(parent_id, guid):
+            guid = None  # the attach above lost a race; don't collide on (podcast_id, external_id)
+        external_id = guid or canonical.external_id
         episode_id = self._repository.insert_imported_episode(
             podcast_id=parent_id,
             canonical_id=canonical.canonical_id,
