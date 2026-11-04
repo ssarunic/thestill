@@ -1,6 +1,6 @@
 # HLS Video Rendition for `<podcast:alternateEnclosure>` Streams
 
-> **Status:** 🚧 Active development
+> **Status:** 🚧 Implemented on `feat/113-hls-video-rendition` (2026-11-04); pending PR + merge
 > **Created:** 2026-11-04
 > **Updated:** 2026-11-04
 > **Priority:** Medium. Publishers on Flightcast already ship video for
@@ -327,18 +327,23 @@ present). Chromium via Playwright, private port:
 
 ## Files touched
 
-**Modified:** `thestill/services/playback.py`,
-`thestill/web/middleware/security_headers.py`,
-`thestill/web/frontend/package.json`,
-`thestill/web/frontend/package-lock.json`,
-`thestill/web/frontend/src/contexts/playback-engine/types.ts`,
-`thestill/web/frontend/src/contexts/playback-engine/native-engine.ts`,
-`thestill/web/frontend/src/contexts/PlayerContext.tsx`,
-`thestill/web/frontend/src/components/EpisodeReader.tsx`, tests,
-`specs/README.md`
+**Modified:**
 
-**Created:** `specs/113-hls-video-rendition.md`,
-`thestill/web/frontend/src/contexts/playback-engine/hls.ts`
+- `thestill/services/playback.py`, `tests/unit/services/test_playback_manifest.py`
+- `thestill/web/middleware/security_headers.py`, `tests/unit/security/test_security_headers.py`
+- `thestill/web/frontend/package.json`, `thestill/web/frontend/package-lock.json`
+- `thestill/web/frontend/src/vite-env.d.ts` (`hls.js/light` type shim)
+- `thestill/web/frontend/src/contexts/playback-engine/types.ts`
+- `thestill/web/frontend/src/contexts/playback-engine/native-engine.ts`
+- `thestill/web/frontend/src/contexts/PlayerContext.tsx` (+ test)
+- `thestill/web/frontend/src/components/EpisodeReader.tsx` (+ test)
+- `specs/README.md`, `specs/62-youtube-video-rendition.md`, `specs/95-product-analytics.md`
+
+**Created:**
+
+- `specs/113-hls-video-rendition.md`
+- `thestill/web/frontend/src/contexts/playback-engine/hls.ts`
+- `thestill/web/frontend/src/contexts/playback-engine/native-engine.hls.test.ts`
 
 ## Open questions
 
@@ -357,3 +362,58 @@ Revert the PR. There's no schema change and no data rewrite: rows in
 `episode_alternate_enclosures` were already being written. Reverting
 `playback.py` alone restores audio-only manifests, and the CSP change
 reverts with it.
+
+## Outcome
+
+Built as planned in Phases A–C, plus one deviation and the review fixes.
+
+**What works** (checked 2026-11-04 on a scratch server over a copy of the
+local DB, with a SOLVED episode):
+
+- **Chromium.** The theater plays the Flightcast HLS through hls.js (MSE
+  `blob:` source, 1080p).
+  - It resumes the saved position.
+  - Seeks to 2000 s and 5000 s play.
+  - "Use audio rendition" switches to the MP3 at the same position, and
+    switching back works too.
+  - The hls.js chunk is preloaded by the reader, and its worker loads
+    same-origin.
+  - There were no CSP violations.
+- **WebKit** (Playwright, macOS) takes the native path: it plays the
+  `.m3u8` from `src` without loading hls.js.
+- **Tests:** frontend 910, plus 653 backend tests that touch the manifest
+  and headers.
+
+**Deviation: Chromium uses hls.js, not its built-in HLS.**
+
+- Chrome 156 reports native HLS, and its built-in player fails every seek
+  on Flightcast VOD (`DEMUXER_ERROR_COULD_NOT_PARSE`).
+- The `needsHlsJs` rule was revised (see Design). The spec was updated
+  before the code changed.
+
+**Review fixes:**
+
+- A media error now clears once playback flows again (hls.js recovery).
+- Derived state was dropped from `NativeEngine`, and the error messages
+  are shared.
+- `playback.py` reuses `is_video_enclosure`.
+- Specs #62 and #95 now note what changed.
+
+**Data notes found along the way:**
+
+- The local DB's SOLVED audio URLs are stale: Megaphone returns `410
+  Gone`. The feed now serves the MP3 from Flightcast, the same host as
+  the video, so a refresh should also remove most of SOLVED's drift.
+  For the scratch check, the episode's `audio_url` was replaced on the
+  copy only.
+- The local DB is migrated to revision `0027` by `feat/110`. The scratch
+  copy was stamped back to `0026` to boot this branch.
+
+**Follow-ups:**
+
+- Re-test Chrome's built-in HLS as it matures; the hls.js rule could then
+  narrow.
+- Firefox wasn't run here, because no Playwright Firefox is installed. It
+  takes the same hls.js path that Chromium now does.
+- Video inside the desktop Now Playing card is out of scope. Spec #72
+  hosts video in the sheet on phones only, by design.
