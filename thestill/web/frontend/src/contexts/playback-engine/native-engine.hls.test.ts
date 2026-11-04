@@ -1,6 +1,6 @@
 // Spec #113 — NativeEngine HLS: native where the browser plays HLS, hls.js
 // on the same element everywhere else.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EngineEvents } from './types'
 import { NativeEngine } from './native-engine'
 import { isHlsSource } from './hls'
@@ -82,6 +82,13 @@ function makeEngine({ nativeHls = false } = {}) {
 async function flush() {
   for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0))
 }
+
+// Warm the two modules the engine imports on first HLS load. On a cold,
+// busy CI runner the worker ?url transform outlasted flush(), so the first
+// test saw no instance and its late attach landed in the next test.
+beforeAll(async () => {
+  await Promise.all([import('hls.js/light'), import('hls.js/dist/hls.worker.js?url')])
+})
 
 beforeEach(() => {
   FakeHls.instances = []
