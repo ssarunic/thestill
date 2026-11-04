@@ -26,6 +26,8 @@ activation 0%. So the strategy is, in order:
    surface such as the Claude connector) and keep trust in the summaries,
    so the habit survives a quiet week.
 
+> **CPO / Growth review — [C1](#c1-establish-the-recurring-reader-need):** Treat this loop as a hypothesis until reader conversations establish the recurring need; three readers without a follow do not establish why they left.
+
 Everything ships under the spec #111 §6 protocol: one change per metric
 at a time, a row in `experiments.md` before it ships, read by signup-week
 cohort, and only bets that could plausibly double the metric. At 2–3
@@ -110,6 +112,8 @@ activation among followers from "whatever the show's cadence gives" to
 cadence. This is also the first engagement lever, so it is the one change
 that serves two metrics; it still ships as one row, graded on activation.
 
+> **CPO / Growth review — [C2](#c2-make-first-delivery-reliable-before-promising-day-2-value):** A follow alone does not guarantee a fresh briefing tomorrow. Define and verify the first-delivery path before adopting this activation expectation.
+
 ### A4. Follow three shows, one of them daily
 
 After the first follow, offer two more: the region's Top chart filtered
@@ -117,6 +121,8 @@ to shows that publish at least three times a week, plus the Related
 rail for the show just followed. Three follows give three chances at a
 within-week delivery, and a daily show nearly guarantees one. Measure
 follows per activated reader as a secondary, and watch follows undone.
+
+> **CPO / Growth review — [C5](#c5-prioritize-relevance-and-reader-preference-over-frequency):** Recommend additional shows for relevance first. More frequent publication and more follows are hypotheses about value, not reader outcomes in themselves.
 
 ### A5. Time to first summary
 
@@ -126,10 +132,14 @@ inbox shows nothing. Merge spec #88's "Arriving soon" strip so the wait
 is visible, and prefer already-processed shows in A4's suggestions so
 most new readers' first follow lands summarised episodes at once.
 
+> **CPO / Growth review — [C6](#c6-bring-first-value-reliability-and-trust-forward):** Prioritize a useful first summary, visible processing progress, and lightweight quality review before expanding follows and product surfaces.
+
 ## 5. Engagement plan (≥2 value days a week)
 
 Engagement work targets members, a different population from activation,
 so one engagement change can run alongside one activation change.
+
+> **CPO / Growth review — [C4](#c4-separate-experiments-by-exposure):** Different metric populations do not guarantee separate experiment exposure. A3 and E1 can influence the same reader's activation and subsequent engagement.
 
 ### E1. The briefing as the daily hook
 
@@ -152,6 +162,8 @@ Three parts:
 Measure: briefing opens per member-week, email open → briefing-open
 rate (counted on our server from a `from=email` path marker, never a
 tracking pixel), and briefings switched off as the guardrail.
+
+> **CPO / Growth review — [C3](#c3-decide-how-email-delivers-value-and-measure-it-accurately):** A source marker measures an email-origin visit, not an email open. The existing full-content email can deliver value without a measured in-app value day.
 
 ### E2. The connector as a second surface
 
@@ -265,3 +277,168 @@ reach the briefing.
 - **The proxy fails the §7 check.** If activated readers don't retain
   better, stop activation work, pick the component that separates
   retention best, and re-plan from §4 with the new definition.
+
+---
+
+## 10. CPO / Growth review remarks (2026-11-04)
+
+> **Review status:** Recommendations for discussion; these remarks do not
+> mark the proposals above as adopted or the experiments as validated.
+
+**Assessment.** The follow → delivery → return hypothesis is worth
+pursuing. The roadmap commits too early to daily usage, additional
+follows, and additional surfaces before establishing what readers want
+repeatedly. Keep the explicit loop, activated-reader counts alongside
+percentages, guardrails, and the decision to defer acquisition.
+
+### C1. Establish the recurring reader need
+
+**Applies to:** [§1](#1-the-one-paragraph-strategy), A1, A2.
+
+Three readers making 5–8 reads each demonstrate interest. Their failure
+to follow does not establish demand for an ongoing subscription or
+explain why they left. A reader researching one guest may have
+successfully completed a one-off task.
+
+Add a specific target reader, recurring job, current alternative, and
+reason to choose Thestill over listening or asking an AI directly.
+Interview the three readers, where reachable, and several subsequent
+signups about their trigger, what they accomplished, and what would
+justify returning. Reading event timelines helps explain behavior, but
+does not replace asking about the underlying need. Use the findings to
+decide whether the next invitation should be to follow a show, receive
+a briefing, or complete another relevant task.
+
+### C2. Make first delivery reliable before promising day-2 value
+
+**Applies to:** §2, A3, E1.
+
+The current implementation does not make tomorrow's fresh briefing
+certain after a follow. The schedule is initialized through
+`GET /api/briefings/latest` with a timezone, rather than by following
+alone. A first briefing generated on signup day can already consume
+the seeded episodes. With no subsequent deliveries, the next slot can
+reuse an existing edition or produce none. Reopening the same briefing
+also does not create another briefing-open value day: `opened_at`
+records only the first open.
+
+Make timezone capture, schedule creation, eligible content, and first
+email delivery explicit prerequisites. Check both paths: a reader who
+follows and leaves the episode page without visiting the inbox, and a
+reader who opens the first briefing on signup day with no new episode
+before tomorrow's slot. Track **first briefing delivered** separately
+from **first briefing consumed**. Email can improve delivery reliability;
+the proposed ≥70% activation among followers remains an unvalidated
+hypothesis.
+
+Also qualify §2's cadence claim: seeded episodes delivered on signup
+day can still create a later-day value day when first read later.
+Publication cadence affects opportunities to return, but is not the
+only way a weekly-show follower can activate.
+
+**Implementation references:** [schedule initialization and first-edition
+fallback](../thestill/web/routes/api_briefings.py),
+[briefing cursor and empty-window behavior](../thestill/services/briefing_service.py),
+[briefing email delivery](51-briefing-email-delivery.md),
+[value-day definitions](../specs/111-product-health-metrics.md).
+
+### C3. Decide how email delivers value and measure it accurately
+
+**Applies to:** A3, E1, R3, §7.
+
+A `from=email` marker measures an email-origin visit; it does not observe
+an email open or supply the denominator for an email-open → briefing-open
+rate. The [existing renderer](../thestill/services/briefing_email_renderer.py)
+includes the full briefing in the email, so a reader can receive the
+intended value without producing a measured in-app value day.
+
+Choose deliberately whether the email is a complete product experience
+or a useful preview leading into the product. If it remains complete,
+acknowledge unobserved email consumption when interpreting the scorecard
+and add qualitative checks of usefulness. If it is a preview, give the
+reader a useful reason to continue. Do not withhold value merely to
+increase measured visits.
+
+Use **delivered-email → authenticated briefing-open conversion** as the
+observable funnel, with a defined observation window. An app open
+attributed to an email is distinct from reading the email itself.
+Similarly, R3's “two in a row with no open” suppression needs an
+observable definition; do not implement it as though email opens are
+available under the current measurement design.
+
+### C4. Separate experiments by exposure
+
+**Applies to:** §5 introduction, §7, §8.
+
+A3's delivery change and E1's fallback-content change can affect the
+same reader. A reader also moves from the new-reader population into
+membership over time. Labeling experiments by different metrics does
+not isolate the changes.
+
+Test reliable email delivery before changing fallback content, or
+explicitly limit the engagement experiment to existing members while
+keeping the activation experience stable. Record exposure dates and
+eligibility in the experiment log. For background on the risk, see
+[Optimizely's guidance on interaction effects](https://docs.optimizely.com/experimentation-strategy/docs/mutual-exclusion-overview).
+
+At this volume, describe cohort changes as directional evidence rather
+than proof of causation. A null result can justify keeping a cheap,
+useful change provisionally; it should not automatically justify
+retaining complexity. Include maintenance cost, unresolved uncertainty,
+and a revisit date in keep / revert / iterate decisions.
+
+### C5. Prioritize relevance and reader preference over frequency
+
+**Applies to:** A4, E1 “Never a blank morning”, E4, R1.
+
+“A skipped day breaks the habit; a thin day doesn't” is a hypothesis.
+Daily shows and unrelated catalogue hits can increase opportunities for
+measured activity while making the product less relevant.
+
+Recommend shows based on expressed interests, with publication cadence
+as a secondary factor. Offer daily, weekly, or new-content-only delivery
+according to the reader's preference. Test relevant back-catalogue
+recommendations separately from reliable delivery, rather than adding
+filler as the default response to a quiet day.
+
+Keep three follows and two surfaces as diagnostic hypotheses until
+evidence supports making them onboarding goals. Readers who already
+like the product may naturally adopt more shows and surfaces; an
+association with retention does not establish that nudging everyone
+into those behaviors will cause retention.
+
+### C6. Bring first-value reliability and trust forward
+
+**Applies to:** A5, R4, §8.
+
+A5 describes an hour-long processing wait, while part of the solution is
+scheduled for Later. Lightweight summary feedback is also deferred
+while connector adoption and additional follows advance. A reader must
+experience a useful, trustworthy summary before reminders can build a
+habit.
+
+Bring processing visibility, access to a ready-to-read first summary,
+and lightweight quality review forward. Favor relevant, processed
+content where available; processing readiness should not override
+reader interest. Add processing cost per activated reader as a
+guardrail when encouraging additional follows.
+
+### Suggested revised sequence
+
+These windows are planning checkpoints, not promises of statistical
+certainty. Keep the existing experiment log and maturity rules; revise
+the sequence as evidence arrives.
+
+| Window | Main decision to resolve | Work to prioritize |
+|---|---|---|
+| Weeks 1–2 | Which reader has a recurring need, and where does first value fail? | Reader conversations, A1, first-summary and processing-path inspection |
+| Weeks 3–4 | Can every consenting follower reliably receive a useful first briefing? | Explicit schedule setup, eligible content, email prerequisites, delivery and consumption instrumentation |
+| Weeks 5–8 | Does delivery produce repeat value? | Read the delivery experiment; test cadence or content relevance sequentially |
+| Weeks 9–12 | Does the behavior persist into week 4? | Review mature cohorts; expand shows or connector use where readers demonstrate demand |
+
+**Suggested strategy statement:**
+
+> Help readers keep up with the shows they care about through trustworthy
+> summaries delivered at their preferred cadence. First prove that one
+> follow produces a useful first experience and a valuable return; then
+> expand the relationship.
