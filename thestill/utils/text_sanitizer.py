@@ -73,7 +73,7 @@ def repair_mojibake(text: str) -> tuple[str, bool]:
     The pattern is UTF-8 bytes that were decoded once as Latin-1 / cp1252
     (or a sibling single-byte codec) and re-encoded as UTF-8. It entered
     the corpus through ``requests.Response.text`` guessing the charset of
-    a feed body (fixed at the source in ``media_source.decode_feed_body``)
+    a feed body (fixed at the source in ``utils.http_text.decode_feed_body``)
     and then spread from episode descriptions into facts, speaker names,
     cleaned transcripts, summaries and the search index.
 

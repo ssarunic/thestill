@@ -43,6 +43,7 @@ from ..core.spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..utils.http_text import response_text
 from ..utils.url_guard import guarded_session
 from ..utils.url_patterns import (
     extract_apple_episode_id,
@@ -388,7 +389,9 @@ def _itunes_lookup(params: str, *, label: str) -> list:
 
 
 def _fetch_apple_episode_page(url: str) -> str:
-    return _guarded_get(url, label="Apple episode page").text
+    # Apple serves bare ``text/html`` (no charset), which ``.text`` reads as
+    # ISO-8859-1 — every ``—`` became ``â\x80\x94`` in imported titles.
+    return response_text(_guarded_get(url, label="Apple episode page"))
 
 
 def _fetch_apple_feed(url: str) -> bytes:

@@ -64,6 +64,7 @@ from urllib3.util.retry import Retry
 
 from ..utils.datetime_utils import parse_struct_time_utc
 from ..utils.duration import parse_duration
+from ..utils.http_text import response_text
 from ..utils.url_guard import guarded_session
 from ..utils.url_patterns import extract_spotify_entity, is_spotify_short_link
 
@@ -218,7 +219,7 @@ def _guarded_get(
 
 def fetch_page(url: str) -> str:
     """GET a Spotify page and return its server-rendered HTML (guarded, non-browser UA)."""
-    return str(_guarded_get(url, label="Spotify page", user_agent=_SPOTIFY_PAGE_USER_AGENT).text)
+    return response_text(_guarded_get(url, label="Spotify page", user_agent=_SPOTIFY_PAGE_USER_AGENT))
 
 
 def expand_short_link(url: str) -> str:
