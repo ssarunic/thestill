@@ -83,6 +83,11 @@ export interface PlayerContextValue {
   isPlaying: boolean
   isLoading: boolean
   duration: number
+  // Spec #113 — the duration the native engine reported for its current
+  // source (the rendition actually loaded), or null until it reports.
+  // Unlike `duration` it never holds the feed's durationHint, so the
+  // reader's drift check can compare the transcript against real media.
+  nativeDuration: number | null
   playbackRate: number
   // Spec #72 §5 — rates the active engine accepts for the current source;
   // null = no restriction (native) or not reported yet. Consumers disable
@@ -234,6 +239,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [nativeDuration, setNativeDuration] = useState<number | null>(null)
   const [playbackRate, setPlaybackRate] = useState(1)
   const [availableRates, setAvailableRates] = useState<number[] | null>(null)
   // Spec #72 §5 — the one global rate preference, read synchronously inside
@@ -345,7 +351,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onWaiting: () => active() && base.onWaiting(),
         onCanPlay: () => active() && base.onCanPlay(),
         onTimeUpdate: (seconds) => active() && base.onTimeUpdate(seconds),
-        onDurationChange: (seconds) => active() && base.onDurationChange(seconds),
+        onDurationChange: (seconds) => {
+          if (kind === 'native') setNativeDuration(seconds)
+          if (active()) base.onDurationChange(seconds)
+        },
         onRateChange: (rate) => active() && base.onRateChange(rate),
         onSeeked: () => active() && base.onSeeked(),
         onVolumeChange: (volume, isMuted) => active() && base.onVolumeChange(volume, isMuted),
@@ -391,6 +400,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const beginSource = useCallback((source: ActiveSource, seekTo: number | null, rate: number | null) => {
     nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType }, { seekTo, rate })
     srcRef.current = source.url
+    setNativeDuration(null)
     setMediaError(null)
   }, [])
 
@@ -606,6 +616,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setIsPlaying(false)
     setCurrentTime(0)
     setDuration(0)
+    setNativeDuration(null)
     setMediaError(null)
     setAvailableRates(null)
   }, [persistence, setEngineKind, setRendition])
@@ -950,6 +961,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       isLoading,
       duration,
+      nativeDuration,
       playbackRate,
       availableRates,
       play,
@@ -992,6 +1004,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       isPlaying,
       isLoading,
       duration,
+      nativeDuration,
       playbackRate,
       availableRates,
       play,

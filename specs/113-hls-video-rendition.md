@@ -220,10 +220,16 @@ carries a poster.
 
 ### Reader
 
-- **Drift banner:** while this episode is the current track and the
-  engine reports a duration, compare the transcript against
-  `player.duration − activeOffset`, the rendition actually playing.
+- **Drift banner:** while this episode is the current track on the native
+  engine and that engine has reported a duration, compare the transcript
+  against `player.nativeDuration`, the rendition actually loaded.
   Otherwise fall back to today's `audio_url` probe.
+  - `nativeDuration` is a new PlayerContext field. It's null until the
+    native engine reports one, and it resets on every source change.
+    `player.duration` can't be used: it starts as the feed's
+    `durationHint`.
+  - The raw duration is compared with no offset applied. The transcript's
+    `transcript_source_duration_s` is a raw file duration too.
 - **Preload:** the reader calls `preloadHls()` when the episode's
   `playback.video` is HLS and the browser needs hls.js. The first click
   then finds the module cached.
@@ -269,7 +275,8 @@ The spec #95 test keeps its intent: no analytics host is listed, and
 | # | File | Change |
 |---|---|---|
 | C1 | `src/components/EpisodeReader.tsx` | live-rendition duration for the drift banner; `preloadHls()` for HLS video episodes |
-| C2 | EpisodeReader tests | banner uses player duration when current; probe otherwise |
+| C2 | EpisodeReader tests | banner uses the loaded rendition's duration when current; probe otherwise |
+| C3 | `src/contexts/PlayerContext.tsx` | `nativeDuration` (engine-reported, reset per source) |
 
 **Gate:** frontend vitest suite green. **Browser check** on a scratch
 server against a copy of the local DB, using a SOLVED episode (HLS row
