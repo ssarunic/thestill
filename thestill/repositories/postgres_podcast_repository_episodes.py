@@ -1994,14 +1994,16 @@ class EpisodesMixin(CategoryCacheMixin):
         Moves the twin's user rows (inbox, progress, views) and feed rows
         (alternate enclosures, platform and transcript links) to the keeper
         where it has none with the same key, deletes the twin (the rest
-        cascade), then gives the keeper the twin's feed GUID and current audio
-        URL so feed refresh updates the keeper from now on. Returns False,
+        cascade), then gives the keeper the twin's feed GUID and current
+        enclosure (URL, MIME type, size) so feed refresh updates the keeper
+        from now on. Returns False,
         changing nothing, when the twin is no longer untouched or either row
         is gone.
         """
         with connect(self.dsn) as conn:
             twin = conn.execute(
-                f"SELECT t.external_id, t.audio_url FROM episodes t WHERE t.id = %s AND {self._UNTOUCHED_TWIN} FOR UPDATE",
+                "SELECT t.external_id, t.audio_url, t.audio_mime_type, t.audio_file_size FROM episodes t "
+                f"WHERE t.id = %s AND {self._UNTOUCHED_TWIN} FOR UPDATE",
                 (twin_id,),
             ).fetchone()
             keeper = conn.execute("SELECT id FROM episodes WHERE id = %s", (keeper_id,)).fetchone()
@@ -2015,8 +2017,16 @@ class EpisodesMixin(CategoryCacheMixin):
                 )
             conn.execute("DELETE FROM episodes WHERE id = %s", (twin_id,))
             conn.execute(
-                "UPDATE episodes SET external_id = %s, audio_url = %s, updated_at = %s WHERE id = %s",
-                (twin["external_id"], twin["audio_url"], datetime.now(timezone.utc), keeper_id),
+                "UPDATE episodes SET external_id = %s, audio_url = %s, audio_mime_type = %s, audio_file_size = %s, "
+                "updated_at = %s WHERE id = %s",
+                (
+                    twin["external_id"],
+                    twin["audio_url"],
+                    twin["audio_mime_type"],  # paired with the URL: playback picks the video rendition from it
+                    twin["audio_file_size"],
+                    datetime.now(timezone.utc),
+                    keeper_id,
+                ),
             )
             return True
 

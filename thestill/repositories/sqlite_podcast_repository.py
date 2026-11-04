@@ -6351,15 +6351,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         Moves the twin's user rows (inbox, progress, views) and feed rows
         (alternate enclosures, platform and transcript links) to the keeper
         where it has none with the same key, deletes the twin (the rest
-        cascade), then gives the keeper the twin's feed GUID and current audio
-        URL so feed refresh updates the keeper from now on. Returns False,
+        cascade), then gives the keeper the twin's feed GUID and current
+        enclosure (URL, MIME type, size) so feed refresh updates the keeper
+        from now on. Returns False,
         changing nothing, when the twin is no longer untouched or either row
         is gone.
         """
         with self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")  # the untouched check and the writes are one write transaction
             twin = conn.execute(
-                f"SELECT t.external_id, t.audio_url FROM episodes t WHERE t.id = ? AND {self._UNTOUCHED_TWIN}",
+                "SELECT t.external_id, t.audio_url, t.audio_mime_type, t.audio_file_size FROM episodes t "
+                f"WHERE t.id = ? AND {self._UNTOUCHED_TWIN}",
                 (twin_id,),
             ).fetchone()
             keeper = conn.execute("SELECT id FROM episodes WHERE id = ?", (keeper_id,)).fetchone()
@@ -6373,8 +6375,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 )
             conn.execute("DELETE FROM episodes WHERE id = ?", (twin_id,))
             conn.execute(
-                "UPDATE episodes SET external_id = ?, audio_url = ?, updated_at = ? WHERE id = ?",
-                (twin["external_id"], twin["audio_url"], datetime.now(timezone.utc).isoformat(), keeper_id),
+                "UPDATE episodes SET external_id = ?, audio_url = ?, audio_mime_type = ?, audio_file_size = ?, "
+                "updated_at = ? WHERE id = ?",
+                (
+                    twin["external_id"],
+                    twin["audio_url"],
+                    twin["audio_mime_type"],  # paired with the URL: playback picks the video rendition from it
+                    twin["audio_file_size"],
+                    datetime.now(timezone.utc).isoformat(),
+                    keeper_id,
+                ),
             )
             return True
 

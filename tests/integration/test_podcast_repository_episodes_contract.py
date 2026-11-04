@@ -952,7 +952,15 @@ def _mk_import_twins(h, uid: str):
     keeper = _mk_episode(
         pid, uid, 1, external_id=f"apple-{uid}", audio_url=f"https://cdn.example.com/old/{guid}.mp3", title="Twin"
     )
-    twin = _mk_episode(pid, uid, 1, external_id=guid, audio_url=f"https://cdn.example.com/new/{guid}.mp3", title="Twin")
+    twin = _mk_episode(
+        pid,
+        uid,
+        1,
+        external_id=guid,
+        audio_url=f"https://cdn.example.com/new/{guid}.mp4",
+        audio_mime_type="video/mp4",
+        title="Twin",
+    )
     h.repo.save_episode(keeper)
     h.repo.save_episode(twin)
     h.repo.set_episode_canonical_id(keeper.id, f"apple:{uid}")
@@ -1000,6 +1008,7 @@ def test_fold_import_twin_moves_inbox_rows_and_takes_the_feed_identity(h):
     _podcast, kept = h.repo.get_episode(keeper.id)
     assert kept.external_id == twin.external_id
     assert str(kept.audio_url) == str(twin.audio_url)
+    assert kept.audio_mime_type == "video/mp4"  # the pair travels together (video rendition)
     assert kept.canonical_id == f"apple:{uid}"
     inbox = h.execute("SELECT user_id, episode_id FROM user_episode_inbox WHERE user_id IN (?, ?)", (only_twin, both))
     assert sorted((r["user_id"], r["episode_id"]) for r in inbox) == sorted([(only_twin, keeper.id), (both, keeper.id)])
