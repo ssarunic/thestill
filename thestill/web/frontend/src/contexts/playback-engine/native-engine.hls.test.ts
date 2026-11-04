@@ -245,6 +245,49 @@ describe('NativeEngine HLS', () => {
     expect(hls.destroyed).toBe(true)
   })
 
+  it('play() after a fatal error re-attaches hls.js at the lost position (Codex #466)', async () => {
+    const t = makeEngine()
+    let time = 0
+    Object.defineProperty(t.el, 'currentTime', { configurable: true, get: () => time, set: (v: number) => { time = v } })
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    time = 1234
+    FakeHls.instances[0].emitError({ fatal: true, type: 'networkError' })
+    time = 0 // hls.js detachMedia resets the element
+
+    // The position is kept while the stream is down, so the bar and the
+    // listening-progress writer never see 0.
+    expect(t.engine.getCurrentTime()).toBe(1234)
+
+    await t.engine.play()
+    expect(FakeHls.instances).toHaveLength(2)
+    expect(FakeHls.instances[1].source).toBe(HLS_URL)
+    expect(FakeHls.instances[1].config.startPosition).toBe(1234)
+    expect(t.el.play).toHaveBeenCalledTimes(1)
+  })
+
+  it('a seek while the stream is down moves the retry position', async () => {
+    const t = makeEngine()
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    FakeHls.instances[0].emitError({ fatal: true, type: 'networkError' })
+    t.engine.seekTo(42)
+    expect(t.engine.getCurrentTime()).toBe(42)
+    await t.engine.play()
+    expect(FakeHls.instances[1].config.startPosition).toBe(42)
+  })
+
+  it('a new source after a fatal error does not resurrect the failed one', async () => {
+    const t = makeEngine()
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })
+    await flush()
+    FakeHls.instances[0].emitError({ fatal: true, type: 'networkError' })
+    t.engine.load({ url: MP3_URL, mimeType: 'audio/mpeg' })
+    await t.engine.play()
+    expect(FakeHls.instances).toHaveLength(1)
+    expect(t.el.getAttribute('src')).toBe(MP3_URL)
+  })
+
   it('reports a fatal network error', async () => {
     const t = makeEngine()
     t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })

@@ -77,6 +77,10 @@ export class NativeEngine implements PlaybackEngine {
   // Token of the play() call waiting on an attach; pause() and any source
   // change bump it so the deferred play is dropped.
   private deferredPlay = 0
+  // Set after a fatal hls.js error tore the attachment down: the source
+  // and the position it reached. The next play() re-attaches there
+  // (Codex #466); meanwhile it stands in for the reset element's clock.
+  private hlsRetry: { url: string; position: number } | null = null
   private hlsRecovered = false
   private readonly onHlsError = (_event: unknown, data: HlsErrorData) => this.handleHlsError(data)
 
@@ -95,7 +99,7 @@ export class NativeEngine implements PlaybackEngine {
       ['playing', () => this.events.onPlaying()],
       ['waiting', () => this.events.onWaiting()],
       ['canplay', () => this.events.onCanPlay()],
-      ['timeupdate', () => this.events.onTimeUpdate(this.el.currentTime)],
+      ['timeupdate', () => this.events.onTimeUpdate(this.getCurrentTime())],
       [
         'loadedmetadata',
         () => {
@@ -173,6 +177,12 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   play(): Promise<void> {
+    if (this.hlsRetry) {
+      const { url, position } = this.hlsRetry
+      this.hlsRetry = null
+      this.pendingSeek = position
+      this.attachHls(url)
+    }
     // An hls.js attach still waiting for its chunk: play once it lands.
     // Chrome and Firefox keep the user activation across the await; Safari
     // never takes this path (native HLS).
@@ -192,6 +202,10 @@ export class NativeEngine implements PlaybackEngine {
 
   seekTo(seconds: number): void {
     if (!Number.isFinite(seconds)) return
+    if (this.hlsRetry) {
+      this.hlsRetry.position = Math.max(0, seconds)
+      return
+    }
     this.userSeeked = true
     // An explicit seek supersedes a deferred one (a resume position queued
     // for loadedmetadata), or metadata would jump back to it.
@@ -234,7 +248,7 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   getCurrentTime(): number {
-    return this.el.currentTime
+    return this.hlsRetry ? this.hlsRetry.position : this.el.currentTime
   }
 
   getDuration(): number {
@@ -322,7 +336,9 @@ export class NativeEngine implements PlaybackEngine {
       hls.recoverMediaError()
       return
     }
+    const position = this.el.currentTime
     this.detachHls()
+    if (this.url !== null) this.hlsRetry = { url: this.url, position }
     // MEDIA_ERR_NETWORK / MEDIA_ERR_DECODE wording.
     this.events.onError(describeMediaError(data.type === HLS_NETWORK_ERROR ? 2 : 3))
   }
@@ -332,6 +348,7 @@ export class NativeEngine implements PlaybackEngine {
   private detachHls(): void {
     this.hlsGeneration++
     this.deferredPlay++
+    this.hlsRetry = null
     this.hlsAttach = null
     const hls = this.hls
     this.hls = null
