@@ -546,12 +546,15 @@ class EntityExtractor:
             if not speaker or speaker.lower() in {"unknown", "speaker", "n/a"}:
                 continue
             anchor_match = _match_anchor(anchor_index, speaker)
+            # Spec #110 — an admin linked this speaker to a person entity in
+            # the transcript editor; that beats the anchor name match.
+            linked_entity_id = segment.metadata.get("speaker_entity_id") if segment.metadata else None
             start_ms = int(round(segment.start * 1000))
             end_ms = int(round(segment.end * 1000))
-            if anchor_match is not None:
+            if linked_entity_id or anchor_match is not None:
                 out.append(
                     EntityMention(
-                        entity_id=anchor_match.entity_id,
+                        entity_id=linked_entity_id or anchor_match.entity_id,
                         resolution_status=ResolutionStatus.RESOLVED,
                         episode_id=episode_id,
                         segment_id=segment.id,
@@ -560,7 +563,7 @@ class EntityExtractor:
                         speaker=speaker,
                         role=MentionRole.SPEAKING,
                         surface_form=speaker,
-                        surface_label=anchor_match.entity_type.value,
+                        surface_label=anchor_match.entity_type.value if anchor_match else "person",
                         quote_excerpt=_speaker_excerpt(segment.text),
                         sentiment=None,
                         confidence=1.0,

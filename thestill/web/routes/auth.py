@@ -42,6 +42,7 @@ from ...utils.page_kind import public_page_kind, signup_source_for
 from ..analytics_request import capture_event, login_flow_key, may_measure
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
+from ..permissions import permissions_for
 from ..responses import api_response
 
 logger = get_logger(__name__)
@@ -199,6 +200,9 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             # Spec #104: shown on /login for a disabled account or paused signups.
             "admin_contact_email": state.config.admin_contact_email or None,
             "user": user.model_dump(exclude=PRIVATE_USER_FIELDS) if user else None,
+            # Spec #110: the named permissions this session holds; the
+            # app's ``can(permission)`` reads this, never ``is_admin``.
+            "permissions": permissions_for(user, state.config) if user else [],
             # Spec #51 capability flag: the settings UI only shows the
             # briefing email-delivery checkbox when a provider is
             # configured AND the briefing scheduler is running — the
@@ -507,6 +511,7 @@ def get_current_user(request: Request, state: AppState = Depends(get_app_state))
     return api_response(
         {
             "user": user.model_dump(exclude=PRIVATE_USER_FIELDS),
+            "permissions": permissions_for(user, state.config),
         }
     )
 

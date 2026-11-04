@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from ..repositories.public_page_view_repository import PublicPageViewRepository
     from ..repositories.sqlite_entity_repository import SqliteEntityRepository
     from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+    from ..repositories.transcript_edit_repository import TranscriptEditRepository
     from ..repositories.user_repository import UserRepository
     from ..search.base import SearchBackend
     from ..services import FollowerService, PodcastService, RefreshService, StatsService
@@ -76,6 +77,7 @@ if TYPE_CHECKING:
     from ..services.narration import NarrationRunner
     from ..services.platform_link_service import PlatformLinkService
     from ..services.refresh_on_open import RefreshOnOpenService
+    from ..services.transcript_edit_service import TranscriptEditService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
     from .services import HealthService
@@ -208,6 +210,10 @@ class AppState:
     # Spec #104 — runtime switches, follow gate, audit log, account admin.
     # ``None`` only in hand-built test fixtures, where everything is allowed.
     abuse: "Optional[AbuseServices]" = None
+    # Spec #110 — the transcript editor's op log and service. ``None`` only
+    # in hand-built test fixtures; readers then see the unedited sidecar.
+    transcript_edit_repository: "Optional[TranscriptEditRepository]" = None
+    transcript_edit_service: "Optional[TranscriptEditService]" = None
 
 
 def get_app_state(request: Request) -> AppState:

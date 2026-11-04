@@ -40,6 +40,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 from starlette.types import Scope
 
+from ..core.facts_manager import FactsManager
 from ..core.feed_manager import PodcastFeedManager
 from ..core.progress_store import ProgressStore
 from ..core.queue_manager import QueueManager
@@ -66,6 +67,7 @@ from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
 from ..services.platform_link_service import PlatformLinkService
 from ..services.refresh_on_open import RefreshOnOpenService
+from ..services.transcript_edit_service import TranscriptEditService
 from ..utils.config import (
     Config,
     get_platform_links_recheck_hours,
@@ -126,6 +128,7 @@ from .routes import (
     api_search,
     api_status,
     api_top_podcasts,
+    api_transcript_edits,
     api_transcript_words,
     auth,
     health,
@@ -165,6 +168,7 @@ def _build_narration_runner(
     inbox_repository: InboxRepository,
     access: AccessGuard,
     quota: QuotaService,
+    transcript_edits=None,
 ) -> Optional[NarrationRunner]:
     """Construct the ``NarrationRunner`` (spec #33).
 
@@ -192,6 +196,7 @@ def _build_narration_runner(
         anchor_prompt=anchor_prompt,
         material_max_words=config.narration_material_max_words,
         stated_target_ratio=config.narration_stated_target_ratio,
+        transcript_edits=transcript_edits,
     )
     return NarrationRunner(
         generator=generator,
@@ -275,6 +280,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         file_storage=config.file_storage,
         access=abuse.guard,
         quota=abuse.quota,
+        transcript_edits=repos.transcript_edit,
     )
     stats_service = StatsService(config.storage_path, repository, path_manager)
     task_manager = get_task_manager()
@@ -448,7 +454,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         search_backend=search_backend,
         embedding_model=embedding_model,
         narration_runner=_build_narration_runner(
-            config, path_manager, repository, briefing_repository, inbox_repository, abuse.guard, abuse.quota
+            config,
+            path_manager,
+            repository,
+            briefing_repository,
+            inbox_repository,
+            abuse.guard,
+            abuse.quota,
+            transcript_edits=repos.transcript_edit,
         ),
         legacy_claim_service=legacy_claim_service,
         health_service=HealthService(config),
@@ -462,6 +475,20 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         episode_view_repository=repos.episode_view,
         public_page_view_repository=repos.public_page_view,
         abuse=abuse,
+        # Spec #110 — the transcript editor: op log for every reader, the
+        # service for the admin routes and the idle-refresh sweep.
+        transcript_edit_repository=repos.transcript_edit,
+        transcript_edit_service=TranscriptEditService(
+            repository=repository,
+            edits=repos.transcript_edit,
+            entities=entity_repository,
+            queue_manager=queue_manager,
+            config=config,
+            path_manager=path_manager,
+            file_storage=config.file_storage,
+            audit=abuse.audit,
+            facts_manager=FactsManager(path_manager),
+        ),
     )
 
     # Create task worker with handlers that have access to app_state.
@@ -659,6 +686,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 PeriodicJob("admin_alerts", 300, abuse.alerts.tick),
                 PeriodicJob("admin_digest", 60, abuse.alerts.maybe_send_digest),
                 *(app_state.mcp_oauth_service.housekeeping_jobs() if app_state.mcp_oauth_service else []),
+                # Spec #110 §4 — an editing session idle for 15 minutes (or a
+                # closed tab) still gets its entity refresh.
+                PeriodicJob("transcript_edit_refresh", 300, app_state.transcript_edit_service.sweep_refreshes),
             ]
         )
         periodic_runner.start()
@@ -868,6 +898,11 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         api_top_podcasts.router, prefix="/api/top-podcasts", tags=["top-podcasts"], dependencies=require_session
     )
     app.include_router(api_episodes.router, prefix="/api/episodes", tags=["episodes"], dependencies=require_session)
+    # Spec #110 — the transcript editor's op log; every route also requires
+    # the ``transcript.edit`` permission (admin-only today).
+    app.include_router(
+        api_transcript_edits.router, prefix="/api/episodes", tags=["transcript-edits"], dependencies=require_session
+    )
     # Spec #28 §5.2 — episode-page entity UX (mention list per episode +
     # entity summary). Routes span /api/episodes/.../entities and
     # /api/entities/..., so the router declares full paths internally

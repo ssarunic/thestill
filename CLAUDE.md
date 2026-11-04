@@ -76,6 +76,16 @@ thestill entity relink ID QID                 # wrong Wikidata item; blacklists 
 thestill entity set-type ID TYPE              # wrong type; pair with relink ID none if the link is wrong
 thestill entity prune-orphans [--apply]       # rows nothing refers to
 
+# Transcript editor op log (spec #110; admin-only, same service as the episode
+# page's "Edit transcript"). Edits never rewrite transcript files: every
+# reader replays the log, so fix speakers here, never in facts + re-clean:
+thestill transcript rename-speaker --podcast-id X --episode <slug> --label SPEAKER_02 --name "Jane Doe" [--entity-id person:jane-doe] [--no-refresh]
+thestill transcript edits --podcast-id X --episode <slug> [--json]   # each op's status + speaker labels
+thestill transcript conflicts [--podcast-id X]                        # ops a re-clean / re-transcribe broke
+thestill transcript revert --edit <id> | --by <email> --since <ISO>  # undo rows (bulk revert is audited)
+thestill transcript refresh --podcast-id X --episode <slug>           # queue the entity refresh now
+thestill transcript speaker-stats [--json]                            # the unnamed-speaker share
+
 # Episode repair (admin-only, audited). An import that missed its feed episode
 # left a second row with the same slug; fold the untouched feed row into it:
 thestill episode fold-import-twins [--podcast-id X] [--apply]

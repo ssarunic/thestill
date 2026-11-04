@@ -722,6 +722,34 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             );
             CREATE INDEX IF NOT EXISTS idx_oauth_tokens_grant ON oauth_tokens(grant_id);
             CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expires ON oauth_tokens(expires_at);
+
+            -- Spec #110 (Postgres 0027): the transcript editor's append-only
+            -- op log and the last op each episode's refresh was queued for.
+            -- JSON is TEXT; created_at is ISO-8601 with +00:00.
+            CREATE TABLE IF NOT EXISTS transcript_edits (
+                id            TEXT PRIMARY KEY NOT NULL,
+                episode_id    TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                seq           INTEGER NOT NULL,
+                op            TEXT NOT NULL,
+                raw_sha256    TEXT NOT NULL,
+                anchor_json   TEXT NOT NULL,
+                args_json     TEXT NOT NULL,
+                before_json   TEXT NOT NULL,
+                reverts       TEXT NULL REFERENCES transcript_edits(id),
+                session_id    TEXT NOT NULL,
+                report_id     TEXT NULL,
+                actor_user_id TEXT NULL,
+                actor_kind    TEXT NOT NULL,
+                created_at    TIMESTAMP NOT NULL,
+                UNIQUE (episode_id, seq)
+            );
+            CREATE INDEX IF NOT EXISTS idx_transcript_edits_actor ON transcript_edits(actor_user_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS transcript_edit_refreshes (
+                episode_id    TEXT PRIMARY KEY NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                refreshed_seq INTEGER NOT NULL,
+                queued_at     TIMESTAMP NOT NULL
+            );
             """
         )
 

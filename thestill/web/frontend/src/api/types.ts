@@ -502,7 +502,7 @@ export type TranscriptType = 'cleaned' | 'raw'
 // SegmentedTranscriptViewer renders from.
 export type SegmentKind = 'content' | 'filler' | 'ad_break' | 'music' | 'intro' | 'outro'
 
-interface WordSpan {
+export interface WordSpan {
   start_segment_id: number
   start_word_index: number
   end_segment_id: number
@@ -1827,4 +1827,106 @@ export interface AdminSettingsResponse {
   settings: AdminSetting[]
   non_default: Record<string, unknown>
   alert_channels: string[]
+}
+
+// ---------------------------------------------------------------------------
+// Spec #110 — transcript editor (admin-only; ``transcript.edit``)
+// ---------------------------------------------------------------------------
+//
+// Mirror the op models in thestill/models/transcript_edits.py and the
+// routes in thestill/web/routes/api_transcript_edits.py. The transcript the
+// editor renders comes from the ordinary transcript endpoint (it serves the
+// effective transcript); these carry the op log and the speaker panel.
+
+export type TranscriptEditOpName =
+  | 'speaker.rename_label'
+  | 'speaker.merge_labels'
+  | 'segment.set_speaker'
+  | 'segment.set_text'
+  | 'segment.set_kind'
+  | 'segment.split'
+  | 'segment.merge'
+  | 'revert'
+
+/** Where a segment op applies: the segment's durable anchors plus the text the editor showed. */
+export interface SegmentAnchorInput {
+  source_segment_ids: number[]
+  source_word_span: WordSpan | null
+  start_s: number
+  end_s: number
+  text: string
+}
+
+export interface TranscriptEditOpInput {
+  op: TranscriptEditOpName
+  anchor: Record<string, unknown>
+  args: Record<string, unknown>
+}
+
+export type TranscriptEditStatus = 'applied' | 'conflict' | 'reverted' | 'revert'
+
+export interface TranscriptEditConflict {
+  edit_id: string
+  seq: number
+  op: TranscriptEditOpName
+  reason: string
+  detail: Record<string, unknown>
+}
+
+export interface TranscriptEdit {
+  id: string
+  seq: number
+  op: TranscriptEditOpName
+  anchor: Record<string, unknown>
+  args: Record<string, unknown>
+  before: Record<string, unknown>
+  reverts: string | null
+  session_id: string
+  report_id: string | null
+  actor_user_id: string | null
+  actor_kind: string
+  created_at: string
+  status: TranscriptEditStatus
+  conflict: TranscriptEditConflict | null
+}
+
+/** One diarization label as the speaker panel lists it. */
+export interface TranscriptSpeaker {
+  label: string
+  name: string | null
+  entity_id: string | null
+  segment_ids: number[]
+}
+
+export interface TranscriptEditorState {
+  episode_id: string
+  last_seq: number
+  raw_sha256: string | null
+  overlay_failed: boolean
+  busy: boolean
+  edits: TranscriptEdit[]
+  conflicts: TranscriptEditConflict[]
+  speakers: TranscriptSpeaker[]
+  summary_stale_edits: number
+  algorithm_version: string
+  // Spec #110 §5.6 — our downloaded audio copy is on disk; the editor
+  // plays it through /transcript/edits/audio.
+  local_audio: boolean
+}
+
+export interface TranscriptEditsApplyResponse {
+  applied: TranscriptEdit[]
+  last_seq: number
+}
+
+export interface TranscriptEditsFinishResponse {
+  session_ops: number
+  refresh: 'queued' | 'deferred' | 'nothing'
+  task_id: string | null
+}
+
+export interface TranscriptPerson {
+  id: string
+  canonical_name: string
+  matched_alias: string | null
 }

@@ -280,9 +280,15 @@ Get the current authenticated user.
     "picture": "https://...",
     "created_at": "2026-01-01T...",
     "last_login_at": "2026-01-21T..."
-  }
+  },
+  "permissions": ["transcript.edit"]
 }
 ```
+
+`permissions` (spec #110) lists the named permissions the session holds;
+`/api/auth/status` carries the same list. Every permission means "effective
+admin" today, but the app checks the name, so a moderator role later changes
+no entry point.
 
 **Errors:**
 
@@ -879,6 +885,97 @@ gone: the run starts at `downsample` or `download` instead.
 transcript, clean transcript or segmented sidecar); 409 when the episode has a
 task queued, running or waiting to retry in any stage; 422 for any other
 `from_stage`.
+
+### Transcript editor (spec #110)
+
+Every route below requires the named permission `transcript.edit` (an
+effective admin today; 401 unauthenticated, 403 without it). Edits never
+rewrite the transcript files: each is a row in an append-only op log that
+every reader replays onto the cleaned sidecar, so the transcript endpoint,
+the words endpoint, MCP `get_transcript`, the summarizer and the entity
+branch all see the corrected transcript.
+
+#### GET /api/episodes/{episode_id}/transcript/edits
+
+The op log with each row's status (`applied`, `conflict`, `reverted`,
+`revert`), the conflicts a re-clean or re-transcribe produced, the speaker
+panel (one row per diarization label with its current name, linked person
+entity and segment ids), `busy` (a transcribe or clean is in flight, so
+writes are refused) and `summary_stale_edits` (live edits newer than the
+last summary).
+
+```json
+{
+  "status": "ok",
+  "episode_id": "uuid",
+  "last_seq": 3,
+  "raw_sha256": "…",
+  "overlay_failed": false,
+  "busy": false,
+  "edits": [{ "id": "uuid", "seq": 1, "op": "speaker.rename_label", "anchor": { "label": "SPEAKER_01" }, "args": { "name": "Grace Hopper", "entity_id": null }, "before": { "name": "SPEAKER_01", "entity_id": null }, "reverts": null, "session_id": "…", "report_id": null, "actor_user_id": "uuid", "actor_kind": "web", "created_at": "…", "status": "applied", "conflict": null }],
+  "conflicts": [],
+  "speakers": [{ "label": "SPEAKER_01", "name": "Grace Hopper", "entity_id": null, "segment_ids": [1, 3] }],
+  "summary_stale_edits": 1,
+  "algorithm_version": "v1"
+}
+```
+
+#### POST /api/episodes/{episode_id}/transcript/edits
+
+```json
+{ "base_seq": 3, "session_id": "uuid", "report_id": null, "ops": [{ "op": "segment.set_text", "anchor": { "source_segment_ids": [12], "source_word_span": { "start_segment_id": 12, "start_word_index": 0, "end_segment_id": 12, "end_word_index": 9 }, "start_s": 61.2, "end_s": 66.0, "text": "the text the editor showed" }, "args": { "old_text": "…", "new_text": "…" } }] }
+```
+
+Ops: `speaker.rename_label` (`{label}` → `{name, entity_id?}`),
+`speaker.merge_labels` (`{label}` → `{into_label}`), `segment.set_speaker`
+(`{label}` or `{name, entity_id?}`), `segment.set_text`, `segment.set_kind`,
+`segment.split` (`{text_word_index}`), `segment.merge` (`{first, second}`
+anchors) and `revert` (`{edit_id}`). A segment anchor carries the segment
+text as shown; the row stores its SHA-256. Ops apply in order; the first
+that does not apply is refused and nothing after it is written.
+
+**Response:** `{ "applied": [rows…], "last_seq": 4 }`.
+
+**Errors:** 409 `stale_base_seq` with `last_seq` and the newer `edits` when
+`base_seq` moved; 409 `busy` while a download, transcribe or clean is in
+flight; 409 `edit_rejected` with the `conflict` reason when an op does not
+apply, or when a revert targets a row that is already reverted; 422 for a
+malformed op; 400 without a segmented transcript. A refused batch writes
+nothing: every op is validated before the first row is appended.
+
+#### POST /api/episodes/{episode_id}/transcript/edits/{edit_id}/revert
+
+`{ "base_seq": 4, "session_id": "uuid" }` — undo as a new row; reverting a
+revert restores the op. Same response and errors as the append.
+
+#### POST /api/episodes/{episode_id}/transcript/edits/finish
+
+`{ "session_id": "uuid" }` — writes one `transcript.edit_session` audit row
+and queues the spec #106 `--from entities` refresh (search chunks, entity
+mentions, quotes). Response `{ "session_ops": 2, "refresh": "queued" |
+"deferred" | "nothing", "task_id": "…" }`; `deferred` means the episode was
+busy and the five-minute sweep will queue it once idle. The summary is never
+regenerated here.
+
+#### POST /api/episodes/{episode_id}/transcript/edits/save-host
+
+`{ "name": "Grace Hopper", "entity_id": "person:grace-hopper" }` — appends
+the name to the podcast's facts hosts so future cleans name them, links the
+entity as a podcast host when given, and writes a `facts.add_host` audit
+row. Response `{ "hosts": [...] }`.
+
+#### GET /api/episodes/{episode_id}/transcript/edits/people?q=
+
+Person entities matching `q` for the rename-or-link picker:
+`{ "people": [{ "id": "person:…", "canonical_name": "…", "matched_alias": null }] }`.
+
+#### GET /api/episodes/{episode_id}/transcript/edits/audio
+
+The episode's downloaded `original_audio` file, the one the timestamps
+were made from, for the editor's player (the publisher's URL can carry
+different ads). The editor state's `local_audio` says whether it exists;
+404 `no_local_audio` when the copy was deleted after processing or the
+deployment keeps audio off local disk.
 
 ---
 

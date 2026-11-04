@@ -36,6 +36,8 @@ const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 const LegalPage = lazy(() => import('./pages/public/LegalPage'))
 const OAuthConsent = lazy(() => import('./pages/OAuthConsent'))
+// Spec #110 — the admin transcript editor, its own screen outside the layout.
+const TranscriptEditorPage = lazy(() => import('./pages/TranscriptEditorPage'))
 const EpisodeReaderOverlay = lazy(() => import('./components/EpisodeReaderOverlay'))
 
 // Loading fallback for page transitions
@@ -98,6 +100,17 @@ function App() {
         <ProtectedRoute>
           <Suspense fallback={<PageLoader />}>
             <OAuthConsent />
+          </Suspense>
+        </ProtectedRoute>
+      } />
+
+      {/* Spec #110 §5.1 — the transcript editor: signed in with
+          transcript.edit, outside the layout (no sidebar, no mini player;
+          the editor owns playback through its own dock). */}
+      <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug/edit" element={
+        <ProtectedRoute>
+          <Suspense fallback={<PageLoader />}>
+            <TranscriptEditorPage />
           </Suspense>
         </ProtectedRoute>
       } />

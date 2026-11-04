@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useDismissablePopover } from '../hooks/useDismissablePopover'
 import { useShareAction } from '../hooks/useShareAction'
-import Button, { CheckIcon, LinkIcon, MoreIcon, PlayIcon, RefreshIcon, ShareIcon } from './Button'
+import Button, { CheckIcon, EditIcon, LinkIcon, MoreIcon, PlayIcon, RefreshIcon, ShareIcon } from './Button'
 
 interface EpisodeMoreMenuProps {
   shareTitle: string
@@ -14,6 +14,8 @@ interface EpisodeMoreMenuProps {
   onMarkPlayed: (played: boolean) => Promise<void>
   /** Spec #106 — admin-only. The item shows only when this is given. */
   onReprocess?: () => void
+  /** Spec #110 — ``transcript.edit`` only. The item shows only when this is given. */
+  onEditTranscript?: () => void
 }
 
 // Plain buttons in a disclosure, not an ARIA menu: Tab moves between them
@@ -46,6 +48,7 @@ export default function EpisodeMoreMenu({
   played,
   onMarkPlayed,
   onReprocess,
+  onEditTranscript,
 }: EpisodeMoreMenuProps) {
   const { open, setOpen, wrapRef } = useDismissablePopover()
   const { share, canShare, label: shareLabel } = useShareAction(shareTitle, shareUrl)
@@ -97,6 +100,11 @@ export default function EpisodeMoreMenu({
           >
             {played ? 'Mark as unplayed' : 'Mark as played'}
           </MenuItem>
+          {onEditTranscript && (
+            <MenuItem icon={<EditIcon />} onSelect={select(onEditTranscript)}>
+              Edit transcript
+            </MenuItem>
+          )}
           {onReprocess && (
             <MenuItem icon={<RefreshIcon />} onSelect={select(onReprocess)}>
               Reprocess…

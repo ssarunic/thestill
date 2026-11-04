@@ -395,6 +395,34 @@ CREATE INDEX IF NOT EXISTS idx_transcript_links_episode ON episode_transcript_li
 CREATE INDEX IF NOT EXISTS idx_transcript_links_mime_type ON episode_transcript_links(mime_type);
 CREATE INDEX IF NOT EXISTS idx_transcript_links_not_downloaded ON episode_transcript_links(episode_id) WHERE downloaded_path IS NULL;
 
+-- Spec #110 (alembic 0027) — the transcript editor's append-only op log,
+-- keyed to spec #18's segment anchors, and the last op each episode's
+-- downstream refresh was queued for.
+CREATE TABLE IF NOT EXISTS transcript_edits (
+    id uuid PRIMARY KEY,
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    seq integer NOT NULL,
+    op text NOT NULL,
+    raw_sha256 text NOT NULL,
+    anchor_json jsonb NOT NULL,
+    args_json jsonb NOT NULL,
+    before_json jsonb NOT NULL,
+    reverts uuid NULL REFERENCES transcript_edits(id),
+    session_id text NOT NULL,
+    report_id text NULL,
+    actor_user_id uuid NULL,
+    actor_kind text NOT NULL,
+    created_at timestamptz NOT NULL,
+    UNIQUE (episode_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_transcript_edits_actor ON transcript_edits(actor_user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS transcript_edit_refreshes (
+    episode_id uuid PRIMARY KEY REFERENCES episodes(id) ON DELETE CASCADE,
+    refreshed_seq integer NOT NULL,
+    queued_at timestamptz NOT NULL
+);
+
 -- ===== follows / inbox / briefings ========================================
 CREATE TABLE IF NOT EXISTS podcast_followers (
     id uuid PRIMARY KEY,

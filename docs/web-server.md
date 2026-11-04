@@ -58,6 +58,13 @@ Commands below).
 | `/api/episodes/{id}/failure` | GET | Get failure details |
 | `/api/episodes/{id}/retry` | POST | Clear failure and retry |
 | `/api/episodes/{id}/reprocess` | POST | Re-run an episode from a stage onwards (spec #106) |
+| `/api/episodes/{id}/transcript/edits` | GET | Transcript editor state: op log with statuses, conflicts, speaker panel, stale-summary count (spec #110, `transcript.edit`) |
+| `/api/episodes/{id}/transcript/edits` | POST | Append edit ops against `base_seq` (409 `stale_base_seq` / `busy` / `edit_rejected`) |
+| `/api/episodes/{id}/transcript/edits/finish` | POST | Close an editing session: audit row + the spec #106 entity refresh |
+| `/api/episodes/{id}/transcript/edits/save-host` | POST | Add a named speaker to the podcast's facts hosts (audited) |
+| `/api/episodes/{id}/transcript/edits/people` | GET | Person entities for the rename-or-link picker (`?q=`) |
+| `/api/episodes/{id}/transcript/edits/audio` | GET | The episode's downloaded audio copy for the editor's player (404 when gone) |
+| `/api/episodes/{id}/transcript/edits/{edit_id}/revert` | POST | Undo (or redo, by reverting a revert) as a new op-log row |
 
 ### Commands (`/api/commands`)
 
@@ -440,6 +447,7 @@ operator-only surface requires an admin session (`require_admin`):
 - Manual pipeline triggers: `POST /api/commands/{refresh,download,downsample,transcribe,clean,summarize,run-pipeline}` and `POST /api/commands/episode/{id}/cancel-pipeline`
 - Queue and DLQ management: `/api/commands/queue/*`, `/api/commands/dlq*`
 - Bulk processing, retries and reprocessing: `POST /api/episodes/bulk/process`, `POST /api/episodes/{id}/retry`, `POST /api/episodes/{id}/reprocess`
+- Transcript editing (spec #110): every `/api/episodes/{id}/transcript/edits*` route requires the named permission `transcript.edit` through `require_permission` (`thestill/web/permissions.py`), which means an effective admin today; `/api/auth/status` and `/api/auth/me` list the session's `permissions` so the app checks `can("transcript.edit")`, never `is_admin`
 - Corpus-wide episode browser and failure details: `GET /api/episodes`, `GET /api/episodes/failed`, `GET /api/episodes/{id}/failure` (non-admins get `failure_reason: null` on the podcast episode routes too)
 - Entity resolution surgery: `GET /api/entities/review-queue`, `POST /api/entities/corrections` (corrections change resolution state for every user)
 - Operator dashboards: `GET /api/status`, `GET /api/dashboard/*` (system-wide activity, storage paths, provider config)

@@ -46,6 +46,11 @@ AUDIT_ACTIONS = (
     "entity.set_type",
     "entity.blacklist",
     "entity.prune_orphans",
+    # Transcript editor (spec #110 §7). Per-edit history is the op log;
+    # the audit log gets one row per finished session and bulk revert.
+    "transcript.edit_session",
+    "transcript.revert_bulk",
+    "facts.add_host",
     # Episode repair (thestill.services.episode_curation)
     "episode.fold_import_twin",
 )

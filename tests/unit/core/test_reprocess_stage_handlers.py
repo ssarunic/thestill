@@ -53,6 +53,8 @@ def _state(episode) -> MagicMock:
     podcast.language = "en"
     state = MagicMock()
     state.repository.get_episode.return_value = (podcast, episode)
+    # Spec #110 — a hand-built state has no op log; readers see the sidecar as written.
+    state.transcript_edit_repository = None
     return state
 
 

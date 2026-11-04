@@ -119,6 +119,49 @@ def _artifact_predates_reprocess(config, relative_path: str, task: Task) -> bool
         return True
 
 
+def _effective_transcript_or_fail(episode: Episode, state: "AppState"):
+    """Spec #110 — the sidecar with the admin's edits replayed (local read).
+
+    A missing sidecar is fatal (the handler checked the path already); an
+    unreadable op log is transient, so the stage retries instead of
+    building chunks or mentions from the unedited sidecar (spec #42 FM-1).
+    """
+    from .transcript_edits import EditLogUnavailable, load_effective_transcript
+
+    try:
+        effective = load_effective_transcript(
+            episode,
+            edits=getattr(state, "transcript_edit_repository", None),
+            path_manager=state.path_manager,
+        )
+    except EditLogUnavailable as exc:
+        raise TransientError(str(exc)) from exc
+    if effective is None:
+        raise FatalError(f"AnnotatedTranscript sidecar not found for episode {episode.id}")
+    return effective.transcript
+
+
+def _edited_transcript_markdown(episode: Episode, state: "AppState") -> Optional[str]:
+    """The summarizer's input for an episode with applied edits, else ``None``."""
+    from .transcript_edits import EditLogUnavailable, load_effective_transcript
+
+    edits = getattr(state, "transcript_edit_repository", None)
+    if edits is None or not episode.clean_transcript_json_path:
+        return None
+    try:
+        if edits.last_seq(episode.id) == 0:
+            return None
+        effective = load_effective_transcript(
+            episode, edits=edits, path_manager=state.path_manager, file_storage=state.config.file_storage
+        )
+    except EditLogUnavailable as exc:
+        raise TransientError(str(exc)) from exc
+    if effective is None or not effective.has_applied_edits:
+        return None
+    effective.transcript.playback_time_offset_seconds = episode.playback_time_offset_seconds
+    return effective.to_summarizer_markdown()
+
+
 def _get_episode_or_fail(task: Task, state: "AppState") -> Tuple[Podcast, Episode]:
     """
     Get episode and podcast from task, raising FatalError if not found.
@@ -710,8 +753,12 @@ def handle_summarize(task: Task, state: "AppState") -> None:
 
     # LLM errors are usually transient (rate limits, API issues)
     with _handler_error_context(f"summarizing {episode.title}"):
+        # Spec #110 — an edited episode summarizes its effective transcript,
+        # rendered with the same kinds stripped as ``_cleaned.md``; an
+        # unedited one reads the file, byte for byte as before.
+        edited = _edited_transcript_markdown(episode, state)
         try:
-            transcript_text = config.file_storage.read_text(clean_key)
+            transcript_text = edited if edited is not None else config.file_storage.read_text(clean_key)
         except FileNotFoundError:
             raise FatalError(f"Clean transcript file not found: {clean_path}")
 
@@ -772,6 +819,7 @@ def handle_summarize(task: Task, state: "AppState") -> None:
             summary_path=output_path,
             path_manager=path_manager,
             file_storage=state.config.file_storage,
+            edits=getattr(state, "transcript_edit_repository", None),
         )
         write_summary_manifest(
             state.config.file_storage,
@@ -859,7 +907,6 @@ def handle_reindex(task: Task, state: "AppState") -> None:
     status, NOT ``failed_at_stage`` — because the user-visible pipeline
     is already done by this point.
     """
-    from ..models.annotated_transcript import AnnotatedTranscript
     from ..repositories.factory import make_chunk_writer
 
     podcast, episode = _get_episode_or_fail(task, state)
@@ -876,7 +923,7 @@ def handle_reindex(task: Task, state: "AppState") -> None:
         raise FatalError(f"AnnotatedTranscript sidecar not found: {sidecar} (episode {episode.id})")
 
     with _handler_error_context(f"chunking {episode.title}"):
-        transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
+        transcript = _effective_transcript_or_fail(episode, state)
         # Spec #44 — backend-resolved: sqlite-vec locally, pgvector on Postgres.
         writer = make_chunk_writer(state.config, state.embedding_model)
         # Spec #106: a reprocess has a new transcript, so the existing
@@ -1142,9 +1189,7 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
     )
 
     with _handler_error_context(f"extracting entities for {episode.title}"):
-        from ..models.annotated_transcript import AnnotatedTranscript
-
-        transcript = AnnotatedTranscript.model_validate_json(sidecar_path.read_text(encoding="utf-8"))
+        transcript = _effective_transcript_or_fail(episode, state)
 
         # Spec §1.13.4 — load anchor entities (host/guest/recurring) for
         # this episode and expand them into surface variants. Empty list
@@ -1158,7 +1203,9 @@ def handle_extract_entities(task: Task, state: "AppState") -> None:
         # None when ENTITY_RESOURCE_SEEDS_ENABLED is off: no summary read.
         from .resource_seeds import make_resource_source
 
-        resources = make_resource_source(state.config, state.path_manager)
+        resources = make_resource_source(
+            state.config, state.path_manager, transcript_edits=getattr(state, "transcript_edit_repository", None)
+        )
         extractor = _get_or_create_entity_extractor(state)
         mentions = extractor.extract(
             transcript,

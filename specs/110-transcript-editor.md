@@ -1,8 +1,8 @@
 # Transcript Editor (Admin Correction Workbench)
 
-> **Status:** 💡 Proposal
+> **Status:** 🚧 Phases 0–3, 3b (dedicated editor screen) and 3c (local audio) implemented (2026-11-02); Phase 4 not started
 > **Created:** 2026-10-27
-> **Updated:** 2026-10-27
+> **Updated:** 2026-11-02 — §5 rewritten around a dedicated editor screen (transport dock, lane timeline, play-a-sample, focus-not-filter, segment inspector, merge handle) after the in-place build proved unusable; Phases 3b/3c added. Earlier the same day: Phases 0–3 built: op log + loader (`thestill/core/transcript_edits.py`), the seven read sites and the summarizer moved, `transcript.edit` permission, routes, `thestill transcript` CLI, editor UI (speaker panel, inline text, split/merge, kind, undo/redo, conflicts, Finish), report deep link. Implementation notes under §Phases
 > **Priority:** Medium. Wrong and unnamed speakers are the most visible transcript defect, and today the only fix is editing episode facts and re-running the cleaner, which also re-runs the LLM.
 > **Author:** Product & Engineering
 > **Related:** [#18 segment-preserving-transcript-cleaning](18-segment-preserving-transcript-cleaning.md) (`source_segment_ids`, `WordSpan`, the reserved `user_segment_id`), [#59 transcript-summary-feedback](59-transcript-summary-feedback.md) (Tier 2 workbench, carved out into this spec), [#86 quality-feedback-loop](86-quality-feedback-loop.md) (reports, the `transcript.overlay` fix op, cases), [#106 episode-reprocess](106-episode-reprocess.md) (downstream refresh), [#104 abuse-prevention-and-user-admin](104-abuse-prevention-and-user-admin.md) (admin role, audit log), [#28 corpus-search-and-entities](28-corpus-search-and-entities.md) (chunks, entity mentions, `speaking` mentions), [#54 summary-segment-citations](54-summary-segment-citations.md) (citation sidecar), [#97 episode-chapters](97-episode-chapters.md) (forced alignment as a follow-up), [#96 prompt-injection-hardening](96-prompt-injection-hardening.md), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md)
@@ -317,26 +317,155 @@ dialog. Readers see nothing. No summary is regenerated automatically.
 
 ### 5. Editor UI
 
-The entry point is **Edit transcript** in the episode page's admin ⋯
-menu, next to Reprocess. It switches the transcript tab into edit mode
-in place: the same `SegmentedTranscriptViewer` with editing affordances,
-not a separate app. Report deep links (Phase 3) open it scrolled to the
-anchored segment with the proposal staged.
+> Revised 2026-11-02. The first build put editing affordances on the
+> episode page's transcript tab (PR #461). Trying it on a real episode
+> showed the design was wrong: the admin's only instruments are their
+> ears and the surrounding turns, and the in-place editor gave them
+> neither — audio lived in the global mini player, far from the row
+> being judged; a speaker row *filtered* the transcript, hiding the very
+> context that tells an ad voice from a guest; the hero, People row,
+> rails and tabs left a narrow column with no sense of time. The
+> ElevenLabs transcript editor gets the anatomy right, and this section
+> now follows it. The op log, routes and replay are unchanged; this is
+> presentation only.
 
-- **Speaker panel** (Phase 1): one row per label with colour, current
-  name, entity chip and segment count. Row menu: Rename or link, Merge
-  into…, Save as podcast host. Clicking a row filters the transcript to
-  that label's segments, so an admin can listen to a few before naming.
-- **Segments** (Phase 2): click the speaker name to reassign; edit text
-  inline (Enter splits at the caret on a word boundary, Backspace at the
-  start merges with the previous segment, matching ElevenLabs' merge
-  icon); kind picker; click a word to play from it.
-- **Header:** undo and redo (⌘Z, ⇧⌘Z), "Saved" status, conflicts count,
-  Finish editing.
-- **Phase 4:** a waveform strip under the transcript with draggable
-  boundaries at word positions, peaks decoded client-side first.
+#### 5.1 A dedicated screen
+
+The entry point stays **Edit transcript** in the episode page's admin ⋯
+menu, but it opens a dedicated route,
+`/podcasts/{podcast}/episodes/{episode}/edit`, gated by
+`can("transcript.edit")` and desktop-only (below `sm` the route sends the
+reader back to the transcript). The screen carries no episode chrome: no
+hero, People row, entity strip, rails, tabs or kind toggles. Report deep
+links (Phase 3) target this route:
+`/edit?report=<id>&segment=<segment id>&fix=…[&value=…]`.
+
+Layout, top to bottom:
+
+```text
+┌ ← Back · Episode title · Podcast         ↶ ↷   ● Saved · 3 edits   ⚠ 1 conflict   [Finish editing] ┐
+├───────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ SPEAKERS      │  Ada Lovelace   00:12  Welcome back to the show, everyone. Today we are talking …  │
+│ ● Ada L.  41  │                 00:31                                                              │
+│   SPEAKER_00  │              ⟐ merge                                                               │
+│   ▶ ◀ ▶  ⋯    │  SPEAKER_01     00:31  Thanks for having me. I have been looking forward to this.  │
+│ ● SPEAKER_01 7│                 00:38                                                              │
+│   unnamed     │              ⟐ merge                                                               │
+│   ▶ ◀ ▶  ⋯    │  Ada Lovelace   00:38  So let us start with the question everyone asks …           │
+│ ● Ad Narr. 3  │                                                                                    │
+│               │                                                                                    │
+│ SEGMENT       │                                                                                    │
+│ Speaker  ▾    │                                                                                    │
+│ Kind     ▾    │                                                                                    │
+│ 00:31–00:38   │                                                                                    │
+│ [Hide]        │                                                                                    │
+├───────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ ▶  −5s  +5s  1.0×   00:31.2 / 1:02:14                                                             │
+│ Ada L.    ▬▬▬▬▬▬▬▬▬      ▬▬▬▬▬▬▬     ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬                                            │
+│ SPEAKER_01          ▬▬▬▬▬        ▬▬▬▬           ▬▬                                                 │
+│ Ad Narr.  ▬▬▬                                                        ▬▬▬                           │
+│           0:00          0:30         │ 1:00          1:30                                          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.2 Top bar
+
+← Back (to the episode page, transcript tab), the episode title with the
+podcast name, undo and redo (⌘Z, ⇧⌘Z), the save status ("Saved" /
+"Saving…" / an error / "Reloaded" after a 409), the live edit count, the
+conflicts chip (opens the list from §3), and **Finish editing** as the
+one primary button. Finish queues the §4 refresh and returns to the
+episode page; leaving by Back keeps the edits (they are saved) and the
+idle sweep queues the refresh.
+
+#### 5.3 Speakers (left column, sticky)
+
+One row per diarization label, in order of first appearance, with the
+viewer's colour dot, the current name, and underneath the raw label and
+segment count ("SPEAKER_01 · 7 segments"). An unnamed voice reads
+"Unnamed" in place of the name; a facts-mapped guess such as
+"Ad Narrator 1" reads as the name with its raw label beneath, so the
+admin can see it is a mapping, not a fact.
+
+Every row carries the instruments for judging a voice, which the
+in-place build lacked:
+
+- **▶ Play a sample** — plays the voice's longest content segment from
+  its start, scrolls the transcript to it and selects it.
+- **◀ ▶ Previous / next turn** — seeks to the voice's previous or next
+  segment and scrolls to it. The transcript is never filtered: other
+  voices stay in place, dimmed slightly while a voice is focused, so the
+  turn is always read in context. Clicking the row focuses the voice;
+  clicking again clears it.
+- **⋯ menu** — Rename or link… (the name-and-entity dialog), Merge into…
+  (another label), Save as podcast host. Rename is also reachable by
+  clicking the name in the row or in the transcript gutter.
+
+Below the speakers, a **Segment** inspector for the selected row:
+speaker (picker over the labels, plus "Someone else…"), kind, start and
+end (read-only until Phase 4), and Hide (sets kind `filler`, the
+non-destructive delete). Selecting a row anywhere (transcript, lane,
+sample) populates it. This replaces the inline speaker button and kind
+`<select>` of the first build; the transcript row itself stays clean.
+
+#### 5.4 Transcript (centre)
+
+Turns at reading size, full width. Each row: the speaker name (coloured;
+click to open the speaker picker) and the start time in a left gutter,
+the end time beneath, the text to the right. The active segment follows
+playback and the row that holds the playhead is highlighted the way the
+reader's viewer does it.
+
+- **Click a word** to play from it. The words API already serves word
+  timings for karaoke; the editor renders them for the selected row and
+  the active row, so the click target is the word, not the row. A
+  segment marked `words_stale` (text edited) plays from its start.
+- **Edit text** by clicking the text (the row turns into a text field in
+  place): Enter saves; Enter with the caret inside unchanged text splits
+  on that word boundary; Escape cancels; leaving the field saves. The
+  ElevenLabs Backspace-at-start merge is dropped in favour of the
+  explicit handle below — it was too easy to trigger by accident.
+- **Merge handle** between adjacent rows of the same kind: a small
+  ⟐ icon on the rail between them, visible on hover and when either row
+  is selected, tooltip "Merge segments". It writes `segment.merge`.
+- **Edited** rows show a small "edited" tag in the gutter; a conflict
+  (§3) shows an amber tag that opens the conflicts list.
 
 Edited text renders as text everywhere, never as Markdown or HTML.
+
+#### 5.5 Transport and lanes (bottom dock, sticky)
+
+A transport row — play/pause, −5 s, +5 s, speed, current time over
+duration — bound to the app's player (`PlayerContext`), so follow and
+karaoke keep working and the mini player is never needed. Under it a
+**lane timeline**: one lane per voice (same order and colours as the
+speakers column), every segment a block on a shared time axis, the
+playhead as a vertical line, the selected segment filled darker. The
+axis shows roughly the current minute at the default zoom; scroll to pan,
+⌘-wheel to zoom, and the lanes keep the playhead in view while playing.
+Clicking a block seeks there, selects the segment and scrolls the
+transcript to it; the lanes are what make a stray turn — three
+SPEAKER_03 blocks inside Ada's run — visible before any listening.
+
+The dock is the Phase 4 home: the waveform strip and draggable
+boundaries, if built, sit on the selected voice's lane.
+
+#### 5.6 Audio source
+
+The dock plays the episode's playback manifest, like the reader. The
+transcript was made from our downloaded copy, and the publisher's URL
+can differ by inserted ads (spec #97's drift problem), so when the
+episode's `original_audio` file still exists on storage the editor
+plays that copy instead through a `transcript.edit`-gated audio route;
+timestamps then match the audio exactly. This is the first consumer of
+the local copy; the route is in §6.
+
+#### 5.7 Keyboard
+
+Space play/pause, J/K/L as in video editors (−5 s, pause, +5 s), ↑/↓
+select the previous/next row, Enter edits the selected row's text, M
+merges the selected row with the previous one, ⌘Z / ⇧⌘Z undo/redo,
+Escape clears the voice focus. None fire while a text field is focused.
 
 ### 6. API and CLI
 
@@ -347,6 +476,9 @@ GET    /api/episodes/{id}/transcript/edits              ops, conflicts, last_seq
 POST   /api/episodes/{id}/transcript/edits              {base_seq, session_id, ops: [...]}
 POST   /api/episodes/{id}/transcript/edits/{edit_id}/revert
 POST   /api/episodes/{id}/transcript/edits/finish       {session_id}  queues the refresh
+POST   /api/episodes/{id}/transcript/edits/save-host    {name, entity_id?}  facts hosts (+ host anchor)
+GET    /api/episodes/{id}/transcript/edits/people?q=    person entities for the name-or-link picker
+GET    /api/episodes/{id}/transcript/edits/audio        (Phase 3c) the local original_audio copy, 404 when gone
 ```
 
 CLI, for scripting and recovery (operator actor, same as
@@ -423,10 +555,103 @@ be a second permission (`reports.triage`) under the same scheme.
 | 1 — Speaker panel | Speaker panel UI, rename or link, merge labels, move one segment, Save as podcast host, Finish editing and idle refresh, stale badge | On a prod-copy episode with a `SPEAKER_NN` leak, an admin names the speaker in under a minute; after refresh the sidebar, roles and `list_quotes_by` show the right person |
 | 2 — Text and segments | Inline text edit, split, merge, kind picker, undo and redo, conflicts list in the header | Every op type round-trips through undo, redo and a re-clean; conflicts appear for an op whose segment text changed |
 | 3 — Reports to editor | #86 report deep link, proposal staged, accept writes the op with `report_id` and sets the report's `fix_json` | One `wrong_speaker` and one `wrong_words` report go report → editor → fixed without leaving the editor |
-| 4 — Waveform and boundaries | Waveform strip, `segment.adjust_boundary`, drag at word positions | Built only if `bad_boundary` reports or admin requests show the need; a boundary fix survives a re-clean |
+| 3b — Editor screen (§5 revised) | Dedicated `/edit` route with top bar, speakers column (play a sample, previous/next turn, focus-not-filter), segment inspector, clean transcript rows with click-a-word playback and the merge handle, transport dock with lane timeline, keyboard map; the in-place edit mode of Phases 1–2 is removed | On a prod-copy episode an admin, without leaving the screen or touching the mini player, hears a voice, names it, moves a stray turn and finishes; a mis-labelled turn is visible on the lanes before any listening |
+| 3c — Local audio for editing | `transcript.edit`-gated route serving the episode's `original_audio` copy when it exists; the dock prefers it | A drifted episode (publisher file longer than transcribed) plays in sync in the editor |
+| 4 — Waveform and boundaries | Waveform strip on the selected lane, `segment.adjust_boundary`, drag at word positions | Built only if `bad_boundary` reports or admin requests show the need; a boundary fix survives a re-clean |
 
 Phase 0 changes the read path for every episode, so it ships alone and
-soaks before Phase 1's UI.
+soaks before Phase 1's UI. Phase 3b is built in this order: route and
+layout with the transport dock (the existing panel, bar and dialogs
+moved in), then the speakers column instruments and focus-not-filter,
+then the lanes, then the inspector and merge handle replacing the inline
+controls, then click-a-word playback.
+
+### Implementation notes (2026-11-02)
+
+Phases 0–3 landed together on one branch, in that order, so the Phase 0
+soak is the review window rather than a separate release. Where the build
+departs from or narrows the text above:
+
+- **Anchors carry text on the wire.** A segment anchor the editor sends
+  holds the segment `text` it showed; `SegmentAnchor` hashes it into
+  `text_sha256` on validation, so the row never stores transcript text
+  twice and the client needs no hashing.
+- **Split addressing.** The client sends `text_word_index` (the
+  whitespace word the split lands before); the service fills the raw
+  `at` reference by proportional mapping across the segment's word span,
+  so a replay lands on the same raw word and audio boundary.
+- **Busy guard is stage-aware.** Editing is refused while download,
+  downsample, transcribe or clean is in flight; an entity-branch task
+  (our own refresh) does not block.
+- **Idle refresh and the nightly sweep are one job.** A
+  `transcript_edit_refresh` periodic job (every 5 minutes) queues the
+  `--from entities` refresh for any episode whose newest op is ≥ 15
+  minutes old and newer than its last queued refresh
+  (`transcript_edit_refreshes`); Finish queues immediately. A busy
+  episode is retried by the same job.
+- **Stale badge** counts live ops newer than the last completed
+  `summarize` task (`summary_stale_edits` on the editor state); it is
+  fetched only for sessions holding `transcript.edit`.
+- **Speaker ops touch speaker rows only.** A rename or merge changes
+  `content`/`filler` segments of the label; an `ad_break` built from the
+  same raw segment keeps its empty speaker.
+- **Word timings after a text edit** are dropped: the segment is marked
+  `words_stale` and the words API omits it, so the karaoke wipe falls
+  back to segment highlighting there (open question 4, v1 answer).
+- **Linked speaker entities** ride on `metadata.speaker_entity_id`; the
+  extractor's synthesized `speaking` mention uses it ahead of the anchor
+  name match, so quotes-by and the People rail follow the admin's choice
+  after the refresh.
+- **Phase 3 without #86.** The reports table does not exist yet, so the
+  editor implements the deep-link contract only:
+  `?view=transcript&edit=1&report=<id>&segment=<segment id>&fix=wrong_speaker|wrong_words|wrong_kind[&value=…]`
+  opens the editor scrolled to the segment with the proposal staged;
+  Accept writes the op with `report_id`. Setting the report's `fix_json`
+  is #86's half and waits for its table.
+- **Retranscribe remap suggestions** (the "suggested new label" in §3
+  rule 1) are not built; conflicts list the op with its `before` snapshot
+  and the admin re-applies by hand.
+- **CLI** adds `rename-speaker` and `refresh` to the four commands listed
+  in §6; `revert --by` takes an email.
+- **The in-place editor was a stopgap.** PR #461's first UI (edit mode on
+  the transcript tab, speaker panel that filters, inline speaker button
+  and kind select) was judged unusable on a real episode — no audio near
+  the text, no surrounding turns, no timeline — and §5 was rewritten
+  around a dedicated screen, built the same day as Phase 3b
+  (`pages/TranscriptEditorPage.tsx`, `components/transcript-editor/`).
+  The op log, routes and the `useTranscriptEditor` hook carried over
+  unchanged; the reader's viewer lost its editing props again.
+- **Phase 3b narrowings.** The lanes are an SVG over a time window
+  (default 120 s, ⌘-scroll zoom, scroll pan) rather than the full
+  episode; words render only on the selected and active rows (the words
+  API payload is per segment, so this keeps the DOM small); a single
+  click on a word plays from it and a double-click (or Enter, or the
+  inspector's Edit text) opens the text, since the two gestures share
+  the same target; Backspace-at-start merge was dropped for the handle
+  and the M key. Start and end in the inspector are read-only (Phase 4).
+- **Phase 3c.** `GET …/transcript/edits/audio` serves `original_audio`
+  from local disk only; the state carries `local_audio` and the dock
+  switches the player's source to the route when it is true.
+- **Review hardening (2026-11-04, Codex + Antigravity on PR #461).** A
+  batch is validated as a whole before any row is written, so a refused
+  op leaves nothing behind. A revert's target must be live: a second
+  undo of the same op is `edit_rejected`, and the editor drops the redo
+  path once a new op follows an undo (a redo then would revive an op the
+  new one was anchored without). Speaker ops know every label the
+  transcript carries, including one heard only in an ad read, and a row
+  re-tagged into a speech kind (`content`, `filler`, `intro`, `outro`)
+  takes its label's current name. The stale-summary count compares the
+  ops live when the summary ran with the ops live now, ignoring rows in
+  conflict. The audio route resolves the stored path and refuses
+  anything outside `original_audio` (absolute paths, `..`, symlinks
+  out). All transport gestures, keys included, act on the episode being
+  edited and leave the YouTube engine before taking the local file. A
+  second pass added: a re-tagged row with no name of its own takes its
+  label's name; an explicit split cut outside the span is unaddressed;
+  the stale count compares the ops *applied* then and now (a structural
+  undo that conflicts a text edit the summary saw counts); a pan away
+  from the playhead holds until the playhead has been inside the chosen
+  window and leaves it.
 
 ## Success metrics
 

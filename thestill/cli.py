@@ -99,9 +99,13 @@ class CLIContext:
         link_decision_repository=None,
         analytics_service=None,
         abuse=None,
+        transcript_edit_repository=None,
     ):
         self.config = config
         self.path_manager = path_manager
+        # Spec #110 — the transcript editor's op log (``thestill transcript``
+        # and every CLI path that reads a cleaned sidecar).
+        self.transcript_edit_repository = transcript_edit_repository
         self.repository = repository
         self.podcast_service = podcast_service
         self.stats_service = stats_service
@@ -214,7 +218,12 @@ def main(ctx, config, quiet):
         abuse = build_abuse_services(config_obj, repos)
         repository = repos.podcast
         podcast_service = PodcastService(
-            storage_path, repository, path_manager, file_storage=file_storage, access=abuse.guard
+            storage_path,
+            repository,
+            path_manager,
+            file_storage=file_storage,
+            access=abuse.guard,
+            transcript_edits=repos.transcript_edit,
         )
         stats_service = StatsService(storage_path, repository, path_manager)
         feed_manager = PodcastFeedManager(
@@ -299,6 +308,7 @@ def main(ctx, config, quiet):
             link_decision_repository=repos.link_decision,
             analytics_service=AnalyticsService(repos.analytics, enabled=config_obj.multi_user),
             abuse=abuse,
+            transcript_edit_repository=repos.transcript_edit,
         )
 
     except Exception as e:
@@ -2493,6 +2503,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                     summary_path=output_path,
                     path_manager=path_manager,
                     file_storage=ctx.obj.config.file_storage,
+                    edits=ctx.obj.transcript_edit_repository,
                 )
             else:
                 # Spec #35 — persist via FileStorage so STORAGE_BACKEND=s3
@@ -2612,6 +2623,7 @@ def summarize(ctx, transcript_path, output, dry_run, max_episodes, force):
                 summary_path=output_path,
                 path_manager=path_manager,
                 file_storage=ctx.obj.config.file_storage,
+                edits=ctx.obj.transcript_edit_repository,
             )
             write_summary_manifest(
                 ctx.obj.config.file_storage,
@@ -2700,6 +2712,7 @@ def resolve_summary_citations(ctx, podcast_slug, episode_slug, limit, only_missi
             file_storage=file_storage,
             write=write_changes,
             force=force,
+            edits=ctx.obj.transcript_edit_repository,
         )
         processed += 1
         if result.skipped:
@@ -2750,6 +2763,7 @@ def _build_narration_runner(ctx, *, llm_provider):
         anchor_prompt=load_anchor_prompt(config.narration_anchor_prompt),
         material_max_words=config.narration_material_max_words,
         stated_target_ratio=config.narration_stated_target_ratio,
+        transcript_edits=ctx.obj.transcript_edit_repository,
     )
     # No spec #104 guard: the operator's own ``thestill narrate`` stays
     # outside the runtime narration switch, as it always ignored
@@ -4741,6 +4755,274 @@ def search(ctx, query, mode, limit, podcast_id, since, has_entity, json_output):
     _print_citation_rows(rows, json_output=json_output, header=header)
 
 
+@main.group("transcript")
+def transcript_group():
+    """The transcript editor's op log, from the shell (spec #110)."""
+
+
+def _transcript_service(ctx):
+    """The editor service; the CLI is the operator (``Actor.cli``)."""
+    from .core.facts_manager import FactsManager
+    from .services.transcript_edit_service import TranscriptEditService
+
+    return TranscriptEditService(
+        repository=ctx.obj.repository,
+        edits=ctx.obj.transcript_edit_repository,
+        entities=ctx.obj.entity_repository,
+        queue_manager=make_queue_manager(ctx.obj.config),
+        config=ctx.obj.config,
+        path_manager=ctx.obj.path_manager,
+        file_storage=ctx.obj.config.file_storage,
+        audit=ctx.obj.abuse.audit if ctx.obj.abuse else None,
+        facts_manager=FactsManager(ctx.obj.path_manager),
+    )
+
+
+def _transcript_episode(ctx, episode_id, podcast_id, episode_slug):
+    """Resolve ``--episode-id`` or ``--podcast-id`` + ``--episode`` like ``reprocess``."""
+    repository = ctx.obj.repository
+    if episode_id:
+        found = repository.get_episode(episode_id)
+    elif podcast_id and episode_slug:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        found = repository.get_episode_by_slug(podcast.slug, episode_slug) if podcast else None
+    else:
+        raise click.UsageError("Pass --episode-id, or --podcast-id with --episode.")
+    if not found:
+        click.echo("❌ Episode not found", err=True)
+        ctx.exit(1)
+    return found
+
+
+def _transcript_episode_options(f):
+    f = click.option("--episode", "episode_slug", help="Episode slug (with --podcast-id).")(f)
+    f = click.option("--podcast-id", help="Podcast UUID or slug (with --episode).")(f)
+    f = click.option("--episode-id", help="Episode UUID.")(f)
+    return f
+
+
+def _run_transcript_action(ctx, action):
+    """Run ``action(service)``; a refusal exits 1 with its message."""
+    from .services.transcript_edit_service import TranscriptEditError
+
+    try:
+        return action(_transcript_service(ctx))
+    except TranscriptEditError as exc:
+        click.echo(f"❌ {exc}", err=True)
+        ctx.exit(1)
+
+
+@transcript_group.command("edits")
+@_transcript_episode_options
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.pass_context
+@require_config
+@log_command
+def transcript_edits(ctx, episode_id, podcast_id, episode_slug, json_output):
+    """List an episode's edits with each one's status, plus its speaker labels."""
+    _podcast, episode = _transcript_episode(ctx, episode_id, podcast_id, episode_slug)
+    state = _run_transcript_action(ctx, lambda service: service.get_state(episode.id))
+    effective = state.effective
+    applied = {e.id for e in effective.applied}
+    conflicts = {c.edit_id: c for c in effective.conflicts}
+    rows = []
+    for edit in effective.edits:
+        if edit.op == "revert":
+            status = "revert"
+        elif edit.id in effective.reverted_ids:
+            status = "reverted"
+        elif edit.id in applied:
+            status = "applied"
+        else:
+            status = f"conflict:{conflicts[edit.id].reason}" if edit.id in conflicts else "conflict"
+        rows.append(
+            {
+                "seq": edit.seq,
+                "id": edit.id,
+                "op": edit.op,
+                "status": status,
+                "anchor": edit.anchor,
+                "args": edit.args,
+                "actor": edit.actor_kind,
+                "created_at": edit.created_at.isoformat(),
+            }
+        )
+    speakers = [
+        {"label": s.label, "name": s.name, "entity_id": s.entity_id, "segments": len(s.segment_ids)}
+        for s in effective.speakers
+    ]
+    if json_output:
+        click.echo(
+            json.dumps(
+                {
+                    "episode_id": episode.id,
+                    "last_seq": effective.last_seq,
+                    "busy": state.busy,
+                    "summary_stale_edits": state.summary_stale_edits,
+                    "edits": rows,
+                    "speakers": speakers,
+                },
+                indent=2,
+            )
+        )
+        return
+    click.echo(f"{episode.title} — {len(rows)} edit(s), last seq {effective.last_seq}")
+    for row in rows:
+        click.echo(f"  #{row['seq']:<4} {row['op']:<22} {row['status']:<18} {row['id']}")
+    click.echo("Speakers:")
+    for s in speakers:
+        name = s["name"] or "(unnamed)"
+        entity = f" → {s['entity_id']}" if s["entity_id"] else ""
+        click.echo(f"  {s['label']:<12} {name}{entity} ({s['segments']} segments)")
+    if state.summary_stale_edits:
+        click.echo(f"Summary predates {state.summary_stale_edits} edit(s); reprocess --from summarize to refresh it.")
+
+
+@transcript_group.command("conflicts")
+@click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.pass_context
+@require_config
+@log_command
+def transcript_conflicts(ctx, podcast_id, json_output):
+    """Edits that no longer apply after a re-clean or re-transcribe."""
+    rows = _run_transcript_action(ctx, lambda service: service.conflicts(podcast_id=podcast_id))
+    if json_output:
+        click.echo(json.dumps([row.__dict__ for row in rows], indent=2))
+        return
+    if not rows:
+        click.echo("No conflicts.")
+        return
+    for row in rows:
+        click.echo(f"{row.podcast_title} :: {row.episode_title} ({row.episode_id})")
+        for conflict in row.conflicts:
+            click.echo(f"  #{conflict['seq']:<4} {conflict['op']:<22} {conflict['reason']}")
+
+
+@transcript_group.command("revert")
+@click.option("--edit", "edit_id", help="Revert this one edit (a new revert row).")
+@click.option("--by", "by_email", help="Revert every live edit by this user's email…")
+@click.option("--since", help="…written at or after this ISO-8601 instant (with --by).")
+@click.option("--reason", default=None, help="Why (recorded in the audit log for --by).")
+@click.pass_context
+@require_config
+@log_command
+def transcript_revert(ctx, edit_id, by_email, since, reason):
+    """Undo one edit, or every edit one user made since an instant."""
+    from datetime import datetime
+
+    from .services.abuse.actor import Actor
+
+    if edit_id and not by_email:
+        edit = ctx.obj.transcript_edit_repository.get(edit_id)
+        if edit is None:
+            click.echo(f"❌ No edit {edit_id}", err=True)
+            ctx.exit(1)
+        result = _run_transcript_action(
+            ctx,
+            lambda service: service.revert(
+                edit.episode_id,
+                edit_id,
+                actor=Actor.cli(),
+                session_id=f"cli-{edit_id[:8]}",
+                base_seq=ctx.obj.transcript_edit_repository.last_seq(edit.episode_id),
+            ),
+        )
+        click.echo(f"✓ Reverted {edit.op} #{edit.seq} (new seq {result.last_seq})")
+        return
+    if by_email and since:
+        user = ctx.obj.auth_service.user_repository.get_by_email(by_email)
+        if user is None:
+            click.echo(f"❌ No user {by_email}", err=True)
+            ctx.exit(1)
+        try:
+            since_at = datetime.fromisoformat(since)
+        except ValueError as exc:
+            raise click.UsageError(f"--since must be ISO-8601: {exc}") from exc
+        if since_at.tzinfo is None:
+            raise click.UsageError("--since needs a timezone offset, e.g. 2026-11-02T08:00:00+00:00")
+        reverted = _run_transcript_action(
+            ctx, lambda service: service.revert_by_actor(user.id, since=since_at, actor=Actor.cli(), reason=reason)
+        )
+        click.echo(f"✓ Reverted {reverted} edit(s) by {by_email} since {since}")
+        return
+    raise click.UsageError("Pass --edit <id>, or --by <email> with --since <ISO-8601>.")
+
+
+@transcript_group.command("speaker-stats")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.pass_context
+@require_config
+@log_command
+def transcript_speaker_stats(ctx, json_output):
+    """The unnamed-speaker share across episodes with a segmented transcript."""
+    stats = _run_transcript_action(ctx, lambda service: service.speaker_stats())
+    if json_output:
+        click.echo(json.dumps(stats.__dict__, indent=2))
+        return
+    share = (stats.episodes_with_unnamed / stats.episodes * 100) if stats.episodes else 0.0
+    click.echo(f"Episodes with a segmented transcript: {stats.episodes}")
+    click.echo(f"  with an unnamed content speaker:    {stats.episodes_with_unnamed} ({share:.1f}%)")
+    click.echo(f"  unnamed content segments:           {stats.unnamed_segments}")
+    click.echo(f"  edited episodes:                    {stats.edited_episodes}")
+
+
+@transcript_group.command("rename-speaker")
+@_transcript_episode_options
+@click.option("--label", required=True, help="Diarization label, e.g. SPEAKER_02.")
+@click.option("--name", required=True, help="The speaker's name.")
+@click.option("--entity-id", default=None, help="Person entity to link, e.g. person:jane-doe.")
+@click.option("--no-refresh", is_flag=True, help="Don't queue the entity refresh afterwards.")
+@click.pass_context
+@require_config
+@log_command
+def transcript_rename_speaker(ctx, episode_id, podcast_id, episode_slug, label, name, entity_id, no_refresh):
+    """Name a diarization label across the whole episode, without an LLM call."""
+    from .services.abuse.actor import Actor
+
+    _podcast, episode = _transcript_episode(ctx, episode_id, podcast_id, episode_slug)
+    session_id = f"cli-{episode.id[:8]}"
+
+    def rename(service):
+        base_seq = ctx.obj.transcript_edit_repository.last_seq(episode.id)
+        result = service.apply(
+            episode.id,
+            actor=Actor.cli(),
+            session_id=session_id,
+            base_seq=base_seq,
+            ops=[
+                {
+                    "op": "speaker.rename_label",
+                    "anchor": {"label": label},
+                    "args": {"name": name, "entity_id": entity_id},
+                }
+            ],
+        )
+        finish = None if no_refresh else service.finish(episode.id, actor=Actor.cli(), session_id=session_id)
+        return result, finish
+
+    result, finish = _run_transcript_action(ctx, rename)
+    click.echo(f"✓ {label} → {name} on {episode.title} (seq {result.last_seq})")
+    if finish is not None:
+        click.echo(f"  entity refresh {finish.refresh}" + (f" (task {finish.task_id})" if finish.task_id else ""))
+
+
+@transcript_group.command("refresh")
+@_transcript_episode_options
+@click.pass_context
+@require_config
+@log_command
+def transcript_refresh(ctx, episode_id, podcast_id, episode_slug):
+    """Queue the entity refresh (spec #106 --from entities) for an edited episode now."""
+    from .services.abuse.actor import Actor
+
+    _podcast, episode = _transcript_episode(ctx, episode_id, podcast_id, episode_slug)
+    finish = _run_transcript_action(
+        ctx, lambda service: service.finish(episode.id, actor=Actor.cli(), session_id=f"cli-{episode.id[:8]}")
+    )
+    click.echo(f"✓ refresh {finish.refresh}" + (f" (task {finish.task_id})" if finish.task_id else ""))
+
+
 @main.group("entity")
 def entity_group():
     """Inspect or manually adjust the entities table."""
@@ -5975,7 +6257,7 @@ def reindex(ctx, status, max_episodes, dry_run):
 @log_command
 def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
     """Embed and index every episode that has a cleaned-transcript JSON sidecar."""
-    from .models.annotated_transcript import AnnotatedTranscript
+    from .core.transcript_edits import load_effective_transcript
     from .repositories.factory import make_chunk_writer
 
     podcast_repo = ctx.obj.repository
@@ -6016,11 +6298,12 @@ def chunks_backfill(ctx, podcast_id, max_episodes, force, dry_run):
     skipped_total = 0
     for p, e in eligible:
         sidecar = path_manager.clean_transcript_file(e.clean_transcript_json_path)
-        if not sidecar.exists():
+        # Spec #110 — chunks are built from the edited transcript.
+        effective = load_effective_transcript(e, edits=ctx.obj.transcript_edit_repository, path_manager=path_manager)
+        if effective is None:
             click.echo(f"  ! sidecar missing for {e.id} ({sidecar})")
             continue
-        transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
-        inserted = writer.write_episode(e.id, transcript, force=force)
+        inserted = writer.write_episode(e.id, effective.transcript, force=force)
         if inserted:
             inserted_total += inserted
             click.echo(f"  ✓ {p.title} :: {e.title} ({inserted} chunks)")
@@ -6107,6 +6390,7 @@ def repair_mojibake_cmd(ctx, podcast_id, apply_changes, examples):
         ctx.obj.path_manager,
         ctx.obj.repository,
         ctx.obj.embedding_model,
+        transcript_edits=ctx.obj.transcript_edit_repository,
     )
     try:
         report = repairer.run(apply=apply_changes, podcast_id=podcast_id)

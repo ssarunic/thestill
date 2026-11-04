@@ -231,11 +231,14 @@ class MojibakeRepairer:
         path_manager: "PathManager",
         podcast_repo: Any,
         embedding_model: Any = None,
+        transcript_edits: Any = None,
     ):
         self._config = config
         self._path_manager = path_manager
         self._repo = podcast_repo
         self._embedding_model = embedding_model
+        # Spec #110 — rewritten chunks come from the edited transcript.
+        self._transcript_edits = transcript_edits
         self._db = _Db(config)
 
     # ── entry point ────────────────────────────────────────────────────
@@ -244,16 +247,16 @@ class MojibakeRepairer:
         report = RepairReport(applied=apply)
         podcasts = self._podcasts(podcast_id)
 
-        sidecar_by_episode: Dict[str, Path] = {}
+        episode_by_id: Dict[str, Any] = {}
         for p in podcasts:
             for e in p.episodes or []:
                 if e.clean_transcript_json_path:
-                    sidecar_by_episode[e.id] = self._path_manager.clean_transcript_file(e.clean_transcript_json_path)
+                    episode_by_id[e.id] = e
 
         repaired_sidecars = self._repair_files(podcasts, report, apply)
         self._repair_columns(report, apply, podcast_id)
         damaged_chunks = self._episodes_with_damaged_chunks(podcast_id)
-        self._rewrite_chunks(repaired_sidecars | damaged_chunks, sidecar_by_episode, report, apply)
+        self._rewrite_chunks(repaired_sidecars | damaged_chunks, episode_by_id, report, apply)
 
         logger.info(
             "mojibake_repair_finished",
@@ -377,17 +380,18 @@ class MojibakeRepairer:
     def _rewrite_chunks(
         self,
         episode_ids: Set[str],
-        sidecar_by_episode: Dict[str, Path],
+        episode_by_id: Dict[str, Any],
         report: RepairReport,
         apply: bool,
     ) -> None:
         if not episode_ids:
             return
-        from ..models.annotated_transcript import AnnotatedTranscript
+        from .transcript_edits import load_effective_transcript
 
         writer = None
         for episode_id in sorted(episode_ids):
-            sidecar = sidecar_by_episode.get(episode_id)
+            episode = episode_by_id.get(episode_id)
+            sidecar = self._path_manager.clean_transcript_file(episode.clean_transcript_json_path) if episode else None
             if sidecar is None or not sidecar.exists():
                 report.chunks_without_sidecar.append(episode_id)
                 continue
@@ -396,7 +400,12 @@ class MojibakeRepairer:
                 continue
             if writer is None:
                 writer = make_chunk_writer(self._config, self._embedding_model)
-            transcript = AnnotatedTranscript.model_validate_json(sidecar.read_text(encoding="utf-8"))
-            inserted = writer.write_episode(episode_id, transcript, force=True)
+            effective = load_effective_transcript(
+                episode, edits=self._transcript_edits, path_manager=self._path_manager
+            )
+            if effective is None:
+                report.chunks_without_sidecar.append(episode_id)
+                continue
+            inserted = writer.write_episode(episode_id, effective.transcript, force=True)
             report.chunks_rewritten += inserted
             logger.info("mojibake_repair_chunks_rewritten", episode_id=episode_id, rows=inserted)
