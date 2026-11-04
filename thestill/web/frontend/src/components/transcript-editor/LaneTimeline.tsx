@@ -3,8 +3,9 @@ import type { AnnotatedSegment, TranscriptSpeaker } from '../../api/types'
 import {
   DEFAULT_SPAN_SECONDS,
   clampWindow,
-  followWindow,
+  followDecision,
   ticksFor,
+  type FollowState,
   timeToX,
   xToTime,
   zoomWindow,
@@ -71,20 +72,15 @@ export default function LaneTimeline({
   // Both are render-time adjustments (no effect, no extra commit): the
   // window only moves when the playhead leaves its middle or the selected
   // row changes to one outside it. A manual pan or zoom suspends following
-  // until the playhead leaves the window the user chose, so the timeline
-  // never snaps back under the wheel.
-  const [panned, setPanned] = useState(false)
+  // until the playhead, once inside the chosen window, leaves it
+  // (laneMath.followDecision), so the timeline never snaps back under the
+  // wheel.
+  const [follow, setFollow] = useState<FollowState>({ panned: false, wasInside: true })
   const inWindow = (at: number) => at >= window_.start && at <= window_.start + window_.span
   if (isPlaying) {
-    if (panned) {
-      if (!inWindow(currentTime)) {
-        setPanned(false)
-        setWindow((w) => ({ ...w, start: clampWindow(currentTime - w.span * 0.3, w.span, total) }))
-      }
-    } else {
-      const start = followWindow(currentTime, window_.start, window_.span, total)
-      if (start !== window_.start) setWindow((w) => ({ ...w, start }))
-    }
+    const decision = followDecision(currentTime, window_.start, window_.span, total, follow)
+    if (decision.start !== null) setWindow((w) => ({ ...w, start: decision.start as number }))
+    if (decision.next.panned !== follow.panned || decision.next.wasInside !== follow.wasInside) setFollow(decision.next)
   }
   const selected = useMemo(() => segments.find((s) => s.id === selectedId) ?? null, [segments, selectedId])
   const [anchoredId, setAnchoredId] = useState<number | null>(null)
@@ -93,7 +89,7 @@ export default function LaneTimeline({
     if (selected) {
       const at = selected.start + offset
       if (!inWindow(at)) {
-        setPanned(false)
+        setFollow({ panned: false, wasInside: true })
         setWindow((w) => ({ ...w, start: clampWindow(at - w.span * 0.3, w.span, total) }))
       }
     }
@@ -101,7 +97,7 @@ export default function LaneTimeline({
 
   const onWheel = (e: WheelEvent<SVGSVGElement>) => {
     e.preventDefault()
-    setPanned(true)
+    setFollow((f) => (f.panned ? f : { panned: true, wasInside: inWindow(currentTime) }))
     if (e.metaKey || e.ctrlKey) {
       const rect = e.currentTarget.getBoundingClientRect()
       const anchor = xToTime(e.clientX - rect.left, window_.start, window_.span, width)

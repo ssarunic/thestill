@@ -645,7 +645,13 @@ departs from or narrows the text above:
   conflict. The audio route resolves the stored path and refuses
   anything outside `original_audio` (absolute paths, `..`, symlinks
   out). All transport gestures, keys included, act on the episode being
-  edited and leave the YouTube engine before taking the local file.
+  edited and leave the YouTube engine before taking the local file. A
+  second pass added: a re-tagged row with no name of its own takes its
+  label's name; an explicit split cut outside the span is unaddressed;
+  the stale count compares the ops *applied* then and now (a structural
+  undo that conflicts a text edit the summary saw counts); a pan away
+  from the playhead holds until the playhead has been inside the chosen
+  window and leaves it.
 
 ## Success metrics
 

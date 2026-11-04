@@ -406,3 +406,29 @@ def test_split_without_word_addressing_marks_both_halves_words_stale(world):
     left, right = effective.transcript.segments[0], effective.transcript.segments[1]
     assert left.source_word_span == right.source_word_span == target.source_word_span
     assert left.metadata[WORDS_STALE_KEY] is True and right.metadata[WORDS_STALE_KEY] is True
+
+
+def test_ad_read_retagged_to_speech_takes_its_labels_name(world):
+    """A row that never carried a name (an ad read) takes the label's name
+    when it starts to speak, even if no speaker op touched the label."""
+    ad = world["sidecar"].segments[2]  # raw segment 1, SPEAKER_01, speaker None
+    _add(world, "segment.set_kind", segment_anchor(ad), {"kind": "content"})
+    effective = _load(world, include_labels=True)
+    assert effective.transcript.segments[2].speaker == "SPEAKER_01"
+    # A row with its own name keeps it when re-tagged.
+    named = world["sidecar"].segments[0]  # "Ada Lovelace"
+    _add(world, "segment.set_kind", segment_anchor(named), {"kind": "ad_break"})
+    current = _load(world).transcript.segments[0]
+    _add(world, "segment.set_kind", segment_anchor(current), {"kind": "content"})
+    assert _load(world).transcript.segments[0].speaker == "Ada Lovelace"
+
+
+def test_explicit_split_cut_outside_the_span_is_unaddressed(world):
+    target = world["sidecar"].segments[3]  # raw segment 2, words 0..8
+    for at in ({"raw_segment_id": 2, "word_index": 0}, {"raw_segment_id": 1, "word_index": 3}):
+        world["repo"] = type(world["repo"])()
+        _add(world, "segment.split", segment_anchor(target), {"text_word_index": 4, "at": at})
+        left, right = _load(world).transcript.segments[3:5]
+        assert left.source_word_span == right.source_word_span == target.source_word_span
+        assert left.metadata[WORDS_STALE_KEY] is True and right.metadata[WORDS_STALE_KEY] is True
+        assert left.source_segment_ids == right.source_segment_ids == [2]

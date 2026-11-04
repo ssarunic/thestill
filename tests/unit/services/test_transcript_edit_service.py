@@ -499,3 +499,46 @@ def test_summary_stale_follows_an_undo_redo_undo_chain_and_ignores_conflicts(wor
     state = service.get_state(EPISODE_ID)
     assert [c.reason for c in state.effective.conflicts] == ["text_changed"]
     assert state.summary_stale_edits == 1
+
+
+def test_summary_stale_sees_an_edit_the_summary_applied_that_now_conflicts(world):
+    """A structural undo after the summary turns a text edit the summary
+    saw into a conflict: the summary is stale by that one edit."""
+    service = world["service"]
+    parent = world["sidecar"].segments[3]
+    split = service.apply(
+        EPISODE_ID,
+        actor=ADMIN,
+        session_id="s1",
+        base_seq=0,
+        ops=[{"op": "segment.split", "anchor": segment_anchor(parent), "args": {"text_word_index": 4}}],
+    ).applied[0]
+    child = service.get_state(EPISODE_ID).effective.transcript.segments[4]
+    service.apply(
+        EPISODE_ID,
+        actor=ADMIN,
+        session_id="s1",
+        base_seq=1,
+        ops=[
+            {
+                "op": "segment.set_text",
+                "anchor": segment_anchor(child),
+                "args": {"old_text": child.text, "new_text": "OKRs, and why"},
+            }
+        ],
+    )
+    world["queue"].tasks.append(
+        Task(
+            id="s",
+            episode_id=EPISODE_ID,
+            stage=TaskStage.SUMMARIZE,
+            status=TaskStatus.COMPLETED,
+            completed_at=NOW + timedelta(hours=1),
+        )
+    )
+    assert service.get_state(EPISODE_ID).summary_stale_edits == 0
+    world["clock"]["now"] = NOW + timedelta(hours=2)
+    service.revert(EPISODE_ID, split.id, actor=ADMIN, session_id="s1", base_seq=2)
+    state = service.get_state(EPISODE_ID)
+    assert [c.op for c in state.effective.conflicts] == ["segment.set_text"]
+    assert state.summary_stale_edits == 1

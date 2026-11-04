@@ -61,3 +61,43 @@ export function ticksFor(windowStart: number, spanSeconds: number): number[] {
   for (let t = first; t <= windowStart + spanSeconds; t += step) ticks.push(t)
   return ticks
 }
+
+export interface FollowState {
+  /** The user panned or zoomed since the window last followed. */
+  panned: boolean
+  /** The playhead was inside the window on the previous tick. */
+  wasInside: boolean
+}
+
+export interface FollowDecision {
+  start: number | null
+  next: FollowState
+}
+
+/**
+ * Where the window goes on a playback tick. Following keeps the playhead
+ * in the middle of the window; after a manual pan or zoom it stays put
+ * until the playhead, having been inside the chosen window, leaves it.
+ * Panning away from the playhead therefore holds, and following resumes
+ * once the user has caught up with it (or on a new selection).
+ */
+export function followDecision(
+  currentTime: number,
+  windowStart: number,
+  spanSeconds: number,
+  duration: number,
+  state: FollowState,
+): FollowDecision {
+  const inside = currentTime >= windowStart && currentTime <= windowStart + spanSeconds
+  if (!state.panned) {
+    const start = followWindow(currentTime, windowStart, spanSeconds, duration)
+    return { start: start === windowStart ? null : start, next: { panned: false, wasInside: inside } }
+  }
+  if (state.wasInside && !inside) {
+    return {
+      start: clampWindow(currentTime - spanSeconds * 0.3, spanSeconds, duration),
+      next: { panned: false, wasInside: true },
+    }
+  }
+  return { start: null, next: { panned: true, wasInside: inside } }
+}

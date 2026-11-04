@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clampWindow, followWindow, tickStep, ticksFor, timeToX, xToTime, zoomWindow } from './laneMath'
+import { clampWindow, followDecision, followWindow, tickStep, ticksFor, timeToX, xToTime, zoomWindow } from './laneMath'
 import { formatClock } from './time'
 
 describe('laneMath', () => {
@@ -46,5 +46,30 @@ describe('formatClock', () => {
     expect(formatClock(31.26, true)).toBe('0:31.2')
     expect(formatClock(3734)).toBe('1:02:14')
     expect(formatClock(-3)).toBe('0:00')
+  })
+})
+
+describe('followDecision', () => {
+  const span = 120
+  const total = 3600
+  it('follows the playhead while not panned', () => {
+    expect(followDecision(60, 0, span, total, { panned: false, wasInside: true })).toEqual({
+      start: null,
+      next: { panned: false, wasInside: true },
+    })
+    expect(followDecision(110, 0, span, total, { panned: false, wasInside: true }).start).toBe(110 - 36)
+  })
+
+  it('holds a window the user panned away from the playhead', () => {
+    // Antigravity on #461: the first version re-followed on the same tick.
+    const away = followDecision(30, 600, span, total, { panned: true, wasInside: false })
+    expect(away).toEqual({ start: null, next: { panned: true, wasInside: false } })
+  })
+
+  it('resumes following once the playhead has been inside the panned window and leaves it', () => {
+    const caughtUp = followDecision(610, 600, span, total, { panned: true, wasInside: false })
+    expect(caughtUp).toEqual({ start: null, next: { panned: true, wasInside: true } })
+    const left = followDecision(721, 600, span, total, { panned: true, wasInside: true })
+    expect(left).toEqual({ start: 721 - 36, next: { panned: false, wasInside: true } })
   })
 })

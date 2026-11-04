@@ -532,9 +532,15 @@ class _Replayer:
         was_speech = segment.kind in SPEECH_KINDS
         segment.kind = op.args.kind
         label = self.labels[index]
-        if not was_speech and op.args.kind in SPEECH_KINDS and label and label in self.touched_labels:
-            # The row sat out the rename or merge of its voice; it takes the
-            # label's current name now that it speaks.
+        if (
+            not was_speech
+            and op.args.kind in SPEECH_KINDS
+            and label
+            and (label in self.touched_labels or not segment.speaker)
+        ):
+            # The row sat out the rename or merge of its voice, or (an ad
+            # read) never carried a name; it takes the label's current name
+            # now that it speaks. A row with its own name keeps it.
             segment.speaker = self._display_name(label)
             entity_id = self.label_entities.get(label)
             if entity_id:
@@ -599,6 +605,12 @@ class _Replayer:
             # are told apart by their text hashes on later ops.
             return ids, ids, span, span
         cut = self.raw_order[at.raw_segment_id]
+        first = (self.raw_order.get(span.start_segment_id, cut), span.start_word_index)
+        last = (self.raw_order.get(span.end_segment_id, cut), span.end_word_index)
+        if not first < (cut, at.word_index) <= last:
+            # A cut outside the span, or on its first word, leaves nothing
+            # to the left: the explicit ``at`` is treated as unaddressed.
+            return ids, ids, span, span
         # A cut on a raw segment's first word leaves that segment wholly on
         # the right.
         left_last = cut if at.word_index > 0 else cut - 1

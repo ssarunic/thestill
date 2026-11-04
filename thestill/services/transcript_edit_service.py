@@ -234,18 +234,23 @@ class TranscriptEditService:
         if summarized_at is not None and summarized_at.tzinfo is None:
             summarized_at = summarized_at.replace(tzinfo=effective.edits[0].created_at.tzinfo)
 
-        # The ops the summary saw are the ones live when it ran: replay the
-        # log as it stood then and compare with what is live now. Any undo
-        # and redo chain reduces to the two sets; a row that conflicts
-        # changed nothing, so it counts on neither side.
-        conflicts = {c.edit_id for c in effective.conflicts}
-
-        def counted(rows: List[TranscriptEdit]) -> set:
-            live, _reverted = live_edits(rows)
-            return {e.id for e in live if e.op not in structural and e.id not in conflicts}
-
+        # The ops the summary saw are the ones applied when it ran: replay
+        # the log as it stood then and compare with what applies now. Any
+        # undo and redo chain reduces to the two sets, and a row that
+        # conflicts (then or now) changed nothing at that time.
+        now = {e.id for e in effective.applied if e.op not in structural}
         seen = [e for e in effective.edits if summarized_at is not None and e.created_at <= summarized_at]
-        return len(counted(seen) ^ counted(list(effective.edits)))
+        then = {e.id for e in self._applied_rows(episode, effective, seen) if e.op not in structural}
+        return len(then ^ now)
+
+    def _applied_rows(
+        self, episode: Episode, effective: EffectiveTranscript, rows: List[TranscriptEdit]
+    ) -> List[TranscriptEdit]:
+        """The rows of ``rows`` that apply when that log is replayed alone."""
+        if not rows:
+            return []
+        replayer = self._replayer_for(episode, effective, [], rows=rows)
+        return replayer.applied_rows
 
     # -- writes --------------------------------------------------------------
 
@@ -350,16 +355,26 @@ class TranscriptEditService:
         return ApplyResult(applied=applied, last_seq=last_seq)
 
     def _replayer_for(
-        self, episode: Episode, effective: EffectiveTranscript, pending: Sequence[TranscriptEdit]
+        self,
+        episode: Episode,
+        effective: EffectiveTranscript,
+        pending: Sequence[TranscriptEdit],
+        *,
+        rows: Optional[List[TranscriptEdit]] = None,
     ) -> _Replayer:
-        """A replayer positioned after the stored log plus ``pending`` rows
-        written in this batch, for validating the next op."""
+        """A replayer positioned after the stored log (or ``rows`` in its
+        place) plus ``pending`` rows written in this batch, for validating
+        the next op. ``applied_rows`` lists the rows that applied."""
         raw = self._read_raw(episode)
         base = load_effective_transcript(episode, edits=None, path_manager=self._paths, file_storage=self._storage)
         assert base is not None  # _load succeeded a moment ago
         replayer = _Replayer(base.transcript, raw, effective.raw_sha256)
-        for row in live_edits([*effective.edits, *pending])[0]:
-            replayer.apply(row)
+        replayer.applied_rows = []
+        log = effective.edits if rows is None else rows
+        for row in live_edits([*log, *pending])[0]:
+            conflict, _before = replayer.apply(row)
+            if conflict is None:
+                replayer.applied_rows.append(row)
         return replayer
 
     def _read_raw(self, episode: Episode) -> Optional[Transcript]:
