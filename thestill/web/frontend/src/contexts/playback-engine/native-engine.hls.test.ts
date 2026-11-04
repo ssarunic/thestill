@@ -266,6 +266,17 @@ describe('NativeEngine HLS', () => {
     expect(t.el.play).toHaveBeenCalledTimes(1)
   })
 
+  it('a fatal error before metadata keeps the pending resume position (Codex #466)', async () => {
+    const t = makeEngine()
+    t.engine.load({ url: HLS_URL, mimeType: HLS_MIME }, { seekTo: 900 })
+    await flush()
+    // The playlist fails before loadedmetadata: the element clock is still 0.
+    FakeHls.instances[0].emitError({ fatal: true, type: 'networkError' })
+    expect(t.engine.getCurrentTime()).toBe(900)
+    await t.engine.play()
+    expect(FakeHls.instances[1].config.startPosition).toBe(900)
+  })
+
   it('a seek while the stream is down moves the retry position', async () => {
     const t = makeEngine()
     t.engine.load({ url: HLS_URL, mimeType: HLS_MIME })

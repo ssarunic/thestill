@@ -298,7 +298,7 @@ export class NativeEngine implements PlaybackEngine {
       },
       () => {
         if (generation !== this.hlsGeneration) return
-        this.events.onError('The video player could not be loaded.')
+        this.failHls('The video player could not be loaded.')
       },
     )
     this.hlsAttach = attach.finally(() => {
@@ -336,11 +336,19 @@ export class NativeEngine implements PlaybackEngine {
       hls.recoverMediaError()
       return
     }
-    const position = this.el.currentTime
+    // MEDIA_ERR_NETWORK / MEDIA_ERR_DECODE wording.
+    this.failHls(describeMediaError(data.type === HLS_NETWORK_ERROR ? 2 : 3))
+  }
+
+  // Tear down after a failure (chunk download or fatal hls.js error) but
+  // keep the source retryable: the next play() re-attaches at the position
+  // reached, or the resume position not yet applied (failure before
+  // loadedmetadata, element clock still 0). Codex #466.
+  private failHls(message: string): void {
+    const position = this.pendingSeek ?? this.el.currentTime
     this.detachHls()
     if (this.url !== null) this.hlsRetry = { url: this.url, position }
-    // MEDIA_ERR_NETWORK / MEDIA_ERR_DECODE wording.
-    this.events.onError(describeMediaError(data.type === HLS_NETWORK_ERROR ? 2 : 3))
+    this.events.onError(message)
   }
 
   // Tear down hls.js (and invalidate a pending attach). Leaves `url`
