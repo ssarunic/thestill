@@ -113,15 +113,8 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await page.goto('/podcasts/public-show/episodes/chips#t=460')
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Chips and Cheese')
   await expect(page.getByText('Linked quote')).toBeVisible()
-  await expect(page.getByText('one sign-in away')).toBeVisible()
-  // Every sign-in link is the one /login URL: next and intent ride in the
-  // fragment (survives a new tab, invisible to crawlers), nofollow.
-  await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute('rel', 'nofollow')
-  // Sign-in comes back to the quoted line, not the top of the episode.
-  await expect(page.getByRole('link', { name: 'Read the transcript' })).toHaveAttribute(
-    'href',
-    `/login#next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}&intent=transcript`,
-  )
+  // The transcript sign-in card lives on the Transcript tab only.
+  await expect(page.getByText('one sign-in away')).toHaveCount(0)
   await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toHaveAttribute(
     'href',
     `/login#next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}`,
@@ -131,6 +124,19 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await expect(page.getByText('Also: Timeline · Best Quotes')).toBeVisible()
   await expect(page.getByRole('link', { name: 'Read the full summary' })).toHaveAttribute('href', /^\/login#.*intent=summary/)
   expect(page.url()).not.toContain('/login?')
+  // The Transcript tab opens in place and carries the sign-in card.
+  await page.getByRole('tab', { name: 'Transcript' }).click()
+  await expect(page).toHaveURL(/\/podcasts\/public-show\/episodes\/chips\?view=transcript#t=460$/)
+  await expect(page.getByText('one sign-in away')).toBeVisible()
+  // Every sign-in link is the one /login URL: next and intent ride in the
+  // fragment (survives a new tab, invisible to crawlers), nofollow.
+  const readTranscript = page.getByRole('link', { name: 'Read the transcript' })
+  await expect(readTranscript).toHaveAttribute('rel', 'nofollow')
+  // Sign-in comes back to the quoted line, not the top of the episode.
+  await expect(readTranscript).toHaveAttribute(
+    'href',
+    `/login#next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}&intent=transcript`,
+  )
   expect(privateCalls).toEqual([])
 })
 
@@ -202,9 +208,11 @@ test('every sign-in goes through the sign-in page and back (spec #102)', async (
   await page.getByRole('link', { name: 'Not now' }).click()
   await expect(page).toHaveURL(/\/podcasts\/public-show\/episodes\/chips$/)
 
-  // Transcript is a normal tab; signed out it asks for sign-in and comes
-  // back to the transcript view.
+  // Transcript is a normal tab; signed out it shows the sign-in card, whose
+  // button asks for sign-in and comes back to the transcript view.
   await page.getByRole('tab', { name: 'Transcript' }).click()
+  await expect(page.getByText('one sign-in away')).toBeVisible()
+  await page.getByRole('link', { name: 'Read the transcript' }).click()
   await expect(page).toHaveURL(/\/login#next=%2Fpodcasts%2Fpublic-show%2Fepisodes%2Fchips%3Fview%3Dtranscript&intent=transcript$/)
   await expect(page.getByText('Sign in to read the full transcript')).toBeVisible()
   expect(privateCalls).toEqual([])
