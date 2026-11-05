@@ -713,6 +713,10 @@ def handle_clean(task: Task, state: "AppState") -> None:
                     entity_repo=state.entity_repository,
                     path_manager=state.path_manager,
                     context_text=role_context(podcast, episode),
+                    # The cleaner wrote this to local disk only; the
+                    # configured backend may not hold it (or holds an
+                    # older one), so hand over what it produced.
+                    clean_transcript_markdown=cleaning_result.get("cleaned_markdown"),
                 )
             except Exception as exc:
                 logger.warning(

@@ -16,11 +16,14 @@ from thestill.repositories.sqlite_podcast_repository import SqlitePodcastReposit
 from thestill.services.role_linker import (
     backfill_all_roles,
     collect_host_evidence,
+    drop_quiet_guests,
     link_episode_roles,
     link_podcast_roles,
     parse_facts_file,
     role_context,
+    tally_speakers,
 )
+from thestill.utils.file_storage import LocalFileStorage
 from thestill.utils.path_manager import PathManager
 
 # ---------------------------------------------------------------------------
@@ -729,3 +732,241 @@ def test_collect_host_evidence_reuses_settled_identities(tmp_path):
         resolved_names={"SCOTT GALLOWAY": "person:scott-galloway-professor"},
     )
     assert (files, counts) == (1, {"person:scott-galloway-professor": 1})
+
+
+# ---------------------------------------------------------------------------
+# Clip voices: a politician heard in a played clip is not a guest
+# ---------------------------------------------------------------------------
+
+# The Ezra Klein episode "Graham Platner, Jon Ossoff and the New Rules of
+# Political Attention" (2026-06-16), facts written before the clip rule:
+# Chris Hayes is the one guest; the rest are campaign clips Ezra plays,
+# yet the extractor filed all eight under Guest(s).
+_EZRA_FACTS = """# Episode: Graham Platner, Jon Ossoff and the New Rules of Political Attention
+
+## Speaker Mapping
+- SPEAKER_01: Ezra Klein (Host)
+- SPEAKER_02: Graham Platner (Guest)
+- SPEAKER_03: Abdul El-Sayed (Guest)
+- SPEAKER_04: James Talarico (Guest)
+- SPEAKER_05: Unknown Speaker (Recruiter)
+- SPEAKER_06: Chris Hayes (Guest)
+- SPEAKER_07: Unknown Speaker (Interviewer)
+- SPEAKER_08: Alexandria Ocasio-Cortez (Guest)
+- SPEAKER_09: Gavin Newsom (Guest)
+- SPEAKER_10: Mallory McMorrow (Guest)
+- SPEAKER_11: Katie (Interviewer)
+- SPEAKER_12: Abdul El-Sayed (Guest)
+- SPEAKER_13: Jon Ossoff (Guest)
+
+## Guest(s)
+- Chris Hayes - Host of All In With Chris Hayes/MSNBC
+- Graham Platner - Political Candidate (Maine)
+- Abdul El-Sayed - Political Candidate (Michigan)
+- James Talarico - State Representative (Texas)
+- Jon Ossoff - U.S. Senator (Georgia)
+- Mallory McMorrow - State Senator (Michigan)
+- Alexandria Ocasio-Cortez - U.S. Representative (New York)
+- Gavin Newsom - Governor of California
+
+## Topics/Keywords
+- Graham Platner
+"""
+
+# (rows, words) per label in that episode's cleaned transcript, words rounded.
+_EZRA_SPEAKERS = {
+    "Ezra Klein": (78, 6200),
+    "Chris Hayes": (70, 5600),
+    "Unknown Speaker": (5, 250),
+    "Graham Platner": (4, 200),
+    "Abdul El-Sayed": (3, 320),
+    "Mallory McMorrow": (2, 120),
+    "Jon Ossoff": (2, 120),
+    "James Talarico": (2, 40),
+    "None": (1, 1),
+    "Katie": (1, 40),
+    "Gavin Newsom": (1, 60),
+}
+
+
+def _transcript(speakers: dict) -> str:
+    """Rows spread each speaker's words evenly; an int is rows of ten words."""
+    lines = []
+    for i, (label, spec) in enumerate(speakers.items()):
+        rows, words = spec if isinstance(spec, tuple) else (spec, spec * 10)
+        per_row = max(1, words // rows)
+        lines += [f"[{i:02d}:{j:02d}] **{label}:** " + " ".join(["word"] * per_row) for j in range(rows)]
+    return "\n\n".join(lines) + "\n"
+
+
+def test_tally_speakers_counts_rows_and_words_and_strips_a_role():
+    md = (
+        "# Title\n\n[00:00] **Ezra Klein:** Hi there.\n\n"
+        "[00:05] **Graham Platner (Archival Audio):** Hello.\n\n"
+        "**Ezra Klein:** Again.\n\nNot a row **Bold:** here.\n"
+    )
+    tally = tally_speakers(md)
+    assert tally.rows == {"ezra klein": 2, "graham platner": 1}
+    assert tally.words == {"ezra klein": 3, "graham platner": 1}
+
+
+def test_parse_drops_a_guest_the_speaker_mapping_calls_archival_audio(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(
+        """## Speaker Mapping
+- SPEAKER_01: Ezra Klein (Host)
+- SPEAKER_02: Graham Platner (Archival Audio)
+- SPEAKER_03: Pat Caller (Listener)
+- SPEAKER_06: Chris Hayes (Guest)
+
+## Guest(s)
+- Chris Hayes - MSNBC host
+- Graham Platner - Senate candidate
+- Pat Caller (Listener)
+"""
+    )
+    roles = parse_facts_file(f)
+    assert roles.guests == [("Chris Hayes", "MSNBC host")]
+    assert roles.clip_voices == ["Graham Platner", "Pat Caller"]
+    assert roles.ad_voices == []
+
+
+def test_quiet_guests_are_the_clip_voices_of_the_ezra_klein_episode(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(_EZRA_FACTS)
+    roles = parse_facts_file(f)
+    kept, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally_speakers(_transcript(_EZRA_SPEAKERS)))
+    assert [name for name, _ in kept] == ["Chris Hayes"]
+    # Ocasio-Cortez is in the speaker mapping but has no row at all.
+    assert quiet == [
+        "Graham Platner",
+        "Abdul El-Sayed",
+        "James Talarico",
+        "Jon Ossoff",
+        "Mallory McMorrow",
+        "Alexandria Ocasio-Cortez",
+        "Gavin Newsom",
+    ]
+
+
+def test_quiet_guests_are_not_judged_on_a_short_or_unlabelled_transcript(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(_EZRA_FACTS)
+    roles = parse_facts_file(f)
+    short = tally_speakers(_transcript({"Ezra Klein": 20, "Chris Hayes": 15, "Graham Platner": 1}))
+    unlabelled = tally_speakers(_transcript({"SPEAKER_01": 78, "SPEAKER_06": 70, "SPEAKER_02": 4}))
+    for tally in (short, unlabelled, tally_speakers("")):
+        kept, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally)
+        assert kept == roles.guests
+        assert quiet == []
+
+
+def test_a_guest_the_speaker_mapping_does_not_name_is_kept_however_quiet():
+    guests = [("Dr Sarah Paine", "professor")]
+    speaker_roles = {"ezra klein": "Host", "sarah paine": "Guest"}
+    tally = tally_speakers(_transcript({"Ezra Klein": 60, "Sarah Paine": 1}))
+    assert drop_quiet_guests(guests, speaker_roles, tally) == (guests, [])
+
+
+def test_a_panel_guest_with_a_modest_share_is_kept():
+    guests = [("Ann One", None), ("Bob Two", None), ("Cy Three", None)]
+    speaker_roles = {"host": "Host", "ann one": "Guest", "bob two": "Guest", "cy three": "Guest"}
+    tally = tally_speakers(_transcript({"Host": 50, "Ann One": 30, "Bob Two": 25, "Cy Three": 8}))
+    assert drop_quiet_guests(guests, speaker_roles, tally) == (guests, [])
+
+
+def test_a_guest_with_few_rows_but_long_answers_is_kept():
+    # John Bishop on Parenting Hell: 18 of 395 rows, 15% of the words.
+    guests = [("John Bishop", "comedian")]
+    speaker_roles = {"rob beckett": "Host", "josh widdicombe": "Host", "john bishop": "Guest"}
+    tally = tally_speakers(
+        _transcript({"Rob Beckett": (190, 4500), "Josh Widdicombe": (187, 4400), "John Bishop": (18, 1590)})
+    )
+    assert drop_quiet_guests(guests, speaker_roles, tally) == (guests, [])
+
+
+def test_a_presenter_with_many_short_questions_is_kept():
+    # Kelly Somers on Football Daily: 13% of the rows, 3% of the words.
+    guests = [("Kelly Somers", "presenter")]
+    speaker_roles = {"host": "Host", "pundit one": "Guest", "kelly somers": "Guest"}
+    tally = tally_speakers(_transcript({"Host": (40, 4000), "Pundit One": (36, 4600), "Kelly Somers": (11, 250)}))
+    assert drop_quiet_guests(guests, speaker_roles, tally) == (guests, [])
+
+
+def test_link_refuses_clip_voices_and_clears_the_stale_guests(tmp_path):
+    db_path, _podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(_EZRA_FACTS)
+    clean_rel = f"{podcast_slug}/{episode_slug}_cleaned.md"
+    clean_file = pm.clean_transcript_file(clean_rel)
+    clean_file.parent.mkdir(parents=True, exist_ok=True)
+    clean_file.write_text(_transcript(_EZRA_SPEAKERS))
+    er = SqliteEntityRepository(db_path=str(db_path))
+    # An earlier run (before the guard) stored a clip voice as a guest.
+    er.upsert_entity(EntityRecord(id="person:graham-platner", type=EntityType.PERSON, canonical_name="Graham Platner"))
+    er.set_episode_guests(episode_id, ["person:graham-platner"])
+
+    result = link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=er,
+        path_manager=pm,
+        clean_transcript_path=clean_rel,
+        file_storage=LocalFileStorage(str(storage)),
+    )
+
+    assert result.guests == ["person:chris-hayes"]
+    assert "Graham Platner" in result.clip_voices
+    assert "Gavin Newsom" in result.skipped_names
+    assert er.get_episode_anchors(episode_id) == ["person:chris-hayes"]
+
+
+def test_link_without_a_readable_transcript_keeps_every_named_guest(tmp_path):
+    db_path, _podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(_EZRA_FACTS)
+    er = SqliteEntityRepository(db_path=str(db_path))
+
+    result = link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=er,
+        path_manager=pm,
+        clean_transcript_path=f"{podcast_slug}/missing_cleaned.md",
+        file_storage=LocalFileStorage(str(storage)),
+    )
+
+    assert len(result.guests) == 8
+    assert result.clip_voices == []
+
+
+def test_link_uses_the_transcript_in_hand_over_a_storage_copy_it_lacks(tmp_path):
+    # The clean task's fresh transcript is on local disk only; with an S3
+    # backend the stored key is missing (or stale), so the linker must use
+    # the Markdown it is handed.
+    db_path, _podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(_EZRA_FACTS)
+    er = SqliteEntityRepository(db_path=str(db_path))
+
+    result = link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=er,
+        path_manager=pm,
+        clean_transcript_path=f"{podcast_slug}/missing_cleaned.md",
+        file_storage=LocalFileStorage(str(storage)),
+        clean_transcript_markdown=_transcript(_EZRA_SPEAKERS),
+    )
+
+    assert result.guests == ["person:chris-hayes"]
+    assert len(result.clip_voices) == 7
