@@ -944,3 +944,29 @@ def test_link_without_a_readable_transcript_keeps_every_named_guest(tmp_path):
 
     assert len(result.guests) == 8
     assert result.clip_voices == []
+
+
+def test_link_uses_the_transcript_in_hand_over_a_storage_copy_it_lacks(tmp_path):
+    # The clean task's fresh transcript is on local disk only; with an S3
+    # backend the stored key is missing (or stale), so the linker must use
+    # the Markdown it is handed.
+    db_path, _podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(_EZRA_FACTS)
+    er = SqliteEntityRepository(db_path=str(db_path))
+
+    result = link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=er,
+        path_manager=pm,
+        clean_transcript_path=f"{podcast_slug}/missing_cleaned.md",
+        file_storage=LocalFileStorage(str(storage)),
+        clean_transcript_markdown=_transcript(_EZRA_SPEAKERS),
+    )
+
+    assert result.guests == ["person:chris-hayes"]
+    assert len(result.clip_voices) == 7

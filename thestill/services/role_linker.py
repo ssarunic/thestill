@@ -638,6 +638,7 @@ def link_episode_roles(
     context_text: str = "",
     clean_transcript_path: Optional[str] = None,
     file_storage: Optional[FileStorage] = None,
+    clean_transcript_markdown: Optional[str] = None,
 ) -> LinkResult:
     """Parse the episode facts file and write guests.
 
@@ -645,16 +646,20 @@ def link_episode_roles(
     the facts-file bio it tells namesakes apart. ``clean_transcript_path``
     is the episode's stored cleaned-transcript path, read through
     ``file_storage`` (it may live in S3); its speaker rows refuse a
-    "guest" who was only a clip (``drop_quiet_guests``). Without both the
+    "guest" who was only a clip (``drop_quiet_guests``).
+    ``clean_transcript_markdown`` is that transcript already in hand — the
+    clean task passes what it just produced, which the configured backend
+    may not hold yet — and wins over the path. Without either the
     speaking-share guard is skipped.
     """
     facts_path = path_manager.episode_facts_file(podcast_slug, episode_slug)
     roles = parse_facts_file(facts_path)
-    if clean_transcript_path and file_storage is not None and roles.guests:
+    markdown = clean_transcript_markdown
+    if markdown is None and clean_transcript_path and file_storage is not None and roles.guests:
         markdown = _read_clean_transcript(path_manager, file_storage, clean_transcript_path, episode_id)
-        if markdown:
-            roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally_speakers(markdown))
-            roles.clip_voices.extend(quiet)
+    if markdown and roles.guests:
+        roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally_speakers(markdown))
+        roles.clip_voices.extend(quiet)
     result = LinkResult(target_id=episode_id)
     guests = _resolve_role_list(
         entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
