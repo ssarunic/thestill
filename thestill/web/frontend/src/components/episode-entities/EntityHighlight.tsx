@@ -258,7 +258,10 @@ export default function EntityHighlight({
   // While the card is showing: any scroll — the user's, or follow-playback
   // / `[` `]` / deep-link auto-scroll — moves the card with its word. Once
   // the word leaves the viewport the card has nothing to point at and
-  // closes.
+  // closes. When an inner scroller around the word did the scrolling (the
+  // desktop entity rail, the reader overlay's panel), "the viewport" is
+  // that scroller's visible box: the portaled card would otherwise float
+  // on, pointing at a word clipped out of sight.
   const cardShowing = isSmUp && (hoverOpen || pinned)
   useEffect(() => {
     if (!cardShowing) return
@@ -267,7 +270,17 @@ export default function EntityHighlight({
       const link = linkRef.current
       if (!link) return
       const rect = link.getBoundingClientRect()
-      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+      const scroller = e.target
+      const clip =
+        scroller instanceof Element &&
+        scroller !== document.body &&
+        scroller !== document.documentElement &&
+        scroller.contains(link)
+          ? scroller.getBoundingClientRect()
+          : null
+      const visibleTop = clip ? Math.max(0, clip.top) : 0
+      const visibleBottom = clip ? Math.min(window.innerHeight, clip.bottom) : window.innerHeight
+      if (rect.bottom < visibleTop || rect.top > visibleBottom) {
         closeAll()
         return
       }
