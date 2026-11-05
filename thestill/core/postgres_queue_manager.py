@@ -391,18 +391,17 @@ class PostgresQueueManager:
         prior run that died before enqueuing are repaired on the next refresh)
         for free.
 
-        Initial-backfill cap: a brand-new podcast discovers its ENTIRE back
-        catalog in one refresh, but only the most-recent few should auto-process
-        on subscribe; the remainder are marked ``auto_process_excluded`` so this
-        sweep never enqueues them — even while nobody follows the feed yet. An
-        established podcast skips the cap, so every genuinely-new episode (and
-        any real crash-orphan) flows through. See
-        ``_discovered_episodes_to_enqueue``.
+        Back-catalog cap: episodes published since the podcast's current
+        follow run began are all enqueued; older ones (a newly added feed's
+        catalog, or what came out while nobody followed) only within the newest
+        ``inbox_seed_on_follow``, and the rest are marked
+        ``auto_process_excluded``. See ``_discovered_episodes_to_enqueue``.
 
         Args:
             podcast_id: Feed whose discovered episodes to enqueue.
-            repository: Podcast repository (``get_discovered_unqueued_episodes``,
-                ``has_processed_episodes``, ``count_episodes_with_tasks``,
+            repository: Podcast repository (``follow_started_at``,
+                ``get_discovered_unqueued_candidates``,
+                ``get_recent_unqueued_unprocessed_episodes``,
                 ``mark_episodes_auto_process_excluded``).
             config: App config (``transcription_provider``, ``inbox_seed_on_follow``).
             initiated_by: Provenance tag stored in task metadata for tracing.

@@ -1081,6 +1081,34 @@ def test_get_chunks_health_empty(repo):
     assert repo.get_chunks_health() == (0, "")
 
 
+def test_follow_started_at_is_earliest_current_follow(repo):
+    """The current follow run starts at the earliest CURRENT follower's
+    created_at — tz-aware on both backends, and reset once every follow row
+    is gone (whatever path removed it)."""
+    p = _mk_podcast()
+    repo.save(p)
+    assert repo.follow_started_at(p.id) is None
+
+    earlier = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    later = datetime(2026, 10, 1, 12, 0, 0, tzinfo=timezone.utc)
+    for when in (later, earlier):
+        user_id = str(uuid.uuid4())
+        _exec(
+            repo,
+            "INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)",
+            (user_id, f"u-{user_id[:8]}@p1.test", _ts(repo, when)),
+        )
+        _exec(
+            repo,
+            "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
+            (str(uuid.uuid4()), user_id, p.id, _ts(repo, when)),
+        )
+    assert repo.follow_started_at(p.id) == earlier
+
+    _exec(repo, "DELETE FROM podcast_followers WHERE podcast_id = ?", (p.id,))
+    assert repo.follow_started_at(p.id) is None
+
+
 def test_refresh_on_open_state_and_has_followers(repo):
     """Spec #74 — the open-triggered refresh reads three facts per feed and
     a per-feed follower probe; both must round-trip identically on both

@@ -1860,8 +1860,9 @@ def handle_refresh_feed(task: Task, state: "AppState") -> None:
     # 4. Auto-enqueue the first pipeline stage for every DISCOVERED-but-unqueued
     #    episode of this feed. Shared with the inline refresh path
     #    (``RefreshService.refresh``) so every refresh trigger behaves the same.
-    #    Drives off DB state (idempotent + crash-recovery) and applies the
-    #    initial-backfill cap for brand-new podcasts. See the helper for detail.
+    #    Drives off DB state (idempotent + crash-recovery) and caps back
+    #    catalog (published before the current follow run) to the newest N.
+    #    See the helper for detail.
     enqueued = state.queue_manager.enqueue_discovered_episodes(
         podcast_id=podcast_id,
         repository=repo,

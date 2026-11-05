@@ -1362,6 +1362,15 @@ class PodcastsMixin(CategoryCacheMixin):
             ).fetchone()
             return row is not None
 
+    def follow_started_at(self, podcast_id: str) -> Optional[datetime]:
+        """See interface."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(created_at) AS started FROM podcast_followers WHERE podcast_id = %s",
+                (podcast_id,),
+            ).fetchone()
+            return ensure_utc(row["started"]) if row else None
+
     def record_refresh_success(
         self,
         podcast_id: str,
