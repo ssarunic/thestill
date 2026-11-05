@@ -38,6 +38,7 @@ import { useCollapsingHeader } from '../hooks/useCollapsingHeader'
 import type { CollapsedHeaderState } from './CollapsedEpisodeBar'
 import KeyEntitiesStrip from './episode-entities/KeyEntitiesStrip'
 import EntityRail from './episode-entities/EntityRail'
+import RailScrollFrame from './episode-entities/RailScrollFrame'
 import EntityFilterBar from './episode-entities/EntityFilterBar'
 import EntityBranchProgress from './EntityBranchProgress'
 import ReprocessDialog from './ReprocessDialog'
@@ -848,9 +849,10 @@ export default function EpisodeReader({
             lg+ so the grid's rail column is never a blank gutter and the
             reading column keeps one width across episodes and across
             the related-episodes fetch; the rail supplies its own
-            empty-state copy when there is nothing to list. */}
+            empty-state copy when there is nothing to list. The frame
+            scrolls on its own once the rail outgrows the screen. */}
         <div className="hidden lg:block">
-          <div className="sticky top-4 space-y-4 rounded-lg border border-hairline bg-surface p-4">
+          <RailScrollFrame host={scrollContainerRef ? 'overlay' : 'page'}>
             <EntityRail
               entities={entities}
               episodeId={episode?.id ?? null}
@@ -861,7 +863,7 @@ export default function EpisodeReader({
               relatedLoading={relatedLoading}
               extractionPending={extractionPending}
             />
-          </div>
+          </RailScrollFrame>
         </div>
       </div>
 

@@ -198,6 +198,29 @@ describe('EntityHighlight', () => {
     expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
   })
 
+  it('closes once an inner scroller (the entity rail) clips its word, though the word is still on screen', () => {
+    renderHighlight()
+    const link = screen.getByRole('link', { name: /Alice, Person/ })
+    // The link's parent stands in for the rail's scroll frame: 72–700 px.
+    const scroller = link.parentElement as HTMLElement
+    scroller.getBoundingClientRect = () => ({ top: 72, bottom: 700 }) as DOMRect
+    const rect = (top: number) =>
+      ({ top, bottom: top + 16, left: 40, right: 80, width: 40, height: 16 }) as DOMRect
+    link.getBoundingClientRect = () => rect(300)
+    fireEvent.click(link)
+    expect(screen.getByTestId('entity-hover-card')).toBeInTheDocument()
+
+    // Still inside the frame: the card stays.
+    link.getBoundingClientRect = () => rect(100)
+    fireEvent.scroll(scroller)
+    expect(screen.getByTestId('entity-hover-card')).toBeInTheDocument()
+
+    // Scrolled above the frame's top edge (y 40 is on screen, but clipped).
+    link.getBoundingClientRect = () => rect(40)
+    fireEvent.scroll(scroller)
+    expect(screen.queryByTestId('entity-hover-card')).not.toBeInTheDocument()
+  })
+
   it('fetches the entity summary on click, but on hover only once the hover has settled', () => {
     vi.useFakeTimers()
     try {
