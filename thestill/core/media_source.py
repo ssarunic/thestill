@@ -584,9 +584,11 @@ class RSSMediaSource(MediaSource):
 
         # Apply max_episodes limit if set. pub_date is tz-aware (Episode
         # validator); keep the None-fallback tz-aware too so the sort never
-        # mixes naive/aware datetimes.
+        # mixes naive/aware datetimes. An undated entry sorts as "now" (it
+        # was just discovered), as it did when its pub_date was stored as now.
         if episodes and max_episodes:
-            episodes.sort(key=lambda e: e.pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            discovered_at = now_utc()
+            episodes.sort(key=lambda e: e.pub_date or discovered_at, reverse=True)
             episodes = episodes[:max_episodes]
 
         return episodes

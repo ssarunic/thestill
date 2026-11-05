@@ -653,8 +653,8 @@ class EpisodesMixin(CategoryCacheMixin):
         docstring for the window-first rationale): the ``limit`` newest by
         ``COALESCE(pub_date, published_at) DESC``, filtered to untouched
         orphans — old skipped episodes outside the window are never
-        resurrected. Ignores ``auto_process_excluded`` (see SQLite docstring).
-        ``NULLS LAST`` matches SQLite, where NULL sorts last under DESC.
+        resurrected. Ignores ``auto_process_excluded``, and ranks an undated
+        episode by ``created_at`` (see SQLite docstring).
         """
         if limit <= 0:
             return []
@@ -666,7 +666,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 JOIN (
                     SELECT id FROM episodes
                     WHERE podcast_id = %s
-                    ORDER BY COALESCE(pub_date, published_at) DESC NULLS LAST
+                    ORDER BY COALESCE(pub_date, published_at, created_at) DESC
                     LIMIT %s
                 ) recent ON recent.id = e.id
                 WHERE e.failed_at_stage IS NULL
@@ -676,7 +676,7 @@ class EpisodesMixin(CategoryCacheMixin):
                   AND e.clean_transcript_path IS NULL
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                ORDER BY COALESCE(e.pub_date, e.published_at) DESC NULLS LAST
+                ORDER BY COALESCE(e.pub_date, e.published_at, e.created_at) DESC
                 """,
                 (podcast_id, limit),
             ).fetchall()

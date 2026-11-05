@@ -819,6 +819,60 @@ def test_handler_untrusted_pub_dates_are_back_catalog(db: str) -> None:
     assert _excluded_count(db) == 4
 
 
+def _undated(n: int, prefix: str = "eeeeeeee") -> Episode:
+    return Episode(
+        id=f"{prefix}-0000-0000-0000-{n:012d}",
+        podcast_id=PODCAST_ID,
+        external_id=f"{prefix}-{n}",
+        title=f"Undated {n}",
+        description="",
+        pub_date=None,
+        audio_url=f"https://example.com/{prefix}{n}.mp3",
+        duration=60,
+    )
+
+
+def test_handler_undated_release_on_followed_feed_is_queued(db: str) -> None:
+    """Steady state on a feed without dates: a newly discovered undated episode
+    ranks by discovery time, lands in the newest-N window and is queued."""
+    _refollow(db, followed_at=now_utc() - timedelta(days=30))
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    # The feed's existing episodes are already processed.
+    _add_discovered_episodes(repo0, 3, base=_naive_days_ago(20))
+    for n in range(3):
+        _mark_processed(db, f"aaaaaaaa-0000-0000-0000-{n:012d}")
+    _mark_processed(db, EPISODE_ID)
+
+    release = _undated(1)
+    repo0.save_refresh_batch([], [release])
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "f")
+
+    assert _queued_ids(db) == {release.id}
+    assert _excluded_count(db) == 0
+
+
+def test_handler_bulk_undated_catalog_is_capped(db: str) -> None:
+    """A whole undated catalog found in one refresh is back catalog: only N go
+    through, the rest are excluded."""
+    _refollow(db, followed_at=now_utc() - timedelta(minutes=5))
+    _mark_processed(db, EPISODE_ID)
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    repo0.save_refresh_batch([], [_undated(n) for n in range(6)])
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "9")
+
+    assert _episodes_with_tasks(db) == 2
+    assert _excluded_count(db) == 4
+
+
 def test_follow_seed_ignores_refresh_exclusion(db: str) -> None:
     """Excluded episodes stay out of the background sweep but not out of a
     later follower's seed: the newest N are an explicit request."""

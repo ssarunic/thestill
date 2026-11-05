@@ -169,3 +169,21 @@ class TestUndatedEntries:
         assert by_guid["guid-dated"] == datetime(2026, 6, 8, 18, 30, tzinfo=timezone.utc)
         assert by_guid["guid-garbage"] is None
         assert by_guid["guid-missing"] is None
+
+    def test_max_episodes_keeps_a_just_discovered_undated_entry(self):
+        # Undated entries rank as "just discovered" in the max_episodes trim,
+        # as they did when their pub_date was stored as now.
+        feed = _rss(
+            ("guid-old", "Old", "Mon, 08 Jun 2026 18:30:00 GMT"),
+            ("guid-undated", "Undated", "not a date"),
+        )
+        new_eps = RSSMediaSource().fetch_episodes(
+            url="https://example.com/feed.xml",
+            existing_episodes=[],
+            last_processed=None,
+            max_episodes=1,
+            podcast_slug="pod",
+            parsed_feed=feed,
+            known_external_ids=set(),
+        )
+        assert [e.external_id for e in new_eps] == ["guid-undated"]

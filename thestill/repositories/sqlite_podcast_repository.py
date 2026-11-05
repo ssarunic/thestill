@@ -4081,6 +4081,10 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         request for the newest N, and the window already keeps it bounded — so
         a later follower still gets the newest episodes queued even after an
         earlier refresh excluded them.
+
+        An undated episode (no ``pub_date`` or ``published_at``) ranks by
+        ``created_at``, i.e. when it was discovered: a just-found undated
+        release lands at the top, so the refresh sweep still queues it.
         """
         if limit <= 0:
             return []
@@ -4092,7 +4096,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 JOIN (
                     SELECT id FROM episodes
                     WHERE podcast_id = ?
-                    ORDER BY COALESCE(pub_date, published_at) DESC
+                    ORDER BY COALESCE(pub_date, published_at, created_at) DESC
                     LIMIT ?
                 ) recent ON recent.id = e.id
                 WHERE e.failed_at_stage IS NULL
@@ -4102,7 +4106,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                   AND e.clean_transcript_path IS NULL
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                ORDER BY COALESCE(e.pub_date, e.published_at) DESC
+                ORDER BY COALESCE(e.pub_date, e.published_at, e.created_at) DESC
                 """,
                 (podcast_id, limit),
             ).fetchall()
