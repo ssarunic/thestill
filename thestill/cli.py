@@ -5521,6 +5521,7 @@ def backfill_roles(ctx, podcast_slug):
                 context_text=role_context(podcast, episode),
                 clean_transcript_path=episode.clean_transcript_path,
                 file_storage=state.config.file_storage,
+                podcast_id=podcast.id,
             )
             if ep_result.guests:
                 eps_with_guests += 1
