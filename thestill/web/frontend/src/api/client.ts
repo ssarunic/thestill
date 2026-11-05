@@ -76,7 +76,7 @@ import type {
   FollowSource,
 } from './types'
 
-import { apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import { ApiStatusError, apiErrorMessage, redirectIfAccountDisabled } from './errors'
 
 const API_BASE = '/api'
 
@@ -275,15 +275,21 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(apiErrorMessage(error, response.status))
+    const error = await response.json().catch(() => null)
+    redirectIfAccountDisabled(error)
+    // Keep the status: a 409 means another add is still running, which
+    // ``followPodcast`` waits out instead of failing the click.
+    throw new ApiStatusError(apiErrorMessage(error, response.status), response.status)
   }
 
   return response.json()
 }
 
-export async function getAddPodcastStatus(): Promise<AddPodcastTaskStatus> {
-  return fetchApi<AddPodcastTaskStatus>('/commands/add/status')
+// With the ``task_id`` the add POST returned, this add's own status; without
+// it, whichever add ran last on the server (possibly someone else's).
+export async function getAddPodcastStatus(taskId?: string | null): Promise<AddPodcastTaskStatus> {
+  const query = taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''
+  return fetchApi<AddPodcastTaskStatus>(`/commands/add/status${query}`)
 }
 
 // Pipeline Task API (Queue-based)

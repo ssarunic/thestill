@@ -11,6 +11,7 @@ import type { TopPodcast, TopPodcastsResponse } from '../api/types'
 vi.mock('../api/client', () => ({
   getTopPodcasts: vi.fn(),
   addPodcast: vi.fn(),
+  getAddPodcastStatus: vi.fn(),
   resolvePodcast: vi.fn(),
 }))
 
@@ -20,16 +21,21 @@ vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ user: null }),
 }))
 
-// Toast — we don't assert on toasts here, just need ``useToast`` to resolve
+// Toast — a stable spy so the Follow tests can assert on the error toast,
 // without needing the real provider tree.
+const { mockShowToast } = vi.hoisted(() => ({ mockShowToast: vi.fn() }))
 vi.mock('../components/Toast', () => ({
-  useToast: () => ({ showToast: vi.fn(), dismissToast: vi.fn() }),
+  useToast: () => ({ showToast: mockShowToast, dismissToast: vi.fn() }),
 }))
 
-import { getTopPodcasts, resolvePodcast } from '../api/client'
+import { addPodcast, getAddPodcastStatus, getTopPodcasts, resolvePodcast } from '../api/client'
+import { ApiStatusError } from '../api/errors'
+import { resetFollowQueueForTests } from '../api/followPodcast'
 
 const mockGetTopPodcasts = getTopPodcasts as ReturnType<typeof vi.fn>
 const mockResolvePodcast = resolvePodcast as ReturnType<typeof vi.fn>
+const mockAddPodcast = addPodcast as ReturnType<typeof vi.fn>
+const mockGetAddPodcastStatus = getAddPodcastStatus as ReturnType<typeof vi.fn>
 
 function row(overrides: Partial<TopPodcast> = {}): TopPodcast {
   return {
@@ -347,5 +353,64 @@ describe('TopPodcasts → show page artwork hand-off', () => {
     expect(await screen.findByTestId('show-state')).toHaveTextContent(
       JSON.stringify({ artworkHint: 'https://rss.example/mel.jpg' }),
     )
+  })
+})
+
+describe('TopPodcasts Follow', () => {
+  const STARTED = { status: 'started', message: 'started', task_type: 'add_podcast' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetFollowQueueForTests()
+    mockGetTopPodcasts.mockResolvedValue(
+      response([
+        row({ rank: 1, name: 'Money Box', rss_url: 'https://example.com/moneybox' }),
+        row({ rank: 2, name: 'The Ramsey Show', rss_url: 'https://example.com/ramsey' }),
+      ]),
+    )
+    mockAddPodcast.mockResolvedValue(STARTED)
+    mockGetAddPodcastStatus.mockResolvedValue({ status: 'completed', error: null })
+  })
+
+  function followButtons() {
+    return screen.findAllByRole('button', { name: 'Follow' })
+  }
+
+  it('follows two shows clicked back to back, one after the other', async () => {
+    // Both rows end up followed, in click order; the queueing itself is
+    // covered in followPodcast.test.ts.
+    renderPage()
+    const [moneyBox, ramsey] = await followButtons()
+    await userEvent.click(moneyBox)
+    await userEvent.click(ramsey)
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Following' })).toHaveLength(2))
+    expect(mockAddPodcast.mock.calls.map(([req]) => req.url)).toEqual([
+      'https://example.com/moneybox',
+      'https://example.com/ramsey',
+    ])
+    expect(mockShowToast).not.toHaveBeenCalled()
+  })
+
+  it('retries a 409 instead of showing Retry', async () => {
+    mockAddPodcast
+      .mockRejectedValueOnce(new ApiStatusError('Add podcast already in progress', 409))
+      .mockResolvedValue(STARTED)
+    renderPage()
+    const [moneyBox] = await followButtons()
+    await userEvent.click(moneyBox)
+
+    expect(await screen.findByRole('button', { name: 'Following' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+  })
+
+  it('shows Retry and says why when the follow fails', async () => {
+    mockGetAddPodcastStatus.mockResolvedValue({ status: 'failed', error: 'No public feed' })
+    renderPage()
+    const [moneyBox] = await followButtons()
+    await userEvent.click(moneyBox)
+
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeInTheDocument()
+    expect(mockShowToast).toHaveBeenCalledWith("Couldn't follow Money Box: No public feed", 'error')
   })
 })
