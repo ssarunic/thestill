@@ -1,6 +1,6 @@
 # Growth Strategy: Activation, Engagement, Retention
 
-> **Status:** 📝 Draft (2026-11-04; §2.1 search-traffic read added 2026-11-05)
+> **Status:** 📝 Draft (2026-11-04; §2.1 search-traffic read and §2.2 genre sweep added 2026-11-05)
 > **Owner:** Product
 > **Scope:** The three Scorecard metrics from [spec #111](../specs/111-product-health-metrics.md), in priority order: activation, then engagement, then week-4 retention. Acquisition is out of scope except where it changes who arrives.
 > **Reads:** [analytics.md](analytics.md) (the metrics), [experiments.md](experiments.md) (the protocol every change below must follow)
@@ -61,6 +61,14 @@ Search Console for the first 19 days of indexing (2026-10-16 to
 2026-11-03), read against the sign-up list. Aggregates only: this doc
 never names a reader, an employer or a single-click country, and the
 underlying cross-reference stays with the operator.
+
+**Read this as a description of the corpus, not of demand.** Public
+pages exist only for episodes thestill has processed, and the 119 shows
+were chosen by the operator: UK and US politics, venture, tech and
+finance. Search Console can only report demand for pages that exist, so
+every finding below is conditional on that choice. The three buckets are
+the three kinds of show in the corpus; the entity finding comes from
+shows full of googleable names. §2.2 is the sweep that removes the bias.
 
 | Fact | Number |
 |---|---|
@@ -123,6 +131,78 @@ follow a show; the mass-market bucket activates best, because the reader
 is a listener and the shows publish often. If that holds, the research
 bucket needs a different activation step (A6), not a better follow
 prompt.
+
+### 2.2 The genre sweep: measuring demand outside the corpus
+
+§2.1 suffers from survivorship: it reads demand for what was processed.
+A second bias sits behind it. What ranks is demand divided by
+competition: a mid-tail venture show ranks because nobody else writes
+about its episodes, while a top-10 chart show has Apple, Spotify,
+YouTube, Reddit and the publisher's own site ahead of thestill. The
+sweep therefore varies two things, category and popularity tier, and
+reads two things, search demand and summary fit.
+
+**Sample.** The Apple category taxonomy, which `primary_category`
+already stores from each feed, has about 19 top-level genres. For each
+genre take three tiers from the UK and US charts: ranks 1–10, ranks
+40–60, and the long tail (rank 150 or beyond). Two shows per cell, two
+recent episodes per show. About 19 × 3 × 2 × 2 ≈ 230 episodes, a
+fraction of the 3,140 already processed. Apple's per-genre chart feed
+answers by genre and country, so the picking is scripted, not done by
+hand. Keep the picked list in the repo as the sweep's manifest.
+
+**Mechanics.**
+
+- A dedicated sweep account follows the shows, so the operator's inbox
+  and briefing stay clean and the sweep's follows are one visible list.
+  The follower gate (spec #63) keeps the shows polled for the duration,
+  which matters because fresh episodes index faster than old ones.
+- Seed two episodes per show and no more. Let the gate deliver what the
+  shows publish during the window.
+- Enable genre profiles (spec #98) for the sweep categories first, or
+  record that the general profile was used, so the fit score is about
+  the genre and not about a missing profile.
+- Sample the new entity pages before they enter the sitemap. The
+  extractor meets unfamiliar domains; the decision 3 rule should hold,
+  but check it on a sample of 20 per genre.
+- **Cost gate.** Process one cell first, read the LLM trace, and
+  multiply before committing to the rest. Transcription runs on the
+  operator's GPU, so marginal cost is mostly LLM calls and queue time.
+  If it is too much, drop the long-tail tier; the two chart tiers
+  answer the competition question on their own.
+
+**Time box.** Four weeks from the last cell's indexing. Spec #105 saw
+indexing settle in about a week; §2.1 was read at 19 days. At the end,
+unfollow every genre that produced nothing, so its ongoing processing
+stops.
+
+**The read.** Group pages by category and tier.
+
+| Measure | Why |
+|---|---|
+| Impressions and clicks **per indexed page**, per cell | Cells have different page counts; totals would reward volume |
+| Average position per cell | The competition read: where thestill can rank at all |
+| Entity-page impressions per category | Whether the second acquisition surface works outside politics and venture |
+| Fit score per genre, 1–3 | Search demand is not fit. Run the spec #53 rubric over the sweep's summaries, or read two per genre and score "would a listener want this instead of the episode". Comedy and true crime may draw impressions and still summarise to nothing, because the content is the performance |
+
+**The decision** is demand × fit per genre, with three outcomes:
+
+- **High demand, high fit:** build the follow-and-briefing product for
+  this genre. Add its shows to the Top chart suggestions (A4) and its
+  profile to `SUMMARY_PROFILES_ENABLED`.
+- **High demand, low fit:** entity-only coverage. Index the people and
+  topics, keep the episode pages out of the sitemap, and route visitors
+  to A6 rather than a follow prompt. This genre is the §2.1 mismatch at
+  scale: visitors who sign in, read once and never follow.
+- **Low demand:** stop polling. Record the cell so nobody re-runs it.
+
+**What it changes elsewhere.** The bucket cut on the Scorecard (§7) stays,
+since it is right for the readers who exist. A2 and A4 wait for the
+sweep's result before choosing which genres they address. The sweep is
+the acquisition experiment that decides which genres get a product built
+for them; it gets a row in `experiments.md` with impressions per page as
+the metric and the fit score as the guardrail, so the read is fixed
+before the first show is added.
 
 ## 3. Targets
 
@@ -343,9 +423,9 @@ reach the briefing.
 
 | Window | Activation (one at a time) | Engagement (one at a time) | Retention / platform |
 |---|---|---|---|
-| Now (weeks 1–4) | A1 ship + read; first-touch attribution and bucket cut on the Scorecard | Prod `EMAIL_PROVIDER`, spec #51 Phase 4, briefing-open source instrumentation | Flip spec #84 flag; merge spec #88; title tags and entity↔episode internal links |
+| Now (weeks 1–4) | A1 ship + read; first-touch attribution and bucket cut on the Scorecard; genre sweep (§2.2): cost gate, then all cells | Prod `EMAIL_PROVIDER`, spec #51 Phase 4, briefing-open source instrumentation | Flip spec #84 flag; merge spec #88; title tags and entity↔episode internal links |
 | Next (weeks 5–8) | A3 email-by-default at follow; A6 fake door on entity pages | E1 "never a blank morning" | Spec #108 `/claude` page and funnel |
-| Then (weeks 9–12) | A2 public-page CTA, or A4 three follows (whichever A1's read argues for) | E2 connector nudge | §7 proxy validation if 50 readers graded; R2 downshift flows |
+| Then (weeks 9–12) | A2 public-page CTA, or A4 three follows (whichever A1's read argues for), aimed at the genres the sweep's read (§2.2) kept | E2 connector nudge | §7 proxy validation if 50 readers graded; R2 downshift flows |
 | Later | A5 processed-first suggestions | Web Push; audio briefing (spec #34) | R3 win-back; R4 one-tap wrong |
 
 ## 9. Risks and what would change the plan
