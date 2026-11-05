@@ -3965,6 +3965,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
     def get_discovered_unqueued_episodes(
         self, podcast_id: str, within_days: int = 2, limit: int = 25
     ) -> List[Tuple[str, Optional[str]]]:
+        """``(episode_id, audio_url)`` view of ``get_discovered_unqueued_candidates``."""
+        return [
+            (episode_id, audio_url)
+            for episode_id, audio_url, _ in self.get_discovered_unqueued_candidates(
+                podcast_id, within_days=within_days, limit=limit
+            )
+        ]
+
+    def get_discovered_unqueued_candidates(
+        self, podcast_id: str, within_days: int = 2, limit: int = 25
+    ) -> List[Tuple[str, Optional[str], Optional[datetime]]]:
         """Spec #48 P1 — RECENT episodes persisted but never enqueued (orphans).
 
         ``handle_refresh_feed`` persists new episodes, then enqueues their first
@@ -3982,13 +3993,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         the historical "discovered but never processed" backlog (pre-spec-48
         episodes the user never queued for processing) — enqueuing those would
         be a surprise flood, not a repair. Bounded by ``limit`` per call so even
-        a burst drains gradually. Returns ``(episode_id, audio_url)`` pairs.
+        a burst drains gradually. Returns ``(episode_id, audio_url, pub_date)``
+        triples, newest ``pub_date`` first; ``pub_date`` is tz-aware UTC or
+        ``None`` — the refresh sweep uses it to tell new releases from back
+        catalog.
         """
         cutoff = (now_utc() - timedelta(days=within_days)).isoformat()
         with self._get_connection() as conn:
             rows = conn.execute(
                 """
-                SELECT e.id, e.audio_url
+                SELECT e.id, e.audio_url, e.pub_date
                 FROM episodes e
                 WHERE e.podcast_id = ?
                   AND e.created_at >= ?
@@ -4005,7 +4019,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 """,
                 (podcast_id, cutoff, limit),
             ).fetchall()
-            return [(row["id"], row["audio_url"]) for row in rows]
+            return [(row["id"], row["audio_url"], _iso_to_utc(row["pub_date"])) for row in rows]
 
     def get_unqueued_unprocessed_episodes(self, episode_ids: List[str]) -> List[Tuple[str, Optional[str]]]:
         """Filter ``episode_ids`` to those that still need the full pipeline.
@@ -4061,6 +4075,16 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
         unlike ``recent_published_episode_ids`` it does NOT require
         ``published_at`` — a brand-new podcast's episodes are all unpublished
         until the pipeline runs.
+
+        Ignores ``auto_process_excluded`` on purpose: that flag only keeps the
+        background refresh sweep off the back catalog. A follow is an explicit
+        request for the newest N, and the window already keeps it bounded — so
+        a later follower still gets the newest episodes queued even after an
+        earlier refresh excluded them.
+
+        An undated episode (no ``pub_date`` or ``published_at``) ranks by
+        ``created_at``, i.e. when it was discovered: a just-found undated
+        release lands at the top, so the refresh sweep still queues it.
         """
         if limit <= 0:
             return []
@@ -4072,69 +4096,28 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 JOIN (
                     SELECT id FROM episodes
                     WHERE podcast_id = ?
-                    ORDER BY COALESCE(pub_date, published_at) DESC
+                    ORDER BY COALESCE(pub_date, published_at, created_at) DESC
                     LIMIT ?
                 ) recent ON recent.id = e.id
                 WHERE e.failed_at_stage IS NULL
-                  AND e.auto_process_excluded = 0
                   AND e.audio_path IS NULL
                   AND e.downsampled_audio_path IS NULL
                   AND e.raw_transcript_path IS NULL
                   AND e.clean_transcript_path IS NULL
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                ORDER BY COALESCE(e.pub_date, e.published_at) DESC
+                ORDER BY COALESCE(e.pub_date, e.published_at, e.created_at) DESC
                 """,
                 (podcast_id, limit),
             ).fetchall()
             return [(row["id"], row["audio_url"]) for row in rows]
 
-    def has_processed_episodes(self, podcast_id: str) -> bool:
-        """True once the podcast has at least one episode past discovery.
-
-        "Processed" means any pipeline progress — an artifact path or a publish
-        timestamp. Distinguishes a brand-new podcast still in its initial
-        backfill (False → cap auto-transcription to the most-recent N) from an
-        established one (True → auto-transcribe every newly-discovered episode).
-        """
-        with self._get_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT 1 FROM episodes
-                WHERE podcast_id = ?
-                  AND (published_at IS NOT NULL
-                       OR raw_transcript_path IS NOT NULL
-                       OR clean_transcript_path IS NOT NULL
-                       OR summary_path IS NOT NULL)
-                LIMIT 1
-                """,
-                (podcast_id,),
-            ).fetchone()
-            return row is not None
-
-    def count_episodes_with_tasks(self, podcast_id: str) -> int:
-        """Number of the podcast's episodes that have ever had a queue task.
-
-        Used to size the initial-backfill cap: episodes already auto-submitted
-        (e.g. by the follow-seed path) count against the "most-recent N" budget
-        so seed + refresh-feed don't together exceed it.
-        """
-        with self._get_connection() as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*) AS n FROM episodes e
-                WHERE e.podcast_id = ?
-                  AND EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                """,
-                (podcast_id,),
-            ).fetchone()
-            return row["n"] if row else 0
-
     def mark_episodes_auto_process_excluded(self, episode_ids: List[str]) -> int:
         """Flag ``episode_ids`` so the refresh-feed sweep never auto-enqueues them.
 
-        Applied to a brand-new podcast's back catalog beyond the most-recent N.
-        Idempotent. Returns the number of rows updated.
+        Applied to back catalog (published before the current follow run
+        began) outside the newest N. Idempotent. Returns the number of rows
+        updated.
         """
         if not episode_ids:
             return 0
@@ -4224,6 +4207,15 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 (podcast_id,),
             ).fetchone()
             return row is not None
+
+    def follow_started_at(self, podcast_id: str) -> Optional[datetime]:
+        """See interface."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(created_at) AS started FROM podcast_followers WHERE podcast_id = ?",
+                (podcast_id,),
+            ).fetchone()
+            return _iso_to_utc(row["started"]) if row else None
 
     def record_refresh_success(
         self,

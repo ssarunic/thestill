@@ -77,9 +77,7 @@ class TestMarkProcessedDoesNotPoisonWatermark:
         repo.save(podcast)
 
         # Processing an episode happens "now" — hours after publish.
-        feed_manager.mark_episode_processed(
-            "https://example.com/feed.xml", "guid-a", raw_transcript_path="raw/a.json"
-        )
+        feed_manager.mark_episode_processed("https://example.com/feed.xml", "guid-a", raw_transcript_path="raw/a.json")
 
         reloaded = repo.get_by_url("https://example.com/feed.xml")
         # The watermark must NOT have moved to a wall clock (the bug).
@@ -139,3 +137,53 @@ class TestDiscoveryUsesWatermarkNotWallClock:
             known_external_ids={"guid-old"},
         )
         assert [e.external_id for e in new_eps] == []
+
+
+class TestUndatedEntries:
+    def test_missing_or_invalid_pub_date_is_stored_as_none(self):
+        # A missing or unparseable <pubDate> must not be stored as "now": the
+        # refresh sweep would read that as a release published after the
+        # follow and queue the whole undated catalog (PR #486, Codex P2).
+        feed = _rss(
+            ("guid-dated", "Dated", "Mon, 08 Jun 2026 18:30:00 GMT"),
+            ("guid-garbage", "Garbage date", "not a date"),
+        )
+        feed.entries.append(
+            feedparser.FeedParserDict(
+                title="No date",
+                guid="guid-missing",
+                enclosures=[{"href": "https://example.com/guid-missing.mp3", "type": "audio/mpeg"}],
+                links=[{"rel": "enclosure", "href": "https://example.com/guid-missing.mp3", "type": "audio/mpeg"}],
+            )
+        )
+        new_eps = RSSMediaSource().fetch_episodes(
+            url="https://example.com/feed.xml",
+            existing_episodes=[],
+            last_processed=None,
+            podcast_slug="pod",
+            parsed_feed=feed,
+            known_external_ids=set(),
+        )
+
+        by_guid = {e.external_id: e.pub_date for e in new_eps}
+        assert by_guid["guid-dated"] == datetime(2026, 6, 8, 18, 30, tzinfo=timezone.utc)
+        assert by_guid["guid-garbage"] is None
+        assert by_guid["guid-missing"] is None
+
+    def test_max_episodes_keeps_a_just_discovered_undated_entry(self):
+        # Undated entries rank as "just discovered" in the max_episodes trim,
+        # as they did when their pub_date was stored as now.
+        feed = _rss(
+            ("guid-old", "Old", "Mon, 08 Jun 2026 18:30:00 GMT"),
+            ("guid-undated", "Undated", "not a date"),
+        )
+        new_eps = RSSMediaSource().fetch_episodes(
+            url="https://example.com/feed.xml",
+            existing_episodes=[],
+            last_processed=None,
+            max_episodes=1,
+            podcast_slug="pod",
+            parsed_feed=feed,
+            known_external_ids=set(),
+        )
+        assert [e.external_id for e in new_eps] == ["guid-undated"]

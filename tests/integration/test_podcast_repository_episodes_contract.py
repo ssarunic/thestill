@@ -417,11 +417,25 @@ def test_discovered_unqueued_vs_task_rows(h):
     got = h.repo.get_discovered_unqueued_episodes(pid)
     assert got == [(orphan.id, str(orphan.audio_url))]
 
+    # The candidates view adds a tz-aware pub_date on both backends.
+    got = h.repo.get_discovered_unqueued_candidates(pid)
+    assert got == [(orphan.id, str(orphan.audio_url), orphan.pub_date)]
+    assert got[0][2].tzinfo is not None
+
     got = h.repo.get_unqueued_unprocessed_episodes([orphan.id, queued.id])
     assert got == [(orphan.id, str(orphan.audio_url))]
     assert h.repo.get_unqueued_unprocessed_episodes([]) == []
 
-    assert h.repo.count_episodes_with_tasks(pid) == 1
+
+def test_discovered_unqueued_candidates_sort_undated_last(h):
+    uid = _nonce()
+    pid = _mk_parent(h, uid)
+    undated = _mk_episode(pid, uid, 1, pub_date=None)
+    dated = _mk_episode(pid, uid, 2)
+    h.repo.save_episodes([undated, dated])
+
+    got = h.repo.get_discovered_unqueued_candidates(pid)
+    assert [(eid, pub) for eid, _, pub in got] == [(dated.id, dated.pub_date), (undated.id, None)]
 
 
 def test_recent_unqueued_unprocessed_ordering_and_limit(h):
@@ -481,22 +495,13 @@ def test_mark_episodes_auto_process_excluded(h):
     assert h.repo.mark_episodes_auto_process_excluded([a.id]) == 1
     assert h.repo.mark_episodes_auto_process_excluded([]) == 0
 
-    # Excluded episode drops out of the auto-enqueue sweeps.
+    # Excluded episode drops out of the background refresh sweep...
     assert [eid for eid, _ in h.repo.get_discovered_unqueued_episodes(pid)] == [b.id]
-    assert [eid for eid, _ in h.repo.get_recent_unqueued_unprocessed_episodes(pid, limit=10)] == [b.id]
-
-
-def test_has_processed_episodes(h):
-    uid = _nonce()
-    pid = _mk_parent(h, uid)
-    ep = _mk_episode(pid, uid)
-    h.repo.save_episode(ep)
-    assert h.repo.has_processed_episodes(pid) is False
-
-    assert h.repo.update_episode(
-        f"https://example.com/{uid}/feed.xml", ep.external_id, {"raw_transcript_path": "t.json"}
-    )
-    assert h.repo.has_processed_episodes(pid) is True
+    assert [eid for eid, _, _ in h.repo.get_discovered_unqueued_candidates(pid)] == [b.id]
+    # ...but not out of the follow-seed window: a later follower still gets
+    # the newest episodes queued even after a refresh excluded them.
+    got = h.repo.get_recent_unqueued_unprocessed_episodes(pid, limit=10)
+    assert [eid for eid, _ in got] == [b.id, a.id]
 
 
 # ---------------------------------------------------------------------------

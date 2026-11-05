@@ -19,6 +19,7 @@ Provides MCP resources for podcasts, episodes, and transcripts.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import unquote
 
@@ -189,7 +190,13 @@ def setup_resources(server: Server, storage_path: str, config: Optional[Config] 
             podcast_index = next((p.index for p in podcasts if str(p.rss_url) == str(podcast.rss_url)), 0)
 
             # Get episode index (latest = 1, second latest = 2, etc.)
-            sorted_episodes = sorted(podcast.episodes, key=lambda ep: ep.pub_date or "", reverse=True)
+            # An RSS entry without a <pubDate> has pub_date=None; sort it
+            # oldest rather than comparing None/str against a datetime.
+            sorted_episodes = sorted(
+                podcast.episodes,
+                key=lambda ep: ep.pub_date or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True,
+            )
             episode_index = next(
                 (idx for idx, ep in enumerate(sorted_episodes, start=1) if ep.external_id == episode.external_id), 0
             )

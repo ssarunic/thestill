@@ -65,7 +65,7 @@ from ..models.podcast import (
     Podcast,
     TranscriptLink,
 )
-from ..utils.datetime_utils import now_utc
+from ..utils.datetime_utils import ensure_utc, now_utc
 from ..utils.podcast_categories import normalize_category_name
 from ..utils.postgres_ext import as_str, connect
 from ..utils.slug import generate_slug
@@ -575,19 +575,30 @@ class EpisodesMixin(CategoryCacheMixin):
     def get_discovered_unqueued_episodes(
         self, podcast_id: str, within_days: int = 2, limit: int = 25
     ) -> List[Tuple[str, Optional[str]]]:
+        """``(episode_id, audio_url)`` view of ``get_discovered_unqueued_candidates``."""
+        return [
+            (episode_id, audio_url)
+            for episode_id, audio_url, _ in self.get_discovered_unqueued_candidates(
+                podcast_id, within_days=within_days, limit=limit
+            )
+        ]
+
+    def get_discovered_unqueued_candidates(
+        self, podcast_id: str, within_days: int = 2, limit: int = 25
+    ) -> List[Tuple[str, Optional[str], Optional[datetime]]]:
         """Spec #48 P1 — RECENT episodes persisted but never enqueued (orphans).
 
         Same idempotent crash-recovery query as the SQLite version (see its
         docstring for the full rationale): DISCOVERED state (no artifact
         paths, not failed, not auto-process-excluded) with no task row at all,
         scoped to ``within_days`` and bounded by ``limit``. Returns
-        ``(episode_id, audio_url)`` pairs.
+        ``(episode_id, audio_url, pub_date)`` triples, newest first.
         """
         cutoff = now_utc() - timedelta(days=within_days)
         with connect(self.dsn) as conn:
             rows = conn.execute(
                 """
-                SELECT e.id, e.audio_url
+                SELECT e.id, e.audio_url, e.pub_date
                 FROM episodes e
                 WHERE e.podcast_id = %s
                   AND e.created_at >= %s
@@ -604,7 +615,7 @@ class EpisodesMixin(CategoryCacheMixin):
                 """,
                 (podcast_id, cutoff, limit),
             ).fetchall()
-            return [(as_str(row["id"]), row["audio_url"]) for row in rows]
+            return [(as_str(row["id"]), row["audio_url"], ensure_utc(row["pub_date"])) for row in rows]
 
     def get_unqueued_unprocessed_episodes(self, episode_ids: List[str]) -> List[Tuple[str, Optional[str]]]:
         """Filter ``episode_ids`` to those that still need the full pipeline.
@@ -642,7 +653,8 @@ class EpisodesMixin(CategoryCacheMixin):
         docstring for the window-first rationale): the ``limit`` newest by
         ``COALESCE(pub_date, published_at) DESC``, filtered to untouched
         orphans — old skipped episodes outside the window are never
-        resurrected.
+        resurrected. Ignores ``auto_process_excluded``, and ranks an undated
+        episode by ``created_at`` (see SQLite docstring).
         """
         if limit <= 0:
             return []
@@ -654,66 +666,28 @@ class EpisodesMixin(CategoryCacheMixin):
                 JOIN (
                     SELECT id FROM episodes
                     WHERE podcast_id = %s
-                    ORDER BY COALESCE(pub_date, published_at) DESC
+                    ORDER BY COALESCE(pub_date, published_at, created_at) DESC
                     LIMIT %s
                 ) recent ON recent.id = e.id
                 WHERE e.failed_at_stage IS NULL
-                  AND e.auto_process_excluded = false
                   AND e.audio_path IS NULL
                   AND e.downsampled_audio_path IS NULL
                   AND e.raw_transcript_path IS NULL
                   AND e.clean_transcript_path IS NULL
                   AND e.summary_path IS NULL
                   AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                ORDER BY COALESCE(e.pub_date, e.published_at) DESC
+                ORDER BY COALESCE(e.pub_date, e.published_at, e.created_at) DESC
                 """,
                 (podcast_id, limit),
             ).fetchall()
             return [(as_str(row["id"]), row["audio_url"]) for row in rows]
 
-    def has_processed_episodes(self, podcast_id: str) -> bool:
-        """True once the podcast has at least one episode past discovery.
-
-        "Processed" means any pipeline progress — an artifact path or a publish
-        timestamp. Distinguishes a brand-new podcast still in its initial
-        backfill from an established one.
-        """
-        with connect(self.dsn) as conn:
-            row = conn.execute(
-                """
-                SELECT 1 FROM episodes
-                WHERE podcast_id = %s
-                  AND (published_at IS NOT NULL
-                       OR raw_transcript_path IS NOT NULL
-                       OR clean_transcript_path IS NOT NULL
-                       OR summary_path IS NOT NULL)
-                LIMIT 1
-                """,
-                (podcast_id,),
-            ).fetchone()
-            return row is not None
-
-    def count_episodes_with_tasks(self, podcast_id: str) -> int:
-        """Number of the podcast's episodes that have ever had a queue task.
-
-        Used to size the initial-backfill cap (see SQLite docstring).
-        """
-        with connect(self.dsn) as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*) AS n FROM episodes e
-                WHERE e.podcast_id = %s
-                  AND EXISTS (SELECT 1 FROM tasks t WHERE t.episode_id = e.id)
-                """,
-                (podcast_id,),
-            ).fetchone()
-            return row["n"] if row else 0
-
     def mark_episodes_auto_process_excluded(self, episode_ids: List[str]) -> int:
         """Flag ``episode_ids`` so the refresh-feed sweep never auto-enqueues them.
 
-        Applied to a brand-new podcast's back catalog beyond the most-recent N.
-        Idempotent. Returns the number of rows updated.
+        Applied to back catalog (published before the current follow run
+        began) outside the newest N. Idempotent. Returns the number of rows
+        updated.
         """
         if not episode_ids:
             return 0

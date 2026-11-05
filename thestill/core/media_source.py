@@ -44,7 +44,7 @@ from structlog import get_logger
 from urllib3.util.retry import Retry
 
 from ..models.podcast import AlternateEnclosure, Episode, TranscriptLink
-from ..utils.datetime_utils import ensure_utc, parse_struct_time_utc
+from ..utils.datetime_utils import ensure_utc, now_utc, parse_struct_time_utc, parse_struct_time_utc_or_none
 from ..utils.duration import parse_duration
 from ..utils.html_utils import resolve_description_variants
 from ..utils.http_text import decode_feed_body
@@ -500,7 +500,12 @@ class RSSMediaSource(MediaSource):
         entries_skipped = 0
         for entry in parsed_feed.entries:
             try:
-                episode_date = self._parse_date(entry.get("published_parsed"))
+                # A missing/invalid date is stored as None, never as "now": the
+                # refresh sweep would read "now" as a release published after
+                # the follow and queue an undated catalog wholesale. The
+                # "now" fallback stays for the id fallback and discovery compare.
+                source_date = parse_struct_time_utc_or_none(entry.get("published_parsed"))
+                episode_date = source_date or now_utc()
                 episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
                 if episode_external_id in seen_ids:
@@ -543,7 +548,7 @@ class RSSMediaSource(MediaSource):
                     title=entry.get("title", "Unknown Episode"),
                     description=description,
                     description_html=description_html,
-                    pub_date=episode_date,
+                    pub_date=source_date,
                     audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                     duration=parse_duration(entry.get("itunes_duration")),
                     external_id=episode_external_id,
@@ -579,9 +584,11 @@ class RSSMediaSource(MediaSource):
 
         # Apply max_episodes limit if set. pub_date is tz-aware (Episode
         # validator); keep the None-fallback tz-aware too so the sort never
-        # mixes naive/aware datetimes.
+        # mixes naive/aware datetimes. An undated entry sorts as "now" (it
+        # was just discovered), as it did when its pub_date was stored as now.
         if episodes and max_episodes:
-            episodes.sort(key=lambda e: e.pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            discovered_at = now_utc()
+            episodes.sort(key=lambda e: e.pub_date or discovered_at, reverse=True)
             episodes = episodes[:max_episodes]
 
         return episodes
