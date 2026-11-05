@@ -200,10 +200,26 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
 ```
 
 - **Gated quotes get a deterministic id:** base32 of the first 50 bits of
-  `sha256(episode_id || segment_id || start_ms)`. The public `QuoteCard`
-  can show the short URL without a write; the row is inserted on the first
-  `GET /q/<id>` or `POST`, inside the public rate limit. Collisions are
-  checked on insert and resolved by appending a character.
+  `sha256(episode_id || segment_id || start_ms)`, so the same quote always
+  has the same link and spec #100 can take over the source without
+  changing ids. **The row is persisted before the link is shown**, never
+  minted on `GET /q/<id>`: a truncated hash cannot be reversed, so an id
+  with no row cannot be resolved to a quote without hashing the whole
+  eligible set. Two writers mint rows:
+  - the public quote payloads (`public_episode_quotes_payload` and the
+    entity and show quote routes) upsert one `quote_shares` row per quote
+    they return, in one `INSERT … ON CONFLICT (id) DO NOTHING` per
+    response, before the response carries `share_id`. The write is
+    idempotent and bounded by the gated set, which is why it is allowed
+    on an anonymous read path; under `read_only` or on a failed upsert
+    the payload carries no `share_id` and the share menu falls back to
+    the `#t=` episode link;
+  - spec #100's candidates step mints the row when it writes the
+    candidate, so once #100 lands the public read path writes nothing.
+  `GET /q/<id>` for an id with no row is a plain 404; it never searches
+  quotes. Collisions are detected on insert (same id, different
+  `(episode_id, segment_id, start_ms)`) and resolved by appending a
+  character to the newer quote's id.
 - **Custom selections (Phase 4) get a random id** and a `created_by`.
 - **`text` is a snapshot.** A re-clean or a spec #110 speaker rename
   changes the transcript; the card keeps saying what it said when shared,
@@ -285,10 +301,40 @@ dynamic ad insertion shifts timestamps by minutes (spec #113 measured
 64 kbps MP3 of the quote range with 250 ms padding and sentence-snapped
 boundaries, into `PathManager.quote_audio_dir()/<episode>/<segment>-<start_ms>.mp3`.
 Twenty quotes × ~250 KB ≈ 5 MB per episode, deleted with the episode
-or when the show turns `audio_clips` off. Cutting runs while the stage
-still has the audio; `ensure_ffmpeg_on_path` already guarantees ffmpeg.
-A backfill command, `thestill quote-audio backfill`, cuts for episodes
-whose audio still exists and reports those whose audio is gone.
+or when the show turns `audio_clips` off. `ensure_ffmpeg_on_path` already
+guarantees ffmpeg. A backfill command, `thestill quote-audio backfill`,
+cuts for episodes whose audio still exists and reports those whose audio
+is gone.
+
+**Retention until the cut, when `DELETE_AUDIO_AFTER_PROCESSING` is on.**
+Today that flag deletes the original right after downsampling
+([task_handlers.py:381](../thestill/core/task_handlers.py#L381)) and the
+downsampled WAV right after transcription
+([task_handlers.py:577](../thestill/core/task_handlers.py#L577)), both
+long before the entity branch runs, so "cut at the entity stage" alone
+would find no audio on those deployments. The cut cannot move earlier:
+it needs the speaker resolved to a person, which happens in
+`RESOLVE_ENTITIES`. So the deletion moves, not the cut:
+
+- the downsample handler **skips deleting the original** when the episode
+  is clip-eligible by the show-level conditions in §1 (`public_pages`,
+  `audio_clips`, RSS enclosure), and marks `episodes.audio_retained_for =
+  'clips'` (new nullable text column); ineligible episodes are deleted
+  there exactly as today;
+- the candidates step cuts from the retained original, then deletes it
+  and clears `audio_path`, as the downsample handler does now (it is the
+  last consumer). The cut uses the original, not the 16 kHz WAV, for
+  quality; the WAV's deletion after transcription is unchanged;
+- a housekeeping job (next to `usage_housekeeping_jobs`) deletes retained
+  originals older than 7 days whose episode never reached the cut (the
+  entity branch is `_NON_USER_FAILING`, so it can fail without the user
+  noticing) and clears the marker, logging each with `episode_id`. Spec
+  #49's healer can retry the branch before then.
+
+Cost: one original (50–150 MB) lives for the hours between downsample
+and the entity branch instead of minutes, only for clip-eligible shows.
+Deployments with the flag off keep every original and need none of this.
+With `clips_enabled` off (§8) the handler deletes as today.
 
 **4.2 Video is rendered on demand, queued, quota'd.** `POST
 /api/quote-shares/{id}/clip` (signed in) reserves `clips_per_day`,
@@ -420,7 +466,7 @@ landing hook, not the cards, is what to change next.
 | `quote_cards_enabled` switch | on | Off: no new renders; cached images still serve; `/q` still redirects |
 | `clips_enabled` switch | on | Off: `POST …/clip` 503, queued jobs drain |
 | `read_only` | — | pauses both, as every write |
-| `quote_shares_per_day` quota | 50 | custom shares and clip requests reserve it; gated-id rows do not (they are deterministic and rate-limited by the public limiter) |
+| `quote_shares_per_day` quota | 50 | custom shares and clip requests reserve it; gated rows do not (the server mints them when it serves a quote, bounded by the gated set and the public rate limit) |
 | `clips_per_day` quota | 10 | reserve → render → commit; failed render releases |
 | Public rate limit | existing | `/q/*` sits on the public router |
 | Render concurrency | 2 images, 1 video | process-wide semaphores |
@@ -450,7 +496,7 @@ rate limit suffices; video is never anonymous.
 |---|---|---|
 | 0 | `quote_shares` + `quote_share_hits` tables; deterministic ids; `GET /q/{id}` and `/q/{id}.png` with the `og` card; `QuoteCardRenderer`; share menu on public `QuoteCard`; `ts_ref` attribution; `/analytics` panel; revoke CLI and show-opt-out revocation | — (works on the #94 stand-in quotes) |
 | 1 | `square` and `story` variants; download and Web Share with files; caption with the X handle chip; *Quote this* in the transcript (gate's block only); follow hook on the linked card | Phase 0; spec #91 §7's files path (small, can be built here) |
-| 2 | `quote_audio` cutting at the entity stage + backfill; the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
+| 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
 | 3 | Video clips: queued render, `clips_per_day`, `clips_enabled`, QR, `GET /q/{id}/{variant}.mp4` | Phase 2; libass probe |
 | 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules | Phase 1; a decision on whether the activation read from Phases 0–1 justifies it |
 
@@ -466,6 +512,12 @@ building.
   curl.
 - `GET /q/<id>.png` renders once and serves from cache after; ETag changes
   when the speaker name changes.
+- `GET /q/<id>` for an id with no `quote_shares` row is 404 without
+  touching the quote tables; every quote a public payload returns has a
+  row before the response is sent.
+- With `DELETE_AUDIO_AFTER_PROCESSING=true`, a clip-eligible episode
+  processed end to end has its `quote_audio` files and no original; an
+  ineligible episode has no original from the downsample stage on.
 - An unresolved speaker renders "a guest on *Show*"; a `public_hidden`
   speaker's share is 404/410 with no assets on disk.
 - Pasting the link into X's and LinkedIn's post composers shows the card
@@ -492,6 +544,15 @@ building.
   read by the OAuth callback.
 - **Invalidation**: a `rename-speaker` op deletes the card directory and
   the next render shows the new name.
+- **Minting**: a quotes payload inserts a `quote_shares` row per returned
+  quote and is idempotent on the second call; the same payload under
+  `read_only` writes nothing and carries no `share_id`; `/q/<id>` for an
+  id with no row is 404 and runs no quote query (asserted with a query
+  counter).
+- **Retention**: with `DELETE_AUDIO_AFTER_PROCESSING` on, the downsample
+  handler keeps the original for a clip-eligible episode and deletes it
+  for an ineligible one; the candidates step deletes it after the cut; the
+  sweep deletes an 8-day-old retained original and clears the marker.
 - **Clip cutting**: a synthetic 60 s tone with known word timestamps cuts
   to the expected length ± 50 ms; the ASS track has one event per word;
   the ffmpeg filtergraph is a pure function with a unit test, and one
@@ -513,6 +574,8 @@ building.
 | Search engines index `/q` pages or treat them as cloaking | `noindex` + canonical; UA-blind bytes; `robots.txt` disallows `/q/` from crawling but the previewers are not crawlers |
 | Render storms on the RPi5 | Cache, two-image semaphore, public rate limit, `quote_cards_enabled` |
 | Storage growth from clip audio | ~5 MB per public episode; deleted with the episode or the opt-out; `thestill quote-audio prune` for episodes no longer public |
+| Retained originals pile up when the entity branch fails (`DELETE_AUDIO_AFTER_PROCESSING` deployments) | The candidates step deletes after the cut; the 7-day housekeeping sweep deletes the rest and clears the marker; `clips_enabled` off restores today's deletion |
+| The on-read upsert of gated `quote_shares` rows becomes a write amplifier on public pages | One statement per response, idempotent, bounded by the gated set (one row per quote ever); skipped under `read_only`; gone once spec #100 mints on write |
 | Caption tagging annoys the people quoted | The handle is a removable chip, never automatic posting; operators can blank a handle |
 | More anonymous traffic that still does not activate | The follow hook ships in Phase 1; §6 reads the cohort and names the hypothesis before launch |
 
@@ -535,9 +598,9 @@ columns, both ignorable.
 | D3 | Clips are opt-out per show (`audio_clips` default true), cards follow `public_pages` | Matches the existing public-pages stance; **open question Q1 asks whether audio should be allowlist instead** before Phase 2 ships |
 | D4 | No QR on image cards; QR on video only | A QR on an X or LinkedIn image is dead weight; on Reels and TikTok it is the only link |
 | D5 | The speaker's handle goes in the caption as a removable chip, never on the image, never auto-posted | Tagging drives the reach; the user, not the system, decides to tag a person |
-| D6 | Clip audio is cut at the entity stage and kept; never re-fetched from the enclosure | Original audio is usually gone by share time, and dynamic ad insertion makes re-fetched audio misaligned by minutes (spec #113) |
+| D6 | Clip audio is cut at the entity stage from the retained original and kept; never re-fetched from the enclosure. With `DELETE_AUDIO_AFTER_PROCESSING` on, clip-eligible episodes keep the original until the cut (§4.1), with a 7-day orphan sweep | Original audio is usually gone by share time, the cut needs resolved speakers so it cannot run earlier, and dynamic ad insertion makes re-fetched audio misaligned by minutes (spec #113) |
 | D7 | No auto-follow from a quote link | A URL is not consent (spec #80); a forced follow games spec #111's activation metric |
-| D8 | Gated quotes have deterministic ids and need no write to display a short URL | The anonymous public page can show the link; the row appears on first open, inside the public rate limit |
+| D8 | Gated quotes have deterministic ids, and the id-to-quote row is persisted before the link is shown: minted by the quote payloads on read (idempotent upsert) until spec #100's candidates step mints it on write | A truncated hash cannot be reversed, so `/q/<id>` must be a lookup, never a search; deterministic ids let #100 replace the source without changing links. Self-describing ids were rejected: they triple the URL length and episode ids have no short indexed form |
 
 ## Open questions
 
