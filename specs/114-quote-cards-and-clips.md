@@ -221,10 +221,14 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
   `(episode_id, segment_id, start_ms)`) and resolved by appending a
   character to the newer quote's id.
 - **Custom selections (Phase 4) get a random id** and a `created_by`.
-- **`text` is a snapshot.** A re-clean or a spec #110 speaker rename
-  changes the transcript; the card keeps saying what it said when shared,
-  except for the speaker name, which is re-read at render time so a fixed
-  misattribution fixes the card (§7).
+- **`text` is a snapshot; `speaker_entity_id` is a cache.** A re-clean or
+  a spec #110 edit changes the transcript; the card keeps saying what it
+  said when shared. The speaker is different: `speaker_entity_id` mirrors
+  the segment's *current* speaking mention and is rewritten whenever that
+  association changes (§7), so a fixed misattribution fixes the card. The
+  on-read upsert is `ON CONFLICT (id) DO UPDATE SET speaker_entity_id =
+  EXCLUDED.speaker_entity_id` where it differs, never `DO NOTHING` for
+  that column.
 
 **Route `GET /q/{id}`** (public router, rate-limited, UA-blind):
 
@@ -420,8 +424,9 @@ readers), PostHog second.
 
 | Fact | Where | Why |
 |---|---|---|
-| Shares created | `quote_shares` (`source`, `created_by`, `created_at`) | volume, gated vs custom |
-| Short link opens | `quote_share_hits` (browser UAs only, `referrer_host`, day) | the backlink loop, per platform |
+| Links minted | `quote_shares` (`source`, `created_by`, `created_at`) | catalog size only: gated rows appear when a quote is served or a candidate is written, **not** when someone shares, so this is never labelled "shares" |
+| Share actions (signed in) | new `quote_share_actions(share_id, user_id, kind image\|clip\|link, method link\|files\|download\|caption, created_at)`, written by `POST /api/quote-shares/{id}/actions` from the signed-in share menu and by the clip and download routes themselves | the share volume the product tables can know; anonymous share actions never write (G6) and exist only as the PostHog `share` event, which is the one stated gap |
+| Short link opens | `quote_share_hits` (browser UAs only, `referrer_host`, day) | the backlink loop, per platform; the primary signal, because it counts anonymous sharers' audiences too |
 | Clips rendered | `usage_events` kind `clip` (spec #104 ledger) | cost and quota tuning |
 | Sign-ins that followed a card | `ts_ref` cookie read by the OAuth callback → `login_completed.next_kind = quote` and a `users.acquired_via = 'quote:<id>'` column set once on first sign-in | the quote-referred cohort for the Scorecard |
 
@@ -429,9 +434,11 @@ Client events (spec #95 names): `share` with `kind` = `quote` or `clip`
 and `method` = `link | files | download | caption`; `quote_sheet_open`;
 `clip_requested`. Server: `quote_link_open` with `referrer_host`, no id.
 
-`/analytics` gains a *Quote cards* panel: shares, opens, opens per share,
+`/analytics` gains a *Quote cards* panel: links minted, links opened at
+least once, opens per opened link, signed-in share actions by method,
 sign-ins, and the quote-referred cohort's spec #111 activation and
-week-4 retention beside the all-readers numbers. The feature is read
+week-4 retention beside the all-readers numbers. No "shares" number is
+derived from `quote_shares` row counts. The feature is read
 cohort by cohort per `docs/experiments.md`; the hypothesis to log before
 launch: *readers who arrive from a quote link activate at least as often
 as readers who arrive from search*. If they activate markedly less, the
@@ -439,12 +446,24 @@ landing hook, not the cards, is what to change next.
 
 ### 7. Misattribution, takedown and revocation
 
-- **The name on the card is read at render time**, not from the snapshot:
-  a spec #110 `rename-speaker` or an entity relink deletes the affected
-  `quote_cards/<id>/` directory (the service already queues an entity
-  refresh; it calls `QuoteShareService.invalidate(episode_id)`), so the
-  next request re-renders with the corrected name while the id and link
-  survive.
+- **The speaker on the card is the segment's current speaker**, not the
+  one cached when the link was minted. A spec #110 `rename-speaker` or
+  label link changes the *segment's* speaker entity
+  ([transcript_edits.py:439](../thestill/core/transcript_edits.py#L439)
+  `_rename_label` writes `speaker_entity_id` into segment metadata), not
+  person A's name, and the editor's finish step queues the spec #106
+  `--from entities` refresh that rewrites the `entity_mentions` speaking
+  rows. So `QuoteShareService.invalidate(episode_id)` runs **when that
+  refresh completes** (a hook at the end of the entity branch for a
+  reprocessed episode; an entity relink via `thestill entity relink`
+  triggers the same), and it does two things for every share of the
+  episode: re-resolves `speaker_entity_id` from the segment's current
+  speaking mention (`NULL` when the segment no longer resolves, which
+  renders "a guest on *Show*"; a now-hidden speaker makes the share 410),
+  and deletes the `quote_cards/<id>/` directory so the next request
+  re-renders with the corrected name while the id and link survive.
+  Between the edit and the refresh the old card can still serve; the
+  editor's existing "entities refreshing" state covers that window.
 - **Hidden speaker** (`entities.public_hidden`): every route 404s or 410s,
   assets deleted by the same invalidation.
 - **Show opt-out**: `set-podcast-visibility --public false` already removes
@@ -520,6 +539,12 @@ building.
   ineligible episode has no original from the downsample stage on.
 - An unresolved speaker renders "a guest on *Show*"; a `public_hidden`
   speaker's share is 404/410 with no assets on disk.
+- After a segment's speaker is corrected from A to B in the transcript
+  editor and the entity refresh completes, `/q/<id>.png` for that quote
+  shows B, with the same id and link.
+- `/analytics` labels `quote_shares` counts as links minted; share
+  volume comes from `quote_share_actions` and opens from
+  `quote_share_hits`.
 - Pasting the link into X's and LinkedIn's post composers shows the card
   (manual, recorded in the PR).
 - Following the link lands on the episode page with the quote highlighted
@@ -542,8 +567,15 @@ building.
 - **Routes**: head tags, cache headers, rate limit, 404/410 matrix, UA
   blindness (same body for three user agents), `ts_ref` cookie set and
   read by the OAuth callback.
-- **Invalidation**: a `rename-speaker` op deletes the card directory and
-  the next render shows the new name.
+- **Invalidation**: a `rename-speaker` op that moves a segment from
+  person A to person B, followed by the entity refresh, rewrites the
+  share's `speaker_entity_id` to B, deletes the card directory, and the
+  next render shows B's name; relinking to no entity renders "a guest on
+  *Show*"; the on-read upsert updates a stale `speaker_entity_id`.
+- **Measurement**: serving a quotes payload twice adds rows to
+  `quote_shares` only once and never to `quote_share_actions`; a
+  signed-in download adds one action row; an anonymous `POST …/actions`
+  is 401.
 - **Minting**: a quotes payload inserts a `quote_shares` row per returned
   quote and is idempotent on the second call; the same payload under
   `read_only` writes nothing and carries no `share_id`; `/q/<id>` for an
