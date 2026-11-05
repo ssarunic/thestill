@@ -41,6 +41,8 @@ Usage:
 """
 
 import threading
+import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -86,10 +88,14 @@ class Task:
     message: str = ""
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+    # Names this run, so a caller can read *its* outcome even after the next
+    # run of the same type has replaced it as the current task.
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for JSON serialization."""
         return {
+            "task_id": self.task_id,
             "task_type": self.task_type.value,
             "status": self.status.value,
             "started_at": self.started_at.isoformat() if self.started_at else None,
@@ -115,7 +121,11 @@ class TaskManager:
     """
 
     _tasks: Dict[TaskType, Task] = field(default_factory=dict)
+    # Recent runs by ``task_id``, oldest first, capped at ``HISTORY_SIZE``.
+    _history: "OrderedDict[str, Task]" = field(default_factory=OrderedDict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    HISTORY_SIZE = 200
 
     def start_task(self, task_type: TaskType, message: str = "") -> Optional[Task]:
         """
@@ -141,6 +151,9 @@ class TaskManager:
                 message=message or f"Starting {task_type.value}...",
             )
             self._tasks[task_type] = task
+            self._history[task.task_id] = task
+            while len(self._history) > self.HISTORY_SIZE:
+                self._history.popitem(last=False)
             logger.info(f"Started task: {task_type.value}")
             return task
 
@@ -209,6 +222,17 @@ class TaskManager:
         """
         with self._lock:
             return self._tasks.get(task_type)
+
+    def get_task_by_id(self, task_id: str) -> Optional[Task]:
+        """
+        Get a recent task by its ``task_id``, even if a newer run of the same
+        type has started since.
+
+        Returns:
+            Task object if it is among the last ``HISTORY_SIZE`` runs, None otherwise
+        """
+        with self._lock:
+            return self._history.get(task_id)
 
     def is_running(self, task_type: TaskType) -> bool:
         """

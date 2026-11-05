@@ -285,8 +285,11 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
   return response.json()
 }
 
-export async function getAddPodcastStatus(): Promise<AddPodcastTaskStatus> {
-  return fetchApi<AddPodcastTaskStatus>('/commands/add/status')
+// With the ``task_id`` the add POST returned, this add's own status; without
+// it, whichever add ran last on the server (possibly someone else's).
+export async function getAddPodcastStatus(taskId?: string | null): Promise<AddPodcastTaskStatus> {
+  const query = taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''
+  return fetchApi<AddPodcastTaskStatus>(`/commands/add/status${query}`)
 }
 
 // Pipeline Task API (Queue-based)

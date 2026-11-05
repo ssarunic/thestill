@@ -12,7 +12,7 @@ import { followPodcast, resetFollowQueueForTests } from './followPodcast'
 const mockAddPodcast = addPodcast as ReturnType<typeof vi.fn>
 const mockGetAddPodcastStatus = getAddPodcastStatus as ReturnType<typeof vi.fn>
 
-const STARTED = { status: 'started', message: 'started', task_type: 'add_podcast' }
+const STARTED = { status: 'started', message: 'started', task_type: 'add_podcast', task_id: 'task-a' }
 
 describe('followPodcast', () => {
   beforeEach(() => {
@@ -68,6 +68,55 @@ describe('followPodcast', () => {
       'https://example.com/a',
       'https://example.com/b',
     ])
+  })
+
+  it("polls this add's own status by task_id", async () => {
+    await followPodcast('https://example.com/a', 'top_podcasts')
+    expect(mockGetAddPodcastStatus).toHaveBeenCalledWith('task-a')
+  })
+
+  it('fails when the add completed but the follow did not', async () => {
+    mockGetAddPodcastStatus.mockResolvedValueOnce({ status: 'completed', error: null, result: { is_following: false } })
+
+    await expect(followPodcast('https://example.com/a', 'top_podcasts')).rejects.toThrow('following it failed')
+  })
+
+  it('gives the add its own time after a long wait for the slot', async () => {
+    // 59 s of 409s, then the slot frees; the add itself then takes 5 s.
+    const busy = new ApiStatusError('Add podcast already in progress', 409)
+    mockAddPodcast.mockImplementation(async () => {
+      if (Date.now() - start < 59_000) throw busy
+      return STARTED
+    })
+    mockGetAddPodcastStatus.mockImplementation(async () =>
+      Date.now() - start < 64_000 ? { status: 'running', error: null } : { status: 'completed', error: null },
+    )
+    const start = Date.now()
+
+    const done = followPodcast('https://example.com/a', 'top_podcasts')
+    const outcome = done.then(() => 'followed', (err: Error) => err.message)
+    await vi.runAllTimersAsync()
+    expect(await outcome).toBe('followed')
+  })
+
+  it('gives up waiting for the slot after a minute', async () => {
+    mockAddPodcast.mockRejectedValue(new ApiStatusError('Add podcast already in progress', 409))
+
+    const done = followPodcast('https://example.com/a', 'top_podcasts')
+    const outcome = done.then(() => 'followed', (err: Error) => err.message)
+    await vi.runAllTimersAsync()
+    expect(await outcome).toMatch(/Another podcast is still being added/)
+  })
+
+  it('does not let a stalled request wedge the queue', async () => {
+    mockGetAddPodcastStatus.mockImplementationOnce(() => new Promise(() => {}))
+
+    const first = followPodcast('https://example.com/a', 'top_podcasts')
+    const firstOutcome = first.then(() => 'followed', (err: Error) => err.message)
+    const second = followPodcast('https://example.com/b', 'top_podcasts')
+    await vi.runAllTimersAsync()
+    expect(await firstOutcome).toMatch(/not responding/)
+    await expect(second).resolves.toBeUndefined()
   })
 
   it('keeps the queue moving after a failed follow', async () => {

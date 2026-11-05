@@ -105,6 +105,8 @@ export default function TopPodcasts() {
       setAdding((prev) => ({ ...prev, [key]: 'done' }))
       queryClient.invalidateQueries({ queryKey: ['podcasts'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      // The chart's cached is_following / podcast_slug are stale now too.
+      queryClient.invalidateQueries({ queryKey: ['top-podcasts'] })
     } catch (err) {
       setAdding((prev) => ({ ...prev, [key]: 'error' }))
       const reason = err instanceof Error ? err.message : 'Failed to follow'

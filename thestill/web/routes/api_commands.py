@@ -31,7 +31,7 @@ from collections import Counter
 from functools import partial
 from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from structlog import get_logger
@@ -107,6 +107,9 @@ class AddPodcastResponse(BaseModel):
     status: str
     message: str
     task_type: str
+    # Pass to ``GET /api/commands/add/status?task_id=`` to read this add's
+    # outcome rather than whichever add ran last.
+    task_id: Optional[str] = None
 
 
 class TaskStatusResponse(BaseModel):
@@ -114,6 +117,7 @@ class TaskStatusResponse(BaseModel):
 
     task_type: str
     status: str
+    task_id: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     progress: int = 0
@@ -479,21 +483,39 @@ def add_podcast(
         status="started",
         message="Add podcast task started. Use GET /api/commands/add/status to check progress.",
         task_type=TaskType.ADD_PODCAST.value,
+        task_id=task.task_id,
     )
 
 
 @router.get("/add/status", response_model=TaskStatusResponse)
 def get_add_podcast_status(
+    task_id: Optional[str] = Query(None, max_length=64),
     state: AppState = Depends(get_app_state),
 ) -> TaskStatusResponse:
     """
-    Get the status of the current or last add podcast task.
+    Get the status of one add podcast task, or of the current or last one.
+
+    Args:
+        task_id: the ``task_id`` ``POST /api/commands/add`` returned. Adds run
+            one at a time server-wide, so without it a caller may read the
+            next add's status (someone else's) instead of its own.
 
     Returns:
-        TaskStatusResponse with current task status, progress, and results
+        TaskStatusResponse with the task's status, progress, and results
+
+    Raises:
+        HTTPException 404: ``task_id`` is unknown (e.g. the server restarted)
     """
     task_manager = state.task_manager
-    task = task_manager.get_task(TaskType.ADD_PODCAST)
+    if task_id is not None:
+        task = task_manager.get_task_by_id(task_id)
+        if task is None or task.task_type != TaskType.ADD_PODCAST:
+            raise HTTPException(
+                status_code=404,
+                detail="Lost track of this add (the server may have restarted). Check the Podcasts page.",
+            )
+    else:
+        task = task_manager.get_task(TaskType.ADD_PODCAST)
 
     if task is None:
         return TaskStatusResponse(
@@ -504,6 +526,7 @@ def get_add_podcast_status(
 
     return TaskStatusResponse(
         task_type=task.task_type.value,
+        task_id=task.task_id,
         status=task.status.value,
         started_at=task.started_at.isoformat() if task.started_at else None,
         completed_at=task.completed_at.isoformat() if task.completed_at else None,

@@ -163,6 +163,8 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
         // Refresh the user's followed-list view now that the row exists.
         queryClient.invalidateQueries({ queryKey: ['podcasts'] })
         queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        // The chart's cached is_following / podcast_slug are stale now too.
+        queryClient.invalidateQueries({ queryKey: ['top-podcasts'] })
         // A pasted link is a single intent, so we are done. The chart list
         // stays open: following several shows in a row is the point of it.
         if (closeOnSuccess) onClose()

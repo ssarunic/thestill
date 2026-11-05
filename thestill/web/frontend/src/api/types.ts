@@ -664,10 +664,13 @@ export interface AddPodcastResponse {
   status: string
   message: string
   task_type: string
+  /** Poll ``/commands/add/status?task_id=`` with this for this add's outcome. */
+  task_id?: string | null
 }
 
 export interface AddPodcastTaskStatus {
   task_type: string
+  task_id?: string | null
   status: 'none' | 'pending' | 'running' | 'completed' | 'failed'
   started_at: string | null
   completed_at: string | null
@@ -678,6 +681,8 @@ export interface AddPodcastTaskStatus {
     podcast_id: string
     rss_url: string
     episodes_count: number
+    /** False when the add worked but the follow itself did not. */
+    is_following?: boolean
   } | null
   error: string | null
 }
