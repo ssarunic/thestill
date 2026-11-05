@@ -137,8 +137,34 @@ CLIP_VOICE_MIN_NAMED_ROWS = 40
 CLIP_VOICE_MAX_ROW_SHARE = 0.05
 CLIP_VOICE_MAX_WORD_SHARE = 0.03
 
+# A co-host taken from the speaker mapping alone (``_cohosts``) has to
+# show they took part, not just escape the clip test: Prof G episodes are
+# too short for that test, and their mappings label promo voices for
+# sister shows "Jake Sullivan (Host - The Long Game)" with a row or two.
+# A co-host speaks at least this many rows and is not quiet by the clip
+# shares; without a transcript none is added.
+COHOST_MIN_ROWS = 5
+
 # A speaker row in a cleaned transcript: ``[01:16] **Ezra Klein:** …``.
 _SPEAKER_ROW_RE = re.compile(r"^\s*(?:\[[0-9:.]+\]\s*)?\*\*(?P<name>[^*\n]+?):\*\*(?P<text>.*)$")
+
+# A speaker-mapping role naming a host: "Host", "Co-Host", "Host/SaaStr",
+# "Guest Host". On a show whose co-hosts rotate (20VC's weekly trio with
+# Jason Lemkin and Rory O'Driscoll beside Harry Stebbings) the extractor
+# labels them host in the mapping and, told to leave regular hosts out,
+# lists them under no Guest(s) — while the show's host list, extracted
+# once, names only Harry. Such a name is taken as a participant of the
+# episode (see ``link_episode_roles``).
+_HOST_ROLE_RE = re.compile(r"\bhost\b", re.IGNORECASE)
+
+# A mapping "name" that is a placeholder, not a person: "Unknown Speaker",
+# or the Croatian "Nepoznati voditelj" (unknown host) the extractor writes
+# for an unnamed host — it passes ``_is_real_person_name`` (two words,
+# capitals) but names nobody.
+_PLACEHOLDER_NAME_RE = re.compile(
+    r"\b(?:unknown|unidentified|unnamed|speaker|host|nepoznat\w*|voditelj\w*)\b|/",
+    re.IGNORECASE,
+)
 
 # Heading variants we accept for each section. Lowercased before lookup
 # so a stray capitalisation doesn't drop a section.
@@ -163,6 +189,9 @@ class FactsRoles:
     clip_voices: List[str] = field(default_factory=list)
     # ``## Speaker Mapping`` roles by casefolded name, e.g. {"evan gershkovich": "Ad Narrator"}.
     speaker_roles: Dict[str, str] = field(default_factory=dict)
+    # Names the speaker mapping labels a host (``_HOST_ROLE_RE``), as
+    # written and in mapping order, without repeats.
+    mapped_hosts: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -193,6 +222,9 @@ class LinkResult:
     # Guest bullets refused because the voice was a clip played in the
     # episode: named so by the speaker mapping, or barely speaking.
     clip_voices: List[str] = field(default_factory=list)
+    # Names the speaker mapping labels host that are not the show's
+    # hosts, taken as participants of the episode (rotating co-hosts).
+    cohosts: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +267,15 @@ def parse_facts_file(path: Path) -> FactsRoles:
         if current_bucket == "speaker_mapping":
             map_match = _SPEAKER_MAP_RE.match(line)
             if map_match and map_match.group("role"):
-                roles.speaker_roles[map_match.group("name").strip().casefold()] = map_match.group("role").strip()
+                mapped_name = map_match.group("name").strip()
+                mapped_role = map_match.group("role").strip()
+                roles.speaker_roles[mapped_name.casefold()] = mapped_role
+                if (
+                    _HOST_ROLE_RE.search(mapped_role)
+                    and not _AD_ROLE_RE.search(mapped_role)
+                    and mapped_name.casefold() not in {h.casefold() for h in roles.mapped_hosts}
+                ):
+                    roles.mapped_hosts.append(mapped_name)
             continue
         bullet_match = _BULLET_RE.match(line)
         if not bullet_match:
@@ -639,6 +679,7 @@ def link_episode_roles(
     clean_transcript_path: Optional[str] = None,
     file_storage: Optional[FileStorage] = None,
     clean_transcript_markdown: Optional[str] = None,
+    podcast_id: Optional[str] = None,
 ) -> LinkResult:
     """Parse the episode facts file and write guests.
 
@@ -651,16 +692,28 @@ def link_episode_roles(
     clean task passes what it just produced, which the configured backend
     may not hold yet — and wins over the path. Without either the
     speaking-share guard is skipped.
+
+    ``podcast_id`` lets the episode's co-hosts in: a name the speaker
+    mapping labels host that is not one of the show's linked hosts, and
+    that speaks like a participant in the transcript (``_takes_part``),
+    joins the guests (``_cohosts``). Without it, without a transcript, or
+    while the show has no linked host to tell its own hosts apart, only
+    Guest(s) counts.
     """
     facts_path = path_manager.episode_facts_file(podcast_slug, episode_slug)
     roles = parse_facts_file(facts_path)
+    candidates = _cohosts(entity_repo, roles, podcast_id, context_text) if podcast_id else []
     markdown = clean_transcript_markdown
-    if markdown is None and clean_transcript_path and file_storage is not None and roles.guests:
+    if markdown is None and clean_transcript_path and file_storage is not None and (roles.guests or candidates):
         markdown = _read_clean_transcript(path_manager, file_storage, clean_transcript_path, episode_id)
-    if markdown and roles.guests:
-        roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally_speakers(markdown))
+    tally = tally_speakers(markdown) if markdown else None
+    cohosts = [name for name in candidates if tally is not None and _takes_part(name, tally)]
+    roles.guests.extend((name, None) for name in cohosts)
+    if tally is not None and roles.guests:
+        roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally)
         roles.clip_voices.extend(quiet)
     result = LinkResult(target_id=episode_id)
+    result.cohosts = cohosts
     guests = _resolve_role_list(
         entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
     )
@@ -702,8 +755,69 @@ def link_episode_roles(
         ambiguous=result.ambiguous_names,
         ad_voices=result.ad_voices,
         clip_voices=result.clip_voices,
+        cohosts=result.cohosts,
     )
     return result
+
+
+def _cohosts(
+    entity_repo: SqliteEntityRepository,
+    roles: FactsRoles,
+    podcast_id: str,
+    context_text: str,
+) -> List[str]:
+    """Speaker-mapping hosts of this episode who are not the show's hosts
+    and not already under Guest(s).
+
+    A show with no linked host is skipped: its own host would otherwise
+    become a guest of every episode. A name is matched to the show's hosts
+    read-only, so nothing is created for a host who is already linked.
+    """
+    show_hosts = set(entity_repo.get_podcast_anchors(podcast_id).get("hosts", []))
+    if not show_hosts:
+        return []
+    # The show's host may be spelt differently in the mapping ("Neil
+    # deGrasse Tyson" against "Neil de Grasse Tyson"); compare names with
+    # case, spaces and punctuation ignored, aliases included.
+    host_keys = set()
+    for host in entity_repo.get_entities_by_ids(list(show_hosts)):
+        host_keys |= {_name_key(n) for n in [host.canonical_name, *(host.aliases or [])]}
+    listed = {_name_key(name) for name, _bio in roles.guests}
+    listed |= {_name_key(name) for name in roles.ad_voices + roles.clip_voices}
+    cohosts: List[str] = []
+    for name in roles.mapped_hosts:
+        key = _name_key(name)
+        if (
+            key in listed
+            or key in host_keys
+            or not _is_real_person_name(name)
+            or _PLACEHOLDER_NAME_RE.search(name)
+            or _AD_ROLE_RE.search(name)
+        ):
+            continue
+        existing, _ambiguous = _resolve_existing_person(entity_repo, name, context_text)
+        if existing is not None and existing.id in show_hosts:
+            continue
+        cohosts.append(name)
+    return cohosts
+
+
+def _takes_part(name: str, tally: SpeakerTally) -> bool:
+    """Whether a speaker-mapping co-host speaks like a participant: at
+    least ``COHOST_MIN_ROWS`` rows, and not under both clip shares."""
+    key = name.casefold()
+    rows, words = tally.rows.get(key, 0), tally.words.get(key, 0)
+    if rows < COHOST_MIN_ROWS:
+        return False
+    total_rows, total_words = sum(tally.rows.values()), sum(tally.words.values())
+    return rows >= CLIP_VOICE_MAX_ROW_SHARE * total_rows or words >= CLIP_VOICE_MAX_WORD_SHARE * total_words
+
+
+def _name_key(name: str) -> str:
+    """A name with case, spaces and punctuation dropped, and a trailing
+    ``(disambiguator)`` too: "Scott Galloway (professor)" → "scottgalloway"."""
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name)
+    return re.sub(r"[\W_]+", "", name.casefold())
 
 
 def _read_clean_transcript(
@@ -846,6 +960,7 @@ def backfill_all_roles(
                 context_text=role_context(podcast, episode),
                 clean_transcript_path=episode.clean_transcript_path,
                 file_storage=file_storage,
+                podcast_id=podcast.id,
             )
             if ep_result.guests:
                 summary.episodes_with_guests += 1

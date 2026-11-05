@@ -717,6 +717,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
                     # configured backend may not hold it (or holds an
                     # older one), so hand over what it produced.
                     clean_transcript_markdown=cleaning_result.get("cleaned_markdown"),
+                    podcast_id=podcast.id,
                 )
             except Exception as exc:
                 logger.warning(
