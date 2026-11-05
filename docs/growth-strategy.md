@@ -1,6 +1,6 @@
 # Growth Strategy: Activation, Engagement, Retention
 
-> **Status:** 📝 Draft (2026-11-04)
+> **Status:** 📝 Draft (2026-11-04; §2.1 search-traffic read added 2026-11-05)
 > **Owner:** Product
 > **Scope:** The three Scorecard metrics from [spec #111](../specs/111-product-health-metrics.md), in priority order: activation, then engagement, then week-4 retention. Acquisition is out of scope except where it changes who arrives.
 > **Reads:** [analytics.md](analytics.md) (the metrics), [experiments.md](experiments.md) (the protocol every change below must follow)
@@ -55,6 +55,75 @@ Two structural facts shape what can work:
   the percentages, and every new reader's PostHog timeline is read by
   hand. Qualitative reading is part of the method, not a fallback.
 
+### 2.1 What search traffic told us (2026-11-05)
+
+Search Console for the first 19 days of indexing (2026-10-16 to
+2026-11-03), read against the sign-up list. Aggregates only: this doc
+never names a reader, an employer or a single-click country, and the
+underlying cross-reference stays with the operator.
+
+| Fact | Number |
+|---|---|
+| Impressions | 20,964 |
+| Clicks | 171 (0.8% CTR) |
+| Average position | 10.2 (top of page 2) |
+| Sign-ups whose sign-in started on a public page | 23 |
+| Desktop share | 75% of impressions, 56% of clicks |
+| Countries | US and UK carry most clicks; a long tail of single-click countries, several of which produced a sign-up |
+
+What it says, and what it doesn't:
+
+- **Three traffic buckets, three different readers.** (1) B2B tech and
+  finance episodes: venture, macro, AI shows. The reader is a
+  professional looking up one episode or one claim, usually on a work
+  laptop. (2) Mass-market UK and US shows: politics, science, interview
+  shows. The reader is a listener; these shows publish several times a
+  week. (3) Entity pages: people, companies and topics. The reader
+  searched a name. The Scorecard must be cut by these buckets from now
+  on, because the right activation step differs for each.
+- **Entity pages are the acquisition engine.** Mid-tail names of guests,
+  hosts and executives have almost no competition, and a co-host's page
+  is already the second most-seen URL on the site. Keep the spec #105
+  decision 3 rule as it is: it indexes people who speak on a show and
+  pages discussed in depth, and keeps thin or misfiled pages out. Pages
+  about people who are only mentioned, never heard, are a reputational
+  cost and the privacy policy promises their removal on request; they
+  are not an SEO lever.
+- **The "13.5% click-to-signup" figure is not a real rate.** The 171
+  clicks are Google organic only; the 23 sign-ups are every public-page
+  sign-in, from any source. Even as an upper bound, it is a content-gate
+  rate: the CTA is "Read the full summary", so people sign in to finish
+  what they searched for. It measures the mismatch in §2, not demand for
+  a subscription.
+- **Attribution hides entity pages.** `signup_source` records the page
+  kind where sign-in started, not where the visitor landed. An
+  entity-page visitor who clicked through to an episode and signed in
+  there is tagged `episode`. So "all 23 from episode pages" is
+  consistent with entity pages assisting most of them. Fix in §7.
+- **Moment-level content ranks.** Two legacy `?t=` deep-link URLs ranked
+  on page 1 with 3–5× the site's CTR because the snippet matched a
+  transcript moment. Those URLs are duplicates and are already
+  redirected to the clean page; the lesson is to give moments and
+  chapters their own headings inside the server-rendered episode page
+  (spec #105), not to keep the query variants.
+- **Position 10 is a depth problem, not a markup problem.** FAQ and
+  podcast rich results no longer exist for sites like this, and schema
+  does not move rank. What does: more real content per page, internal
+  links between entity and episode pages in both directions, and the
+  guest's name and topic at the front of the title tag (which moves
+  click-through, not position).
+- **Desktop skew is a hypothesis.** It fits "workday research", but
+  Search Console has no hour-of-day data. Check sign-in hours in the
+  server logs before building on it.
+
+**The open question.** None of this says whether the 23 activated. The
+prediction to test on the Scorecard, by bucket: the B2B bucket activates
+worst, because a professional who wanted one statistic has no reason to
+follow a show; the mass-market bucket activates best, because the reader
+is a listener and the shows publish often. If that holds, the research
+bucket needs a different activation step (A6), not a better follow
+prompt.
+
 ## 3. Targets
 
 Baselines come from `/analytics` on the day this doc is adopted; the
@@ -97,7 +166,9 @@ full summary" to "Get new episodes of `<show>` in your inbox", carrying
 link stays as the secondary action. This moves the follow decision to
 the moment of highest intent and in front of the sign-in, so sign-in
 completion is the guardrail to watch: if fewer visitors sign in but
-more of those who do activate, the activated **count** decides.
+more of those who do activate, the activated **count** decides. Read it
+per traffic bucket (§2.1): the right CTA for an interview-show listener
+and a macro-finance researcher is probably not the same sentence.
 
 ### A3. Make day-2 value certain: the first briefing reaches the reader
 
@@ -133,6 +204,19 @@ is visible, and prefer already-processed shows in A4's suggestions so
 most new readers' first follow lands summarised episodes at once.
 
 > **CPO / Growth review — [C6](#c6-bring-first-value-reliability-and-trust-forward):** Prioritize a useful first summary, visible processing progress, and lightweight quality review before expanding follows and product surfaces.
+
+### A6. Follow a name, not a show (the research bucket)
+
+The visitor who searched a guest or a company and landed on an entity
+page will not follow a show; they might follow the name. "Tell me when
+anyone mentions this person / company / topic" is an alert on the
+entity index thestill already has, and a mention delivered to the inbox
+or the briefing is a value day like any other. Test it as a fake door
+first: a "Follow" button on public entity pages that leads to sign-in
+and a "coming soon" line, with clicks counted by entity type. Build it
+only if the research bucket's activation is confirmed low (§2.1) and
+the fake door draws clicks. The gaming check is the same as for shows:
+a follow is setup, the later-day mention is the value.
 
 ## 5. Engagement plan (≥2 value days a week)
 
@@ -237,11 +321,18 @@ reach the briefing.
   experiment rows that reached their "Read on" date. Fifteen minutes.
 - **Before every ship:** the experiments.md row, with the expected
   effect written down.
-- **Instrumentation to add, in this order:** (1) briefing open source
+- **Instrumentation to add, in this order:** (1) first-touch public
+  page kind on sign-up, next to the existing `signup_source`: the kind
+  of the first public page in the visit that led to sign-in, carried
+  first-party and cookieless in the same way as the sign-in attempt key,
+  never the URL, so entity pages get credit when they assist (§2.1);
+  (2) traffic bucket per reader, derived from the first show or entity
+  read, so the Scorecard can be cut by bucket; (3) briefing open source
   (`in_app` / `email` / `push`) stored on the briefing, since E1 cannot
-  be read without it; (2) `mcp_connector_created` and the `/claude`
-  funnel from spec #108; (3) follows-per-reader at day 7 and day 28 on
-  `/analytics`, for R1.
+  be read without it; (4) `mcp_connector_created` and the `/claude`
+  funnel from spec #108; (5) follows-per-reader at day 7 and day 28 on
+  `/analytics`, for R1. Items 1 and 2 are measurement, not product
+  changes, so they get no experiments.md row.
 - **Gates:** §7 proxy validation at 50 graded readers; A/B testing by
   user-id hash at ~150 signups a week (a later spec).
 - **What a null result means:** at this volume, "not visible", not "no
@@ -252,8 +343,8 @@ reach the briefing.
 
 | Window | Activation (one at a time) | Engagement (one at a time) | Retention / platform |
 |---|---|---|---|
-| Now (weeks 1–4) | A1 ship + read | Prod `EMAIL_PROVIDER`, spec #51 Phase 4, briefing-open source instrumentation | Flip spec #84 flag; merge spec #88 |
-| Next (weeks 5–8) | A3 email-by-default at follow | E1 "never a blank morning" | Spec #108 `/claude` page and funnel |
+| Now (weeks 1–4) | A1 ship + read; first-touch attribution and bucket cut on the Scorecard | Prod `EMAIL_PROVIDER`, spec #51 Phase 4, briefing-open source instrumentation | Flip spec #84 flag; merge spec #88; title tags and entity↔episode internal links |
+| Next (weeks 5–8) | A3 email-by-default at follow; A6 fake door on entity pages | E1 "never a blank morning" | Spec #108 `/claude` page and funnel |
 | Then (weeks 9–12) | A2 public-page CTA, or A4 three follows (whichever A1's read argues for) | E2 connector nudge | §7 proxy validation if 50 readers graded; R2 downshift flows |
 | Later | A5 processed-first suggestions | Web Push; audio briefing (spec #34) | R3 win-back; R4 one-tap wrong |
 
@@ -274,6 +365,17 @@ reach the briefing.
   cohorts of 15–20 and only doublings are visible. That is acceptable
   for A1–A3, which are doubling-sized bets, and is why nothing smaller is
   on the list.
+- **Search brings the wrong reader.** If the bucket cut shows the
+  research bucket is most of the traffic and never activates, the
+  choice is explicit: serve that reader with A6 and search-led return
+  (a signed-in reader who comes back through Google still gets a value
+  day), or accept them as the cost of SEO and build for the listener
+  bucket. Decide on the data, not before it.
+- **Reader privacy in research notes.** Cross-referencing Search Console
+  geography with the sign-up list identifies individuals at this volume.
+  Analysis that names readers or employers stays with the operator and
+  never enters docs, PostHog, Notion or an LLM prompt. This doc carries
+  aggregates only.
 - **The proxy fails the §7 check.** If activated readers don't retain
   better, stop activation work, pick the component that separates
   retention best, and re-plan from §4 with the new definition.
