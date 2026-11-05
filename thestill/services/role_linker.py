@@ -24,6 +24,7 @@ parse-and-link bridge.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -34,6 +35,7 @@ from ..models.entities import EntityRecord, EntityType
 from ..models.facts import AD_WORD
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from ..utils.file_storage import FileStorage
 from ..utils.path_manager import PathManager
 from ..utils.slug import generate_slug
 
@@ -104,6 +106,40 @@ _AD_BIO_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A voice the conversation plays rather than one taking part in it: a
+# campaign clip, a news soundbite, a caller. The extractor is told to
+# annotate those "Name (Archival Audio)" / "Name (Listener)" rather than
+# "(Guest)" (facts_extractor's AD VOICES ARE NOT GUESTS rule), but still
+# lists some of them under Guest(s); a role annotation naming one is
+# decisive, as an ad word is. The same words as the frontend's
+# ROLE_ONLY_SPEAKER in buildPeople.ts.
+_CLIP_ROLE_RE = re.compile(
+    r"\b(?:archival|archive|clips?|soundbites?|footage|recording|listener|caller|voicemail)\b",
+    re.IGNORECASE,
+)
+
+# Facts written before the clip rule label every clip voice "(Guest)",
+# so the role annotation cannot catch them; how much they speak can. A
+# guest takes part in the main discussion: on the Ezra Klein episode that
+# surfaced this, Chris Hayes has 41% of the speaker rows and 42% of the
+# words, the seven politicians in its clips at most 2.4% of either. A
+# voice is a clip only when it is quiet on both counts — a presenter
+# asking many short questions has the rows (Kelly Somers on Football
+# Daily, 13% of rows, 3% of words), a guest with few long answers has
+# the words (John Bishop on Parenting Hell, 5% of rows, 15% of words).
+# On 1,788 judged guests in the local corpus the pair drops 231: post-
+# match interviews, news soundbites, vox pops, and sister-show promo
+# voices the cleaner never labels as a speaker at all (no rows).
+# Only judged when the transcript has enough rows under the speaker
+# mapping's names to tell — a short episode, or one whose labels stayed
+# SPEAKER_nn, says nothing about who spoke.
+CLIP_VOICE_MIN_NAMED_ROWS = 40
+CLIP_VOICE_MAX_ROW_SHARE = 0.05
+CLIP_VOICE_MAX_WORD_SHARE = 0.03
+
+# A speaker row in a cleaned transcript: ``[01:16] **Ezra Klein:** …``.
+_SPEAKER_ROW_RE = re.compile(r"^\s*(?:\[[0-9:.]+\]\s*)?\*\*(?P<name>[^*\n]+?):\*\*(?P<text>.*)$")
+
 # Heading variants we accept for each section. Lowercased before lookup
 # so a stray capitalisation doesn't drop a section.
 _HOST_HEADINGS = ("hosts", "host")
@@ -122,8 +158,20 @@ class FactsRoles:
     # Guest bullets dropped because their role annotation, bio, or
     # speaker-mapping role says the voice only read an advert.
     ad_voices: List[str] = field(default_factory=list)
+    # Guest bullets dropped because their role annotation names a clip,
+    # soundbite or caller rather than a participant.
+    clip_voices: List[str] = field(default_factory=list)
     # ``## Speaker Mapping`` roles by casefolded name, e.g. {"evan gershkovich": "Ad Narrator"}.
     speaker_roles: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class SpeakerTally:
+    """Speaker rows and spoken words per label in a cleaned transcript,
+    keyed by the casefolded label without a trailing ``(Role)``."""
+
+    rows: Counter = field(default_factory=Counter)
+    words: Counter = field(default_factory=Counter)
 
 
 @dataclass
@@ -142,6 +190,9 @@ class LinkResult:
     demoted_hosts: List[str] = field(default_factory=list)
     # Guest bullets refused because the voice only read an advert.
     ad_voices: List[str] = field(default_factory=list)
+    # Guest bullets refused because the voice was a clip played in the
+    # episode: named so by the speaker mapping, or barely speaking.
+    clip_voices: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +250,11 @@ def parse_facts_file(path: Path) -> FactsRoles:
     # guests once the whole file is read.
     kept: List[Tuple[str, Optional[str]]] = []
     for (name, bio), role in zip(roles.guests, guest_roles):
-        if _is_ad_voice(role=role, bio=bio, speaker_role=roles.speaker_roles.get(name.casefold())):
+        speaker_role = roles.speaker_roles.get(name.casefold())
+        if _is_ad_voice(role=role, bio=bio, speaker_role=speaker_role):
             roles.ad_voices.append(name)
+        elif any(annotation and _CLIP_ROLE_RE.search(annotation) for annotation in (role, speaker_role)):
+            roles.clip_voices.append(name)
         else:
             kept.append((name, bio))
     roles.guests = kept
@@ -219,6 +273,53 @@ def _is_ad_voice(*, role: Optional[str], bio: Optional[str], speaker_role: Optio
         if annotation and _AD_ROLE_RE.search(annotation):
             return True
     return bool(bio and _AD_BIO_RE.search(bio))
+
+
+def tally_speakers(markdown: str) -> SpeakerTally:
+    """Count each speaker's rows and words in a cleaned Markdown transcript."""
+    tally = SpeakerTally()
+    for line in markdown.splitlines():
+        match = _SPEAKER_ROW_RE.match(line)
+        if match:
+            label = re.sub(r"\s*\([^)]*\)\s*$", "", match.group("name")).strip()
+            if label:
+                tally.rows[label.casefold()] += 1
+                tally.words[label.casefold()] += len(match.group("text").split())
+    return tally
+
+
+def drop_quiet_guests(
+    guests: List[Tuple[str, Optional[str]]],
+    speaker_roles: Dict[str, str],
+    tally: SpeakerTally,
+) -> Tuple[List[Tuple[str, Optional[str]]], List[str]]:
+    """Split guests into ``(kept, clip_voices)``: a clip voice has under
+    ``CLIP_VOICE_MAX_ROW_SHARE`` of the speaker rows and under
+    ``CLIP_VOICE_MAX_WORD_SHARE`` of the words.
+
+    Only names the speaker mapping lists are judged: the cleaner labels
+    rows with those names, so one with no rows was never heard as a
+    speaker. A Guest(s) name the mapping lacks may simply be spelt
+    differently there, so it is kept.
+    """
+    named = sum(n for label, n in tally.rows.items() if label in speaker_roles)
+    if named < CLIP_VOICE_MIN_NAMED_ROWS:
+        return list(guests), []
+    total_rows = sum(tally.rows.values())
+    total_words = sum(tally.words.values())
+    kept: List[Tuple[str, Optional[str]]] = []
+    quiet: List[str] = []
+    for name, bio in guests:
+        key = name.casefold()
+        if (
+            key in speaker_roles
+            and tally.rows.get(key, 0) < CLIP_VOICE_MAX_ROW_SHARE * total_rows
+            and tally.words.get(key, 0) < CLIP_VOICE_MAX_WORD_SHARE * total_words
+        ):
+            quiet.append(name)
+        else:
+            kept.append((name, bio))
+    return kept, quiet
 
 
 def _split_bullet(text: str) -> Tuple[str, Optional[str], Optional[str]]:
@@ -535,14 +636,25 @@ def link_episode_roles(
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
     context_text: str = "",
+    clean_transcript_path: Optional[str] = None,
+    file_storage: Optional[FileStorage] = None,
 ) -> LinkResult:
     """Parse the episode facts file and write guests.
 
     ``context_text`` is the episode description (plus the podcast's): with
-    the facts-file bio it tells namesakes apart.
+    the facts-file bio it tells namesakes apart. ``clean_transcript_path``
+    is the episode's stored cleaned-transcript path, read through
+    ``file_storage`` (it may live in S3); its speaker rows refuse a
+    "guest" who was only a clip (``drop_quiet_guests``). Without both the
+    speaking-share guard is skipped.
     """
     facts_path = path_manager.episode_facts_file(podcast_slug, episode_slug)
     roles = parse_facts_file(facts_path)
+    if clean_transcript_path and file_storage is not None and roles.guests:
+        markdown = _read_clean_transcript(path_manager, file_storage, clean_transcript_path, episode_id)
+        if markdown:
+            roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally_speakers(markdown))
+            roles.clip_voices.extend(quiet)
     result = LinkResult(target_id=episode_id)
     guests = _resolve_role_list(
         entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
@@ -562,9 +674,18 @@ def link_episode_roles(
             episode_slug=episode_slug,
             names=roles.ad_voices,
         )
+    result.clip_voices = list(roles.clip_voices)
+    result.skipped_names.extend(roles.clip_voices)
+    if roles.clip_voices:
+        logger.info(
+            "episode_guest_clip_voice_skipped",
+            episode_id=episode_id,
+            episode_slug=episode_slug,
+            names=roles.clip_voices,
+        )
     # see link_podcast_roles: an all-ambiguous list clears stale guests. A
-    # refused ad voice clears too — an earlier run may have stored it.
-    if guests.writes or roles.ad_voices:
+    # refused ad or clip voice clears too — an earlier run may have stored it.
+    if guests.writes or roles.ad_voices or roles.clip_voices:
         entity_repo.set_episode_guests(episode_id, result.guests)
     logger.info(
         "episode_roles_linked",
@@ -575,8 +696,22 @@ def link_episode_roles(
         skipped=len(result.skipped_names),
         ambiguous=result.ambiguous_names,
         ad_voices=result.ad_voices,
+        clip_voices=result.clip_voices,
     )
     return result
+
+
+def _read_clean_transcript(
+    path_manager: PathManager, file_storage: FileStorage, clean_transcript_path: str, episode_id: str
+) -> Optional[str]:
+    """The cleaned transcript's Markdown, or ``None`` when it cannot be
+    read — the guard is then skipped rather than failing the link."""
+    key = path_manager.to_relative(path_manager.clean_transcript_file(clean_transcript_path))
+    try:
+        return file_storage.read_text(key)
+    except FileNotFoundError:
+        logger.info("episode_roles_transcript_missing", episode_id=episode_id, key=key)
+        return None
 
 
 @dataclass
@@ -666,6 +801,7 @@ def backfill_all_roles(
     podcast_repo: SqlitePodcastRepository,
     entity_repo: SqliteEntityRepository,
     path_manager: PathManager,
+    file_storage: Optional[FileStorage] = None,
 ) -> BackfillSummary:
     """One-shot pass over every podcast and episode in the DB.
 
@@ -703,6 +839,8 @@ def backfill_all_roles(
                 entity_repo=entity_repo,
                 path_manager=path_manager,
                 context_text=role_context(podcast, episode),
+                clean_transcript_path=episode.clean_transcript_path,
+                file_storage=file_storage,
             )
             if ep_result.guests:
                 summary.episodes_with_guests += 1

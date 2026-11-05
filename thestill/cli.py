@@ -5519,6 +5519,8 @@ def backfill_roles(ctx, podcast_slug):
                 entity_repo=state.entity_repository,
                 path_manager=state.path_manager,
                 context_text=role_context(podcast, episode),
+                clean_transcript_path=episode.clean_transcript_path,
+                file_storage=state.config.file_storage,
             )
             if ep_result.guests:
                 eps_with_guests += 1
@@ -5531,6 +5533,7 @@ def backfill_roles(ctx, podcast_slug):
         podcast_repo=state.repository,
         entity_repo=state.entity_repository,
         path_manager=state.path_manager,
+        file_storage=state.config.file_storage,
     )
     click.echo(f"✓ podcasts: {summary.podcasts_with_hosts}/{summary.podcasts_processed} now have hosts")
     click.echo(f"✓ episodes: {summary.episodes_with_guests}/{summary.episodes_processed} now have guests")

@@ -713,6 +713,8 @@ def handle_clean(task: Task, state: "AppState") -> None:
                     entity_repo=state.entity_repository,
                     path_manager=state.path_manager,
                     context_text=role_context(podcast, episode),
+                    clean_transcript_path=clean_transcript_db_path,
+                    file_storage=config.file_storage,
                 )
             except Exception as exc:
                 logger.warning(
