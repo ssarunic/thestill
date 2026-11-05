@@ -47,8 +47,8 @@ def ensure_utc(value: Optional[datetime]) -> Optional[datetime]:
     return value
 
 
-def parse_struct_time_utc(date_tuple: Any) -> datetime:
-    """Parse a feedparser date tuple to a tz-aware UTC datetime.
+def parse_struct_time_utc_or_none(date_tuple: Any) -> Optional[datetime]:
+    """Parse a feedparser date tuple to a tz-aware UTC datetime, or ``None``.
 
     feedparser normalises ``published_parsed`` to GMT, so the struct_time is
     always UTC; we attach ``tzinfo=utc`` rather than returning a naive value.
@@ -59,7 +59,7 @@ def parse_struct_time_utc(date_tuple: Any) -> datetime:
         date_tuple: feedparser date tuple (``time.struct_time`` or ``None``).
 
     Returns:
-        Parsed UTC datetime, or the current UTC time if parsing fails.
+        Parsed UTC datetime, or ``None`` if the date is missing or invalid.
     """
     if date_tuple:
         try:
@@ -68,4 +68,11 @@ def parse_struct_time_utc(date_tuple: Any) -> datetime:
             return datetime(*date_tuple[:6], tzinfo=timezone.utc)  # type: ignore[misc]
         except (TypeError, ValueError):
             pass
-    return now_utc()
+    return None
+
+
+def parse_struct_time_utc(date_tuple: Any) -> datetime:
+    """Like ``parse_struct_time_utc_or_none`` but falls back to the current
+    UTC time. Only for internal bookkeeping (external-id fallback, discovery
+    compare); never store the fallback as an episode's ``pub_date``."""
+    return parse_struct_time_utc_or_none(date_tuple) or now_utc()
