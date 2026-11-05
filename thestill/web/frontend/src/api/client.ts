@@ -76,7 +76,7 @@ import type {
   FollowSource,
 } from './types'
 
-import { apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import { ApiStatusError, apiErrorMessage, redirectIfAccountDisabled } from './errors'
 
 const API_BASE = '/api'
 
@@ -275,8 +275,11 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(apiErrorMessage(error, response.status))
+    const error = await response.json().catch(() => null)
+    redirectIfAccountDisabled(error)
+    // Keep the status: a 409 means another add is still running, which
+    // ``followPodcast`` waits out instead of failing the click.
+    throw new ApiStatusError(apiErrorMessage(error, response.status), response.status)
   }
 
   return response.json()

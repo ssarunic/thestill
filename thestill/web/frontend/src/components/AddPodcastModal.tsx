@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { addPodcast, getAddPodcastStatus, getTopPodcasts } from '../api/client'
+import { getTopPodcasts } from '../api/client'
+import { followPodcast } from '../api/followPodcast'
 import type { TopPodcast } from '../api/types'
 import { flagFor } from '../utils/regions'
 import Button, { CloseIcon } from './Button'
@@ -150,11 +151,10 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
       })
       setAddError(null)
       try {
-        await addPodcast({ url: rssUrl, source: 'add_podcast' })
-        // The POST only starts a background task. Wait for it, so the list
-        // refetch below sees the new row and a failure (e.g. a Spotify
-        // exclusive with no public feed) is shown instead of a false "done".
-        await waitForAddTask()
+        // Resolves once the background add finished, so the list refetch
+        // below sees the new row and a failure (e.g. a Spotify exclusive
+        // with no public feed) is shown instead of a false "done".
+        await followPodcast(rssUrl, 'add_podcast')
         setAddDone((prev) => {
           const next = new Set(prev)
           next.add(rssUrl)
@@ -352,20 +352,6 @@ function AddPodcastModalContent({ onClose }: Pick<AddPodcastModalProps, 'onClose
 }
 
 type FollowStatus = 'idle' | 'pending' | 'done'
-
-const ADD_POLL_INTERVAL_MS = 500
-const ADD_POLL_TIMEOUT_MS = 60_000
-
-async function waitForAddTask(): Promise<void> {
-  const deadline = Date.now() + ADD_POLL_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    const task = await getAddPodcastStatus()
-    if (task.status === 'failed') throw new Error(task.error || 'Failed to add podcast')
-    if (task.status === 'completed' || task.status === 'none') return
-    await new Promise((resolve) => setTimeout(resolve, ADD_POLL_INTERVAL_MS))
-  }
-  throw new Error('Adding the podcast is taking longer than expected. Check the Podcasts page in a moment.')
-}
 
 function statusOf(key: string, inFlight: Set<string>, done: Set<string>): FollowStatus {
   if (done.has(key)) return 'done'

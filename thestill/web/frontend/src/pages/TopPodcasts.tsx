@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { addPodcast, resolvePodcast } from '../api/client'
+import { useQueryClient } from '@tanstack/react-query'
+import { resolvePodcast } from '../api/client'
+import { followPodcast } from '../api/followPodcast'
 import { useTopPodcasts } from '../hooks/useApi'
 import type { ArtworkHintState } from '../hooks/useArtworkHint'
 import type { TopPodcast } from '../api/types'
@@ -15,6 +17,7 @@ export default function TopPodcasts() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const queryClient = useQueryClient()
   // Restore scroll position on Back from a podcast detail page.
   // Filters live in the URL query string so the browser Back button restores
   // both them *and* the scroll position when returning from a podcast detail
@@ -96,10 +99,16 @@ export default function TopPodcasts() {
     const key = podcast.rss_url
     setAdding((prev) => ({ ...prev, [key]: 'pending' }))
     try {
-      await addPodcast({ url: podcast.rss_url, source: 'top_podcasts' })
+      // Queued behind any other Follow clicked on this page, and resolves
+      // only once the show is really followed.
+      await followPodcast(podcast.rss_url, 'top_podcasts')
       setAdding((prev) => ({ ...prev, [key]: 'done' }))
-    } catch {
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    } catch (err) {
       setAdding((prev) => ({ ...prev, [key]: 'error' }))
+      const reason = err instanceof Error ? err.message : 'Failed to follow'
+      showToast(`Couldn't follow ${podcast.name}: ${reason}`, 'error')
     }
   }
 

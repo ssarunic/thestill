@@ -13,6 +13,7 @@ vi.mock('../api/client', () => ({
 }))
 
 import { addPodcast, getAddPodcastStatus, getTopPodcasts } from '../api/client'
+import { resetFollowQueueForTests } from '../api/followPodcast'
 
 const mockAddPodcast = addPodcast as ReturnType<typeof vi.fn>
 const mockGetAddPodcastStatus = getAddPodcastStatus as ReturnType<typeof vi.fn>
@@ -107,6 +108,7 @@ describe('AddPodcastModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useRealTimers()
+    resetFollowQueueForTests()
     mockGetAddPodcastStatus.mockResolvedValue({ status: 'completed', error: null })
   })
 
