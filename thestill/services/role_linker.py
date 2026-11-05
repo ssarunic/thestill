@@ -225,6 +225,8 @@ class LinkResult:
     # Names the speaker mapping labels host that are not the show's
     # hosts, taken as participants of the episode (rotating co-hosts).
     cohosts: List[str] = field(default_factory=list)
+    # Such names the transcript refused: they did not take part.
+    refused_cohosts: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -708,12 +710,15 @@ def link_episode_roles(
         markdown = _read_clean_transcript(path_manager, file_storage, clean_transcript_path, episode_id)
     tally = tally_speakers(markdown) if markdown else None
     cohosts = [name for name in candidates if tally is not None and _takes_part(name, tally)]
+    # Only a transcript-backed refusal counts: without one nothing is judged.
+    refused_cohosts = [name for name in candidates if tally is not None and name not in cohosts]
     roles.guests.extend((name, None) for name in cohosts)
     if tally is not None and roles.guests:
         roles.guests, quiet = drop_quiet_guests(roles.guests, roles.speaker_roles, tally)
         roles.clip_voices.extend(quiet)
     result = LinkResult(target_id=episode_id)
     result.cohosts = cohosts
+    result.refused_cohosts = refused_cohosts
     guests = _resolve_role_list(
         entity_repo, roles.guests, accumulator_for_created=result.created_entities, context_text=context_text
     )
@@ -742,8 +747,9 @@ def link_episode_roles(
             names=roles.clip_voices,
         )
     # see link_podcast_roles: an all-ambiguous list clears stale guests. A
-    # refused ad or clip voice clears too — an earlier run may have stored it.
-    if guests.writes or roles.ad_voices or roles.clip_voices:
+    # refused ad, clip or co-host voice clears too — an earlier run may
+    # have stored it.
+    if guests.writes or roles.ad_voices or roles.clip_voices or refused_cohosts:
         entity_repo.set_episode_guests(episode_id, result.guests)
     logger.info(
         "episode_roles_linked",
@@ -756,6 +762,7 @@ def link_episode_roles(
         ad_voices=result.ad_voices,
         clip_voices=result.clip_voices,
         cohosts=result.cohosts,
+        refused_cohosts=result.refused_cohosts,
     )
     return result
 

@@ -1111,3 +1111,28 @@ def test_a_show_host_spelt_differently_in_the_mapping_stays_a_host(tmp_path):
 
     assert result.cohosts == ["Jason Lemkin", "Rory O'Driscoll"]
     assert er.find_entity_by_name("Harry Stebbings").id not in result.guests
+
+
+def test_a_cohost_the_transcript_now_refuses_is_cleared(tmp_path):
+    er, podcast_id, episode_id, link = _trio(tmp_path)
+    link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+    harry = er.find_entity_by_name("Harry Stebbings")
+    assert len(er.get_episode_anchors(episode_id)) == 3
+
+    # A corrected transcript: the pair were a clip in this one.
+    corrected = {"Harry Stebbings": (60, 6000), "Jason Lemkin": (2, 60), "Rory O'Driscoll": (1, 40)}
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(corrected))
+
+    assert result.cohosts == []
+    assert result.refused_cohosts == ["Jason Lemkin", "Rory O'Driscoll"]
+    assert er.get_episode_anchors(episode_id) == [harry.id]
+
+
+def test_a_relink_without_a_transcript_leaves_cohosts_alone(tmp_path):
+    er, podcast_id, episode_id, link = _trio(tmp_path)
+    link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+
+    result = link(podcast_id=podcast_id)
+
+    assert result.refused_cohosts == []
+    assert len(er.get_episode_anchors(episode_id)) == 3
