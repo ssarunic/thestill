@@ -460,10 +460,21 @@ landing hook, not the cards, is what to change next.
   episode: re-resolves `speaker_entity_id` from the segment's current
   speaking mention (`NULL` when the segment no longer resolves, which
   renders "a guest on *Show*"; a now-hidden speaker makes the share 410),
-  and deletes the `quote_cards/<id>/` directory so the next request
-  re-renders with the corrected name while the id and link survive.
-  Between the edit and the refresh the old card can still serve; the
-  editor's existing "entities refreshing" state covers that window.
+  and deletes **every rendered asset that carries the name**: the
+  `quote_cards/<id>/` directory and the `quote_clips/<id>/` directory
+  (§4.2's videos embed the card PNG, so a stale video would keep showing
+  the wrong speaker after the card was fixed). Images re-render on the
+  next request. Videos are not rendered on `GET`, so for each share that
+  had a rendered clip the invalidation **re-queues the render itself**,
+  as a system job that reserves no user quota and runs under the same
+  concurrency limit; until it finishes `GET /q/<id>/<variant>.mp4`
+  returns 404 with `Retry-After`, never the old file. The `quote_audio`
+  MP3 carries no name and is kept. Image and video cache keys include a
+  hash of the speaker name beside `template_version`, so a stale file
+  can never match a fresh request even if a deletion is missed. The id
+  and link survive. Between the edit and the refresh the old assets can
+  still serve; the editor's existing "entities refreshing" state covers
+  that window.
 - **Hidden speaker** (`entities.public_hidden`): every route 404s or 410s,
   assets deleted by the same invalidation.
 - **Show opt-out**: `set-podcast-visibility --public false` already removes
@@ -541,7 +552,9 @@ building.
   speaker's share is 404/410 with no assets on disk.
 - After a segment's speaker is corrected from A to B in the transcript
   editor and the entity refresh completes, `/q/<id>.png` for that quote
-  shows B, with the same id and link.
+  shows B, with the same id and link; a previously rendered
+  `/q/<id>/<variant>.mp4` is never served with A again, and comes back
+  showing B once the re-queued render finishes.
 - `/analytics` labels `quote_shares` counts as links minted; share
   volume comes from `quote_share_actions` and opens from
   `quote_share_hits`.
@@ -569,9 +582,12 @@ building.
   read by the OAuth callback.
 - **Invalidation**: a `rename-speaker` op that moves a segment from
   person A to person B, followed by the entity refresh, rewrites the
-  share's `speaker_entity_id` to B, deletes the card directory, and the
-  next render shows B's name; relinking to no entity renders "a guest on
-  *Show*"; the on-read upsert updates a stale `speaker_entity_id`.
+  share's `speaker_entity_id` to B, deletes the card and clip
+  directories, re-queues the clip render without a quota reservation,
+  and the next card render shows B's name while the clip URL is 404 with
+  `Retry-After` until the new video exists; relinking to no entity
+  renders "a guest on *Show*"; the on-read upsert updates a stale
+  `speaker_entity_id`; a cache key with the old speaker hash never serves.
 - **Measurement**: serving a quotes payload twice adds rows to
   `quote_shares` only once and never to `quote_share_actions`; a
   signed-in download adds one action row; an anonymous `POST …/actions`
