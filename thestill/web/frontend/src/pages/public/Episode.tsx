@@ -59,7 +59,6 @@ export default function Episode() {
   // visitor who came from a quote lands on its line (?t=, see
   // episodeTimestampPath).
   const transcriptPath = `${episodeHref}?view=transcript${linkedSeconds != null ? `&t=${linkedSeconds}` : ''}`
-  const readTranscript = useSignIn('transcript', transcriptPath)
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]
   const more = usePublicPodcastEpisodes(podcastSlug)
@@ -154,17 +153,17 @@ export default function Episode() {
               <button type="button" role="tab" aria-selected={tab === 'summary'} className={`ts-tab ${tab === 'summary' ? 'ts-tab-active' : ''}`} onClick={() => setTab('summary')}>
                 Summary
               </button>
-              {/* Spec #102 — the tab works as it does signed in; signed out it
-                  asks for sign-in and comes back to the transcript. */}
-              <Link role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} to={readTranscript} rel="nofollow">
+              {/* Spec #102 — the tab opens in place and shows the sign-in card;
+                  its button signs in and comes back to the transcript. */}
+              <button type="button" role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} onClick={() => setTab('transcript')}>
                 Transcript
-              </Link>
+              </button>
             </div>
           </div>
 
           {tab === 'transcript' ? (
             <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
-              Sign in to read every word, search across every show, and get each new episode summarised in your inbox.
+              Sign in to read every word, with speaker names and timestamps.
             </SignInCard>
           ) : (
             <article className="ts-summary ts-fade-in">
@@ -249,12 +248,6 @@ export default function Episode() {
                 )}
               </div>
             </section>
-          )}
-
-          {tab === 'summary' && (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
-              Sign in to read every word, with speaker names and timestamps.
-            </SignInCard>
           )}
         </div>
 
