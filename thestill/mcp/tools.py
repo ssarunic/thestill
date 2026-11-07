@@ -38,6 +38,7 @@ from ..models.transcription import TranscribeOptions
 from ..services import PodcastService, RefreshService, StatsService
 from ..services.abuse.errors import ReadOnlyError
 from ..services.abuse.wiring import build_abuse_services
+from ..services.analytics_service import AnalyticsService
 from ..services.auth_service import AuthService
 from ..services.follower_service import NotFollowingError
 from ..utils.config import Config, load_config
@@ -45,6 +46,12 @@ from ..utils.datetime_utils import now_utc
 from ..utils.path_manager import PathManager
 from ..utils.url_generator import episode_links
 from ..web.middleware.rate_limit import RateLimitExceeded, enforce_mcp_mutation_quota
+from .analytics_tools import (
+    ANALYTICS_TOOL_NAMES,
+    analytics_tool_definitions,
+    dispatch_analytics_tool,
+    new_analytics_cache,
+)
 from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
@@ -175,6 +182,13 @@ def setup_tools(
     from ..services.follower_service import FollowerService
     from ..services.inbox_service import InboxService
 
+    # Spec #115 — the admin analytics tool reads the same report as /analytics.
+    from ..web.routes.api_entities import entity_path_resolver
+
+    analytics_service = AnalyticsService(
+        repos.analytics, enabled=config.multi_user, entity_path=entity_path_resolver(entity_repository)
+    )
+    analytics_cache = new_analytics_cache()
     inbox_service = InboxService.from_config(
         config,
         repos.inbox,
@@ -453,6 +467,8 @@ def setup_tools(
             *search_tool_definitions(),
             # Spec #112 — list the inbox, import an episode, send one there.
             *inbox_tool_definitions(),
+            # Spec #115 — admins only; nothing for anyone else.
+            *analytics_tool_definitions(identity),
         ]
         # Spec #78 Phase 2 — over the remote connector only the tools the
         # token's (effective) scopes grant are listed. Advisory: the
@@ -1734,6 +1750,11 @@ def setup_tools(
             entity_response = dispatch_entity_tool(name, arguments, entity_repository, base_url=config.public_base_url)
             if entity_response is not None:
                 return entity_response
+
+            if name in ANALYTICS_TOOL_NAMES:
+                return dispatch_analytics_tool(
+                    name, arguments, identity, service=analytics_service, cache=analytics_cache
+                )
 
             if name in INBOX_TOOL_NAMES:
                 # Spec #112 — whose inbox: the connector's user; on stdio the

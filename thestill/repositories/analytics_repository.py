@@ -30,6 +30,7 @@ from ..models.analytics import (
     EngagementReport,
     ScorecardReport,
     SignupsReport,
+    TrafficReport,
 )
 
 
@@ -72,6 +73,12 @@ class AnalyticsRepository(ABC):
         readers in ``previous`` for the change column (spec #103). One
         statement per table."""
 
+    @abstractmethod
+    def traffic(self, window: AnalyticsWindow, *, limit: int) -> TrafficReport:
+        """Signed-out public page views per UTC day of ``window`` and its
+        top ``limit`` pages, each with the same number of whole days just
+        before it (spec #115). One statement each."""
+
 
 class UnavailableAnalyticsRepository(AnalyticsRepository):
     """Stand-in for backends with no analytics (SQLite)."""
@@ -97,4 +104,7 @@ class UnavailableAnalyticsRepository(AnalyticsRepository):
         self._unavailable()
 
     def content(self, window: AnalyticsWindow, previous: AnalyticsWindow, *, limit: int) -> ContentReport:
+        self._unavailable()
+
+    def traffic(self, window: AnalyticsWindow, *, limit: int) -> TrafficReport:
         self._unavailable()

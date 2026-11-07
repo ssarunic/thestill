@@ -33,7 +33,7 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Dict, Iterable, List, Literal, Optional, Sequence, Set
+from typing import Annotated, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
@@ -495,6 +495,37 @@ def url_owner(candidates: Sequence[str], with_mentions: Set[str]) -> str:
     resolver and the sitemap both decide through here (spec #42 FM-6).
     """
     return next((entity_id for entity_id in candidates if entity_id in with_mentions), candidates[0])
+
+
+def entity_path_resolver(entity_repository) -> Callable[[str], Optional[str]]:
+    """``entity_page_path`` bound to a repository, for ``AnalyticsService``."""
+    return lambda entity_id: entity_page_path(entity_repository, entity_id)
+
+
+def entity_page_path(entity_repository, entity_id: str) -> Optional[str]:
+    """The ``/entities/<type>/<slug>`` path that shows ``entity_id``, or None.
+
+    The current type's URL when this entity owns it, else the URL of the
+    type its id was minted with: a re-typed entity whose current-type URL
+    belongs to another row keeps its old one (``current_entity_path``).
+    None when neither shows it, or it no longer exists. Spec #115 links the
+    admin traffic report's entity pages through here.
+    """
+    records = entity_repository.get_entities_by_ids([entity_id])
+    if not records:
+        return None
+    prefix, _, bare_slug = entity_id.partition(":")
+    if not bare_slug:
+        prefix, bare_slug = "", entity_id
+    for entity_type in dict.fromkeys((records[0].type.value, prefix)):
+        if entity_type not in _VALID_TYPES:
+            continue
+        try:
+            if _entity_id_from_path(entity_repository, entity_type, bare_slug) == entity_id:
+                return f"/entities/{entity_type}/{bare_slug}"
+        except HTTPException:
+            continue
+    return None
 
 
 def _citation_row(ctx: MentionContext) -> CitationRow:

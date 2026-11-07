@@ -81,3 +81,50 @@ def test_scorecard_is_in_the_report_and_on_its_own_with_the_same_clock(repo):
 def test_scorecard_respects_availability(repo):
     with pytest.raises(AnalyticsUnavailableError):
         AnalyticsService(repo, enabled=False).scorecard()
+
+
+def test_traffic_entity_paths_go_through_the_resolver(repo):
+    """Spec #115: the repository's entity path assumes the current-type URL;
+    the resolver knows when another row owns it. Pages whose entity is gone
+    (no title) and non-entity pages are left alone."""
+    asked = []
+
+    def resolve(entity_id):
+        asked.append(entity_id)
+        return "/entities/company/nvidia"
+
+    service = AnalyticsService(repo, enabled=True, clock=lambda: NOW, entity_path=resolve)
+    pages = service.report("7d").traffic.top_pages
+    assert asked == []  # the fake's only entity page is a gone one
+    assert pages[1].path is None and pages[0].path.startswith("/podcasts/")
+
+
+def test_traffic_entity_path_failure_keeps_the_report(repo, monkeypatch):
+    from thestill.models.analytics import TrafficPage
+
+    original = repo.traffic
+
+    def with_live_entity(window, *, limit):
+        report = original(window, limit=limit)
+        report.top_pages.append(
+            TrafficPage(
+                kind="entity",
+                object_id="topic:x",
+                title="X",
+                parent_title=None,
+                path="/entities/topic/x",
+                views=1,
+                views_previous=0,
+            )
+        )
+        return report
+
+    monkeypatch.setattr(repo, "traffic", with_live_entity)
+
+    def broken(entity_id):
+        raise RuntimeError("db down")
+
+    service = AnalyticsService(repo, enabled=True, clock=lambda: NOW, entity_path=broken)
+    assert service.report("7d").traffic.top_pages[-1].path == "/entities/topic/x"
+    fixed = AnalyticsService(repo, enabled=True, clock=lambda: NOW, entity_path=lambda _: "/entities/company/x")
+    assert fixed.report("7d").traffic.top_pages[-1].path == "/entities/company/x"
