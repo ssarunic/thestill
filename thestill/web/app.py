@@ -470,7 +470,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         listening_service=ListeningProgressService(
             repos.listening_progress, repository, mark_read=inbox_service.mark_read
         ),
-        analytics_service=AnalyticsService(repos.analytics, enabled=config.multi_user),
+        analytics_service=AnalyticsService(
+            repos.analytics, enabled=config.multi_user, entity_path=api_entities.entity_path_resolver(entity_repository)
+        ),
         analytics_sink=make_analytics_sink(config),
         episode_view_repository=repos.episode_view,
         public_page_view_repository=repos.public_page_view,

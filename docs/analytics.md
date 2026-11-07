@@ -4,11 +4,20 @@ Thestill measures use in two layers ([spec #95](../specs/95-product-analytics.md
 
 | Layer | Source | Where you read it |
 |---|---|---|
-| A. Product funnel | Product tables: signups, follows, reads, briefings | `/analytics` admin page, `thestill analytics` |
+| A. Product funnel | Product tables: signups, follows, reads, briefings, public page counters | `/analytics` admin page, `thestill analytics`, the `get_analytics` connector tool (admins) |
 | B. Usage events | PostHog Cloud (EU) | PostHog |
 
 Layer A needs no configuration: it works on any multi-user Postgres
 install. This page is mostly about Layer B, after the Scorecard.
+
+**From Claude.** An admin's Thestill connector has `get_analytics`
+([spec #115](../specs/115-admin-analytics-mcp.md)): the same report as
+`/analytics`, so "how are we doing" needs no production access. It also
+carries the **public traffic** section that `thestill analytics` prints:
+signed-out views per UTC day by page kind and the top public pages, from
+`public_page_daily_views`. Those counts include JS-running scrapers with
+browser user agents (a burst of no-referrer entity views is the tell);
+spec #115 Phase 2 proposes counting engaged views to filter them.
 
 ## Scorecard (Layer A, spec #111)
 

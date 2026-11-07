@@ -40,6 +40,7 @@ from ..models.analytics import (
     COHORT_ROWS,
     COHORT_WEEKS,
     ENGAGED_DAYS,
+    PUBLIC_KINDS,
     RETENTION_WEEK,
     SCORECARD_METRICS,
     SCORECARD_WEEKS,
@@ -63,6 +64,9 @@ from ..models.analytics import (
     SignupDay,
     SignupsReport,
     StepStat,
+    TrafficDay,
+    TrafficPage,
+    TrafficReport,
     ratio,
 )
 from ..utils.postgres_ext import connect
@@ -519,6 +523,55 @@ SELECT COALESCE(top.name, %(uncategorised)s) AS category,
  ORDER BY readers DESC, followers DESC, category
 """
 
+# Spec #115: signed-out public views per UTC day and kind, over the
+# previous window and this one.
+_TRAFFIC_DAYS_SQL = """
+SELECT day, kind, sum(views) AS views
+  FROM public_page_daily_views
+ WHERE day >= %(prev_start_day)s AND day <= %(end_day)s
+ GROUP BY day, kind
+"""
+
+# Spec #115: the most-viewed public pages in the window, with what the
+# operator needs to recognise and open them. An entity's path uses its
+# current type and the id without its type prefix (``api_public.entity_slug``),
+# because a re-typed entity keeps its id. Pages whose object is gone keep
+# their counts with no title or path.
+_TRAFFIC_TOP_PAGES_SQL = """
+WITH views AS (
+    SELECT kind, object_id,
+           COALESCE(sum(views) FILTER (WHERE day >= %(start_day)s), 0) AS views,
+           COALESCE(sum(views) FILTER (WHERE day < %(start_day)s), 0) AS views_previous
+      FROM public_page_daily_views
+     WHERE day >= %(prev_start_day)s AND day <= %(end_day)s
+     GROUP BY kind, object_id
+)
+SELECT v.kind, v.object_id, v.views, v.views_previous,
+       CASE v.kind
+           WHEN 'landing' THEN 'Home'
+           WHEN 'top' THEN 'Top podcasts'
+           WHEN 'podcast' THEN p.title
+           WHEN 'episode' THEN e.title
+           WHEN 'entity' THEN en.canonical_name
+       END AS title,
+       CASE WHEN v.kind = 'episode' THEN ep.title END AS parent_title,
+       CASE v.kind
+           WHEN 'landing' THEN '/'
+           WHEN 'top' THEN '/top'
+           WHEN 'podcast' THEN '/podcasts/' || p.slug
+           WHEN 'episode' THEN '/podcasts/' || ep.slug || '/episodes/' || e.slug
+           WHEN 'entity' THEN '/entities/' || en.type || '/' || substr(en.id, strpos(en.id, ':') + 1)
+       END AS path
+  FROM views v
+  LEFT JOIN podcasts p ON v.kind = 'podcast' AND p.id::text = v.object_id
+  LEFT JOIN episodes e ON v.kind = 'episode' AND e.id::text = v.object_id
+  LEFT JOIN podcasts ep ON ep.id = e.podcast_id
+  LEFT JOIN entities en ON v.kind = 'entity' AND en.id = v.object_id
+ WHERE v.views > 0
+ ORDER BY v.views DESC, v.kind, v.object_id
+ LIMIT %(limit)s
+"""
+
 
 # Activity weeks are reader-local, so a week has ended everywhere only once
 # the westernmost offset in use (UTC-12, ``Etc/GMT+12``) has left it.
@@ -758,4 +811,34 @@ class PostgresAnalyticsRepository(AnalyticsRepository):
                 CategoryStat.model_validate(row)
                 for row in self._rows(_CONTENT_CATEGORIES_SQL, uncategorised=UNCATEGORISED, **params)
             ],
+        )
+
+    def traffic(self, window: AnalyticsWindow, *, limit: int) -> TrafficReport:
+        # The counter is per UTC day: the window is its whole days, the
+        # newest one partial; the previous window is as many whole days
+        # just before it (spec #115 D4).
+        start_day = window.start.astimezone(timezone.utc).date()
+        end_day = (window.end - timedelta(microseconds=1)).astimezone(timezone.utc).date()
+        days = [start_day + timedelta(days=i) for i in range((end_day - start_day).days + 1)]
+        params = {
+            "start_day": start_day,
+            "end_day": end_day,
+            "prev_start_day": start_day - timedelta(days=len(days)),
+            "limit": limit,
+        }
+        per_day: Dict[date, Dict[str, int]] = defaultdict(lambda: dict.fromkeys(PUBLIC_KINDS, 0))
+        total_previous = 0
+        for row in self._rows(_TRAFFIC_DAYS_SQL, **params):
+            if row["day"] < start_day:
+                total_previous += _n(row, "views")
+            else:
+                per_day[row["day"]][row["kind"]] = _n(row, "views")
+        series = [TrafficDay(day=d, total=sum(per_day[d].values()), by_kind=per_day[d]) for d in days]
+        by_kind = {kind: sum(day.by_kind.get(kind, 0) for day in series) for kind in PUBLIC_KINDS}
+        return TrafficReport(
+            days=series,
+            total=sum(day.total for day in series),
+            total_previous=total_previous,
+            by_kind=by_kind,
+            top_pages=[TrafficPage.model_validate(row) for row in self._rows(_TRAFFIC_TOP_PAGES_SQL, **params)],
         )

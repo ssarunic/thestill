@@ -148,6 +148,7 @@ transcript on the instance. Over the connector:
   They need the **Follows & imports** scope, like `add_podcast`.
 - `get_status` returns counts over your follows only; admins get the full
   operator payload.
+- `get_analytics` is admins only: the `/analytics` report (spec #115).
 - Podcast identifiers are `uuid`, `slug` or RSS URL. A bare number is
   refused with an error naming the accepted forms.
 - Tools your token does not grant are not listed, and calling one anyway
@@ -1177,6 +1178,34 @@ read.
 `source` says how the episode arrived: `follow_new` or `follow_seed` (a
 show you follow), `ad_hoc` (sent there) or `import`. `next_before` is
 `null` when there are no older rows.
+
+### 24. `get_analytics`
+
+Admins only ([spec #115](../specs/115-admin-analytics-mcp.md)). The
+product analytics report the `/analytics` page shows, so an admin can ask
+Claude "how are we doing this week" over the connector they already have.
+It sits in the **Read** scope, because an admin's web session can see
+`/analytics`; it is not listed for anyone else, and a call from a
+non-admin reads as an unknown tool.
+
+**Parameters** (all optional):
+
+- `range` (string): `7d` (default), `28d` or `90d`, ending now.
+- `detail` (string): `summary` (default) keeps the top 10 rows of each
+  ranked list, the last 6 signup cohorts and the activation funnel
+  without its per-source split. `full` returns every row. Totals are the
+  same in both.
+
+**Response:** `{"available": true, "detail": …, …}` with the Scorecard,
+signups, activation, cohorts, engagement, content and `traffic`: public
+(signed-out) page views per UTC day by page kind, the previous window's
+total, and the most-viewed public pages with title and path. On a
+single-user or SQLite install, `{"available": false, "reason": …}`.
+Reports are cached for 10 minutes per range.
+
+Not included: the sign-in funnel and referrers (PostHog) and search
+clicks (Search Console). Public views count JS-running scrapers; a burst
+of entity views is usually one.
 
 ---
 

@@ -121,6 +121,7 @@ drift into collecting things it does not need.
 |---|---|---|---|
 | Acquisition | Public page views per day by kind (landing, episode, podcast, entity, top), excluding bots | B | server `public_page_view` |
 | Acquisition | Top referrer hosts for public views | B | same event, `referrer_host` |
+| Acquisition | Most-viewed public pages, with titles and paths (spec #115) | A | `public_page_daily_views` |
 | Acquisition | Sign-in starts from public pages, which page kind, and how many complete | B | server `login_started` (`from_kind`) → `login_completed` (`next_kind`) |
 | Acquisition | Signups per day, and how many arrived through each kind of public page | A | `users.created_at`, `users.signup_source` (§2) |
 | Activation | Every activation step below, broken down by signup source | A | `users.signup_source` |

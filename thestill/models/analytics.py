@@ -315,6 +315,47 @@ class ScorecardReport(BaseModel):
     notes: List[str] = Field(default_factory=lambda: list(SCORECARD_NOTES))
 
 
+PUBLIC_KINDS = ("landing", "top", "podcast", "episode", "entity")
+
+TRAFFIC_NOTES = (
+    "Signed-out browser views of public pages, from the per-page daily counter (spec #103). "
+    "Signed-in readers, crawlers and link previews are not counted.",
+    "JS-running scrapers with browser user agents are counted: a burst of entity views is usually "
+    "a scraper (spec #115 Phase 2 proposes engaged views to filter them).",
+    "Days are UTC and today is partial, so the newest day and the window total undercount.",
+    "The previous window is the same number of whole days just before this one.",
+)
+
+
+class TrafficDay(BaseModel):
+    day: date
+    total: int
+    by_kind: Dict[str, int]  # every PUBLIC_KINDS key, zero-filled
+
+
+class TrafficPage(BaseModel):
+    """One public page and its signed-out views (spec #115)."""
+
+    kind: str  # one of PUBLIC_KINDS
+    object_id: str  # '' for the landing and top pages
+    title: Optional[str]  # None when the object no longer exists
+    parent_title: Optional[str]  # the show, for an episode page
+    path: Optional[str]  # site path; None when the object no longer exists
+    views: int
+    views_previous: int
+
+
+class TrafficReport(BaseModel):
+    """Signed-out public page views in the window (spec #115)."""
+
+    days: List[TrafficDay]  # every day of the window, zero-filled
+    total: int
+    total_previous: int
+    by_kind: Dict[str, int]  # every PUBLIC_KINDS key, zero-filled
+    top_pages: List[TrafficPage]
+    notes: List[str] = Field(default_factory=lambda: list(TRAFFIC_NOTES))
+
+
 class AnalyticsReport(BaseModel):
     generated_at: datetime
     range: str
@@ -325,6 +366,7 @@ class AnalyticsReport(BaseModel):
     cohorts: CohortsReport
     engagement: EngagementReport
     content: ContentReport
+    traffic: TrafficReport
     notes: List[str]
 
 

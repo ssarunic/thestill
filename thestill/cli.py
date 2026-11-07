@@ -38,7 +38,7 @@ from .evals.compare import compare_runs
 from .evals.rubrics import ENTITY_LINKING, RUBRICS, get_rubric
 from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
-from .models.analytics import COHORT_ROWS, SMALL_GROUP, ContentReport
+from .models.analytics import COHORT_ROWS, SMALL_GROUP, ContentReport, TrafficReport
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.briefing_repository import BriefingRepository
@@ -306,7 +306,9 @@ def main(ctx, config, quiet):
             follower_service=follower_service,
             legacy_claim_service=legacy_claim_service,
             link_decision_repository=repos.link_decision,
-            analytics_service=AnalyticsService(repos.analytics, enabled=config_obj.multi_user),
+            analytics_service=AnalyticsService(
+                repos.analytics, enabled=config_obj.multi_user, entity_path=_lazy_entity_path(entity_repository)
+            ),
             abuse=abuse,
             transcript_edit_repository=repos.transcript_edit,
         )
@@ -6646,6 +6648,19 @@ def _grade_one(repo, question: dict, limit: int) -> dict:
     }
 
 
+def _lazy_entity_path(entity_repository):
+    """``api_entities.entity_page_path`` for the analytics report (spec
+    #115), imported on first use so the CLI doesn't load the web routes
+    at startup."""
+
+    def resolve(entity_id: str):
+        from .web.routes.api_entities import entity_page_path
+
+        return entity_page_path(entity_repository, entity_id)
+
+    return resolve
+
+
 def _pct_cell(numerator: int, denominator: int, pct, width: int = 0) -> str:
     """``42.0% (21/50)`` right-aligned to ``width``, dimmed when the group is
     too small to read into. Pads before styling: ANSI codes would otherwise
@@ -6707,6 +6722,23 @@ def _render_content(content: ContentReport, top: int = 10) -> None:
         click.echo(click.style(f"Note: {note}", dim=True))
 
 
+def _render_traffic(traffic: TrafficReport, top: int = 10) -> None:
+    """Spec #115: signed-out public views, per kind, and the top pages."""
+    click.echo(f"\nPublic traffic: {traffic.total} views (previous window {traffic.total_previous})")
+    click.echo("  " + "  ".join(f"{kind} {n}" for kind, n in traffic.by_kind.items()))
+    days = "  ".join(f"{d.day:%m-%d} {d.total}" for d in traffic.days[-14:])
+    click.echo(click.style(f"  per day: {days}", dim=True))
+    if not traffic.top_pages:
+        click.echo("  No public views in this window.")
+    for page in traffic.top_pages[:top]:
+        label = page.title or f"(gone) {page.kind} {page.object_id}"
+        if page.parent_title:
+            label = f"{page.parent_title} — {label}"
+        click.echo(f"  {page.views:>6} ({page.views_previous:>5} before)  {page.kind:<8} {_fit(label, 60)}")
+    for note in traffic.notes:
+        click.echo(click.style(f"Note: {note}", dim=True))
+
+
 def _render_scorecard(scorecard) -> None:
     """The spec #111 Scorecard: each metric's newest graded week, then the
     last weeks oldest first, then the guardrails."""
@@ -6765,6 +6797,7 @@ def _render_analytics(report) -> None:
     click.echo(f"  Follows: {e.follows}")
 
     _render_content(report.content)
+    _render_traffic(report.traffic)
 
     click.echo("")
     for note in report.notes:

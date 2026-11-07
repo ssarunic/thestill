@@ -28,6 +28,9 @@ from thestill.models.analytics import (
     SignupDay,
     SignupsReport,
     StepStat,
+    TrafficDay,
+    TrafficPage,
+    TrafficReport,
 )
 from thestill.repositories.analytics_repository import AnalyticsRepository
 
@@ -157,6 +160,36 @@ class FakeAnalyticsRepository(AnalyticsRepository):
                 ),
                 CategoryStat(
                     category="Uncategorised", shows=1, shows_read=1, followers=20, readers=1, readers_previous=0
+                ),
+            ],
+        )
+
+    def traffic(self, window: AnalyticsWindow, *, limit: int) -> TrafficReport:
+        self.calls.append(("traffic", (window, limit)))
+        by_kind = {"landing": 4, "top": 1, "podcast": 6, "episode": 30, "entity": 9}
+        return TrafficReport(
+            days=[TrafficDay(day=date(2026, 10, 14), total=50, by_kind=by_kind)],
+            total=50,
+            total_previous=40,
+            by_kind=by_kind,
+            top_pages=[
+                TrafficPage(
+                    kind="episode",
+                    object_id="e1",
+                    title="The AI Episode",
+                    parent_title="Hard Fork",
+                    path="/podcasts/hard-fork/episodes/the-ai-episode",
+                    views=12,
+                    views_previous=3,
+                ),
+                TrafficPage(
+                    kind="entity",
+                    object_id="person:gone",
+                    title=None,
+                    parent_title=None,
+                    path=None,
+                    views=2,
+                    views_previous=0,
                 ),
             ],
         )
