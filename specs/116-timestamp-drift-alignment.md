@@ -431,15 +431,130 @@ same word.
 - Map building: the existing banner text, with "Aligning…" beneath it.
 - Map failed or not attempted: today's banner, unchanged.
 
-### 7. Logging and analytics
+### 7. Logging, audit and proof of correctness
 
-- Server: `sync_track_written` (`episode_id`, `anchors`, `bytes`,
-  `duration_ms`), `sync_track_failed`.
-- Client (PostHog, per #95): `drift_alignment_result` with `outcome`
-  (`identity_assumed`, `identity`, `aligned`, `no_cors`, `variant_mismatch`,
-  `low_confidence`, `unsupported_codec`, `error`), span count, largest
-  offset, and bytes fetched. This is the measure of how often the banner
-  is replaced.
+A log of what the aligner decided does not show that the decision was
+right. This section has three layers: what each step records, what the
+listener's behaviour shows, and an independent audit that checks the
+result against the audio itself.
+
+All server events use `structlog` with `episode_id`, `podcast_id` and the
+track `generation`. No event carries a user id, an IP address or a full
+audio URL (host only).
+
+#### 7.1 Building the track (server)
+
+| Event | Fields | What it confirms |
+|---|---|---|
+| `sync_track_written` | `source` (`local`, `dalston`, `realign`), `frames`, `anchors_kept`, `anchors_dropped_duplicate`, `unique_ratio`, `audio_bytes`, `audio_duration_s`, `track_bytes`, `duration_ms` | a track exists and how dense it is |
+| `sync_track_transcript_mismatch` (error) | `audio_duration_s`, `transcribed_input_duration_s`, `delta_s` | the track and the transcript do **not** describe the same bytes |
+| `sync_track_failed` | `source`, `reason`, `exc_info` | no track, and why |
+| `sync_track_switched` | `old_generation`, `new_generation` | transcript and track changed together |
+
+`sync_track_transcript_mismatch` is the key invariant. The audio the
+track was cut from and the audio the transcript came from must have the
+same duration within 1 s. The comparison uses the input duration the
+transcription job reports for its audio, not the time of the last
+transcribed word: an episode that ends on music has a last word well
+before the end of the file. When the two differ, the track is discarded
+rather than published. To verify during implementation: that every
+provider reports its input duration.
+
+#### 7.2 Building the map (client, reported to the server)
+
+The worker posts one report per attempt to
+`POST /api/episodes/{id}/drift-outcome` (section 8). The server logs it
+as `drift_map_reported` and forwards the summary to PostHog as
+`drift_alignment_result` (#95). The body is validated and capped at
+4 KB; a map is a handful of spans, so the whole map fits.
+
+| Field | Meaning |
+|---|---|
+| `outcome` | `identity_assumed`, `identity`, `aligned`, `no_cors`, `variant_mismatch`, `low_confidence`, `unsupported_codec`, `error` |
+| `spans` | the fitted map: `[{src_start, src_end, offset}]` |
+| `gaps_confirmed_s`, `unresolved_s`, `listener_ads_s` | seconds in each class of interval (section 4, step 5) |
+| `coverage` | share of non-`ad_break` transcript time inside matched spans |
+| `anchors_total`, `anchors_hit`, `anchors_inlier`, `anchors_outlier` | how many landmarks were found, and how many agree with the span they fall in |
+| `verify_length_ok`, `verify_ranges_checked`, `verify_ranges_matched` | the two checks of step 6 |
+| `audio_host`, `audio_bytes`, `fetched_bytes`, `fetch_ms`, `fit_ms` | where the audio came from and what the pass cost |
+| `browser` | family and major version |
+
+What to read from it:
+
+- **Inlier share.** In a correct map nearly every landmark that was
+  found agrees with its span. A map with many outliers was fitted to
+  noise even if it passed the coverage threshold.
+- **Unresolved seconds.** Time where the aligner declined to decide.
+  Large values on one show point at a host that re-encodes.
+- **Verification counts.** `verify_ranges_matched` below
+  `verify_ranges_checked` on an applied map is a bug, and is logged at
+  error level.
+
+#### 7.3 Aligning old episodes (Phase 5)
+
+`sync_track_realigned`: `words_old`, `words_new`, `words_matched`,
+`match_ratio`, `spans`, and for each span the number of word samples and
+the spread of their offsets (median absolute deviation). A tight spread
+(under 0.1 s) with a high match ratio is the evidence that the old
+timings map cleanly onto the new copy. `sync_track_unalignable` carries
+the same fields when the thresholds are missed.
+
+#### 7.4 What listeners do
+
+A segment click that lands in the wrong place is usually followed by a
+manual correction. The client records `segment_seek_corrected` when a
+seek started from a transcript segment, a citation or a chapter is
+followed within 10 s by a manual seek of less than 90 s. The rate is
+compared across three groups: episodes with an applied map, episodes
+with a provisional identity, and episodes showing the banner. An applied
+map that works should bring the rate down to the identity group's.
+
+#### 7.5 Independent audit
+
+The checks above all rest on the same landmarks. The audit does not. It
+asks the question directly: is the sentence the transcript promises
+actually spoken at the mapped time?
+
+`thestill sync-track audit [--podcast-id X] [--episode <slug>] [--sample N]`:
+
+1. Download the episode afresh. This is a new copy with whatever ads
+   the server is given, as a listener would get.
+2. Build the map with the same fitter the browser uses (one
+   implementation, shared by test vectors with the client).
+3. Pick sample points: one shortly after each span boundary, where an
+   error would show first, and others spread across the episode.
+4. At each point cut 10 s of audio at the *mapped* time, transcribe that
+   clip, and compare its words with the stored transcript's words for
+   the same 10 s.
+5. For each sample, also search the clip's words in the transcript
+   within ±120 s to measure how far off the timing is, not just whether
+   it matched.
+
+Logged as `sync_track_audit` per episode: `samples`, `samples_matched`,
+`median_error_s`, `max_error_s`, `spans`, and the failing sample times.
+An episode passes when every sample matches with an error under 0.5 s
+(Goal 1).
+
+The audit runs on a schedule over a small random sample of recently
+played episodes (a runtime setting, default 5 per day) and on demand. It
+costs one download and under two minutes of transcription per episode.
+Its pass rate and median error go on the admin analytics surface next to
+the outcome mix.
+
+The audit checks the map against a server download, not against one
+listener's copy. It proves the method on that episode; the service
+worker check of step 6 is what ties a map to a listener.
+
+#### 7.6 Looking at one episode
+
+- `thestill sync-track show --episode <slug>` prints the track header,
+  anchor density per minute, and the last reported maps and audit for
+  the episode from the logs.
+- For admins, the reader takes `?driftdebug=1`: a strip above the
+  transcript draws the spans, confirmed gaps, unresolved intervals and
+  listener-side ads on the episode timeline, shows the offset applied to
+  each seek, and offers "play 5 s from the start of each span" for a
+  check by ear.
 
 ### 8. Per-show ad profile
 
@@ -527,6 +642,7 @@ Art19. Phase 1 does not depend on any of these and can start.
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
 | 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
+| 1.6 | `thestill/core/sync_track.py` | events of section 7.1, including the track/transcript duration invariant |
 
 Acceptance: a contract test that builds a track from a fixture MP3,
 splices a second MP3 into a copy of it at two points, and recovers both
@@ -549,11 +665,15 @@ every such transcript.
 | 2.1 | `src/workers/driftAlign.worker.ts` (new) | stream fetch, frame hashing, fitter, verification |
 | 2.2 | `src/contexts/playback-engine/` | `TimelineMap` with `toAsset` / `toLogical` |
 | 2.3 | `src/contexts/PlayerContext.tsx`, `EpisodeReader.tsx` | route seeks and karaoke through the map; banner states |
-| 2.4 | analytics | `drift_alignment_result` |
-| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome` updating the per-show ad profile (rate-limited) |
+| 2.4 | analytics | `drift_alignment_result`, `segment_seek_corrected` |
+| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome`: validates and logs `drift_map_reported`, updates the per-show ad profile (rate-limited, 4 KB cap) |
+| 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | server-side fitter sharing test vectors with the worker; `thestill sync-track audit` and `show`; scheduled audit sample |
+| 2.7 | `EpisodeReader.tsx` | admin-only `?driftdebug=1` strip |
 
 Acceptance: a Playwright test serves two spliced variants of one fixture
-and asserts that a segment click lands on the same audio in both.
+and asserts that a segment click lands on the same audio in both. The
+audit command passes on that fixture, and fails when the fixture's map
+is shifted by 2 s on purpose.
 
 ### Phase 3: perceptual fallback and AAC
 
