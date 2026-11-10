@@ -156,6 +156,16 @@ enclosures, and any of this inside a real browser.
    host. They break when a publisher re-encodes or re-uploads. The
    perceptual fingerprint survives that, and costs a decode.
 
+4. **Why does Thestill compute the track on the Dalston path, and not
+   Dalston?** (Decided 2026-11-10.) The sync track is a playback concern
+   of Thestill's reader; no other Dalston client has a use for it.
+   Dalston's contract stays generic: transcribe this input, and let the
+   caller read back the input that was processed, which it already
+   does. Thestill then has one frame parser and one track format for
+   every provider, and can change the algorithm version without a
+   Dalston release. The cost is one read of the audio per episode from
+   Dalston's storage.
+
 ## Design
 
 ### 1. The sync track
@@ -209,10 +219,13 @@ There are two paths to those bytes:
   Thestill never sees the bytes. A download made by Thestill at that
   point would be a different request and possibly a different ad set,
   so it must not be used. Dalston keeps the fetched file as a job
-  artefact (`jobs/<job_id>/audio/original.mp3`). The track is built
-  from that artefact after the job completes: either Dalston computes
-  the frame anchors and returns them with the transcript, or Thestill
-  streams the artefact and computes them. Open question 6 picks one.
+  artefact and already serves it: `GET
+  /v1/audio/transcriptions/{job_id}/audio` returns a signed URL.
+  Thestill builds the track itself, inside the transcribe task, right
+  after the job completes: it streams that artefact through the frame
+  parser without writing it to disk. Doing it in the same task keeps it
+  ahead of Dalston's retention window. Dalston is not changed
+  (Clarification 4).
 
 In both paths:
 
@@ -414,7 +427,7 @@ any pipeline work.
 |---|---|---|
 | 1.1 | `thestill/core/sync_track.py` (new) | MP3 frame parser, anchor selection, binary writer and reader |
 | 1.2 | `thestill/core/task_handlers.py` | local path: write the track after download, before audio cleanup; delete the old track whenever a transcribe task replaces the raw transcript |
-| 1.2b | Dalston client or Dalston itself (open question 6) | Dalston URL path: build the track from the job's stored original |
+| 1.2b | `thestill/core/dalston_transcriber.py`, transcribe handler | Dalston URL path: after the job completes, stream the job's stored original (signed URL from Dalston's audio endpoint) through the frame parser |
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
 | 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track`, `has_sync_track` |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
@@ -546,12 +559,6 @@ with #110 Phase 4 and is not required here.
    there?
 5. **Phase 5 cap.** What daily number of lazy re-transcriptions is
    acceptable, given the Mac and GPU pool?
-6. **Track on the Dalston URL path.** Should Dalston compute the frame
-   anchors and return them with the transcript (a change in Dalston, no
-   extra transfer), or should Thestill stream the job's stored original
-   and compute them (no Dalston change, one S3 read per episode)?
-   Production runs this path, so Phase 1 has no effect there until this
-   is decided.
 
 ## Rollback plan
 
