@@ -342,8 +342,10 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    ads.
 4. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
    `mode: 'cors'`. Parse MP3 frame headers as bytes arrive, keep a
-   rolling 4-frame hash, and look each one up in the anchor table. Bytes
-   are discarded after hashing, so memory stays flat.
+   rolling 4-frame hash, and look each one up in the anchor table. In
+   the same pass, keep an 8-byte hash of every 64 KB block of the
+   stream (the block digest, about 7 KB for a 60 MB file). The bytes
+   themselves are discarded, so memory stays flat.
 5. **Fit.** Each hit gives one offset sample: listener frame index minus
    transcribed frame index. The fitter keeps a run only when at least 5
    consecutive anchors agree on the same offset, and drops isolated
@@ -371,10 +373,16 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    - **Content.** Equal length does not prove equal content: two
      variants can carry breaks of different lengths that sum to the same
      total. A service worker reads the head of every response the
-     element receives and compares it byte for byte with the fetched
-     copy at the same offset. The first response and every later range
-     must match; any mismatch discards the map, also after it has been
-     applied.
+     element receives, hashes the first whole 64 KB block in it
+     (blocks are aligned to the start of the file, so a range that
+     starts mid-block is checked from the next boundary), and compares
+     that hash with the block digest of the fetched copy. The digest
+     is kept with the map for as long as the map is in use, so ranges
+     requested after a later seek are checked the same way. The first
+     response and every later range must match; any mismatch discards
+     the map, also after it has been applied. A map restored from
+     `sessionStorage` is restored with its digest and re-verified
+     against the element's first response before it is applied.
 
    Both checks need the element to load with `crossorigin="anonymous"`.
    The attribute is set only after a probe `fetch()` of the URL has
