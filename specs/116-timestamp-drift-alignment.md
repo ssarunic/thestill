@@ -36,7 +36,7 @@ duration and shows "Timestamps may have drifted" when they differ by
 Nothing is corrected.
 
 This spec stores a small **sync track** for each episode at download
-time: about 30 KB of anchors taken from the transcribed copy. When a
+time: about 36 KB per hour of anchors taken from the transcribed copy. When a
 listener plays the episode, the browser locates those anchors in its own
 copy, fits a step function of offsets, and the player maps transcript
 time to audio time through it. Where the browser cannot read the audio,
@@ -49,7 +49,8 @@ the banner stays as it is today.
    right word.
 2. Karaoke highlighting follows the audio across ad breaks, and pauses
    while an ad that is not in the transcript plays.
-3. Storage stays under 100 KB per episode. No episode audio is retained.
+3. Storage stays under 250 KB per hour of audio (36 KB until the
+   perceptual track of Phase 3). No episode audio is retained.
 4. Every failure (no CORS, unknown codec, variant mismatch, low
    confidence) falls back to today's banner. A wrong map is never
    applied.
@@ -144,7 +145,7 @@ enclosures, and any of this inside a real browser.
    its own ad set and says nothing about what the browser received.
 2. **Why not a few bytes in front of each speaker segment?** Anchors
    placed by segment are unevenly spaced and often fall on silence. A
-   whole-episode track of one anchor per second is 30 KB and can locate
+   whole-episode track of one anchor per second is 36 KB per hour and can locate
    any part of the live file. Segment and word times are then mapped by
    arithmetic.
 3. **Why frame hashes first, perceptual fingerprint second?** Frame
@@ -162,7 +163,7 @@ One binary artefact per episode, written once, never changed:
 |---|---|
 | Header | algorithm version, codec, sample rate, frame count, byte length, duration of the transcribed copy |
 | Frame anchors | one per second: frame index (4 bytes) + hash of 4 consecutive compressed frames (6 bytes) |
-| Perceptual track (Phase 3) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 190 KB per hour |
+| Perceptual track (Phase 3) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
 
 Rules for frame anchors:
 
