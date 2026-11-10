@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 📝 Draft (2026-11-10)
+> **Status:** 📝 Draft (2026-11-10); Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-10
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -139,8 +139,58 @@ Findings:
 - **Cost.** Decoding a 74-minute MP3 took 11 s and fingerprinting 5 s in
   unoptimised numpy. Frame hashing needs no decode and took under 2 s.
 
-Not tested: Chromaprint (the `fpcalc` binary was not available), AAC
-enclosures, and any of this inside a real browser.
+Not tested: Chromaprint (the `fpcalc` binary was not available) and AAC
+enclosures.
+
+### Browser check (Phase 0, 2026-11-10)
+
+A throwaway page on `localhost`, driven in desktop Chrome 157. For the
+latest episode of 18 shows it loaded an `<audio crossorigin="anonymous">`
+element, fetched the same URL with `fetch()`, and used a service worker
+to read the first 256 KB of every response the element received. The
+element was then seeked to 20%, 45%, 70% and 93%, and each range it
+requested was compared byte for byte with the fetched copy. Eight
+further rounds, about a minute apart with the HTTP cache bypassed,
+compared the total size each of the two requests was served.
+
+| Check | Result |
+|---|---|
+| CORS: `fetch()` and the `crossorigin` element both load | 15 of 18 |
+| Element and fetch served the same total bytes | 15 of 15 |
+| Element's bytes identical to the fetched copy at every sampled range | 15 of 15 (71 ranges) |
+| Rounds in which the two requests were served different totals | 0 of 111 completed (of 120: 7 lost the element's size to a measurement gap, 2 hit a network error) |
+| Distinct sizes seen per episode across about 10 minutes | 1 for all 15 |
+| Full fetch on a desktop connection | 0.5–11 s for 10–313 MB |
+| Parsing frame headers of the whole file | 4–47 ms |
+
+Hosts that passed: Megaphone (7 episodes), Acast (3), Art19,
+Simplecast (2), Audioboom, Triton/Omny, Flightcast. Failed on CORS:
+Captivate, one podtrac chain (The Ezra Klein Show), and the BBC.
+
+What this settles:
+
+- **One variant per session.** No host served the element and the fetch
+  different copies. Megaphone has 63 matching plays; Acast 25 and Art19
+  9, short of the 50 the exit asked for.
+- **A service worker is a working content check.** It sees the exact
+  bytes the element receives, so the comparison is exact and needs no
+  audio decoding. Two conditions: the element must carry
+  `crossorigin="anonymous"`, and the worker must return the original
+  response. A response rebuilt from a teed stream loses `Content-Range`
+  and Chrome rejects it with a format error.
+- **`crossorigin` breaks playback where CORS fails.** The three failing
+  hosts did not load at all with the attribute set. It must be set only
+  after a probe `fetch()` has succeeded; those failed within 0.6 s.
+- **Reported duration is not a reliable length.** For identical bytes
+  the element's `duration` differed from the summed frame durations by
+  under 1 ms on 7 episodes, by 8 ms on 1, by about one frame (25 ms) on
+  4, by 52 and 62 ms on 2, and by 9.9 s on one (Flightcast, The Diary Of A CEO).
+  Byte totals are exact and are used for the length check.
+
+Not covered: Safari, Firefox, any phone, hashing cost, and playback
+over hours or across networks. The 9.9 s outlier is unexplained; if
+Chrome's time-to-byte seeking is off on that file, seeks land wrong
+there whatever the map says.
 
 ## Clarifications
 
@@ -269,10 +319,14 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 
 1. **Gate.** Run only when the episode has a track, the engine is the
    native audio engine, and the playing asset is the RSS audio.
-2. **Identity shortcut.** If the live duration equals the duration in
-   the track header within 50 ms, the map is a *provisional* identity
-   and nothing is fetched yet. This needs no CORS, so it also covers
-   hosts the full pass cannot reach. Equal duration is not proof: a
+2. **Identity shortcut.** If the copy being played has the byte length
+   recorded in the track header, the map is a *provisional* identity
+   and nothing more is fetched. The byte length comes from the service
+   worker (step 6). Where CORS fails it cannot be read, and the
+   shortcut falls back to comparing the live duration with the header's
+   within 100 ms; the browser check measured up to 62 ms of difference
+   on identical bytes, and one host far outside that, which simply
+   misses the shortcut. Equal duration is not proof: a
    longer break followed by a shorter one gives the same total with a
    shifted stretch in between. So:
    - for a show without `ads_seen_at` (section 8), the worker stops
@@ -310,27 +364,26 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 6. **Verify.** The map describes the fetched copy. It is valid for
    playback only if the audio element is playing the same copy. Two
    checks, both required:
-   - **Length.** The stream's total frame count must match the audio
-     element's `duration` within 50 ms. A mismatch means a different ad
-     set, and the map is discarded.
+   - **Length.** The total byte length the element was served must
+     equal the length of the fetched stream, exactly. A mismatch means
+     a different ad set, and the map is discarded. Durations are not
+     compared: the browser check found them unreliable.
    - **Content.** Equal length does not prove equal content: two
      variants can carry breaks of different lengths that sum to the same
-     total. Phase 0 must establish one of the following before any map
-     is applied, per host:
-     1. the host serves one variant to both requests from the same
-        browser session, shown by measurement (the curl probe saw one
-        variant per IP and user agent on 42 of 42 episodes, across
-        repeats and after 15 minutes); or
-     2. a spot check through the element itself: with
-        `crossOrigin="anonymous"`, capture a few seconds of what the
-        element plays through Web Audio at one point inside each span,
-        and compare it with the fetched bytes decoded at the mapped
-        position; or
-     3. single fetch: the element plays the fetched bytes (see
-        Alternatives), so there is only one copy.
+     total. A service worker reads the head of every response the
+     element receives and compares it byte for byte with the fetched
+     copy at the same offset. The first response and every later range
+     must match; any mismatch discards the map, also after it has been
+     applied.
 
-   Hosts with none of the three keep the banner. Length alone never
-   applies a map.
+   Both checks need the element to load with `crossorigin="anonymous"`.
+   The attribute is set only after a probe `fetch()` of the URL has
+   succeeded, because an element with it fails to load on a host
+   without CORS. The worker must pass the original response through
+   unchanged. Where the service worker is unavailable or does not see
+   media requests (to be established for Safari and Firefox), the
+   fallback is single fetch (see Alternatives) or the banner. Length
+   alone never applies a map.
 7. **Publish.** The map goes to the player only after the stream has
    ended, both checks of step 6 have passed and the confidence threshold
    below is met. While it is building the worker reports progress, not
@@ -454,6 +507,15 @@ and same-session requests are shown to receive one variant across at
 least 50 plays. If same-session variants differ on any host, that host
 uses single fetch or keeps the banner, and the plan is revised before
 any pipeline work.
+
+Result (2026-11-10, desktop Chrome only; see Browser check): the
+service-worker content check works and no variant mismatch was seen.
+Megaphone met the 50-play bar; Acast (25) and Art19 (9) matched on
+every play but fall short of it; Captivate fails CORS and keeps the
+banner. Questions 1, 2, 4 and 5 are answered for Chrome. Still open
+before Phase 2: Safari and Firefox (does a service worker see media
+requests there), a phone (question 3), and more plays on Acast and
+Art19. Phase 1 does not depend on any of these and can start.
 
 ### Phase 1: sync track in the pipeline
 
@@ -612,9 +674,10 @@ with #110 Phase 4 and is not required here.
    acceptable on mobile, or should the full pass wait for Wi-Fi?
 2. **Listener-side ads in the karaoke view.** Hold the last word (this
    spec), or show a neutral "Ad" marker?
-3. **Identity tolerance.** The shortcut assumes the audio element
-   reports the same duration for the same bytes within 50 ms, across
-   browsers and for VBR files. Phase 0 measures this.
+3. **Duration outlier.** On one Flightcast episode Chrome's reported
+   duration was 9.9 s longer than the summed frame durations of the
+   same bytes. Is time-based seeking on that file accurate, and how
+   common is this?
 4. **Server consumers.** `get_episode_clip` and the clip work of #114
    hand out transcript times against the publisher URL. They cannot know
    the recipient's ad set. Is a "times are approximate" note enough
