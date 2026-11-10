@@ -187,20 +187,45 @@ at any time, and 36 KB is cheaper than finding out later. The
 perceptual track is different: at 155 KB per hour it is written only for
 shows flagged `needs_perceptual_track` (section 8).
 
-### 2. Pipeline: write the track at download
+### 2. Pipeline: write the track from the bytes that were transcribed
 
-The download stage has the original file on disk. A new step parses its
-MP3 frames, writes the track through `PathManager`
-(`sync_tracks/<podcast>/<episode>.sync`), and records the path on the
-episode. It runs before `DELETE_AUDIO_AFTER_PROCESSING` removes the file
-([task_handlers.py:382](../thestill/core/task_handlers.py#L382)).
+The rule: the track is built from the exact bytes the transcript came
+from, and a transcript never keeps a track built from other bytes.
 
-- A failure here logs `sync_track_failed` with `episode_id` and does not
-  fail the download. The episode simply has no track.
+There are two paths to those bytes:
+
+- **Local path** (Whisper, WhisperX, and any episode that goes through
+  the download stage). The original file is on disk. A step after
+  download parses its MP3 frames and writes the track, before
+  `DELETE_AUDIO_AFTER_PROCESSING` removes the file
+  ([task_handlers.py:382](../thestill/core/task_handlers.py#L382)).
+- **Dalston URL path** (production today). With
+  `transcription_provider == "dalston"` an RSS episode skips download
+  and downsample, and Dalston fetches the publisher URL itself
+  (`starting_stage_for` in
+  [queue_manager.py](../thestill/core/queue_manager.py),
+  `_transcribe_entry_stage` in
+  [episode_reprocess.py](../thestill/services/episode_reprocess.py)).
+  Thestill never sees the bytes. A download made by Thestill at that
+  point would be a different request and possibly a different ad set,
+  so it must not be used. Dalston keeps the fetched file as a job
+  artefact (`jobs/<job_id>/audio/original.mp3`). The track is built
+  from that artefact after the job completes: either Dalston computes
+  the frame anchors and returns them with the transcript, or Thestill
+  streams the artefact and computes them. Open question 6 picks one.
+
+In both paths:
+
+- The track is written through `PathManager`
+  (`sync_tracks/<podcast>/<episode>.sync`) and its path recorded on the
+  episode.
+- Whenever a transcribe task replaces an episode's raw transcript, the
+  existing track is deleted first and `sync_track_path` cleared. The
+  new track is written only from the new job's bytes. A reprocess that
+  cannot rebuild the track leaves the episode with none.
+- A failure logs `sync_track_failed` with `episode_id` and does not fail
+  the stage. The episode simply has no track.
 - Non-MP3 enclosures get no frame anchors until Phase 3.
-- `thestill reprocess --from transcribe` re-downloads, so it rewrites the
-  track from the copy it transcribes. Track and transcript always
-  describe the same copy.
 
 Schema: one nullable column `episodes.sync_track_path`, added by an
 Alembic migration for both SQLite and Postgres.
@@ -219,14 +244,22 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 1. **Gate.** Run only when the episode has a track, the engine is the
    native audio engine, and the playing asset is the RSS audio.
 2. **Identity shortcut.** If the live duration equals the duration in
-   the track header within 50 ms, the map is the identity and nothing is
-   fetched. This needs no CORS, so it also covers hosts the full pass
-   cannot reach. It is wrong only when ads of the same total length sit
-   at different positions; the outcome is logged as `identity_assumed`
-   so that case can be sized.
+   the track header within 50 ms, the map is a *provisional* identity
+   and nothing is fetched yet. This needs no CORS, so it also covers
+   hosts the full pass cannot reach. Equal duration is not proof: a
+   longer break followed by a shorter one gives the same total with a
+   shifted stretch in between. So:
+   - for a show without `ads_seen_at` (section 8), the worker stops
+     here and logs `identity_assumed`. This is what the reader does
+     today, since equal durations show no banner;
+   - for a show with `ads_seen_at`, the full pass still runs in the
+     background and replaces the provisional map if it finds a shift.
 3. **Cheap check.** If the durations differ by less than 0.5 s, fetch
    three 256 KB ranges (start, middle, end) and look up their anchors.
-   If all sit at offset 0, the map is the identity and the worker stops.
+   Offsets of 0 at all three give a provisional identity under the same
+   two rules. Three samples cannot see a shift that opens and closes
+   between them, so they never end the work for a show that inserts
+   ads.
 4. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
    `mode: 'cors'`. Parse MP3 frame headers as bytes arrive, keep a
    rolling 4-frame hash, and look each one up in the anchor table. Bytes
@@ -237,9 +270,30 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    hits. The result is a list of spans `{src_start, src_end, offset}`.
    Gaps on the source side are ads only in the transcribed copy; gaps on
    the listener side are ads only in the listener's copy.
-6. **Verify.** The stream's total frame count must match the audio
-   element's `duration` within 0.5 s. A mismatch means the fetch got a
-   different ad set than the element did, and the map is discarded.
+6. **Verify.** The map describes the fetched copy. It is valid for
+   playback only if the audio element is playing the same copy. Two
+   checks, both required:
+   - **Length.** The stream's total frame count must match the audio
+     element's `duration` within 50 ms. A mismatch means a different ad
+     set, and the map is discarded.
+   - **Content.** Equal length does not prove equal content: two
+     variants can carry breaks of different lengths that sum to the same
+     total. Phase 0 must establish one of the following before any map
+     is applied, per host:
+     1. the host serves one variant to both requests from the same
+        browser session, shown by measurement (the curl probe saw one
+        variant per IP and user agent on 42 of 42 episodes, across
+        repeats and after 15 minutes); or
+     2. a spot check through the element itself: with
+        `crossOrigin="anonymous"`, capture a few seconds of what the
+        element plays through Web Audio at one point inside each span,
+        and compare it with the fetched bytes decoded at the mapped
+        position; or
+     3. single fetch: the element plays the fetched bytes (see
+        Alternatives), so there is only one copy.
+
+   Hosts with none of the three keep the banner. Length alone never
+   applies a map.
 7. **Publish.** The map goes to the player as it grows, so the first
    minutes are usable while the rest downloads. It is cached in
    `sessionStorage` keyed by episode and content length.
@@ -343,23 +397,33 @@ not:
 2. What is the real CORS pass rate from a browser, including preflight?
 3. How long does the full pass take on a phone?
 
-Exit: variant match on at least 3 of the 4 hosts. Otherwise the client
-must play from the fetched bytes (Alternatives, single fetch) and the
-plan changes before any pipeline work.
+4. Which content check of section 4 step 6 holds for each host: a
+   measured single variant, the Web Audio spot check, or single fetch?
+5. How much does the element's reported `duration` vary for identical
+   bytes, across browsers and for VBR files?
+
+Exit: for at least 3 of the 4 hosts, one content check is shown to work
+and same-session requests are shown to receive one variant across at
+least 50 plays. If same-session variants differ on any host, that host
+uses single fetch or keeps the banner, and the plan is revised before
+any pipeline work.
 
 ### Phase 1: sync track in the pipeline
 
 | # | Where | What |
 |---|---|---|
 | 1.1 | `thestill/core/sync_track.py` (new) | MP3 frame parser, anchor selection, binary writer and reader |
-| 1.2 | `thestill/core/task_handlers.py` | write the track after download, before audio cleanup |
+| 1.2 | `thestill/core/task_handlers.py` | local path: write the track after download, before audio cleanup; delete the old track whenever a transcribe task replaces the raw transcript |
+| 1.2b | Dalston client or Dalston itself (open question 6) | Dalston URL path: build the track from the job's stored original |
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
 | 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track`, `has_sync_track` |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
 
 Acceptance: a contract test that builds a track from a fixture MP3,
 splices a second MP3 into a copy of it at two points, and recovers both
-offsets from the track alone.
+offsets from the track alone. A second test runs a transcribe task on
+the Dalston URL path with a stubbed job and asserts that the old track
+is gone and the new one comes from the job's artefact.
 
 ### Phase 2: client map and piecewise timeline
 
@@ -401,8 +465,10 @@ transcript is then thrown away.
 A new task type, `BUILD_SYNC_TRACK`, separate from the reprocess chain
 of #106 (which would run on through clean and summarize):
 
-1. Download the episode and downsample it, as the pipeline does today.
-2. Transcribe to a scratch path. The stored raw transcript, the cleaned
+1. Obtain audio and transcribe it by whichever path the provider uses
+   (section 2). The sync track must come from those same bytes, so on
+   the Dalston URL path it is built from the job's stored original.
+2. The transcript goes to a scratch path. The stored raw transcript, the cleaned
    transcript, the summary, citations, entity mentions and the edit log
    of #110 are not read for writing and not replaced.
 3. Normalise both word lists (case, punctuation) and align them as
@@ -480,6 +546,12 @@ with #110 Phase 4 and is not required here.
    there?
 5. **Phase 5 cap.** What daily number of lazy re-transcriptions is
    acceptable, given the Mac and GPU pool?
+6. **Track on the Dalston URL path.** Should Dalston compute the frame
+   anchors and return them with the transcript (a change in Dalston, no
+   extra transfer), or should Thestill stream the job's stored original
+   and compute them (no Dalston change, one S3 read per episode)?
+   Production runs this path, so Phase 1 has no effect there until this
+   is decided.
 
 ## Rollback plan
 
