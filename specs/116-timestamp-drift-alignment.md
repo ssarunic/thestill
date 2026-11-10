@@ -174,7 +174,7 @@ One binary artefact per episode, written once, never changed:
 
 | Field | Content |
 |---|---|
-| Header | algorithm version, codec, sample rate, frame count, byte length, duration of the transcribed copy |
+| Header | algorithm version, transcript generation, codec, sample rate, frame count, byte length, duration of the transcribed copy |
 | Frame anchors | one per second: frame index (4 bytes) + hash of 4 consecutive compressed frames (6 bytes) |
 | Base spans (Phase 5 only) | a short list of `{src_start, src_end, offset}` mapping transcript time onto the copy the anchors were taken from; empty when that copy is the transcribed one |
 | Perceptual track (Phase 3, flagged shows only) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
@@ -230,26 +230,38 @@ There are two paths to those bytes:
 
 In both paths:
 
-- The track is written through `PathManager`
-  (`sync_tracks/<podcast>/<episode>.sync`) and its path recorded on the
-  episode.
-- Whenever a transcribe task replaces an episode's raw transcript, the
-  existing track is deleted first and `sync_track_path` cleared. The
-  new track is written only from the new job's bytes. A reprocess that
-  cannot rebuild the track leaves the episode with none.
+- A track and the raw transcript it describes form one **generation**,
+  identified by the id of the transcribe task that produced that
+  transcript. The generation is in the track header and in its path,
+  written through `PathManager`
+  (`sync_tracks/<podcast>/<episode>.<generation>.sync`).
+- A track built before its transcript exists (the local path builds it
+  at download) is written as pending and is not visible to readers.
+  When the transcribe task succeeds, the new raw transcript and
+  `sync_track_path` are switched together: to the pending track built
+  from the same bytes, or to null if none was built. The previous
+  generation's track is deleted after the switch.
+- Until that switch the old transcript keeps its old track, so a
+  reprocess that is running or failed never pairs a transcript with a
+  track built from other bytes. A reprocess that cannot rebuild the
+  track leaves the new transcript with none.
 - A failure logs `sync_track_failed` with `episode_id` and does not fail
   the stage. The episode simply has no track.
 - Non-MP3 enclosures get no frame anchors until Phase 3.
 
 Schema: one nullable column `episodes.sync_track_path`, added by an
-Alembic migration for both SQLite and Postgres.
+Alembic migration for both SQLite and Postgres. Phase 5 adds
+`episodes.sync_track_status`.
 
 ### 3. API
 
-`GET /api/episodes/{id}/sync-track` returns the artefact as
-`application/octet-stream` with `Cache-Control: immutable`, or 404. It
-has the same visibility as the transcript. The episode payload gains
-`has_sync_track: boolean` so the client does not probe.
+`GET /api/episodes/{id}/sync-track/{generation}` returns the artefact as
+`application/octet-stream` with `Cache-Control: immutable`, or 404 when
+that generation is not the episode's current one. It has the same
+visibility as the transcript. The episode payload gains
+`sync_track_generation: string | null` (null when there is no track) so
+the client does not probe. Because the generation is in the URL, an
+immutable cached track can never accompany a newer transcript.
 
 ### 4. Client: build the map
 
@@ -282,8 +294,19 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    transcribed frame index. The fitter keeps a run only when at least 5
    consecutive anchors agree on the same offset, and drops isolated
    hits. The result is a list of spans `{src_start, src_end, offset}`.
-   Gaps on the source side are ads only in the transcribed copy; gaps on
-   the listener side are ads only in the listener's copy.
+   Missing anchors are not evidence of an ad, so each source-side
+   interval between two spans is then refined and classified:
+
+   - **Refine.** Inside the interval, single hits that agree with the
+     offset of either neighbouring span extend that span; the offset is
+     already established, so no run of 5 is needed.
+   - **Confirmed gap.** What remains is treated as content absent from
+     the listener's copy only when it is covered by `ad_break` segments
+     (#18) or holds no transcript words.
+   - **Unresolved.** Anything else is kept as an `unresolved` interval,
+     not a gap.
+
+   Gaps on the listener side are ads only in the listener's copy.
 6. **Verify.** The map describes the fetched copy. It is valid for
    playback only if the audio element is playing the same copy. Two
    checks, both required:
@@ -308,9 +331,16 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 
    Hosts with none of the three keep the banner. Length alone never
    applies a map.
-7. **Publish.** The map goes to the player as it grows, so the first
-   minutes are usable while the rest downloads. It is cached in
-   `sessionStorage` keyed by episode and content length.
+7. **Publish.** The map goes to the player only after the stream has
+   ended, both checks of step 6 have passed and the confidence threshold
+   below is met. While it is building the worker reports progress, not
+   spans: the player keeps today's behaviour (no offset, banner with
+   "Aligning…"), so seeks, highlighting and saved listening positions are
+   never derived from a map that later fails verification. A provisional
+   identity (steps 2–3) applies no offset, which is today's behaviour.
+   It is cached in
+   `sessionStorage` keyed by episode, track generation and content
+   length.
 
 Confidence: the map is applied only when matched spans cover at least
 90% of the transcribed copy's non-`ad_break` duration.
@@ -325,8 +355,11 @@ Spec #61 maps logical time to asset time with one number,
 `timeline_offset`. This spec generalises that to a `TimelineMap` with
 two functions:
 
-- `toAsset(t)`: transcript time to audio time. A time inside a source-side
-  gap maps to the start of the next span.
+- `toAsset(t)`: transcript time to audio time. A time inside a confirmed
+  source-side gap maps to the start of the next span. A time inside an
+  `unresolved` interval maps with the preceding span's offset and is
+  flagged approximate; the reader shows the drift note on those
+  segments only.
 - `toLogical(a)`: audio time to transcript time, or `null` inside a
   listener-side ad.
 
@@ -427,10 +460,10 @@ any pipeline work.
 | # | Where | What |
 |---|---|---|
 | 1.1 | `thestill/core/sync_track.py` (new) | MP3 frame parser, anchor selection, binary writer and reader |
-| 1.2 | `thestill/core/task_handlers.py` | local path: write the track after download, before audio cleanup; delete the old track whenever a transcribe task replaces the raw transcript |
+| 1.2 | `thestill/core/task_handlers.py` | local path: write a pending track after download, before audio cleanup; switch transcript and track together when the transcribe task succeeds |
 | 1.2b | `thestill/core/dalston_transcriber.py`, transcribe handler | Dalston URL path: after the job completes, stream the job's stored original (signed URL from Dalston's audio endpoint) through the frame parser |
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
-| 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track`, `has_sync_track` |
+| 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
 
 Acceptance: a contract test that builds a track from a fixture MP3,
@@ -467,6 +500,15 @@ Add the Haitsma-Kalker track at ingest for shows flagged
 `AudioDecoder` when frame anchors fail. Add ADTS and MP4 frame parsing
 for AAC enclosures. Scope this from Phase 2's `low_confidence` and
 `unsupported_codec` rates.
+
+Episodes ingested before their show was flagged already have a
+frame-only track and no original audio, so ingest alone never repairs
+them. They are upgraded lazily through Phase 5's task: a client report
+of `low_confidence` on an episode whose track has no perceptual data, in
+a flagged show, enqueues `BUILD_SYNC_TRACK`. Phase 5 aligns against the
+stored raw transcript, not the old track, so it writes a new generation
+with a perceptual track and base spans. This repair path ships with
+Phase 5.
 
 ### Phase 4: ad map of our own copy
 
@@ -505,8 +547,17 @@ of #106 (which would run on through clean and summarize):
 
 Acceptance thresholds: at least 60% of the old words matched, and spans
 covering at least 90% of the old transcript's non-`ad_break` duration.
-Below that no track is written and the episode is marked
-`sync_track_unalignable` so it is not retried on every play.
+Below that no track is written and `sync_track_status` is set to
+`unalignable` so it is not retried on every play.
+
+Failure domain: `BUILD_SYNC_TRACK` never changes the episode's
+processing state. Like the entity branch (#28 §6), its outcome lives in
+its own column, `episodes.sync_track_status` (`queued`, `built`,
+`unalignable`, `failed`), and `_mark_episode_failed` in
+[task_worker.py](../thestill/core/task_worker.py) gets an explicit branch
+for it, so exhausted retries write `failed` there and never set
+`failed_at_stage`. A `failed` episode is not re-enqueued by client
+reports; `thestill sync-track` retries it by hand.
 
 Trigger and limits:
 
@@ -523,7 +574,9 @@ Cost per episode: one download and one transcription. No LLM calls.
 
 Acceptance: for a fixture episode with a stored transcript, a spliced
 variant of its audio yields base spans within 0.2 s of the known splice
-offsets, and no stored artefact changes on disk.
+offsets, and no stored artefact changes on disk. A second test makes the
+task fail until retries are exhausted and asserts that the episode's
+state is still `summarized` and `sync_track_status` is `failed`.
 
 Word timings for edited segments still need forced alignment. That stays
 with #110 Phase 4 and is not required here.
