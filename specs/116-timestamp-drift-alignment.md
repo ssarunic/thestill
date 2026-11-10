@@ -64,8 +64,11 @@ the banner stays as it is today.
   for a separate spec.
 - **Proxying or re-hosting audio.** It removes drift, and it also removes
   the publisher's ad impressions and download counts.
-- **Backfilling episodes transcribed before this ships.** Their original
-  copy is gone, so there is nothing to fingerprint. See Phase 5.
+- **Eager backfill of every old episode.** Their transcribed copy is
+  gone, so there is nothing to fingerprint. Phase 5 aligns them lazily,
+  one episode at a time, when someone plays one.
+- **Re-cleaning or re-summarising old episodes.** Phase 5 never touches
+  stored transcripts, summaries, citations or edits.
 - **YouTube and HLS video renditions.** They keep the scalar
   `timeline_offset` of #61 and the banner of #113.
 - **Fixing word timings after transcript edits.** That is forced
@@ -163,7 +166,8 @@ One binary artefact per episode, written once, never changed:
 |---|---|
 | Header | algorithm version, codec, sample rate, frame count, byte length, duration of the transcribed copy |
 | Frame anchors | one per second: frame index (4 bytes) + hash of 4 consecutive compressed frames (6 bytes) |
-| Perceptual track (Phase 3) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
+| Base spans (Phase 5 only) | a short list of `{src_start, src_end, offset}` mapping transcript time onto the copy the anchors were taken from; empty when that copy is the transcribed one |
+| Perceptual track (Phase 3, flagged shows only) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
 
 Rules for frame anchors:
 
@@ -176,6 +180,12 @@ Rules for frame anchors:
   applies.
 
 At 10 bytes per anchor a one-hour episode is 36 KB before compression.
+
+The track is written for every episode, including shows that have never
+carried ads. A publisher can switch on ad insertion for a back catalogue
+at any time, and 36 KB is cheaper than finding out later. The
+perceptual track is different: at 155 KB per hour it is written only for
+shows flagged `needs_perceptual_track` (section 8).
 
 ### 2. Pipeline: write the track at download
 
@@ -208,29 +218,38 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 
 1. **Gate.** Run only when the episode has a track, the engine is the
    native audio engine, and the playing asset is the RSS audio.
-2. **Cheap check.** If the live duration equals the transcribed duration
-   within 0.5 s, fetch three 256 KB ranges (start, middle, end) and look
-   up their anchors. If all sit at offset 0, the map is the identity and
-   the worker stops.
-3. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
+2. **Identity shortcut.** If the live duration equals the duration in
+   the track header within 50 ms, the map is the identity and nothing is
+   fetched. This needs no CORS, so it also covers hosts the full pass
+   cannot reach. It is wrong only when ads of the same total length sit
+   at different positions; the outcome is logged as `identity_assumed`
+   so that case can be sized.
+3. **Cheap check.** If the durations differ by less than 0.5 s, fetch
+   three 256 KB ranges (start, middle, end) and look up their anchors.
+   If all sit at offset 0, the map is the identity and the worker stops.
+4. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
    `mode: 'cors'`. Parse MP3 frame headers as bytes arrive, keep a
    rolling 4-frame hash, and look each one up in the anchor table. Bytes
    are discarded after hashing, so memory stays flat.
-4. **Fit.** Each hit gives one offset sample: listener frame index minus
+5. **Fit.** Each hit gives one offset sample: listener frame index minus
    transcribed frame index. The fitter keeps a run only when at least 5
    consecutive anchors agree on the same offset, and drops isolated
    hits. The result is a list of spans `{src_start, src_end, offset}`.
    Gaps on the source side are ads only in the transcribed copy; gaps on
    the listener side are ads only in the listener's copy.
-5. **Verify.** The stream's total frame count must match the audio
+6. **Verify.** The stream's total frame count must match the audio
    element's `duration` within 0.5 s. A mismatch means the fetch got a
    different ad set than the element did, and the map is discarded.
-6. **Publish.** The map goes to the player as it grows, so the first
+7. **Publish.** The map goes to the player as it grows, so the first
    minutes are usable while the rest downloads. It is cached in
    `sessionStorage` keyed by episode and content length.
 
 Confidence: the map is applied only when matched spans cover at least
 90% of the transcribed copy's non-`ad_break` duration.
+
+When the track carries base spans (Phase 5), the worker composes the two
+maps before publishing: transcript time to the anchored copy, then the
+anchored copy to the listener's copy. The player sees one map.
 
 ### 5. Player: a piecewise timeline
 
@@ -263,10 +282,36 @@ same word.
 - Server: `sync_track_written` (`episode_id`, `anchors`, `bytes`,
   `duration_ms`), `sync_track_failed`.
 - Client (PostHog, per #95): `drift_alignment_result` with `outcome`
-  (`identity`, `aligned`, `no_cors`, `variant_mismatch`,
+  (`identity_assumed`, `identity`, `aligned`, `no_cors`, `variant_mismatch`,
   `low_confidence`, `unsupported_codec`, `error`), span count, largest
   offset, and bytes fetched. This is the measure of how often the banner
   is replaced.
+
+### 8. Per-show ad profile
+
+Two facts are kept per podcast so that shows without ads cost nothing at
+playback and little at ingest:
+
+| Field | Set when | Used for |
+|---|---|---|
+| `ads_seen_at` | the ingest probe sees two sizes, or a client reports `aligned` with a non-zero offset | client eagerness |
+| `needs_perceptual_track` | clients report `low_confidence` on episodes that do have frame anchors, above a threshold; or set by hand | writing the 155 KB perceptual track (Phase 3) |
+
+- **Ingest probe.** At download, two `Range: bytes=0-1` requests with
+  different user agents read the total size from `Content-Range`. Two
+  sizes mean the show inserts ads. This is two tiny requests per
+  episode, not a second download.
+- **Client report.** `POST /api/episodes/{id}/drift-outcome` carries the
+  outcome of section 4. It updates the two fields and, in Phase 5,
+  enqueues alignment for an old episode.
+- **Client eagerness.** For a show with `ads_seen_at` set, the worker
+  starts when playback starts. For a show without it, the worker waits
+  until the listener first uses a timestamp (a segment click, a
+  citation, karaoke on screen), and the identity shortcut usually ends
+  it there.
+
+The profile never suppresses the frame-anchor track. It only decides how
+much work happens around it.
 
 ## Edge cases
 
@@ -310,6 +355,7 @@ plan changes before any pipeline work.
 | 1.2 | `thestill/core/task_handlers.py` | write the track after download, before audio cleanup |
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
 | 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track`, `has_sync_track` |
+| 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
 
 Acceptance: a contract test that builds a track from a fixture MP3,
 splices a second MP3 into a copy of it at two points, and recovers both
@@ -323,16 +369,18 @@ offsets from the track alone.
 | 2.2 | `src/contexts/playback-engine/` | `TimelineMap` with `toAsset` / `toLogical` |
 | 2.3 | `src/contexts/PlayerContext.tsx`, `EpisodeReader.tsx` | route seeks and karaoke through the map; banner states |
 | 2.4 | analytics | `drift_alignment_result` |
+| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome` updating the per-show ad profile (rate-limited) |
 
 Acceptance: a Playwright test serves two spliced variants of one fixture
 and asserts that a segment click lands on the same audio in both.
 
 ### Phase 3: perceptual fallback and AAC
 
-Add the Haitsma-Kalker track at ingest, and a client path that decodes
-with WebCodecs `AudioDecoder` when frame anchors fail. Add ADTS and MP4
-frame parsing for AAC enclosures. Scope this from Phase 2's
-`low_confidence` and `unsupported_codec` rates.
+Add the Haitsma-Kalker track at ingest for shows flagged
+`needs_perceptual_track`, and a client path that decodes with WebCodecs
+`AudioDecoder` when frame anchors fail. Add ADTS and MP4 frame parsing
+for AAC enclosures. Scope this from Phase 2's `low_confidence` and
+`unsupported_codec` rates.
 
 ### Phase 4: ad map of our own copy
 
@@ -342,12 +390,55 @@ ads. This gives `ad_break` tagging an audio-level signal and resolves
 the `net` versus `served` chapter timelines of #97. It doubles download
 bandwidth, so it is opt-in per show.
 
-### Phase 5: old episodes
+### Phase 5: old episodes, lazily
 
-Episodes without a track need forced alignment of the existing
-transcript against a fresh download (WhisperX align is already in the
-repo), after which a track is written from that download. This is the
-same aligner #110 Phase 4 needs. Scope it there.
+Episodes transcribed before Phase 1 have no track, and the copy they
+were transcribed from is gone. A fresh download is transcribed once and
+used only as a ruler: the new words are matched against the stored raw
+transcript to learn how the old copy maps onto the new one. The new
+transcript is then thrown away.
+
+A new task type, `BUILD_SYNC_TRACK`, separate from the reprocess chain
+of #106 (which would run on through clean and summarize):
+
+1. Download the episode and downsample it, as the pipeline does today.
+2. Transcribe to a scratch path. The stored raw transcript, the cleaned
+   transcript, the summary, citations, entity mentions and the edit log
+   of #110 are not read for writing and not replaced.
+3. Normalise both word lists (case, punctuation) and align them as
+   sequences. Each matched word gives one offset sample: new start
+   minus old start. Words the two engines render differently ("2024"
+   against "twenty twenty four") simply do not match.
+4. Fit the same step function as section 4. The offset is constant
+   between ad breaks, so each span takes the median of its samples.
+   Single-word timing error (about 0.1–0.2 s) averages out.
+5. Write the sync track from the new download, with the fitted spans as
+   its base spans. Delete the scratch transcript and the audio.
+
+Acceptance thresholds: at least 60% of the old words matched, and spans
+covering at least 90% of the old transcript's non-`ad_break` duration.
+Below that no track is written and the episode is marked
+`sync_track_unalignable` so it is not retried on every play.
+
+Trigger and limits:
+
+- A client that would show the drift banner on an episode without a
+  track reports it through the section 8 endpoint. The server enqueues
+  `BUILD_SYNC_TRACK` at the lowest priority, de-duplicated per episode.
+  The next visit gets the map.
+- A daily cap on these tasks, a runtime setting, keeps a crawler or one
+  curious user from re-transcribing the catalogue.
+- `thestill sync-track --podcast-id X [--episode <slug>] [--dry-run]`
+  runs the same task by hand.
+
+Cost per episode: one download and one transcription. No LLM calls.
+
+Acceptance: for a fixture episode with a stored transcript, a spliced
+variant of its audio yields base spans within 0.2 s of the known splice
+offsets, and no stored artefact changes on disk.
+
+Word timings for edited segments still need forced alignment. That stays
+with #110 Phase 4 and is not required here.
 
 ## Alternatives considered
 
@@ -360,6 +451,12 @@ same aligner #110 Phase 4 needs. Scope it there.
   Extensions. One download instead of two and no variant mismatch. It
   replaces the native engine's source handling and loses the browser's
   own buffering. Held in reserve for a failed Phase 0.
+- **Forced alignment for old episodes** (CTC alignment of the stored text
+  against a fresh download). It gives the same result as Phase 5 and
+  needs a second model path. Re-transcribing reuses the pipeline that
+  already runs, and its output is discarded either way.
+- **Skip the track for shows without ads.** Saves 36 KB per hour and
+  leaves the episode uncorrectable if the publisher adds ads later.
 - **Forced alignment per listener.** Exact, and needs speech recognition
   in the browser or a server copy of each listener's audio.
 - **Server proxy.** Ruled out under Non-goals.
@@ -374,13 +471,15 @@ same aligner #110 Phase 4 needs. Scope it there.
    acceptable on mobile, or should the full pass wait for Wi-Fi?
 2. **Listener-side ads in the karaoke view.** Hold the last word (this
    spec), or show a neutral "Ad" marker?
-3. **`anchor.fm` and Substack.** No CORS, and no size variance observed.
-   Treat equal duration as identity for those hosts without
-   verification?
+3. **Identity tolerance.** The shortcut assumes the audio element
+   reports the same duration for the same bytes within 50 ms, across
+   browsers and for VBR files. Phase 0 measures this.
 4. **Server consumers.** `get_episode_clip` and the clip work of #114
    hand out transcript times against the publisher URL. They cannot know
    the recipient's ad set. Is a "times are approximate" note enough
    there?
+5. **Phase 5 cap.** What daily number of lazy re-transcriptions is
+   acceptable, given the Mac and GPU pool?
 
 ## Rollback plan
 
