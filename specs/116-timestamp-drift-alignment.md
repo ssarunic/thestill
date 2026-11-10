@@ -223,9 +223,10 @@ There are two paths to those bytes:
   /v1/audio/transcriptions/{job_id}/audio` returns a signed URL.
   Thestill builds the track itself, inside the transcribe task, right
   after the job completes: it streams that artefact through the frame
-  parser without writing it to disk. Doing it in the same task keeps it
-  ahead of Dalston's retention window. Dalston is not changed
-  (Clarification 4).
+  parser without writing it to disk. Dalston keeps job audio for 30
+  days by default, and Thestill does not override that, so a failed
+  read can be retried later by `thestill sync-track` without
+  re-transcribing. Dalston is not changed (Clarification 4).
 
 In both paths:
 
@@ -437,6 +438,14 @@ splices a second MP3 into a copy of it at two points, and recovers both
 offsets from the track alone. A second test runs a transcribe task on
 the Dalston URL path with a stubbed job and asserts that the old track
 is gone and the new one comes from the job's artefact.
+
+Backfill at ship time: episodes transcribed through Dalston in the 30
+days before Phase 1 deploys still have their original in Dalston's
+storage. `thestill sync-track --recent` builds their tracks from those
+artefacts, using the job id recorded with each raw transcript. These
+are exact tracks of the transcribed copy, so they need none of Phase 5.
+To verify during implementation: that the job id is recoverable for
+every such transcript.
 
 ### Phase 2: client map and piecewise timeline
 
