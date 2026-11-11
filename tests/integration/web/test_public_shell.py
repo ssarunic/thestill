@@ -130,6 +130,22 @@ def test_root_files_are_served_as_files(site):
     assert response.text == "<svg/>"
 
 
+def test_service_worker_is_served_uncached_and_never_as_the_shell(site, static_dir):
+    """Spec #116 — a cached service worker cannot be withdrawn; and its URL
+    must not fall through to index.html when the build has none."""
+    assert site.get("/sw.js").status_code == 404
+    assert site.get("/sw.js").headers["cache-control"] == "no-cache"
+
+    (static_dir / "sw.js").write_text("// worker", encoding="utf-8")
+    response = site.get("/sw.js")
+    assert response.status_code == 200
+    assert response.text == "// worker"
+    assert response.headers["cache-control"] == "no-cache"
+    assert "javascript" in response.headers["content-type"]
+    # Other root files keep their day of caching.
+    assert site.get("/favicon.svg").headers["cache-control"] == "public, max-age=86400"
+
+
 def test_robots_allows_public_and_blocks_private(site):
     body = site.get("/robots.txt").text
     parser = urllib.robotparser.RobotFileParser()

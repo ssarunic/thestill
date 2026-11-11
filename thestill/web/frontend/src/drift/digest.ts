@@ -56,3 +56,62 @@ export function windowDigest(frameDigests: ArrayLike<number>): number {
   for (let i = 0; i < WINDOW_FRAMES * 2; i++) packedView.setUint32(i * 4, frameDigests[i] >>> 0, true)
   return crc32(packed) * 0x10000 + (adler32(packed) & 0xffff)
 }
+
+/** Bytes per block of the block digest (spec #116 §4 steps 4 and 6). */
+export const BLOCK_BYTES = 65536
+
+/**
+ * Digest of every whole `BLOCK_BYTES` block of a byte stream, blocks
+ * aligned to the start of the file: CRC-32 and Adler-32 per block, eight
+ * bytes for 64 KB. The service worker computes the same pair for the first
+ * whole block of each response the audio element receives; equal pairs mean
+ * the element is playing the copy that was aligned. A trailing partial
+ * block has no entry.
+ */
+export class BlockDigester {
+  private crc = 0xffffffff
+  private a = 1
+  private b = 0
+  private filled = 0
+  private readonly pairs: number[] = []
+
+  push(chunk: Uint8Array): void {
+    let at = 0
+    while (at < chunk.length) {
+      const take = Math.min(chunk.length - at, BLOCK_BYTES - this.filled)
+      let crc = this.crc
+      let a = this.a
+      let b = this.b
+      let i = at
+      const end = at + take
+      while (i < end) {
+        const stop = Math.min(end, i + ADLER_BLOCK)
+        for (; i < stop; i++) {
+          const byte = chunk[i]
+          crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+          a += byte
+          b += a
+        }
+        a %= ADLER_MOD
+        b %= ADLER_MOD
+      }
+      this.crc = crc
+      this.a = a
+      this.b = b
+      this.filled += take
+      at = end
+      if (this.filled === BLOCK_BYTES) {
+        this.pairs.push((this.crc ^ 0xffffffff) >>> 0, ((this.b << 16) | this.a) >>> 0)
+        this.crc = 0xffffffff
+        this.a = 1
+        this.b = 0
+        this.filled = 0
+      }
+    }
+  }
+
+  /** `[crc, adler, crc, adler, …]`, one pair per whole block so far. */
+  finish(): Uint32Array {
+    return Uint32Array.from(this.pairs)
+  }
+}

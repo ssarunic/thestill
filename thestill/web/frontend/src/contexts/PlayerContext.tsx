@@ -21,6 +21,7 @@ import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
 import { NativeEngine, type NativeEngineState } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
+import { beginAudioLoad } from '../drift/corsVerdict'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
 
 // ---------------------------------------------------------------------------
@@ -402,7 +403,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Assign a new native source and (optionally) carry seek/rate across
   // the transition (the engine defers the seek to loadedmetadata).
   const beginSource = useCallback((source: ActiveSource, seekTo: number | null, rate: number | null) => {
-    nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType }, { seekTo, rate })
+    // Spec #116 — only the audio rendition of a plain file is ever aligned,
+    // so only that may load with `crossorigin` (and only for a host already
+    // known to allow it).
+    const eligible = source.rendition === 'audio' && !/mpegurl/i.test(source.mimeType ?? '')
+    const crossOrigin = beginAudioLoad(source.url, eligible)
+    nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType, crossOrigin }, { seekTo, rate })
     srcRef.current = source.url
     setNativeDuration(null)
     setMediaError(null)

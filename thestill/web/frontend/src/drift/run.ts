@@ -9,6 +9,7 @@
 
 import { Aligner, OFFSET_TOLERANCE_S } from './align'
 import { classifyAlignment, type TranscriptInterval } from './classify'
+import { BlockDigester } from './digest'
 import { CODEC_MP3, parseSyncTrack, SyncTrackError } from './syncTrack'
 import type { SourceGap } from '../contexts/playback-engine/timeline-map'
 
@@ -55,6 +56,12 @@ export interface DriftReport {
   fitMs: number | null
   /** A short machine-readable reason, for `error` and `unsupported_codec`. */
   error: string | null
+  /**
+   * `[crc, adler, …]` per whole 64 KB block of the fetched copy, for the
+   * content check (verify.ts). Never sent to the server. Null until the
+   * whole file has been read.
+   */
+  blocks: Uint32Array | null
 }
 
 export interface DriftProgress {
@@ -82,6 +89,7 @@ function emptyReport(outcome: DriftOutcome, error: string | null = null): DriftR
     fetchMs: null,
     fitMs: null,
     error,
+    blocks: null,
   }
 }
 
@@ -143,6 +151,7 @@ export async function runDriftAlignment(
   const declared = Number(response.headers.get('content-length'))
   const totalBytes = Number.isFinite(declared) && declared > 0 ? declared : null
   const aligner = new Aligner(track)
+  const digester = new BlockDigester()
   let fetchedBytes = 0
   let lastProgress = 0
   try {
@@ -152,6 +161,7 @@ export async function runDriftAlignment(
       if (done) break
       fetchedBytes += value.length
       aligner.push(value)
+      digester.push(value)
       if (onProgress && fetchedBytes - lastProgress >= 1 << 20) {
         lastProgress = fetchedBytes
         onProgress({ fetchedBytes, totalBytes })
@@ -164,6 +174,7 @@ export async function runDriftAlignment(
   onProgress?.({ fetchedBytes, totalBytes: totalBytes ?? fetchedBytes })
   report.fetchedBytes = fetchedBytes
   report.fetchMs = Math.round(now() - started)
+  report.blocks = digester.finish()
 
   const fitStarted = now()
   const alignment = aligner.finish()

@@ -207,3 +207,38 @@ def test_unknown_episode_is_not_found(client, log):
     )
 
     assert response.status_code == 404
+
+
+def test_report_carries_the_play_check(client, app_state, episode, log):
+    """Spec #116 §4 step 6 — the verify fields and why a check is missing."""
+    url, generation = episode
+    app_state.analytics_sink = sink = RecordingSink()
+
+    verified = {**_aligned(generation), "sw_state": "ok"}
+    unchecked = {
+        **_aligned(generation),
+        "sw_state": "element_not_cors",
+        "verify_length_ok": None,
+        "verify_ranges_checked": None,
+        "verify_ranges_matched": None,
+    }
+    assert client.post(url, json=verified).status_code == 200
+    assert client.post(url, json=unchecked).status_code == 200
+    assert client.post(url, json={**verified, "sw_state": "made_up"}).status_code == 422
+
+    first, second = log.named("drift_map_reported")
+    assert (first["sw_state"], first["verify_ranges_matched"]) == ("ok", 4)
+    assert (second["sw_state"], second["verify_ranges_checked"]) == ("element_not_cors", None)
+    assert [event.properties()["sw_state"] for event, _ in sink.events] == ["ok", "element_not_cors"]
+    assert sink.events[0][0].properties()["verify_ranges_matched"] == 4
+
+
+def test_a_map_reported_for_another_copy_is_not_an_error(client, episode, log):
+    """The browser found the element playing a different copy and said so."""
+    url, generation = episode
+    body = {**_aligned(generation), "outcome": "variant_mismatch", "verify_ranges_matched": 1, "sw_state": "ok"}
+
+    assert client.post(url, json=body).status_code == 200
+
+    (event,) = log.named("drift_map_reported")
+    assert event["log_level"] == "info"

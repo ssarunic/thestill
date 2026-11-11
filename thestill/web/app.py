@@ -142,6 +142,10 @@ from .task_manager import get_task_manager
 logger = structlog.get_logger(__name__)
 
 
+#: Spec #116 — the reader's service worker, at the root so its scope is the site.
+SERVICE_WORKER_FILE = "sw.js"
+
+
 class CachedStaticFiles(StaticFiles):
     """
     StaticFiles with aggressive caching for hashed assets.
@@ -1028,7 +1032,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             if full_path and full_path != "index.html":
                 candidate = (static_dir / full_path).resolve()
                 if candidate.is_file() and static_root in candidate.parents:
-                    return FileResponse(str(candidate), headers={"Cache-Control": "public, max-age=86400"})
+                    # Spec #116: the service worker must be re-checked on
+                    # every load, or a broken one stays in browsers for as
+                    # long as it is cached. Everything else here is static.
+                    cache = "no-cache" if full_path == SERVICE_WORKER_FILE else "public, max-age=86400"
+                    return FileResponse(str(candidate), headers={"Cache-Control": cache})
+                if full_path == SERVICE_WORKER_FILE:
+                    # Never answer the worker's URL with the HTML shell.
+                    return PlainTextResponse("Not found", status_code=404, headers={"Cache-Control": "no-cache"})
             no_cache = {"Cache-Control": "no-cache, must-revalidate"}
             state = request.app.state.app_state
             renderer = get_shell_renderer(state)

@@ -24,22 +24,23 @@ const report: DriftReport = {
   fetchMs: 2100,
   fitMs: 35,
   error: null,
+  blocks: null,
 }
 
 describe('DriftDebugStrip', () => {
   it('says so when the transcript has no sync track', () => {
-    render(<DriftDebugStrip state={{ status: 'idle', progress: null, report: null }} hasTrack={false} onPlayAt={vi.fn()} />)
+    render(<DriftDebugStrip state={{ status: 'idle', progress: null, report: null, check: null }} hasTrack={false} onPlayAt={vi.fn()} />)
     expect(screen.getByText(/No sync track for this transcript/)).toBeInTheDocument()
   })
 
   it('waits for playback, then shows progress', () => {
     const { rerender } = render(
-      <DriftDebugStrip state={{ status: 'idle', progress: null, report: null }} hasTrack onPlayAt={vi.fn()} />,
+      <DriftDebugStrip state={{ status: 'idle', progress: null, report: null, check: null }} hasTrack onPlayAt={vi.fn()} />,
     )
     expect(screen.getByText(/Waiting for playback/)).toBeInTheDocument()
     rerender(
       <DriftDebugStrip
-        state={{ status: 'running', progress: { fetchedBytes: 10 * 1048576, totalBytes: 40 * 1048576 }, report: null }}
+        state={{ status: 'running', progress: { fetchedBytes: 10 * 1048576, totalBytes: 40 * 1048576 }, report: null, check: null }}
         hasTrack
         onPlayAt={vi.fn()}
       />,
@@ -49,7 +50,7 @@ describe('DriftDebugStrip', () => {
 
   it('shows the map and that it is not applied, and plays a span start both ways', () => {
     const onPlayAt = vi.fn()
-    render(<DriftDebugStrip state={{ status: 'done', progress: null, report }} hasTrack onPlayAt={onPlayAt} />)
+    render(<DriftDebugStrip state={{ status: 'done', progress: null, report, check: null }} hasTrack onPlayAt={onPlayAt} />)
 
     expect(screen.getByText(/Aligned/)).toBeInTheDocument()
     expect(screen.getByText(/Seeks and highlighting are not corrected yet/)).toBeInTheDocument()
@@ -66,12 +67,35 @@ describe('DriftDebugStrip', () => {
   it('explains an outcome without a map', () => {
     render(
       <DriftDebugStrip
-        state={{ status: 'done', progress: null, report: { ...report, outcome: 'no_cors', spans: [], gaps: [] } }}
+        state={{ status: 'done', progress: null, report: { ...report, outcome: 'no_cors', spans: [], gaps: [] }, check: null }}
         hasTrack
         onPlayAt={vi.fn()}
       />,
     )
     expect(screen.getByText(/does not allow the page to read the file/)).toBeInTheDocument()
     expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('says whether the playing audio was shown to be the aligned copy', () => {
+    const show = (check: Parameters<typeof DriftDebugStrip>[0]['state']['check']) =>
+      render(<DriftDebugStrip state={{ status: 'done', progress: null, report, check }} hasTrack onPlayAt={vi.fn()} />)
+
+    const pending = show(null)
+    expect(screen.getByText(/Check against the playing audio: pending/)).toBeInTheDocument()
+    pending.unmount()
+
+    const first = show({ swState: 'element_not_cors', verification: null })
+    expect(screen.getByText(/not possible — the audio loaded without crossorigin/)).toBeInTheDocument()
+    first.unmount()
+
+    const ok = show({
+      swState: 'ok',
+      verification: { lengthOk: true, rangesChecked: 4, rangesMatched: 4, verdict: 'verified' },
+    })
+    expect(screen.getByText(/the element is playing the aligned copy \(same length, 4 of 4 ranges match\)/)).toBeInTheDocument()
+    ok.unmount()
+
+    show({ swState: 'ok', verification: { lengthOk: false, rangesChecked: 2, rangesMatched: 1, verdict: 'mismatch' } })
+    expect(screen.getByText(/playing a DIFFERENT copy; this map does not apply/)).toBeInTheDocument()
   })
 })

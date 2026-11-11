@@ -1,6 +1,7 @@
 // Spec #116 §7.6 — the admin-only `?driftdebug=1` strip: what the aligner
 // made of this browser's copy of the audio, drawn on the transcript's
 // timeline, with a way to check each span by ear.
+import type { PlayCheck } from './report'
 import type { DriftAlignmentState } from './useDriftAlignment'
 
 function clock(seconds: number): string {
@@ -18,10 +19,38 @@ const signed = (seconds: number) => `${seconds >= 0 ? '+' : '−'}${Math.abs(sec
 const OUTCOME_TEXT: Record<string, string> = {
   identity: 'Same audio as the transcribed copy',
   aligned: 'Aligned',
+  variant_mismatch: 'Aligned, but the audio playing is a different copy',
   low_confidence: 'Too little of the transcript was found',
   no_cors: 'The audio host does not allow the page to read the file',
   unsupported_codec: 'Not an MP3 the aligner can read',
   error: 'Failed',
+}
+
+const SW_TEXT: Record<string, string> = {
+  unsupported: 'this browser has no service worker here',
+  not_controlling: 'the service worker was not yet in control of this page; reload and play again',
+  element_not_cors:
+    'the audio loaded without crossorigin, as it does the first time a host is seen; play the episode again after a reload',
+  no_requests: 'the service worker saw no request from the audio element',
+  opaque: 'the service worker could not read the audio responses',
+}
+
+/** One line on whether the element was shown to be playing the aligned copy. */
+function checkText(check: PlayCheck | null): string {
+  if (!check) return 'Check against the playing audio: pending.'
+  const v = check.verification
+  if (check.swState !== 'ok' || !v) {
+    return `Check against the playing audio: not possible — ${SW_TEXT[check.swState] ?? check.swState}.`
+  }
+  const length = v.lengthOk === null ? 'length unknown' : v.lengthOk ? 'same length' : 'DIFFERENT length'
+  const ranges = `${v.rangesMatched} of ${v.rangesChecked} ranges match`
+  const verdict =
+    v.verdict === 'verified'
+      ? 'the element is playing the aligned copy'
+      : v.verdict === 'mismatch'
+        ? 'the element is playing a DIFFERENT copy; this map does not apply'
+        : 'not enough to decide'
+  return `Check against the playing audio: ${verdict} (${length}, ${ranges}).`
 }
 
 export default function DriftDebugStrip({
@@ -62,6 +91,7 @@ export default function DriftDebugStrip({
         {report?.error ? ` (${report.error})` : ''}
       </p>
       <p className="mt-1 text-slate-600">Reported only. Seeks and highlighting are not corrected yet.</p>
+      {state.status === 'done' && report && <p className="mt-1 text-slate-600">{checkText(state.check)}</p>}
 
       {report && (
         <>

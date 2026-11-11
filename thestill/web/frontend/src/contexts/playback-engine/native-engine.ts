@@ -10,6 +10,7 @@
 // below works unchanged on top of it.
 
 import { canPlayHlsNatively, HLS_ERROR_EVENT, loadHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
+import { rejectCrossOrigin } from '../../drift/corsVerdict'
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 
 // Numeric codes rather than the MediaError constants — the global is not
@@ -68,6 +69,10 @@ export class NativeEngine implements PlaybackEngine {
   // Last URL assigned. Also the error-suppression guard: clearing src
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
+  // Spec #116 — the URL currently loaded with `crossorigin`, and whether a
+  // play was asked for on it (to resume after the fallback reload).
+  private crossOriginUrl: string | null = null
+  private wantsPlay = false
   private unbind: () => void
   // Spec #113 — hls.js state. `hlsGeneration` invalidates an attach still
   // waiting for the chunk when the source changes underneath it.
@@ -121,7 +126,15 @@ export class NativeEngine implements PlaybackEngine {
       [
         'error',
         () => {
-          if (this.url !== null) this.events.onError(describeMediaError(this.el.error?.code))
+          if (this.url === null) return
+          // Spec #116 — a source loaded with `crossorigin` fails outright
+          // when its host does not allow CORS. Fall back once to a plain
+          // load of the same source; the listener only loses the check.
+          if (this.crossOriginUrl === this.url) {
+            this.reloadWithoutCrossOrigin()
+            return
+          }
+          this.events.onError(describeMediaError(this.el.error?.code))
         },
       ],
       ['ended', () => this.events.onEnded()],
@@ -148,7 +161,17 @@ export class NativeEngine implements PlaybackEngine {
     this.pendingSeek = opts?.seekTo ?? null
     this.userSeeked = false
     this.url = source.url
-    if (needsHlsJs(this.el, source.url, source.mimeType)) {
+    this.wantsPlay = false
+    const useHls = needsHlsJs(this.el, source.url, source.mimeType)
+    // The attribute must be in place before the source is assigned.
+    if (source.crossOrigin && !useHls) {
+      this.el.crossOrigin = 'anonymous'
+      this.crossOriginUrl = source.url
+    } else {
+      this.el.removeAttribute('crossorigin')
+      this.crossOriginUrl = null
+    }
+    if (useHls) {
       // Stop the outgoing source now: hls.js attaches once its chunk has
       // loaded, and the old file must not keep playing in the meantime.
       if (this.el.hasAttribute('src')) this.clearSrc()
@@ -165,18 +188,36 @@ export class NativeEngine implements PlaybackEngine {
     }
   }
 
+  private reloadWithoutCrossOrigin(): void {
+    const url = this.url
+    if (url === null) return
+    rejectCrossOrigin(url)
+    this.crossOriginUrl = null
+    // Keep where playback was meant to be: a deferred seek that never ran
+    // (the failure comes before metadata), else the position reached.
+    const position = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
+    this.el.removeAttribute('crossorigin')
+    this.pendingSeek = position
+    this.el.src = url
+    if (this.wantsPlay) void this.el.play().catch(() => {})
+  }
+
   // Detach the source (session stop). Keeps the element itself alive —
   // it is the one stable media node (spec #61 invariant 2).
   unload(): void {
     this.detachHls()
     this.el.pause()
     this.clearSrc()
+    this.el.removeAttribute('crossorigin')
+    this.crossOriginUrl = null
+    this.wantsPlay = false
     this.url = null
     this.pendingSeek = null
     this.userSeeked = false
   }
 
   play(): Promise<void> {
+    this.wantsPlay = true
     if (this.hlsRetry) {
       const { url, position } = this.hlsRetry
       this.hlsRetry = null
@@ -197,6 +238,7 @@ export class NativeEngine implements PlaybackEngine {
     // Also cancels a play() still waiting on an hls.js attach — e.g.
     // playYouTube() pausing this engine must not have it start later.
     this.deferredPlay++
+    this.wantsPlay = false
     this.el.pause()
   }
 

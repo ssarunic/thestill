@@ -2,6 +2,8 @@
 // Nothing here identifies the listener: a host name, a browser family and
 // numbers.
 import type { DriftReport } from './run'
+import type { SwState } from './swClient'
+import type { Verification } from './verify'
 
 const round = (value: number | null, digits = 3): number | null =>
   value === null ? null : Math.round(value * 10 ** digits) / 10 ** digits
@@ -34,11 +36,12 @@ export interface DriftOutcomeBody {
   anchors_hit: number | null
   anchors_inlier: number | null
   anchors_outlier: number | null
-  // The two checks of §4 step 6 are not built yet (they need the service
-  // worker), so they are reported as unknown, never as passed.
-  verify_length_ok: null
-  verify_ranges_checked: null
-  verify_ranges_matched: null
+  // The two checks of §4 step 6. Null means "not known", never "passed":
+  // the element loaded without crossorigin, or the worker saw nothing.
+  verify_length_ok: boolean | null
+  verify_ranges_checked: number | null
+  verify_ranges_matched: number | null
+  sw_state: SwState | null
   audio_host: string | null
   audio_bytes: number | null
   fetched_bytes: number | null
@@ -49,6 +52,7 @@ export interface DriftOutcomeBody {
 }
 
 const HOST = /^[A-Za-z0-9.-]{1,253}$/
+const isMapOutcome = (outcome: DriftReport['outcome']) => outcome === 'aligned' || outcome === 'identity'
 /** The server takes at most this many spans; a real map has a handful. */
 export const MAX_REPORTED_SPANS = 64
 /** The server refuses a body over this many bytes (`DRIFT_OUTCOME_MAX_BYTES`). */
@@ -56,12 +60,24 @@ export const MAX_REPORT_BYTES = 4096
 
 const byteLength = (body: DriftOutcomeBody): number => new TextEncoder().encode(JSON.stringify(body)).length
 
-export function toOutcomeBody(report: DriftReport, generation: string, userAgent: string): DriftOutcomeBody {
+/** What the reader learned about the play this report describes. */
+export interface PlayCheck {
+  swState: SwState
+  verification: Verification | null
+}
+
+export function toOutcomeBody(
+  report: DriftReport,
+  generation: string,
+  userAgent: string,
+  check: PlayCheck | null = null,
+): DriftOutcomeBody {
   const outlier =
     report.anchorsHit !== null && report.anchorsInlier !== null ? report.anchorsHit - report.anchorsInlier : null
   const body: DriftOutcomeBody = {
     generation: report.generation ?? generation,
-    outcome: report.outcome,
+    // A map built from another copy than the one playing is no map.
+    outcome: check?.verification?.verdict === 'mismatch' && isMapOutcome(report.outcome) ? 'variant_mismatch' : report.outcome,
     spans: report.spans.slice(0, MAX_REPORTED_SPANS).map((span) => ({
       src_start: round(span.srcStartS) as number,
       src_end: round(span.srcEndS) as number,
@@ -75,9 +91,10 @@ export function toOutcomeBody(report: DriftReport, generation: string, userAgent
     anchors_hit: report.anchorsHit,
     anchors_inlier: report.anchorsInlier,
     anchors_outlier: outlier,
-    verify_length_ok: null,
-    verify_ranges_checked: null,
-    verify_ranges_matched: null,
+    verify_length_ok: check?.verification?.lengthOk ?? null,
+    verify_ranges_checked: check?.verification?.rangesChecked ?? null,
+    verify_ranges_matched: check?.verification?.rangesMatched ?? null,
+    sw_state: check?.swState ?? null,
     audio_host: report.audioHost && HOST.test(report.audioHost) ? report.audioHost : null,
     audio_bytes: report.audioBytes,
     fetched_bytes: report.fetchedBytes,
