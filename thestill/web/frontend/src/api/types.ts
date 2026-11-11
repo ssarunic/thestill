@@ -1267,6 +1267,10 @@ export interface EpisodeEntity {
   mention_count: number
   first_mention_ms: number
   speaker_kind: SpeakerKind
+  // On this episode (a guest, or a host / recurring voice with a segment
+  // of their own), not merely the show's host being talked about. Absent
+  // from a payload cached before the field existed.
+  takes_part?: boolean
   // Spec #28 §5.2 — composite relevance score; see backend
   // ``_compute_salience``. Used to sort the rail; the frontend can
   // also use it to filter very-low-salience entries.

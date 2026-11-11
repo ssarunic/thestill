@@ -118,6 +118,13 @@ class EpisodeEntity(BaseModel):
     # ``role`` field. Spec §1.13.1: host/guest is a property of the
     # entity↔podcast relationship, not the mention.
     speaker_kind: Literal["host", "guest", "recurring", "unknown"]
+    # True when the entity takes part in *this* episode. A guest anchor is
+    # per episode, so a guest always does. Host and recurring anchors are
+    # per show: they say who the person is to the podcast, not that they
+    # are on this episode, so those count only when a segment is theirs
+    # (a ``speaking`` mention). An absent host who is merely talked about
+    # stays among the people mentioned.
+    takes_part: bool = False
     # Spec #28 §5.2 — composite relevance score used to sort the rail.
     # Combines mention_count, speaker_kind weight, log(time_spread), and
     # average mention confidence so a 2× mention by a host across the
@@ -405,6 +412,8 @@ def get_episode_entities(
                 mention_count=len(mentions),
                 first_mention_ms=mentions[0].start_ms,
                 speaker_kind=kind,
+                takes_part=kind == "guest"
+                or (kind != "unknown" and any(m.role == MentionRole.SPEAKING.value for m in mentions)),
                 salience=_compute_salience(speaker_kind=kind, mentions=mentions),
                 mentions=mentions,
             )

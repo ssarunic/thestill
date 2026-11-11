@@ -621,3 +621,16 @@ def test_episode_mentioned_marks_who_takes_part_guests_first(anon, app_state):
     assert people[:2] == [("Ed Elson", "guest"), ("Scott Galloway", "host")]
     assert all(role is None for _name, role in people[2:])
     assert all(m["role"] is None for m in body["mentioned"] if m["type"] != "person")
+
+
+def test_episode_mentioned_gives_no_role_to_a_show_host_who_is_only_talked_about(anon, app_state):
+    _seed_people(app_state)
+    _anchor_people(app_state, host="person:scott-galloway", guest="person:ed-elson")
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE entity_mentions SET role = 'mentioned' WHERE entity_id = 'person:scott-galloway' AND role = 'speaking'"
+        )
+    body = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes").json()
+    roles = {m["name"]: m["role"] for m in body["mentioned"] if m["type"] == "person"}
+    assert roles["Ed Elson"] == "guest"
+    assert roles["Scott Galloway"] is None

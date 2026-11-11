@@ -131,6 +131,19 @@ describe('EntityRail', () => {
     expect(within(mentioned).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Stranger7×'])
   })
 
+  it('keeps an absent host who is only talked about among the people mentioned', () => {
+    renderRail([
+      { ...entity('person:guest', 'Guesty', 'person', 40, 'guest'), takes_part: true },
+      // The show's host, not on this episode: discussed three times.
+      { ...entity('person:host', 'Hosty', 'person', 3, 'host'), takes_part: false },
+    ])
+    const cast = screen.getByText('In this episode').closest('section') as HTMLElement
+    const mentioned = screen.getByText('People mentioned').closest('section') as HTMLElement
+    expect(within(cast).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Guestyguest'])
+    // Still tagged as the host, and the count is back: these are mentions.
+    expect(within(mentioned).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Hostyhost3×'])
+  })
+
   it('never folds the people who take part behind "Show all"', () => {
     renderRail(Array.from({ length: 10 }, (_, i) => entity(`person:g${i}`, `Guest ${i}`, 'person', 1, 'guest')))
     expect(screen.getAllByRole('listitem')).toHaveLength(10)

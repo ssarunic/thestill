@@ -34,6 +34,15 @@ const DEFAULT_VISIBLE_COUNT = 8
 // same on every episode of the show.
 const TAKING_PART_ORDER: Record<SpeakerKind, number> = { guest: 0, host: 1, recurring: 2, unknown: 3 }
 
+/** A person who is on this episode, as opposed to one who is talked about.
+ * A show's host who is absent from the episode is not: ``speaker_kind``
+ * alone only says who they are to the podcast. */
+function takesPart(e: EpisodeEntity): boolean {
+  if (e.entity.type !== 'person') return false
+  // A payload cached from before ``takes_part`` existed.
+  return e.takes_part ?? e.speaker_kind !== 'unknown'
+}
+
 export interface EntityRailProps {
   entities: EpisodeEntity[]
   // The episode being read; the peek skips it when listing where else
@@ -83,6 +92,7 @@ function RailRow({ entity: episodeEntity, episodeId, isSmUp, onSeek, onShowInTra
   const style = entityStyle(entity.type)
   const seekSeconds = first_mention_ms / 1000
   const isParticipant = speaker_kind !== 'unknown'
+  const inCast = takesPart(episodeEntity)
   const mention = useMemo(() => synthesizeIndexMention(episodeEntity), [episodeEntity])
 
   return (
@@ -111,7 +121,7 @@ function RailRow({ entity: episodeEntity, episodeId, isSmUp, onSeek, onShowInTra
       </EntityHighlight>
       {/* A participant's count is mostly their own speaking turns, which
           says nothing next to "7×" for someone who is talked about. */}
-      {!(isParticipant && entity.type === 'person') && (
+      {!inCast && (
         <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">{mention_count}×</span>
       )}
       {onSeek && (
@@ -157,7 +167,7 @@ export default function EntityRail({
   }
   const takingPart: EpisodeEntity[] = []
   for (const e of entities) {
-    if (e.entity.type === 'person' && e.speaker_kind !== 'unknown') takingPart.push(e)
+    if (takesPart(e)) takingPart.push(e)
     else buckets[e.entity.type].push(e)
   }
   // A cached payload may still be host-first.
