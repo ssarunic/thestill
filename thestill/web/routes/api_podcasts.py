@@ -18,14 +18,14 @@ Podcast API endpoints for Thestill web UI.
 Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.analytics_sink import Follow, Unfollow, follow_source
+from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, Follow, Unfollow, follow_source
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
@@ -509,6 +509,130 @@ def get_episode_sync_track(
         media_type="application/octet-stream",
         headers={"Cache-Control": "private, max-age=31536000, immutable"},
     )
+
+
+#: A drift report is a handful of spans; anything larger is not one.
+DRIFT_OUTCOME_MAX_BYTES = 4096
+
+
+class DriftSpan(BaseModel):
+    """Transcript time ``[src_start, src_end]`` plays ``offset`` seconds
+    later in the listener's copy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    src_start: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+    src_end: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+    offset: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+
+
+class DriftOutcomeRequest(BaseModel):
+    """What the browser made of one attempt to align an episode (spec #116
+    section 7.2). Nothing here identifies the listener."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generation: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    outcome: DriftOutcome
+    spans: List[DriftSpan] = Field(default_factory=list, max_length=64)
+    gaps_confirmed_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    unresolved_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    listener_ads_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    coverage: Optional[float] = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    anchors_total: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_hit: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_inlier: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_outlier: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    verify_length_ok: Optional[bool] = None
+    verify_ranges_checked: Optional[int] = Field(default=None, ge=0, le=100_000)
+    verify_ranges_matched: Optional[int] = Field(default=None, ge=0, le=100_000)
+    # A host name only, never a URL: no scheme, path, query or port.
+    audio_host: Optional[str] = Field(default=None, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
+    audio_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
+    fetched_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
+    fetch_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    fit_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    # Family and major version, for example "Safari 27".
+    browser: Optional[str] = Field(default=None, max_length=40, pattern=r"^[A-Za-z][A-Za-z ]{0,30} \d{1,4}$")
+    error: Optional[str] = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_ .:-]+$")
+
+
+def _drift_report_size(request: Request) -> None:
+    """Refuse a report over ``DRIFT_OUTCOME_MAX_BYTES`` before parsing it."""
+    declared = request.headers.get("content-length", "")
+    if not declared.isdigit():
+        raise HTTPException(status_code=411, detail="Content-Length required")
+    if int(declared) > DRIFT_OUTCOME_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Drift report too large")
+
+
+@router.post("/{podcast_slug}/episodes/{episode_slug}/drift-outcome", dependencies=[Depends(_drift_report_size)])
+def report_drift_outcome(
+    podcast_slug: str,
+    episode_slug: str,
+    body: DriftOutcomeRequest,
+    request: Request,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+) -> dict:
+    """Record what a browser made of aligning this episode (spec #116).
+
+    The report is logged as ``drift_map_reported`` and its summary goes to
+    usage analytics as ``drift_alignment_result``. It changes nothing: the
+    map itself lives in the browser. A report for a generation that is not
+    the episode's current track is still logged, marked as stale, because a
+    reader can hold an older transcript open across a re-transcription.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    podcast, episode = result
+
+    sync_tracks = getattr(state, "sync_track_service", None)
+    current = sync_tracks.usable_generation(episode.id, body.generation) if sync_tracks is not None else None
+
+    fields = body.model_dump(exclude={"generation", "spans"})
+    spans = [span.model_dump() for span in body.spans]
+    max_offset_s = max((abs(span.offset) for span in body.spans), default=0.0)
+    # An applied map whose ranges did not all match the fetched copy means
+    # the checks of section 4 step 6 let a wrong map through.
+    verification_bug = (
+        body.outcome == "aligned"
+        and body.verify_ranges_checked is not None
+        and body.verify_ranges_matched is not None
+        and body.verify_ranges_matched < body.verify_ranges_checked
+    )
+    log = logger.error if verification_bug else logger.info
+    log(
+        "drift_map_reported",
+        episode_id=episode.id,
+        podcast_id=podcast.id,
+        generation=body.generation,
+        generation_current=current is not None,
+        spans=spans,
+        span_count=len(spans),
+        max_offset_s=round(max_offset_s, 3),
+        **fields,
+    )
+    capture_event(
+        state,
+        request,
+        DriftAlignmentResult(
+            outcome=body.outcome,
+            audio_host=body.audio_host,
+            browser=body.browser,
+            span_count=len(spans),
+            max_offset_s=round(max_offset_s, 1),
+            coverage=body.coverage,
+            anchors_total=body.anchors_total,
+            anchors_hit=body.anchors_hit,
+            verify_length_ok=body.verify_length_ok,
+            fetch_ms=body.fetch_ms,
+            fit_ms=body.fit_ms,
+        ),
+        user=user,
+    )
+    return api_response({"accepted": True})
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
