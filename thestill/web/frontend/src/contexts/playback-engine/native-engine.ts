@@ -129,7 +129,9 @@ export class NativeEngine implements PlaybackEngine {
         'loadedmetadata',
         () => {
           if (this.pendingSeek != null) {
-            this.el.currentTime = this.toElementTime(this.pendingSeek)
+            // A deferred seek is a position in this audio (see
+            // getElementTime), never a transcript time.
+            this.el.currentTime = this.pendingSeek
             this.pendingSeek = null
           }
         },
@@ -325,7 +327,7 @@ export class NativeEngine implements PlaybackEngine {
       return true
     }
     if (this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
-    this.el.currentTime = this.toElementTime(seconds)
+    this.el.currentTime = seconds
     return true
   }
 
@@ -345,6 +347,22 @@ export class NativeEngine implements PlaybackEngine {
 
   getCurrentTime(): number {
     return this.hlsRetry ? this.hlsRetry.position : this.fromElementTime(this.el.currentTime)
+  }
+
+  /**
+   * Spec #116 — where the audio itself is, whatever map is in force. This
+   * is what a saved listening position holds, and what a resume seeks to
+   * (`LoadOptions.seekTo`, `setPendingSeek`): on the next load the player
+   * seeks before any map can exist, so a position saved as transcript time
+   * would resume off by the ad shift even when the copy has not changed.
+   */
+  getElementTime(): number {
+    return this.hlsRetry ? this.hlsRetry.position : this.el.currentTime
+  }
+
+  /** The audio's own duration, whatever map is in force. */
+  getElementDuration(): number {
+    return Number.isFinite(this.el.duration) ? this.el.duration : 0
   }
 
   getDuration(): number {

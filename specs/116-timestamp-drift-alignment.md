@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resume correction, the audit command, the per-show ad profile. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -888,8 +888,8 @@ other verdict lifts it, also after it has been applied.
 Where the map is applied: inside `NativeEngine`, not at each caller.
 While a map is set, every time the engine takes or reports is transcript
 time. So segment clicks, citations, chapters, the scrubber, the clock,
-karaoke and the saved listening position are corrected by one change and
-none of them knows about the map:
+and karaoke are corrected by one change and none of them knows about the
+map (the saved listening position is the exception, below):
 
 - a seek to transcript time t moves the element to `toAsset(t)`;
 - the reported time is `toLogicalHeld(elementTime)`: through an ad that
@@ -957,11 +957,18 @@ How this was built, where it differs from the sections above:
   response of the same play, and a changed verdict is reported again
   with `revision` above 0, so a copy that differs only at a later ad
   break is found when a seek reaches it.
-- **Not corrected yet: resuming.** A position saved while a map is in
-  force is transcript time. On the next load the element seeks to it
-  before any map exists, so it starts as far off as the ads differ, as it
-  does today; the clock then shows the true transcript time. Correcting
-  the start needs the map before the first seek (a cached map, step 7).
+- **Saved positions stay positions in the audio.** Section 5 says a
+  listening position is stored in transcript time once a map is present.
+  It is not: while a map is in force the engine still hands the
+  persistence layer the element's own time (`getElementTime`). A resume
+  seeks before any map can exist, so a position saved as transcript time
+  would come back off by the ad shift on every reload, even when the copy
+  has not changed. Kept as a position in the audio, a resume behaves
+  exactly as before this spec: right when the copy is the same, off by
+  the difference when its ads changed. Resuming on the same sentence in a
+  changed copy needs the saved position to say which kind of time it is
+  (a server field) and the map before the first seek (a cached map,
+  step 7); neither is built.
 - **Not built:** the per-show ad profile (section 8) and the client
   eagerness it drives, the identity shortcut and the cheap check (steps
   2 and 3: every attempt is a full pass), the "Refine" step (the

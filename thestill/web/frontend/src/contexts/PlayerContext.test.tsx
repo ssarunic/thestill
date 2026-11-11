@@ -1044,6 +1044,29 @@ describe('spec #90 — listening progress', () => {
       expect(writes()).toEqual([expect.objectContaining({ event: 'pause', position_seconds: 42, keepalive: true })])
     })
 
+    it('saves where the audio is, not transcript time, while a timeline map is in force (spec #116)', async () => {
+      // A resume seeks before any map exists. A position saved as transcript
+      // time would come back 30 s off in this copy even though nothing changed.
+      listeningCache.seed('ep-audio', null)
+      const { video } = renderPlayer()
+      act(() => ctx.play(audioTrack))
+      video.currentTime = 1100
+      act(() => {
+        ctx.applyTimeline('ep-audio', audioTrack.audioUrl, {
+          map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: -30 }]),
+          durationS: 3000,
+        })
+      })
+      // The app sees transcript time…
+      expect(ctx.getCurrentTime()).toBe(1130)
+      act(() => {
+        window.dispatchEvent(new Event('pagehide'))
+      })
+      // …the saved position is the audio's.
+      expect(writes()).toEqual([expect.objectContaining({ event: 'pause', position_seconds: 1100 })])
+      expect(readSnapshot(LOCAL_USER_KEY)?.logicalPosition).toBe(1100)
+    })
+
     it('flushes the outgoing episode before a track change', async () => {
       listeningCache.seed('ep-audio', null)
       const { video } = renderPlayer()
