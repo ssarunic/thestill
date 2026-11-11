@@ -421,6 +421,16 @@ describe('a play is checked again as later ranges arrive', () => {
     const reports = bodies().length
     rerender()
     expect(bodies()).toHaveLength(reports)
+
+    // A further matching range updates the count shown; the map stays in
+    // force and the state keeps saying so.
+    act(() =>
+      recordMediaReport(range({ range: 'bytes=65536-', contentLength: null, blockIndex: 1, crc: 33, adler: 44 })),
+    )
+    settle(500)
+    expect(result.current.check?.verification).toMatchObject({ rangesChecked: 2, verdict: 'verified' })
+    expect(result.current.applied).toBe(true)
+    expect(player.applyTimeline.mock.calls.at(-1)?.[2]).not.toBeNull()
   })
 
   it('stops when another source is loaded', () => {

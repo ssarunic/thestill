@@ -138,14 +138,12 @@ function keepChecking(
   audioUrl: string,
   result: DriftReport,
   first: PlayCheck,
-  wasApplied: boolean,
   { report, apply }: PlayHooks,
 ): void {
   const load = currentAudioLoad()
   if (!load || load.url !== audioUrl) return
   let reported = verdictOf(first)
   let shown = JSON.stringify(first)
-  let applied = wasApplied
   let revision = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   const stop = onMediaReport(() => {
@@ -159,6 +157,10 @@ function keepChecking(
       const check = checkPlay(audioUrl, result)
       const signature = JSON.stringify(check)
       const verdict = verdictOf(check)
+      // Whether the map is in force is read from the attempt each time, not
+      // remembered here: the hook can apply it later (a map the player
+      // refused while the listener was on another rendition).
+      let applied = attempts.get(key)?.applied ?? false
       // The map follows the verdict at once: lifted the moment a range does
       // not match, also after it has been applied.
       if (verdict !== reported) applied = settleTimeline(result, check, apply)
@@ -212,7 +214,7 @@ function checkThisLoad(
     const applied = settleTimeline(result, check, hooks.apply)
     publish(key, { ...IDLE, status: 'done', report: result, check, applied })
     report(result, check, 0, applied)
-    keepChecking(key, audioUrl, result, check, applied, hooks)
+    keepChecking(key, audioUrl, result, check, hooks)
   }, CHECK_SETTLE_MS)
 }
 
