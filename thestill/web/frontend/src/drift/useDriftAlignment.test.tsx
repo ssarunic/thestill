@@ -307,6 +307,23 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(bodies()).toHaveLength(2)
   })
 
+  it('still reports the alignment when the listener moves on before it can be checked', () => {
+    const { result } = play()
+    recordMediaReport(range())
+    finish()
+    // Within the settle delay the listener starts another episode.
+    settle(700)
+    beginAudioLoad('https://host.example/next.mp3', true)
+    act(() => recordMediaReport(range({ url: 'https://host.example/next.mp3', crc: 999 })))
+    settle(800)
+
+    // The outcome is recorded, with the check unknown: never judged against the new source.
+    expect(reportDriftOutcome).toHaveBeenCalledTimes(1)
+    const body = reportDriftOutcome.mock.calls[0][2] as Body & { verify_length_ok: boolean | null }
+    expect([body.outcome, body.revision, body.sw_state, body.verify_length_ok]).toEqual(['aligned', 0, null, null])
+    expect(result.current).toMatchObject({ status: 'done', report, check: null })
+  })
+
   it('stops when another source is loaded', () => {
     const { result } = play()
     recordMediaReport(range())

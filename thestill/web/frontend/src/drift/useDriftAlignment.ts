@@ -90,7 +90,7 @@ function saveData(): boolean {
   return connection?.saveData === true
 }
 
-type ReportPlay = (result: DriftReport, check: PlayCheck, revision: number) => void
+type ReportPlay = (result: DriftReport, check: PlayCheck | null, revision: number) => void
 
 /** A play is re-reported at most this many times after its first report. */
 const MAX_REVISIONS = 2
@@ -146,14 +146,29 @@ function keepChecking(key: string, audioUrl: string, result: DriftReport, first:
  * nothing about that. The alignment and its block digest are reused; the
  * file is not downloaded again.
  */
-function checkThisLoad(key: string, audioUrl: string, result: DriftReport, report: ReportPlay): void {
+function checkThisLoad(
+  key: string,
+  audioUrl: string,
+  result: DriftReport,
+  report: ReportPlay,
+  /** The alignment has not been reported yet: its outcome must reach the
+   * server even if the play it belongs to is over before it can be checked. */
+  firstReport: boolean,
+): void {
   const load = currentAudioLoad()
   checkedLoads.set(key, load && load.url === audioUrl ? load.t : -1)
   publish(key, { ...IDLE, status: 'done', report: result })
   setTimeout(() => {
     const now = currentAudioLoad()
-    // Superseded by a newer load of the same audio, or by another source.
-    if (load && (!now || now.url !== load.url || now.t !== load.t)) return
+    // Superseded by a newer load of the same audio, or by another source
+    // (the listener moved on within the settle delay). There is nothing
+    // left to check this alignment against, and checking it against the
+    // replacement would be wrong; the outcome is still reported, with the
+    // check unknown.
+    if (load && (!now || now.url !== load.url || now.t !== load.t)) {
+      if (firstReport) report(result, null, 0)
+      return
+    }
     const check = checkPlay(audioUrl, result)
     publish(key, { ...IDLE, status: 'done', report: result, check })
     report(result, check, 0)
@@ -185,7 +200,7 @@ function startAttempt(
     // for this redirect chain, for the next load of the element.
     if (result.outcome === 'no_cors') setCorsVerdict(input.audioUrl, 'no_cors')
     else if (result.fetchedBytes !== null) setCorsVerdict(input.audioUrl, 'cors_ok')
-    checkThisLoad(key, input.audioUrl, result, report)
+    checkThisLoad(key, input.audioUrl, result, report, true)
   }
   worker.postMessage({ type: 'start', input } satisfies DriftWorkerRequest)
 }
@@ -253,7 +268,7 @@ export function useDriftAlignment({
       // that is a new play to check; the alignment itself is reused.
       const load = currentAudioLoad()
       if (earlier.status === 'done' && earlier.report && load?.url === audioUrl && checkedLoads.get(key) !== load.t) {
-        checkThisLoad(key, audioUrl, earlier.report, report)
+        checkThisLoad(key, audioUrl, earlier.report, report, false)
       }
       return
     }
