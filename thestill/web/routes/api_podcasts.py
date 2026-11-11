@@ -511,7 +511,8 @@ def get_episode_sync_track(
     )
 
 
-#: A drift report is a handful of spans; anything larger is not one.
+#: A drift report is a handful of spans; anything larger is not one. Enforced
+#: by ``BodySizeLimitMiddleware`` (see ``app.py``), before the body is read.
 DRIFT_OUTCOME_MAX_BYTES = 4096
 
 
@@ -557,16 +558,7 @@ class DriftOutcomeRequest(BaseModel):
     error: Optional[str] = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_ .:-]+$")
 
 
-def _drift_report_size(request: Request) -> None:
-    """Refuse a report over ``DRIFT_OUTCOME_MAX_BYTES`` before parsing it."""
-    declared = request.headers.get("content-length", "")
-    if not declared.isdigit():
-        raise HTTPException(status_code=411, detail="Content-Length required")
-    if int(declared) > DRIFT_OUTCOME_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="Drift report too large")
-
-
-@router.post("/{podcast_slug}/episodes/{episode_slug}/drift-outcome", dependencies=[Depends(_drift_report_size)])
+@router.post("/{podcast_slug}/episodes/{episode_slug}/drift-outcome")
 def report_drift_outcome(
     podcast_slug: str,
     episode_slug: str,

@@ -804,6 +804,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         BodySizeLimitMiddleware,
         default_limit=config.max_webhook_body_bytes,
         route_limits=[("/webhook/", config.max_webhook_body_bytes)],
+        # Spec #116: a drift report is a handful of spans. The cap has to
+        # sit here, before FastAPI reads and parses the body.
+        suffix_limits=[("/drift-outcome", api_podcasts.DRIFT_OUTCOME_MAX_BYTES)],
     )
 
     # CORS: origins come from ALLOWED_ORIGINS env,

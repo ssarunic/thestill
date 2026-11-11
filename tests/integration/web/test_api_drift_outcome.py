@@ -178,6 +178,29 @@ def test_report_over_the_size_cap_is_refused_before_parsing(client, episode, log
     assert log.named("drift_map_reported") == []
 
 
+def test_oversized_body_is_refused_before_it_is_read_as_json(client, episode, log):
+    """The cap sits in front of body parsing: malformed JSON over the limit
+    is a 413, not the 422 a parsed body would give."""
+    url, _generation = episode
+
+    response = client.post(url, content="{" + "x" * 5000, headers={"content-type": "application/json"})
+
+    assert response.status_code == 413
+    assert client.post(url, content="{not json", headers={"content-type": "application/json"}).status_code == 422
+
+
+def test_report_without_a_declared_length_is_refused(client, episode, log):
+    url, generation = episode
+
+    def chunks():
+        yield json.dumps(_aligned(generation)).encode()
+
+    response = client.post(url, content=chunks(), headers={"content-type": "application/json"})
+
+    assert response.status_code == 411
+    assert log.named("drift_map_reported") == []
+
+
 def test_unknown_episode_is_not_found(client, log):
     response = client.post(
         "/api/podcasts/nope/episodes/nope/drift-outcome", json={"generation": "g", "outcome": "error"}
