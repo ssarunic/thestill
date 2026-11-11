@@ -130,8 +130,51 @@ class McpToolCall(_Event):
     ok: bool
 
 
+DriftOutcome = Literal[
+    "identity_assumed",
+    "identity",
+    "aligned",
+    "no_cors",
+    "variant_mismatch",
+    "low_confidence",
+    "unsupported_codec",
+    "error",
+]
+
+
+class DriftAlignmentResult(_Event):
+    """One attempt to map a transcript onto a listener's copy of the audio
+    (spec #116); never which episode or show.
+
+    ``audio_host`` is the host that served the audio (a podcast hosting
+    company), which is what decides whether alignment can work at all.
+    """
+
+    name: Literal["drift_alignment_result"] = "drift_alignment_result"
+    outcome: DriftOutcome
+    audio_host: Optional[str] = Field(default=None, max_length=253)
+    browser: Optional[str] = Field(default=None, max_length=40)
+    span_count: int = Field(ge=0)
+    max_offset_s: float = Field(ge=0)
+    coverage: Optional[float] = Field(default=None, ge=0, le=1)
+    anchors_total: Optional[int] = Field(default=None, ge=0)
+    anchors_hit: Optional[int] = Field(default=None, ge=0)
+    verify_length_ok: Optional[bool] = None
+    fetch_ms: Optional[int] = Field(default=None, ge=0)
+    fit_ms: Optional[int] = Field(default=None, ge=0)
+
+
 AnalyticsEvent = Union[
-    PublicPageView, LoginStarted, LoginCompleted, LoginCancelled, LoginFailed, Search, Follow, Unfollow, McpToolCall
+    PublicPageView,
+    LoginStarted,
+    LoginCompleted,
+    LoginCancelled,
+    LoginFailed,
+    Search,
+    Follow,
+    Unfollow,
+    McpToolCall,
+    DriftAlignmentResult,
 ]
 
 

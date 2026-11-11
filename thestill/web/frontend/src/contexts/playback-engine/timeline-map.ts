@@ -81,8 +81,15 @@ export class TimelineMap {
       const last = before as MapSpan
       return { time: last.srcEndS + last.offsetS, approximate: false }
     }
-    const neighbour = (before ?? after) as MapSpan
+    // Unplaced transcript audio keeps the offset of the span it is joined
+    // to: the one before it, unless an absent stretch lies between them.
+    const cutOff = before !== undefined && after !== undefined && this.confirmedBetween(before.srcEndS, t)
+    const neighbour = (cutOff ? after : (before ?? after)) as MapSpan
     return { time: t + neighbour.offsetS, approximate: true }
+  }
+
+  private confirmedBetween(fromS: number, toS: number): boolean {
+    return this.gaps.some((gap) => gap.kind === 'confirmed' && gap.srcEndS > fromS && gap.srcStartS < toS)
   }
 
   /**
@@ -101,14 +108,21 @@ export class TimelineMap {
       if (end < a) before = span
       else if (after === undefined) after = span
     }
-    // Between spans the copy holds, in some order, transcript audio the
-    // aligner could not place and audio of its own. Carry the neighbouring
-    // offset across the first; everything else is the listener's own.
-    const neighbour = (before ?? after) as MapSpan
-    const t = a - neighbour.offsetS
-    if (t < 0) return null
-    if (after && t >= after.srcStartS) return null
-    if (this.confirmedGapAt(t)) return null
-    return t
+    // Between spans the copy holds transcript audio the aligner could not
+    // place and audio of its own. Unplaced audio joined to the span before
+    // carries that span's offset; joined to the span after, that one's. A
+    // time that neither reaches without crossing an absent stretch is the
+    // listener's own audio.
+    if (before) {
+      const t = a - before.offsetS
+      const limit = after ? after.srcStartS : Infinity
+      if (t < limit && !this.confirmedGapAt(t) && !this.confirmedBetween(before.srcEndS, t)) return t
+    }
+    if (after) {
+      const t = a - after.offsetS
+      const floor = before ? before.srcEndS : 0
+      if (t >= floor && !this.confirmedGapAt(t) && !this.confirmedBetween(t, after.srcStartS)) return t
+    }
+    return null
   }
 }
