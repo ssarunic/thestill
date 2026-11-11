@@ -261,6 +261,33 @@ describe('NativeEngine holding a transcript-time start', () => {
     expect(t.elementTime()).toBe(14)
   })
 
+  it('reports the asked-for time as the audio position while nothing has been heard', () => {
+    // What gets saved as the listening position: not a point reached in
+    // silence, and never the end of the file.
+    const t = clickedStart()
+    t.playTo(34)
+    expect(t.engine.getElementTime()).toBe(30)
+    t.playTo(55)
+    expect(t.engine.getElementTime()).toBe(30)
+
+    // Paused before the map came: still the clicked paragraph, and the
+    // element itself is back there.
+    t.playTo(34)
+    t.engine.pause()
+    expect(t.engine.getElementTime()).toBe(30)
+    expect(t.elementTime()).toBe(30)
+
+    // Once the hold is settled the element's own clock is reported again.
+    t.engine.releaseTimelineHold(URL_A)
+    t.playTo(31)
+    expect(t.engine.getElementTime()).toBe(31)
+
+    const mapped = clickedStart()
+    mapped.engine.setTimeline(URL_A, timeline)
+    mapped.playTo(40)
+    expect(mapped.engine.getElementTime()).toBe(40)
+  })
+
   it('plays a paragraph near the end even if the silent wait ran off the end of the file', () => {
     // The click is close to the end: the muted playback finishes before the
     // map is ready, and the element stops.

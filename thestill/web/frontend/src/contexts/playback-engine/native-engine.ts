@@ -324,8 +324,11 @@ export class NativeEngine implements PlaybackEngine {
     this.deferredPlay++
     this.wantsPlay = false
     // Paused, there is nothing to keep silent; the asked-for time is kept,
-    // so a map that arrives meanwhile still moves to it.
+    // so a map that arrives meanwhile still moves to it. The element goes
+    // back to that time: what ran on meanwhile was never heard.
+    const asked = this.hold?.transcriptTime ?? null
     this.endHold(false, true)
+    if (asked !== null && this.el.readyState >= HTMLMediaElement.HAVE_METADATA) this.el.currentTime = asked
     this.el.pause()
   }
 
@@ -525,7 +528,14 @@ export class NativeEngine implements PlaybackEngine {
    * would resume off by the ad shift even when the copy has not changed.
    */
   getElementTime(): number {
-    return this.hlsRetry ? this.hlsRetry.position : this.el.currentTime
+    if (this.hlsRetry) return this.hlsRetry.position
+    // While a start is held (or paused before its map came) the element may
+    // have run on, unheard. For the listener playback is still at the place
+    // they asked for, and that is what a saved position must say: not a
+    // point they never heard, and never "finished" because the silent wait
+    // crossed the end.
+    const asked = this.hold?.transcriptTime ?? this.pendingTranscriptTime
+    return asked ?? this.el.currentTime
   }
 
   /** The audio's own duration, whatever map is in force. */
