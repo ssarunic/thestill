@@ -76,6 +76,11 @@ interface HlsErrorData {
   type: string
 }
 
+// Safari's false end: how close to its last seek the element must have
+// ended, and how far short of the known duration.
+const FALSE_END_SEEK_SLACK_S = 0.5
+const FALSE_END_MIN_SHORTFALL_S = 2
+
 export class NativeEngine implements PlaybackEngine {
   readonly kind = 'native' as const
 
@@ -106,6 +111,13 @@ export class NativeEngine implements PlaybackEngine {
   } | null = null
   // A held start that was paused before its map arrived: still owed.
   private pendingTranscriptTime: number | null = null
+  // Safari's false end (see isFalseEnd): the longest duration this source
+  // has reported, where the last seek went, the seek already recovered
+  // once, and whether the element has ended since it last played.
+  private longestDuration = 0
+  private lastSeekTarget: number | null = null
+  private recoveredAt: number | null = null
+  private hasEnded = false
   private unbind: () => void
   // Spec #113 — hls.js state. `hlsGeneration` invalidates an attach still
   // waiting for the chunk when the source changes underneath it.
@@ -140,10 +152,24 @@ export class NativeEngine implements PlaybackEngine {
           // The hold's own pause is not the listener's: for them playback
           // has started and is loading.
           if (this.hold && this.wantsPlay) return
+          // Safari pauses for a false end first; `ended` deals with it.
+          if (this.isFalseEnd()) return
           this.events.onPause()
         },
       ],
-      ['playing', () => this.events.onPlaying()],
+      [
+        'playing',
+        () => {
+          this.hasEnded = false
+          this.events.onPlaying()
+        },
+      ],
+      [
+        'seeking',
+        () => {
+          this.lastSeekTarget = this.el.currentTime
+        },
+      ],
       ['waiting', () => this.events.onWaiting()],
       ['canplay', () => this.events.onCanPlay()],
       ['timeupdate', () => this.events.onTimeUpdate(this.getCurrentTime())],
@@ -161,7 +187,9 @@ export class NativeEngine implements PlaybackEngine {
       [
         'durationchange',
         () => {
-          if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.getDuration())
+          if (!Number.isFinite(this.el.duration)) return
+          this.longestDuration = Math.max(this.longestDuration, this.el.duration)
+          this.events.onDurationChange(this.getDuration())
         },
       ],
       ['ratechange', () => this.events.onRateChange(this.el.playbackRate)],
@@ -181,7 +209,17 @@ export class NativeEngine implements PlaybackEngine {
           this.events.onError(describeMediaError(this.el.error?.code))
         },
       ],
-      ['ended', () => this.events.onEnded()],
+      [
+        'ended',
+        () => {
+          if (this.isFalseEnd()) {
+            this.recoverFromFalseEnd()
+            return
+          }
+          this.hasEnded = true
+          this.events.onEnded()
+        },
+      ],
     ]
     for (const [name, listener] of listeners) el.addEventListener(name, listener)
     this.unbind = () => {
@@ -210,6 +248,10 @@ export class NativeEngine implements PlaybackEngine {
     this.userSeeked = false
     this.url = source.url
     this.wantsPlay = false
+    this.longestDuration = 0
+    this.lastSeekTarget = null
+    this.recoveredAt = null
+    this.hasEnded = false
     // A map belongs to one verified load of one copy.
     this.timeline = null
     if (!(sameSource && opts?.holdForTimeline)) this.pendingTranscriptTime = null
@@ -263,6 +305,37 @@ export class NativeEngine implements PlaybackEngine {
     if (this.wantsPlay && !this.hold) void this.el.play().catch(() => {})
   }
 
+  /**
+   * Safari sometimes ends an MP3 where it has just been put: it reports
+   * the seek target as the duration and fires `ended`, after which every
+   * seek is clamped to that point and Play restarts from 0. Seen on a seek
+   * back from the real end of the file (2026-11-11). The marks: the
+   * element ended on the spot of its last seek, well short of a duration
+   * this same source reported earlier.
+   */
+  private isFalseEnd(): boolean {
+    if (this.url === null || !this.el.ended || this.lastSeekTarget === null) return false
+    const at = this.el.currentTime
+    if (Math.abs(at - this.lastSeekTarget) > FALSE_END_SEEK_SLACK_S) return false
+    if (this.longestDuration - at < FALSE_END_MIN_SHORTFALL_S) return false
+    // Once per place: an end that comes back after a reload is believed.
+    return this.recoveredAt === null || Math.abs(this.recoveredAt - at) > FALSE_END_SEEK_SLACK_S
+  }
+
+  // A fresh load of the same source gives the true duration back. The map
+  // stays: every range of the new load is still checked against it.
+  private recoverFromFalseEnd(): void {
+    const url = this.url
+    if (url === null) return
+    const at = this.el.currentTime
+    this.recoveredAt = at
+    this.lastSeekTarget = null
+    this.pendingSeek = at
+    this.el.src = url
+    if (this.wantsPlay) void this.el.play().catch(() => {})
+    else this.events.onPause()
+  }
+
   // Detach the source (session stop). Keeps the element itself alive —
   // it is the one stable media node (spec #61 invariant 2).
   unload(): void {
@@ -311,6 +384,22 @@ export class NativeEngine implements PlaybackEngine {
     if (this.hlsAttach) {
       const token = ++this.deferredPlay
       return this.hlsAttach.then(() => (token === this.deferredPlay ? this.el.play() : undefined))
+    }
+    // A seek made on an ended element has not landed yet. Started now,
+    // Safari either restarts from 0 or ends again on the spot; so start
+    // once the seek is done.
+    if (this.hasEnded && this.el.seeking) {
+      const token = ++this.deferredPlay
+      return new Promise<void>((resolve, reject) => {
+        this.el.addEventListener(
+          'seeked',
+          () => {
+            if (token !== this.deferredPlay) resolve()
+            else this.el.play().then(resolve, reject)
+          },
+          { once: true },
+        )
+      })
     }
     return this.el.play()
   }

@@ -121,14 +121,13 @@ describe('useDriftSession', () => {
   })
 
   it('treats a browser the feature is not proven in as not holding the permission', async () => {
-    // Safari, with the worker and the remembered setting left by an earlier
-    // release: everything is taken away, permission or not.
-    const safari =
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15'
+    // Firefox, with the worker and the remembered setting left by an
+    // earlier release: everything is taken away, permission or not.
+    const firefox = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0'
     localStorage.setItem('thestill:drift:enabled', '1')
     controlledBy = controller
     vi.stubGlobal('navigator', {
-      userAgent: safari,
+      userAgent: firefox,
       serviceWorker: {
         get controller() {
           return controlledBy

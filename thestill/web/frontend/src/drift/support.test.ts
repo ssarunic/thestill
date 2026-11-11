@@ -18,12 +18,18 @@ const UA = {
 }
 
 describe('driftAlignmentSupported', () => {
-  it('allows the browsers the feature has been proven in: desktop Chrome and Edge', () => {
+  it('allows the browsers the feature has been proven in: desktop Chrome, Edge and Safari', () => {
     expect(driftAlignmentSupported(UA.chrome)).toBe(true)
     expect(driftAlignmentSupported(UA.edge)).toBe(true)
+    expect(driftAlignmentSupported(UA.safari)).toBe(true)
   })
 
-  it.each(Object.entries(UA).filter(([name]) => name !== 'chrome' && name !== 'edge'))(
+  it('does not take an iPad asking for the desktop site for a Mac', () => {
+    expect(driftAlignmentSupported(UA.safari, 5)).toBe(false)
+    expect(driftAlignmentSupported(UA.safari, 0)).toBe(true)
+  })
+
+  it.each(Object.entries(UA).filter(([name]) => !['chrome', 'edge', 'safari'].includes(name)))(
     'gives %s none of it',
     (_name, userAgent) => {
       expect(driftAlignmentSupported(userAgent)).toBe(false)
