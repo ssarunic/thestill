@@ -99,7 +99,13 @@ export class NativeEngine implements PlaybackEngine {
   private timeline: AppliedTimeline | null = null
   // Spec #116 — a transcript-time start waiting for its map: the time the
   // listener asked for, the mute state to give back, and the deadline.
-  private hold: { transcriptTime: number; muted: boolean; timer: ReturnType<typeof setTimeout> } | null = null
+  private hold: {
+    transcriptTime: number
+    muted: boolean
+    timer: ReturnType<typeof setTimeout>
+    // The silent playback ran to the end of the file before the map came.
+    ended: boolean
+  } | null = null
   // A held start that was paused before its map arrived: still owed.
   private pendingTranscriptTime: number | null = null
   private unbind: () => void
@@ -176,7 +182,19 @@ export class NativeEngine implements PlaybackEngine {
           this.events.onError(describeMediaError(this.el.error?.code))
         },
       ],
-      ['ended', () => this.events.onEnded()],
+      [
+        'ended',
+        () => {
+          // A held start that ran to the end of the file, unheard, has not
+          // ended for the listener: it has not begun. Playback is restarted
+          // when the hold ends (a paragraph clicked near the end).
+          if (this.hold) {
+            this.hold.ended = true
+            return
+          }
+          this.events.onEnded()
+        },
+      ],
     ]
     for (const [name, listener] of listeners) el.addEventListener(name, listener)
     this.unbind = () => {
@@ -273,6 +291,14 @@ export class NativeEngine implements PlaybackEngine {
 
   play(): Promise<void> {
     this.wantsPlay = true
+    // A held start that was paused before its map arrived is held again on
+    // resume: still silent, with a fresh cap on the wait. (A hold that was
+    // released or timed out left nothing pending.)
+    if (this.pendingTranscriptTime !== null && this.timeline === null && !this.hold && this.url !== null) {
+      const asked = this.pendingTranscriptTime
+      this.pendingTranscriptTime = null
+      this.beginHold(asked)
+    }
     if (this.hlsRetry) {
       const { url, position } = this.hlsRetry
       this.hlsRetry = null
@@ -331,7 +357,7 @@ export class NativeEngine implements PlaybackEngine {
   private beginHold(transcriptTime: number): void {
     const muted = this.el.muted
     const timer = setTimeout(() => this.endHold(true), TIMELINE_HOLD_MAX_MS)
-    this.hold = { transcriptTime, muted, timer }
+    this.hold = { transcriptTime, muted, timer, ended: false }
     this.el.muted = true
     this.events.onTimelineHoldChange?.(true)
   }
@@ -351,9 +377,15 @@ export class NativeEngine implements PlaybackEngine {
     if (restart && this.url !== null) {
       if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = hold.transcriptTime
       else this.el.currentTime = hold.transcriptTime
+      this.replayIfRanOut(hold.ended)
     }
     this.el.muted = hold.muted
     this.events.onTimelineHoldChange?.(false)
+  }
+
+  // The element stops at the end of the file; the listener asked to play.
+  private replayIfRanOut(ended: boolean): void {
+    if (ended && this.wantsPlay) void this.el.play().catch(() => {})
   }
 
   /** The hook's word that no map is coming for this source. */
@@ -394,11 +426,13 @@ export class NativeEngine implements PlaybackEngine {
       // A start that was waiting for this map: go to where the asked-for
       // words are in this copy, then let the audio be heard.
       const asked = this.hold?.transcriptTime ?? this.pendingTranscriptTime
+      const ranOut = this.hold?.ended ?? false
       this.pendingTranscriptTime = null
       if (asked !== null && asked !== undefined) {
         const target = Math.max(0, timeline.map.toAsset(asked).time)
         if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = target
         else this.el.currentTime = target
+        this.replayIfRanOut(ranOut)
       }
       this.endHold(false)
     }

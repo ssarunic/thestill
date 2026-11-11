@@ -631,7 +631,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // Spec #116 — an explicit startAt is a transcript time the listener
     // picked. When a map is expected, hold the start for it.
     const asked = options?.startAt !== undefined && Number.isFinite(options.startAt) ? Math.max(0, options.startAt) : null
-    const holdStart = asked !== null && shouldHoldFor(next.episodeId, desired.rendition)
+    // The engine may still hold the previous episode's map at this point;
+    // it says nothing about this one, whose source is about to replace it.
+    const holdStart = asked !== null && desired.rendition === 'audio' && isTimelineExpected(next.episodeId)
     if (engineKindRef.current === 'youtube') {
       youtubeEngineRef.current?.pause()
       setEngineKind('native')

@@ -171,6 +171,94 @@ describe('NativeEngine holding a transcript-time start', () => {
     expect(t.elementTime()).toBe(39)
   })
 
+  it('is silent again when a paused held start is resumed before its map', () => {
+    const t = clickedStart()
+    t.engine.pause()
+    expect(t.el.muted).toBe(false)
+    void t.engine.play()
+    // Resuming must not play the uncorrected position out loud.
+    expect(t.el.muted).toBe(true)
+    expect(t.engine.isHoldingForTimeline()).toBe(true)
+    t.engine.setTimeline(URL_A, timeline)
+    expect(t.elementTime()).toBe(39)
+    expect(t.el.muted).toBe(false)
+
+    // The wait is bounded again from the resume.
+    const late = clickedStart()
+    vi.advanceTimersByTime(TIMELINE_HOLD_MAX_MS - 100)
+    late.engine.pause()
+    void late.engine.play()
+    vi.advanceTimersByTime(TIMELINE_HOLD_MAX_MS - 1)
+    expect(late.el.muted).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(late.el.muted).toBe(false)
+
+    // A hold that was released leaves nothing to hold on the next play.
+    const released = clickedStart()
+    released.engine.releaseTimelineHold(URL_A)
+    released.engine.pause()
+    void released.engine.play()
+    expect(released.el.muted).toBe(false)
+  })
+
+  it('plays a paragraph near the end even if the silent wait ran off the end of the file', () => {
+    // The click is close to the end: the muted playback finishes before the
+    // map is ready, and the element stops.
+    const onEnded = vi.fn()
+    const el = document.createElement('video')
+    let currentTime = 0
+    Object.defineProperty(el, 'readyState', { configurable: true, get: () => HTMLMediaElement.HAVE_METADATA })
+    Object.defineProperty(el, 'duration', { configurable: true, get: () => 55 })
+    Object.defineProperty(el, 'currentTime', { configurable: true, get: () => currentTime, set: (v) => (currentTime = v) })
+    const play = vi.fn(async () => {})
+    el.play = play
+    el.pause = vi.fn()
+    const noop = vi.fn()
+    const events = new Proxy({} as EngineEvents, { get: (_t, name) => (name === 'onEnded' ? onEnded : noop) })
+    const engine = new NativeEngine(el, events)
+    engine.load({ url: URL_A, crossOrigin: true }, { seekTo: 44, holdForTimeline: true })
+    void engine.play()
+    play.mockClear()
+
+    currentTime = 55
+    el.dispatchEvent(new Event('ended'))
+    // For the listener nothing has ended: nothing has been heard yet.
+    expect(onEnded).not.toHaveBeenCalled()
+
+    engine.setTimeline(URL_A, timeline)
+    expect(currentTime).toBe(53) // 44 s of the transcript, 9 s later here
+    expect(play).toHaveBeenCalledTimes(1)
+    expect(el.muted).toBe(false)
+
+    // The real end, after the hold, is reported as usual.
+    el.dispatchEvent(new Event('ended'))
+    expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts a run-out held start from the asked-for time when no map is coming', () => {
+    const t = makeEngine()
+    const play = t.el.play as ReturnType<typeof vi.fn>
+    t.engine.load({ url: URL_A, crossOrigin: true }, { seekTo: 44, holdForTimeline: true })
+    void t.engine.play()
+    t.metadataLoaded()
+    play.mockClear()
+    t.playTo(55)
+    t.el.dispatchEvent(new Event('ended'))
+    t.engine.releaseTimelineHold(URL_A)
+    expect(t.elementTime()).toBe(44)
+    expect(play).toHaveBeenCalledTimes(1)
+
+    // …but not if the listener had paused.
+    const paused = makeEngine()
+    const pausedPlay = paused.el.play as ReturnType<typeof vi.fn>
+    paused.engine.load({ url: URL_A, crossOrigin: true }, { seekTo: 44, holdForTimeline: true })
+    paused.metadataLoaded() // loaded, never asked to play
+    paused.playTo(55)
+    paused.el.dispatchEvent(new Event('ended'))
+    paused.engine.releaseTimelineHold(URL_A)
+    expect(pausedPlay).not.toHaveBeenCalled()
+  })
+
   it('keeps holding across the reload that makes the audio checkable', () => {
     // First play on a host: loaded without crossorigin, then reloaded with it.
     const t = makeEngine()

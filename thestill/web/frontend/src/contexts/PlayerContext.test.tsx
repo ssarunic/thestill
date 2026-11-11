@@ -444,6 +444,25 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
     expect(stateFor(video).currentTime).toBe(109)
   })
 
+  it('holds a first click on another episode even while the previous one has a map', () => {
+    // Episode A is playing with its map in force; the listener opens B and
+    // clicks a paragraph. A's map says nothing about B.
+    const other = { ...audioTrack, episodeId: 'ep-b', audioUrl: 'https://cdn.test/b.mp3' }
+    setTimelineExpected('ep-b', true)
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    loaded(video)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(ctx.timelineApplied).toBe(true)
+
+    act(() => ctx.play(other, { startAt: 30 }))
+    expect(ctx.timelineHold).toBe(true)
+    expect(stateFor(video).muted).toBe(true)
+    expect(ctx.timelineApplied).toBe(false)
+  })
+
   it('does not hold when no map is expected for the episode', () => {
     setTimelineExpected('ep-audio', false)
     const { video } = renderPlayer()
