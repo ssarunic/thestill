@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import type { DriftReport } from './run'
 import { getCorsVerdict, setCorsVerdict, beginAudioLoad, setCrossOriginLoadingEnabled } from './corsVerdict'
+import { isTimelineExpected, resetTimelineExpectations } from './expectation'
 import { recordMediaReport, resetDriftServiceWorkerClient } from './swClient'
 import { checkPlay, resetDriftAttempts, transcriptIntervals, useDriftAlignment } from './useDriftAlignment'
 
@@ -15,6 +16,9 @@ const player = {
   activeEngine: 'native',
   activeRendition: 'audio',
   applyTimeline: vi.fn<(...args: unknown[]) => boolean>(() => true),
+  releaseTimelineHold: vi.fn<(...args: unknown[]) => void>(),
+  // False: nothing is being held (the listener pressed Play, not a paragraph).
+  reloadHeldForCheck: vi.fn<(...args: unknown[]) => boolean>(() => false),
 }
 vi.mock('../contexts/PlayerContext', () => ({ usePlayer: () => player }))
 
@@ -79,6 +83,10 @@ const props = (overrides: Partial<Parameters<typeof useDriftAlignment>[0]> = {})
 beforeEach(() => {
   player.applyTimeline.mockClear()
   player.applyTimeline.mockImplementation(() => true)
+  player.releaseTimelineHold.mockClear()
+  player.reloadHeldForCheck.mockClear()
+  player.reloadHeldForCheck.mockImplementation(() => false)
+  resetTimelineExpectations()
   vi.useFakeTimers()
   localStorage.clear()
   resetDriftServiceWorkerClient()
@@ -315,11 +323,11 @@ describe('a play is checked again as later ranges arrive', () => {
     const { result } = play()
     recordMediaReport(range())
     finish()
-    // Within the settle delay the listener starts another episode.
-    settle(700)
+    // Before the play can be checked the listener starts another episode.
+    settle(100)
     beginAudioLoad('https://host.example/next.mp3', true)
     act(() => recordMediaReport(range({ url: 'https://host.example/next.mp3', crc: 999 })))
-    settle(800)
+    settle(1400)
 
     // The outcome is recorded, with the check unknown: never judged against the new source.
     expect(reportDriftOutcome).toHaveBeenCalledTimes(1)
@@ -431,6 +439,123 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(result.current.check?.verification).toMatchObject({ rangesChecked: 2, verdict: 'verified' })
     expect(result.current.applied).toBe(true)
     expect(player.applyTimeline.mock.calls.at(-1)?.[2]).not.toBeNull()
+  })
+
+  it('checks at once when the worker has already read the play', () => {
+    const { result } = play()
+    recordMediaReport(range())
+    finish()
+    settle(250)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(result.current.applied).toBe(true)
+    expect(bodies()).toHaveLength(1)
+    // …and does not report it a second time when the full delay has passed.
+    settle(1500)
+    expect(bodies()).toHaveLength(1)
+  })
+
+  it('tells the player whether a start from the transcript should wait for a map', () => {
+    // Before anything has played: the episode has a track, so yes.
+    Object.assign(player, { track: null, isPlaying: false })
+    const waiting = renderHook((p) => useDriftAlignment(p), { initialProps: props() })
+    expect(isTimelineExpected('ep-1')).toBe(true)
+    waiting.rerender(props({ enabled: false }))
+    expect(isTimelineExpected('ep-1')).toBe(false)
+    waiting.rerender(props({ transcript: { ...transcript, sync_track_generation: null } }))
+    expect(isTimelineExpected('ep-1')).toBe(false)
+    waiting.unmount()
+
+    // While aligning, and once a map is applied: yes.
+    Object.assign(player, { track: { episodeId: 'ep-1', audioUrl: AUDIO }, isPlaying: true })
+    const applied = play()
+    expect(isTimelineExpected('ep-1')).toBe(true)
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    expect(applied.result.current.applied).toBe(true)
+    expect(isTimelineExpected('ep-1')).toBe(true)
+    // The reader closes: nothing here can produce a map any more.
+    applied.unmount()
+    expect(isTimelineExpected('ep-1')).toBe(false)
+  })
+
+  it('expects no map for an HLS stream', () => {
+    Object.assign(player, {
+      track: {
+        episodeId: 'ep-1',
+        audioUrl: 'x',
+        playback: { kind: 'audio', audio: { url: 'https://h/x.m3u8', mime_type: 'application/vnd.apple.mpegurl' } },
+      },
+    })
+    renderHook(() => useDriftAlignment(props()))
+    // Otherwise a paragraph click would be ten seconds of silence for nothing.
+    expect(isTimelineExpected('ep-1')).toBe(false)
+  })
+
+  it('stops expecting a map once a check has ended without one', () => {
+    // Identical audio: nothing to correct, so no click should ever wait.
+    const identity = play()
+    recordMediaReport(range())
+    act(() =>
+      FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
+    )
+    // The held start, if any, is let go the moment the outcome is known.
+    expect(player.releaseTimelineHold).toHaveBeenCalledWith('ep-1', AUDIO)
+    settle(1500)
+    expect(isTimelineExpected('ep-1')).toBe(false)
+    identity.unmount()
+  })
+
+  it('reloads a held start once so that it can be checked, then applies the map', () => {
+    // First play on a host: the audio loaded without crossorigin, so the
+    // play cannot be checked. The start is being held, so reload it.
+    vi.stubGlobal('navigator', {
+      userAgent: 'x',
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    beginAudioLoad(AUDIO, true) // no verdict yet: a plain load
+    player.reloadHeldForCheck.mockImplementation(() => {
+      // What the player does: the same audio, now with crossorigin.
+      beginAudioLoad(AUDIO, true)
+      return true
+    })
+    const { result } = renderHook(() => useDriftAlignment(props()))
+    finish()
+    settle(1500)
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(1)
+    // Not reported, not released: the check of the reloaded audio decides.
+    expect(bodies()).toHaveLength(0)
+    expect(result.current.check).toBeNull()
+
+    act(() => recordMediaReport(range()))
+    settle(250)
+    expect(result.current.applied).toBe(true)
+    expect(bodies().map((b) => [b.outcome, b.sw_state, b.revision])).toEqual([['aligned', 'ok', 0]])
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a held start go when even the reloaded audio cannot be checked', () => {
+    vi.stubGlobal('navigator', {
+      userAgent: 'x',
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    beginAudioLoad(AUDIO, true)
+    player.reloadHeldForCheck.mockImplementation(() => {
+      beginAudioLoad(AUDIO, true)
+      return true
+    })
+    const { result } = renderHook(() => useDriftAlignment(props()))
+    finish()
+    settle(1500)
+    player.releaseTimelineHold.mockClear()
+    // The worker reports nothing for the reloaded audio either.
+    settle(1500)
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(1)
+    expect(player.releaseTimelineHold).toHaveBeenCalledWith('ep-1', AUDIO)
+    expect(result.current.applied).toBe(false)
+    expect(bodies().map((b) => [b.outcome, b.sw_state])).toEqual([['aligned', 'no_requests']])
+    // No more waiting on clicks for this load.
+    expect(isTimelineExpected('ep-1')).toBe(false)
   })
 
   it('stops when another source is loaded', () => {

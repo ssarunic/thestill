@@ -900,12 +900,44 @@ map (the saved listening position is the exception, below):
 - setting or lifting the map does not move the audio. Only the time
   reported for it changes.
 
+**The first click.** A map cannot exist before the audio has been read
+and checked, which takes a few seconds, and the most common use of a
+timestamp is a click on a paragraph to start listening there. So a start
+or seek that comes from a transcript time (a paragraph, a citation, a
+chapter mark, a result that carries a time) is *held* while a map is
+expected and not yet in force:
+
+- the element plays muted, so the click still counts as the listener's
+  gesture and nothing wrong is heard; the player shows its loading state;
+- when the map goes in, the element moves to `toAsset` of the time that
+  was asked for and the mute is lifted. The listener's own mute setting is
+  untouched and given back;
+- if no map is coming (identical copy, no CORS, low confidence, a failed
+  check) the hold ends at once and playback starts at the asked-for time,
+  uncorrected, as before. The wait is capped at 10 s;
+- a seek that is a position in the audio (the scrubber, skip, a resume)
+  is never held and ends a hold.
+
+"Expected" is the reader's word (`src/drift/expectation.ts`): the episode
+has a track, this browser can align, and no check of the current load has
+ended without a map. The player asks; it holds nothing for an episode the
+reader has not vouched for.
+
+A held start also closes the two gaps of a first play. The first play on
+a host loads without `crossorigin`, and the first play in a browser starts
+before the service worker controls the page; neither can be checked. When
+the alignment comes back for a held start that cannot be checked, the
+audio is reloaded once (now with `crossorigin`, under the worker) and
+checked again. The listener hears none of it.
+
 The acceptance test is `tests/drift-alignment.spec.ts`: two real MP3
 copies of one episode with different ads, served from a second origin
 with CORS and Range, in Chromium. With the listener's copy, a click on
 the paragraph at 30 s of the transcript moves the element to 39 s and
 that paragraph is highlighted; with the transcribed copy the element goes
-to 30 s and no map is set.
+to 30 s and no map is set. Two more tests make the click the very first
+action on a fresh page (no verdict on the host, no service worker): every
+sample of audible playback is from the clicked paragraph onwards.
 
 Rows 2.4, 2.5 and 2.7 were built first, with the worker, so that every
 play reports its outcome from the first admin session.

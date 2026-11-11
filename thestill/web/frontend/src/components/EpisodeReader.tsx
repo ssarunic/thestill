@@ -459,7 +459,8 @@ export default function EpisodeReader({
     (seconds: number) => {
       if (!episode || !playerTrack) return
       if (player.isCurrent(episode.id)) {
-        player.seek(seconds)
+        // A transcript time: the player corrects it for this copy (spec #116).
+        player.seek(seconds, { transcript: true })
         if (!player.isPlaying) player.resume()
         return
       }

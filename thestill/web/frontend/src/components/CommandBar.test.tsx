@@ -165,7 +165,7 @@ describe('CommandBar — quote selection plays inline (spec #28 §4.1)', () => {
     await typeAndSelect('speechify')
 
     expect(playMock).not.toHaveBeenCalled()
-    expect(seekMock).toHaveBeenCalledWith(187)
+    expect(seekMock).toHaveBeenCalledWith(187, { transcript: true })
     expect(resumeMock).toHaveBeenCalled()
     expect(navigateMock).not.toHaveBeenCalled()
   })

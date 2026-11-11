@@ -174,7 +174,7 @@ describe('Entities page — FloatingPlayer wiring (spec #28 §5.1)', () => {
     // No play() — we don't want to reload the same audio source. Just
     // seek and resume (since playback was paused).
     expect(playMock).not.toHaveBeenCalled()
-    expect(seekMock).toHaveBeenCalledWith(187)
+    expect(seekMock).toHaveBeenCalledWith(187, { transcript: true })
     expect(resumeMock).toHaveBeenCalled()
   })
 

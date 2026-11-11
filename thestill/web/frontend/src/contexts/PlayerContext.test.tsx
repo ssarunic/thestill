@@ -14,6 +14,8 @@ import {
 } from './PlayerContext'
 import type { PlaybackManifest } from '../api/types'
 import { TimelineMap } from './playback-engine/timeline-map'
+import { resetTimelineExpectations, setTimelineExpected } from '../drift/expectation'
+import { setCorsVerdict, setCrossOriginLoadingEnabled } from '../drift/corsVerdict'
 import * as listeningApi from '../api/listening'
 import { listeningCache } from './listening/listeningCache'
 import { LOCAL_USER_KEY, readSnapshot, writeSnapshot } from './listening/sessionSnapshot'
@@ -378,6 +380,137 @@ describe('spec #116 §5 — a verified timeline map', () => {
     })
     act(() => ctx.stop())
     expect(ctx.timelineApplied).toBe(false)
+  })
+})
+
+describe('spec #116 — a start from a transcript time waits for its map', () => {
+  const timeline = () => ({
+    map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: 9 }]),
+    durationS: 3000,
+  })
+  const loaded = (video: HTMLVideoElement) =>
+    act(() => {
+      Object.defineProperty(video, 'readyState', { configurable: true, get: () => 1 })
+      video.dispatchEvent(new Event('loadedmetadata'))
+    })
+
+  beforeEach(() => {
+    resetTimelineExpectations()
+    setTimelineExpected('ep-audio', true)
+  })
+  afterEach(() => resetTimelineExpectations())
+
+  it('a click that starts playback is held silent, then lands on the corrected position', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack, { startAt: 30 }))
+    loaded(video)
+
+    expect(ctx.timelineHold).toBe(true)
+    expect(ctx.isLoading).toBe(true) // the same spinner as buffering
+    expect(stateFor(video).muted).toBe(true)
+    expect(ctx.muted).toBe(false) // the listener did not mute anything
+    expect(stateFor(video).currentTime).toBe(30)
+
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(stateFor(video).currentTime).toBe(39)
+    expect(stateFor(video).muted).toBe(false)
+    expect(ctx.timelineHold).toBe(false)
+    expect(ctx.getCurrentTime()).toBe(30)
+  })
+
+  it('a click while playing is held too, but the scrubber and Play are not', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack)) // the Play button: nothing to correct yet
+    loaded(video)
+    expect(ctx.timelineHold).toBe(false)
+
+    act(() => ctx.seek(12)) // the scrubber: a position in the audio
+    expect(ctx.timelineHold).toBe(false)
+    expect(stateFor(video).muted).toBe(false)
+
+    act(() => ctx.seek(30, { transcript: true })) // a paragraph
+    expect(ctx.timelineHold).toBe(true)
+    expect(stateFor(video).muted).toBe(true)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(stateFor(video).currentTime).toBe(39)
+
+    // With the map in force a click needs no waiting.
+    act(() => ctx.seek(100, { transcript: true }))
+    expect(ctx.timelineHold).toBe(false)
+    expect(stateFor(video).currentTime).toBe(109)
+  })
+
+  it('holds a first click on another episode even while the previous one has a map', () => {
+    // Episode A is playing with its map in force; the listener opens B and
+    // clicks a paragraph. A's map says nothing about B.
+    const other = { ...audioTrack, episodeId: 'ep-b', audioUrl: 'https://cdn.test/b.mp3' }
+    setTimelineExpected('ep-b', true)
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    loaded(video)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(ctx.timelineApplied).toBe(true)
+
+    act(() => ctx.play(other, { startAt: 30 }))
+    expect(ctx.timelineHold).toBe(true)
+    expect(stateFor(video).muted).toBe(true)
+    expect(ctx.timelineApplied).toBe(false)
+  })
+
+  it('does not hold when no map is expected for the episode', () => {
+    setTimelineExpected('ep-audio', false)
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack, { startAt: 30 }))
+    loaded(video)
+    expect(ctx.timelineHold).toBe(false)
+    expect(stateFor(video).muted).toBe(false)
+    act(() => ctx.seek(40, { transcript: true }))
+    expect(ctx.timelineHold).toBe(false)
+  })
+
+  it('plays from the asked-for time when told no map is coming', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack, { startAt: 30 }))
+    loaded(video)
+    stateFor(video).currentTime = 34 // it ran on, unheard
+    act(() => ctx.releaseTimelineHold('ep-other', audioTrack.audioUrl))
+    expect(ctx.timelineHold).toBe(true)
+    act(() => ctx.releaseTimelineHold('ep-audio', audioTrack.audioUrl))
+    expect(ctx.timelineHold).toBe(false)
+    expect(stateFor(video).muted).toBe(false)
+    expect(stateFor(video).currentTime).toBe(30)
+  })
+
+  it('reloads a held start with crossorigin once its host is known to allow it', () => {
+    const { video } = renderPlayer()
+    setCrossOriginLoadingEnabled(true)
+    act(() => ctx.play(audioTrack, { startAt: 30 }))
+    loaded(video)
+    expect(video.hasAttribute('crossorigin')).toBe(false) // first play on this host
+    playSpy.mockClear()
+
+    setCorsVerdict(audioTrack.audioUrl, 'cors_ok') // the alignment's fetch worked
+    let reloaded = false
+    act(() => {
+      reloaded = ctx.reloadHeldForCheck('ep-audio', audioTrack.audioUrl)
+    })
+    expect(reloaded).toBe(true)
+    expect(video.getAttribute('crossorigin')).toBe('anonymous')
+    expect(playSpy).toHaveBeenCalledTimes(1)
+    expect(ctx.timelineHold).toBe(true) // still silent
+    expect(stateFor(video).muted).toBe(true)
+
+    // Nothing to reload when nothing is held.
+    act(() => ctx.releaseTimelineHold('ep-audio', audioTrack.audioUrl))
+    act(() => {
+      expect(ctx.reloadHeldForCheck('ep-audio', audioTrack.audioUrl)).toBe(false)
+    })
   })
 })
 
