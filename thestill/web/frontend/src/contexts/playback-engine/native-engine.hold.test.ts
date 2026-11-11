@@ -242,6 +242,25 @@ describe('NativeEngine holding a transcript-time start', () => {
     expect(t.elementTime()).toBe(36)
   })
 
+  it('forgets a paused request once another paragraph is clicked', () => {
+    const t = clickedStart() // the paragraph at 30 s
+    t.engine.pause()
+    t.engine.seekTo(10, { holdForTimeline: true }) // then another one
+    void t.engine.play()
+    // No map comes: the second click plays from where it was asked.
+    t.engine.releaseTimelineHold(URL_A)
+    expect(t.elementTime()).toBe(10)
+    expect(t.el.muted).toBe(false)
+
+    // An ordinary pause and resume afterwards is just that.
+    t.playTo(14)
+    t.engine.pause()
+    void t.engine.play()
+    expect(t.el.muted).toBe(false)
+    expect(t.engine.isHoldingForTimeline()).toBe(false)
+    expect(t.elementTime()).toBe(14)
+  })
+
   it('plays a paragraph near the end even if the silent wait ran off the end of the file', () => {
     // The click is close to the end: the muted playback finishes before the
     // map is ready, and the element stops.

@@ -355,6 +355,9 @@ export class NativeEngine implements PlaybackEngine {
   // --- Spec #116: holding a transcript-time start for its map --------------
 
   private beginHold(transcriptTime: number): void {
+    // One request at a time: a paused one (pendingTranscriptTime) is
+    // replaced by whatever is held now.
+    this.pendingTranscriptTime = null
     const muted = this.el.muted
     const timer = setTimeout(() => this.endHold(true), TIMELINE_HOLD_MAX_MS)
     this.hold = { transcriptTime, muted, timer, ended: false }
