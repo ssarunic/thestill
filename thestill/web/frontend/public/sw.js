@@ -3,8 +3,8 @@
 // that a timestamp map was built from the same copy.
 //
 // Rules (specs/116-timestamp-drift-alignment.md, Phase 2):
-// - It answers only cross-origin requests whose destination is audio or
-//   video, and returns the ORIGINAL response. A response rebuilt from a
+// - It answers only cross-origin, CORS-mode requests whose destination is
+//   audio or video, and returns the ORIGINAL response. A response rebuilt from a
 //   stream loses Content-Range and the browser rejects it.
 // - Every other request is left to the browser. Nothing is cached and no
 //   navigation is handled.
@@ -61,6 +61,13 @@ self.addEventListener('fetch', (event) => {
   const request = event.request
   if (request.destination !== 'audio' && request.destination !== 'video') return
   if (new URL(request.url).origin === self.location.origin) return
+  // Only a request made with CORS (an element loaded with `crossorigin`,
+  // which the page sets for hosts it has already read from) is of any use:
+  // nothing can be read from the others. And they must be left alone. A
+  // worker's fetch is not a media element's: the browser upgrades a plain
+  // http redirect for the element (the BBC's host redirects to http), but
+  // blocks it for a worker, so relaying such a request stops playback.
+  if (request.mode !== 'cors') return
   event.respondWith(relay(event))
 })
 

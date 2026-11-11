@@ -944,8 +944,14 @@ play reports its outcome from the first admin session.
 
 The service worker is the app's first. Its rules:
 
-- It answers only cross-origin requests whose destination is `audio` or
-  `video`, and returns the original response. Every other request is
+- It answers only cross-origin requests made with CORS (an element
+  loaded with `crossorigin`) whose destination is `audio` or `video`, and
+  returns the original response. A request made without CORS is left to
+  the browser: nothing can be read from it, and a worker's `fetch` is not
+  a media element's. The browser upgrades a redirect to plain `http` for
+  the element and blocks it for a worker, so relaying one stops playback.
+  v1.40.0 to v1.42.0 relayed them, and audio on the BBC's host (which
+  redirects to `http`) would not play for sessions with the worker. Every other request is
   left to the browser. It caches nothing and handles no navigation.
 - It is registered on the first play of an episode that has a track, by
   a session that holds `drift.align`, and takes control of the open page
@@ -1018,6 +1024,20 @@ requests, the later ones sent straight to the final host), with equal
 lengths. On production, an admin play of a Prof G Markets episode
 reported three spans (0 s, +1.907 s, −30.798 s); a click on the 18:50
 paragraph played the 19:20 one, as the last span predicts.
+
+**Browser allow-list (2026-11-11).** `src/drift/support.ts` lets the
+feature run only in desktop Chromium browsers (Chrome, Edge), the one
+place the whole chain has been verified end to end. Everywhere else the
+permission counts as not held: no service worker (an installed one is
+removed), no `crossorigin` loading, no held start, no map. v1.40.0 to
+v1.42.0 ran it in every browser; in Safari, with a map applied and
+verified, playback restarted from the beginning on every seek. The cause
+is not known: it could not be reproduced outside real Safari (Playwright's
+WebKit mis-seeks this kind of file even without any of this code), and
+the Safari check of Phase 0 only counted `seeked` events and compared
+bytes, never where playback ended up. A browser is added to the list
+after a check in that browser that seeks, plays on, and reads back the
+position.
 
 Rollout: admins only, then per browser. Standalone browser probes stop
 here; the remaining questions (Safari on iOS, Firefox, more plays on

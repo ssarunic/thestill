@@ -46,9 +46,10 @@ function loadWorker(fetchImpl: (request: Request) => Promise<Response>) {
   new Function('self', 'fetch', SOURCE)(scope, fetchImpl)
 
   /** Dispatch a fetch event; resolves with the response once the worker has finished its report. */
-  async function request(url: string, init: { destination: string; range?: string }) {
+  async function request(url: string, init: { destination: string; range?: string; mode?: string }) {
     const headers = new Headers(init.range ? { range: init.range } : {})
-    const req = { url, destination: init.destination, headers } as unknown as Request
+    // An element loaded with `crossorigin` makes CORS requests.
+    const req = { url, destination: init.destination, mode: init.mode ?? 'cors', headers } as unknown as Request
     let responded: Promise<Response> | null = null
     const pending: Promise<unknown>[] = []
     listeners.fetch({
@@ -103,6 +104,21 @@ describe('service worker', () => {
     expect(await worker.request('https://cdn.example/cover.jpg', { destination: 'image' })).toBeNull()
     expect(await worker.request('https://thestill.me/api/narration.mp3', { destination: 'audio' })).toBeNull()
     expect(await worker.request('https://thestill.me/', { destination: 'document' })).toBeNull()
+    expect(worker.posted).toEqual([])
+    expect(server.served).toEqual([])
+  })
+
+  it('leaves a request made without CORS to the browser', async () => {
+    // An element without `crossorigin`: every host not yet known to allow
+    // reads, and every host that never will (the BBC's redirects to plain
+    // http, which the browser upgrades for the element but blocks for a
+    // worker). Relaying these broke playback in production.
+    const worker = loadWorker(server.fetchImpl)
+    for (const destination of ['audio', 'video']) {
+      expect(
+        await worker.request('http://open.live.bbc.co.uk/x.mp3', { destination, range: 'bytes=0-', mode: 'no-cors' }),
+      ).toBeNull()
+    }
     expect(worker.posted).toEqual([])
     expect(server.served).toEqual([])
   })

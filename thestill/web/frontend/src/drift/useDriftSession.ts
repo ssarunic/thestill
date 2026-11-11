@@ -9,12 +9,16 @@
 //   switch reaching browsers that already have the worker.
 import { useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { driftAlignmentSupported } from './support'
 import { setCrossOriginLoadingEnabled } from './corsVerdict'
 import { listenForMediaReports, reloadOnceUncontrolled, removeDriftServiceWorker } from './swClient'
 
 export function useDriftSession(): void {
   const { can, isLoading } = useAuth()
-  const held = can('drift.align')
+  // Holding the permission is not enough: the browser must be one the
+  // feature has been proven in. Anywhere else this hook cleans up after
+  // earlier releases (the service worker, the remembered setting).
+  const held = can('drift.align') && driftAlignmentSupported()
   useEffect(() => {
     // Until the session is known, change nothing: a held permission must
     // not lose its worker on every page load.

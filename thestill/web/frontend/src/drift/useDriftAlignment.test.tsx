@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
+import { CHROME_UA } from '../test/setup'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import type { DriftReport } from './run'
@@ -229,7 +230,7 @@ describe('a play is checked again as later ranges arrive', () => {
 
   function play() {
     vi.stubGlobal('navigator', {
-      userAgent: 'x',
+      userAgent: CHROME_UA,
       serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
     })
     setCorsVerdict(AUDIO, 'cors_ok')
@@ -510,7 +511,7 @@ describe('a play is checked again as later ranges arrive', () => {
     // First play on a host: the audio loaded without crossorigin, so the
     // play cannot be checked. The start is being held, so reload it.
     vi.stubGlobal('navigator', {
-      userAgent: 'x',
+      userAgent: CHROME_UA,
       serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
     })
     beginAudioLoad(AUDIO, true) // no verdict yet: a plain load
@@ -536,7 +537,7 @@ describe('a play is checked again as later ranges arrive', () => {
 
   it('lets a held start go when even the reloaded audio cannot be checked', () => {
     vi.stubGlobal('navigator', {
-      userAgent: 'x',
+      userAgent: CHROME_UA,
       serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
     })
     beginAudioLoad(AUDIO, true)
@@ -586,7 +587,7 @@ describe('checkPlay', () => {
     ...overrides,
   })
   const controlled = (controller: object | null) =>
-    vi.stubGlobal('navigator', { userAgent: 'x', serviceWorker: { controller, addEventListener: vi.fn() } })
+    vi.stubGlobal('navigator', { userAgent: CHROME_UA, serviceWorker: { controller, addEventListener: vi.fn() } })
 
   beforeEach(() => {
     vi.useRealTimers()
@@ -597,7 +598,7 @@ describe('checkPlay', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('says so where there is no service worker', () => {
-    vi.stubGlobal('navigator', { userAgent: 'x' })
+    vi.stubGlobal('navigator', { userAgent: CHROME_UA })
     expect(checkPlay(AUDIO, report)).toEqual({ swState: 'unsupported', verification: null })
   })
 
