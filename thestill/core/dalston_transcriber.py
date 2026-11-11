@@ -69,10 +69,12 @@ def iter_job_audio(
     presigned URL at ``GET /v1/audio/transcriptions/{job_id}/audio``. The
     presigned URL is fetched without the API key.
 
-    Raises ``httpx.HTTPError`` on a failed request (404 unknown job, 410
-    audio purged) and ``ValueError`` when the audio exceeds ``max_bytes``.
+    Raises ``httpx.HTTPError`` when Dalston refuses (404 unknown job, 410
+    audio purged), ``OSError`` when the download fails or ends before the
+    declared length, and ``ValueError`` when the audio exceeds ``max_bytes``.
     """
     import os
+    import urllib.request
 
     import httpx
 
@@ -83,14 +85,28 @@ def iter_job_audio(
         response = client.get(f"{base}/v1/audio/transcriptions/{job_id}/audio", headers=headers)
         response.raise_for_status()
         signed_url = response.json()["url"]
-        total = 0
-        with client.stream("GET", signed_url) as audio:
-            audio.raise_for_status()
-            for chunk in audio.iter_bytes(chunk_size):
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise ValueError(f"job audio exceeds {max_bytes} bytes")
-                yield chunk
+
+    # The presigned URL's query string is a credential, valid for an hour.
+    # httpx logs every request URL at INFO (and urllib3 at DEBUG), so this
+    # one request goes through the standard library, which logs nothing.
+    # That needs no logger juggling and is safe with concurrent downloads.
+    if not signed_url.startswith(("https://", "http://")):
+        raise ValueError("Dalston returned a non-HTTP audio URL")
+    total = 0
+    with urllib.request.urlopen(signed_url, timeout=timeout) as audio:  # noqa: S310 — URL issued by our Dalston
+        declared = audio.headers.get("Content-Length") if getattr(audio, "headers", None) is not None else None
+        while True:
+            chunk = audio.read(chunk_size)
+            if not chunk:
+                break
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ValueError(f"job audio exceeds {max_bytes} bytes")
+            yield chunk
+    # A connection cut short reads as a clean end of file here. A sync track
+    # built from part of the audio would look valid, so check the length.
+    if declared is not None and str(declared).isdigit() and total != int(declared):
+        raise OSError(f"job audio download ended early: got {total} of {declared} bytes")
 
 
 class DalstonTranscriber(Transcriber):

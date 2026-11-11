@@ -142,7 +142,11 @@ class LocalFileStorage(FileStorage):
         target = self._resolve(path)
         if not target.is_file():
             raise FileNotFoundError(path)
-        return self._metadata_from_path(target)
+        # ``_resolve`` returns the unresolved join. The key is computed
+        # against the resolved root, so resolve here too: with a relative
+        # ``STORAGE_PATH`` (``./data``) or a symlinked prefix (macOS
+        # ``/tmp``) the unresolved path is not under the resolved root.
+        return self._metadata_from_path(target.resolve())
 
     def list_files(self, prefix: str = "", pattern: Optional[str] = None) -> Iterator[FileMetadata]:
         # Walk from the RESOLVED root, not ``self.base_path``. On macOS

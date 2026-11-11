@@ -264,3 +264,25 @@ def test_pipeline_publish_ignores_a_pending_track_it_did_not_build(env):
 
     assert env.service.publish(episode_id=EPISODE_ID, use_pending=False) is None
     assert env.repo.get(EPISODE_ID, STATE_PENDING).generation == foreign.generation
+
+
+def test_audio_stream_that_fails_at_the_end_writes_no_track(env):
+    """A download cut short raises after the last chunk it did deliver. The
+    complete frames received so far must not become a track."""
+
+    def cut_short():
+        yield AUDIO_60[: len(AUDIO_60) // 2]
+        raise OSError("job audio download ended early: got 1 of 2 bytes")
+
+    record, reason = env.service.build_pending_detailed(
+        episode_id=EPISODE_ID,
+        podcast_id=PODCAST_ID,
+        podcast_slug="the-show",
+        episode_slug="ep",
+        chunks=cut_short(),
+        source="dalston",
+    )
+
+    assert record is None and reason == "error"
+    assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
+    assert not (env.root / "sync_tracks").exists() or not list((env.root / "sync_tracks").rglob("*.sync"))
