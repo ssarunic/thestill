@@ -4555,17 +4555,26 @@ def sync_track_show(ctx, episode_id, podcast_id, episode_slug, json_output):
     show_default=True,
     help="Stop after this many episodes in a row whose audio Dalston no longer has (0 = never stop).",
 )
+@click.option(
+    "--since-days",
+    type=int,
+    default=45,
+    show_default=True,
+    help="Only episodes transcribed within this many days (0 = no limit).",
+)
 @click.option("--dry-run", "-d", is_flag=True, help="Show what would be built without fetching audio or writing.")
 @click.pass_context
 @require_config
 @log_command
-def sync_track_backfill(ctx, podcast_id, max_episodes, stop_after_gone, dry_run):
+def sync_track_backfill(ctx, podcast_id, max_episodes, stop_after_gone, since_days, dry_run):
     """Build sync tracks for episodes transcribed before spec #116.
 
     Works for episodes transcribed through Dalston while Dalston still
     stores the job's audio: the track is cut from that audio, so nothing is
-    re-transcribed. Newest episodes first; older jobs' audio is gone, so the
-    run stops after a row of those.
+    re-transcribed. Most recently transcribed first (Dalston's retention
+    runs from the job, not from the publication date); older jobs' audio is
+    gone, so the run stops after a row of those. Episodes with a task in
+    flight are skipped.
     """
     from collections import Counter
 
@@ -4585,18 +4594,37 @@ def sync_track_backfill(ctx, podcast_id, max_episodes, stop_after_gone, dry_run)
         click.echo("❌ SYNC_TRACKS_ENABLED is false — nothing to do.", err=True)
         ctx.exit(1)
 
-    candidates = [(p, e) for p in podcasts for e in p.episodes if e.raw_transcript_path]
-    candidates.sort(key=lambda pair: (pair[1].pub_date is not None, pair[1].pub_date), reverse=True)
+    # Order by when the raw transcript was written, i.e. by job age.
+    config = ctx.obj.config
+    cutoff = time.time() - since_days * 86400 if since_days else None
+    candidates = []
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            if not episode.raw_transcript_path:
+                continue
+            raw_key = config.path_manager.to_relative(
+                config.path_manager.raw_transcript_file(episode.raw_transcript_path)
+            )
+            try:
+                transcribed_at = config.file_storage.get_modified_time(raw_key)
+            except FileNotFoundError:
+                continue
+            if cutoff is None or transcribed_at >= cutoff:
+                candidates.append((transcribed_at, podcast, episode))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    queue_manager = make_queue_manager(config)
 
     counts: Counter = Counter()
     stamped = 0
     attempted = 0
     gone_in_a_row = 0
-    for podcast, episode in candidates:
-        result = backfill.backfill_episode(ctx.obj.config, service, podcast, episode, dry_run=dry_run)
+    for _transcribed_at, podcast, episode in candidates:
+        result = backfill.backfill_episode(
+            config, service, podcast, episode, dry_run=dry_run, queue_manager=queue_manager
+        )
         counts[result.outcome] += 1
         stamped += int(result.stamped)
-        if result.outcome in (backfill.HAS_TRACK, backfill.NO_TRANSCRIPT, backfill.NOT_DALSTON):
+        if result.outcome in (backfill.HAS_TRACK, backfill.NO_TRANSCRIPT, backfill.NOT_DALSTON, backfill.BUSY):
             continue
         attempted += 1
         click.echo(f"  {result.outcome:<18} {podcast.slug}/{episode.slug}")

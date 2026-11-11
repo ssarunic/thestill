@@ -725,6 +725,15 @@ need none of Phase 5.
   transcript carries its generation. The backfill writes that stamp when
   the cleaned transcript was written after the raw transcript and has
   no stamp; otherwise it leaves it for the clean stage.
+- Episodes are taken most recently transcribed first (the raw
+  transcript's modified time), because Dalston's retention runs from
+  the job, not from the publication date. `--since-days` (default 45)
+  bounds the run.
+- The backfill runs beside the pipeline. It skips an episode with a
+  task in flight, re-checks after fetching the audio that the raw
+  transcript still names the same job, and publishes only if the episode
+  still has no track (checked in the same transaction). The pipeline in
+  turn publishes only the pending track it built itself.
 - The run stops after 20 episodes in a row whose audio Dalston no longer
   has. How far back it reaches is not settled: one URL-fetch job
   returned "audio deleted" at 25.7 days old, while a 21.6-day-old

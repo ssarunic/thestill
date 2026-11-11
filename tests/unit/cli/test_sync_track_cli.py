@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,12 @@ def storage(tmp_path, monkeypatch) -> Path:
                     f"show/{slug}_cleaned.json",
                 ),
             )
+    # Transcription times (the raw transcript's modified time), newest first:
+    # new, whisper, old. Cleaned transcripts are newer than all of them.
+    now = time.time()
+    for slug, age_s in (("new", 3600), ("whisper", 3 * 3600), ("old", 2 * 86400)):
+        os.utime(root / "raw_transcripts" / "show" / f"{slug}_transcript.json", (now - age_s, now - age_s))
+        os.utime(root / "clean_transcripts" / "show" / f"{slug}_cleaned.json", (now, now))
     return root
 
 
@@ -184,3 +191,67 @@ def test_max_episodes_limits_attempts(storage, dalston):
 def test_show_human_output_for_an_episode_without_a_track(storage):
     output = _run("show", "--podcast-id", "show", "--episode", "whisper")
     assert "no sync track" in output and "usable by the reader      no" in output
+
+
+def test_order_follows_transcription_time_not_publication_date(storage, dalston):
+    """An old episode transcribed yesterday must be tried before a new one
+    transcribed long ago, or the stop rule ends the run before reaching it."""
+    raw = storage / "raw_transcripts" / "show"
+    now = time.time()
+    os.utime(raw / "old_transcript.json", (now - 3600, now - 3600))  # published in September, transcribed just now
+    os.utime(raw / "new_transcript.json", (now - 20 * 86400, now - 20 * 86400))
+    for slug in ("old", "new"):  # keep the cleaned transcripts newer than the raw ones
+        os.utime(storage / "clean_transcripts" / "show" / f"{slug}_cleaned.json", (now, now))
+
+    _run("backfill")
+
+    assert dalston == ["job-old", "job-new"]
+
+
+def test_since_days_skips_long_ago_transcriptions(storage, dalston):
+    long_ago = time.time() - 90 * 86400
+    os.utime(storage / "raw_transcripts" / "show" / "old_transcript.json", (long_ago, long_ago))
+
+    _run("backfill")
+    assert dalston == ["job-new"]
+
+    _run("backfill", "--since-days", "0")
+    assert dalston == ["job-new", "job-old"]
+
+
+def test_episode_with_a_task_in_flight_is_skipped(storage, dalston, monkeypatch):
+    class _Queue:
+        def has_active_task_for_episode(self, episode_id):
+            return episode_id == EPISODES["new"]
+
+    monkeypatch.setattr("thestill.cli.make_queue_manager", lambda config: _Queue())
+
+    output = _run("backfill")
+
+    assert "busy 1" in output
+    assert "job-new" not in dalston
+    assert _show("new")["has_track"] is False
+
+
+def test_re_transcription_during_the_fetch_discards_the_backfilled_track(storage, monkeypatch):
+    """While the audio is being fetched, the pipeline stores a new raw
+    transcript that names another job."""
+    raw = storage / "raw_transcripts" / "show" / "new_transcript.json"
+
+    def fetch_then_reprocess(job_id, **kwargs):
+        if job_id != "job-new":
+            raise _Gone()
+        data = json.loads(raw.read_text())
+        data["provider_metadata"]["job_id"] = "job-newer"
+        raw.write_text(json.dumps(data))
+        return chunks(AUDIO)
+
+    monkeypatch.setattr("thestill.services.sync_track_backfill.iter_job_audio", fetch_then_reprocess)
+
+    output = _run("backfill")
+
+    assert "superseded 1" in output
+    shown = _show("new")
+    assert shown["has_track"] is False
+    assert _stamp(storage, "new") is None
+    assert not list((storage / "sync_tracks").rglob("*.sync"))

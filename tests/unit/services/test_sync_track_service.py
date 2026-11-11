@@ -206,3 +206,61 @@ def test_rebuild_of_unsupported_audio_or_while_disabled_also_drops_it(env):
     env.config.sync_tracks_enabled = False
     assert _build(env.service, AUDIO_90) is None
     assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
+
+
+# --- running beside the pipeline (a backfill and a worker on one episode) ---
+
+
+def test_publish_if_untracked_never_replaces_a_published_track(env):
+    pipeline = _build(env.service, AUDIO_90)
+    env.service.publish(episode_id=EPISODE_ID)
+    backfill = _build(env.service, AUDIO_60)
+
+    assert env.service.publish_if_untracked(episode_id=EPISODE_ID, generation=backfill.generation) is None
+
+    assert env.service.current(EPISODE_ID).generation == pipeline.generation
+    assert (env.root / pipeline.path).exists()
+    # Its own pending track is cleaned up.
+    assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
+    assert not (env.root / backfill.path).exists()
+
+
+def test_publish_if_untracked_leaves_someone_elses_pending_track_alone(env):
+    mine = _build(env.service, AUDIO_60)
+    theirs = _build(env.service, AUDIO_90)  # replaces the pending track
+
+    assert env.service.publish_if_untracked(episode_id=EPISODE_ID, generation=mine.generation) is None
+
+    assert env.repo.get(EPISODE_ID, STATE_PENDING).generation == theirs.generation
+    assert env.service.current(EPISODE_ID) is None
+
+
+def test_publish_if_untracked_publishes_when_nothing_is_in_the_way(env):
+    record = _build(env.service, AUDIO_60)
+    published = env.service.publish_if_untracked(
+        episode_id=EPISODE_ID, generation=record.generation, transcript_end_s=55.0
+    )
+    assert published.generation == record.generation
+
+    late = _build(env.service, AUDIO_60)
+    assert (
+        env.service.publish_if_untracked(episode_id=EPISODE_ID, generation=late.generation, transcript_end_s=500.0)
+        is None
+    )
+
+
+def test_pipeline_publish_ignores_a_pending_track_it_did_not_build(env):
+    """A backfill slipped its pending track in while the worker was fetching
+    audio. The worker's new transcript must not be paired with it."""
+    old = _build(env.service, AUDIO_90)
+    env.service.publish(episode_id=EPISODE_ID)
+    foreign = _build(env.service, AUDIO_60)
+
+    assert env.service.publish(episode_id=EPISODE_ID, expected_generation="the-workers-own") is None
+    # The old transcript's track is gone, the foreign pending track untouched.
+    assert env.service.current(EPISODE_ID) is None
+    assert not (env.root / old.path).exists()
+    assert env.repo.get(EPISODE_ID, STATE_PENDING).generation == foreign.generation
+
+    assert env.service.publish(episode_id=EPISODE_ID, use_pending=False) is None
+    assert env.repo.get(EPISODE_ID, STATE_PENDING).generation == foreign.generation

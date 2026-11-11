@@ -79,10 +79,13 @@ class PostgresSyncTrackRepository(SyncTrackRepository):
             )
             return old["path"] if old else None
 
-    def promote(self, episode_id: str, generation: str) -> Optional[List[str]]:
+    def promote(self, episode_id: str, generation: str, *, require_no_current: bool = False) -> Optional[List[str]]:
         if not is_uuid(episode_id):
             return None
         with connect(self.dsn) as conn:
+            # One promotion per episode at a time: the checks below and the
+            # switch then form one atomic step.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"sync_track:{episode_id}",))
             # Lock the pending row so two promotions of one episode serialize.
             pending = conn.execute(
                 """
@@ -94,6 +97,13 @@ class PostgresSyncTrackRepository(SyncTrackRepository):
             ).fetchone()
             if pending is None:
                 return None
+            if require_no_current:
+                existing = conn.execute(
+                    "SELECT 1 FROM episode_sync_tracks WHERE episode_id = %s AND state = %s",
+                    (episode_id, STATE_CURRENT),
+                ).fetchone()
+                if existing is not None:
+                    return None
             retired = [
                 row["path"]
                 for row in conn.execute(

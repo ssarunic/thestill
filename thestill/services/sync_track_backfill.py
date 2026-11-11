@@ -50,8 +50,9 @@ WOULD_BUILD = "would_build"
 BUILT = "built"
 AUDIO_GONE = "audio_gone"
 UNSUPPORTED = "unsupported_codec"
-MISMATCH = "mismatch"
 FAILED = "failed"
+BUSY = "busy"
+SUPERSEDED = "superseded"
 
 
 @dataclass(frozen=True)
@@ -111,6 +112,17 @@ def stamp_cleaned_transcript(config: Any, episode: Episode, generation: str, *, 
     return True
 
 
+def _dalston_job_id(config: Any, episode: Episode) -> Optional[str]:
+    """The Dalston job named by the episode's stored raw transcript."""
+    if not episode.raw_transcript_path:
+        return None
+    paths = config.path_manager
+    raw = _read_json(config, paths.to_relative(paths.raw_transcript_file(episode.raw_transcript_path)))
+    metadata = (raw or {}).get("provider_metadata") or {}
+    job_id = metadata.get("job_id") if metadata.get("provider") == "dalston" else None
+    return str(job_id) if job_id else None
+
+
 def backfill_episode(
     config: Any,
     service: SyncTrackService,
@@ -118,9 +130,18 @@ def backfill_episode(
     episode: Episode,
     *,
     dry_run: bool = False,
+    queue_manager: Any = None,
 ) -> BackfillResult:
-    """Give one already-transcribed episode a sync track, if it still can have one."""
+    """Give one already-transcribed episode a sync track, if it still can have one.
+
+    The pipeline may process the same episode at the same time. An episode
+    with a task in flight is skipped (``queue_manager``), and the track is
+    published only if, when the audio has been fetched, the raw transcript
+    still names the same job and the episode still has no track.
+    """
     log = logger.bind(episode_id=episode.id, podcast_id=podcast.id)
+    if queue_manager is not None and queue_manager.has_active_task_for_episode(episode.id):
+        return BackfillResult(episode.id, BUSY)
 
     current = service.current(episode.id)
     if current is not None:
@@ -156,11 +177,20 @@ def backfill_episode(
 
     ends = [segment.get("end") for segment in raw.get("segments") or []]
     transcript_end_s = max((end for end in ends if isinstance(end, (int, float))), default=None)
-    # ``publish`` with no pending track would retire the current one; there
-    # is none here (checked above), and the pending track was just built.
-    published = service.publish(episode_id=episode.id, podcast_id=podcast.id, transcript_end_s=transcript_end_s)
+    # Fetching the audio took a while. If the episode was re-transcribed
+    # meanwhile, the stored transcript names another job and this track is
+    # not its track.
+    if _dalston_job_id(config, episode) != str(job_id):
+        service.discard_pending_generation(episode.id, record.generation)
+        return BackfillResult(episode.id, SUPERSEDED, detail="raw transcript changed")
+    published = service.publish_if_untracked(
+        episode_id=episode.id,
+        generation=record.generation,
+        podcast_id=podcast.id,
+        transcript_end_s=transcript_end_s,
+    )
     if published is None:
-        return BackfillResult(episode.id, MISMATCH)
+        return BackfillResult(episode.id, SUPERSEDED)
 
     stamped = stamp_cleaned_transcript(config, episode, published.generation)
     log.info("sync_track_backfilled", generation=published.generation, stamped=stamped, job_id=str(job_id))
