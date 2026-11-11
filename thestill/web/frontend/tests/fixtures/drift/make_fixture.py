@@ -77,9 +77,9 @@ def main() -> None:
 
     track = build_sync_track([transcribed], "e2e")
     (HERE / "track.sync").write_bytes(track.to_bytes())
-    print(
+    sys.stdout.write(
         f"transcribed {len(transcribed)} B, listener {len(listener)} B, "
-        f"track {len(track.anchors)} anchors over {track.duration_s:.2f} s"
+        f"track {len(track.anchors)} anchors over {track.duration_s:.2f} s\n"
     )
 
 

@@ -429,8 +429,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const applyTimeline = useCallback((episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => {
     const native = nativeEngineRef.current
-    if (!native || engineKindRef.current !== 'native' || renditionRef.current !== 'audio') return false
+    if (!native) return false
     if (trackRef.current?.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+    // Lifting must always reach the source the map was set on, even while
+    // it is parked: after a switch to the YouTube player the native engine
+    // keeps its source, and a switch back reuses it. A map found invalid in
+    // the meantime must not come back with it.
+    if (timeline !== null && (engineKindRef.current !== 'native' || renditionRef.current !== 'audio')) return false
     if (!native.setTimeline(audioUrl, timeline)) return false
     setTimelineApplied(timeline !== null)
     return true

@@ -625,6 +625,36 @@ describe('spec #62 — YouTube iframe engine', () => {
     resetFakePlayers()
   })
 
+  it('lifts a timeline map from the parked native source (spec #116)', async () => {
+    // The listener switches to YouTube; a late range then shows the audio
+    // copy was a different one. Switching back reuses the native source, so
+    // the map must already be gone.
+    const { video } = renderPlayer()
+    const audioUrl = youtubeTrack.playback!.audio!.url
+    const timeline = () => ({
+      map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: -30 }]),
+      durationS: 3000,
+    })
+    act(() => ctx.play(youtubeTrack))
+    act(() => {
+      expect(ctx.applyTimeline('ep-yt', audioUrl, timeline())).toBe(true)
+    })
+    await enterYouTube(document.createElement('div'))
+    expect(ctx.activeEngine).toBe('youtube')
+
+    act(() => {
+      // Applying is refused while YouTube plays; lifting is not.
+      expect(ctx.applyTimeline('ep-yt', audioUrl, timeline())).toBe(false)
+      expect(ctx.applyTimeline('ep-yt', audioUrl, null)).toBe(true)
+    })
+    expect(ctx.timelineApplied).toBe(false)
+
+    act(() => ctx.switchRendition('audio'))
+    expect(ctx.activeEngine).toBe('native')
+    act(() => ctx.seek(1130))
+    expect(stateFor(video).currentTime).toBe(1130)
+  })
+
   it('exposes youtubeAvailable from the manifest', () => {
     renderPlayer()
     act(() => ctx.play(audioTrack))
