@@ -16,6 +16,14 @@ SIGNED = "https://bucket.example/jobs/j1/audio/original.mp3?X-Amz-Signature=SECR
 AUDIO = b"abc" * 1000
 
 
+class _Download(io.BytesIO):
+    """A response body with headers, as ``urllib.request.urlopen`` returns."""
+
+    def __init__(self, body: bytes, declared):
+        super().__init__(body)
+        self.headers = {} if declared is None else {"Content-Length": str(declared)}
+
+
 @pytest.fixture
 def dalston(monkeypatch):
     """A Dalston that answers the audio endpoint, and a download that serves bytes."""
@@ -33,7 +41,7 @@ def dalston(monkeypatch):
 
     def urlopen(url, timeout=None):
         seen["download"].append(url)
-        return io.BytesIO(AUDIO)
+        return _Download(seen.get("body", AUDIO), seen.get("declared", len(AUDIO)))
 
     monkeypatch.setattr(httpx, "Client", client)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
@@ -98,3 +106,17 @@ def test_non_http_download_url_is_refused(monkeypatch, dalston):
     monkeypatch.setattr(httpx, "Client", client)
     with pytest.raises(ValueError, match="non-HTTP"):
         b"".join(iter_job_audio("j1", base_url="http://dalston.test"))
+
+
+def test_download_cut_short_is_an_error_not_a_short_file(dalston):
+    """The server declares 3000 bytes and closes after 300."""
+    dalston["body"] = AUDIO[:300]
+    received = []
+    with pytest.raises(OSError, match="ended early: got 300 of 3000"):
+        for chunk in iter_job_audio("j1", base_url="http://dalston.test"):
+            received.append(chunk)
+
+
+def test_download_without_a_declared_length_is_accepted(dalston):
+    dalston["declared"] = None
+    assert b"".join(iter_job_audio("j1", base_url="http://dalston.test")) == AUDIO

@@ -70,8 +70,8 @@ def iter_job_audio(
     presigned URL is fetched without the API key.
 
     Raises ``httpx.HTTPError`` when Dalston refuses (404 unknown job, 410
-    audio purged), ``urllib.error.URLError`` when the download itself fails,
-    and ``ValueError`` when the audio exceeds ``max_bytes``.
+    audio purged), ``OSError`` when the download fails or ends before the
+    declared length, and ``ValueError`` when the audio exceeds ``max_bytes``.
     """
     import os
     import urllib.request
@@ -94,6 +94,7 @@ def iter_job_audio(
         raise ValueError("Dalston returned a non-HTTP audio URL")
     total = 0
     with urllib.request.urlopen(signed_url, timeout=timeout) as audio:  # noqa: S310 — URL issued by our Dalston
+        declared = audio.headers.get("Content-Length") if getattr(audio, "headers", None) is not None else None
         while True:
             chunk = audio.read(chunk_size)
             if not chunk:
@@ -102,6 +103,10 @@ def iter_job_audio(
             if max_bytes is not None and total > max_bytes:
                 raise ValueError(f"job audio exceeds {max_bytes} bytes")
             yield chunk
+    # A connection cut short reads as a clean end of file here. A sync track
+    # built from part of the audio would look valid, so check the length.
+    if declared is not None and str(declared).isdigit() and total != int(declared):
+        raise OSError(f"job audio download ended early: got {total} of {declared} bytes")
 
 
 class DalstonTranscriber(Transcriber):
