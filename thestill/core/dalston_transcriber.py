@@ -26,7 +26,6 @@ Features:
 """
 
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -54,22 +53,6 @@ POLL_INTERVAL = 5.0  # seconds between polls
 MAX_POLL_DURATION = 7200  # 2 hours max wait
 
 
-@contextmanager
-def _quiet_loggers(*names: str):
-    """Raise the named stdlib loggers to WARNING for the duration of the block."""
-    import logging
-
-    loggers = [logging.getLogger(name) for name in names]
-    previous = [logger_.level for logger_ in loggers]
-    for logger_ in loggers:
-        logger_.setLevel(logging.WARNING)
-    try:
-        yield
-    finally:
-        for logger_, level in zip(loggers, previous):
-            logger_.setLevel(level)
-
-
 def iter_job_audio(
     job_id: str,
     *,
@@ -86,10 +69,12 @@ def iter_job_audio(
     presigned URL at ``GET /v1/audio/transcriptions/{job_id}/audio``. The
     presigned URL is fetched without the API key.
 
-    Raises ``httpx.HTTPError`` on a failed request (404 unknown job, 410
-    audio purged) and ``ValueError`` when the audio exceeds ``max_bytes``.
+    Raises ``httpx.HTTPError`` when Dalston refuses (404 unknown job, 410
+    audio purged), ``urllib.error.URLError`` when the download itself fails,
+    and ``ValueError`` when the audio exceeds ``max_bytes``.
     """
     import os
+    import urllib.request
 
     import httpx
 
@@ -100,18 +85,23 @@ def iter_job_audio(
         response = client.get(f"{base}/v1/audio/transcriptions/{job_id}/audio", headers=headers)
         response.raise_for_status()
         signed_url = response.json()["url"]
-        total = 0
-        # httpx logs every request URL at INFO (httpcore at DEBUG). This one
-        # is a presigned URL: its query string is a credential, valid for an
-        # hour. Keep it out of the logs for the duration of the download.
-        with _quiet_loggers("httpx", "httpcore"):
-            with client.stream("GET", signed_url) as audio:
-                audio.raise_for_status()
-                for chunk in audio.iter_bytes(chunk_size):
-                    total += len(chunk)
-                    if max_bytes is not None and total > max_bytes:
-                        raise ValueError(f"job audio exceeds {max_bytes} bytes")
-                    yield chunk
+
+    # The presigned URL's query string is a credential, valid for an hour.
+    # httpx logs every request URL at INFO (and urllib3 at DEBUG), so this
+    # one request goes through the standard library, which logs nothing.
+    # That needs no logger juggling and is safe with concurrent downloads.
+    if not signed_url.startswith(("https://", "http://")):
+        raise ValueError("Dalston returned a non-HTTP audio URL")
+    total = 0
+    with urllib.request.urlopen(signed_url, timeout=timeout) as audio:  # noqa: S310 — URL issued by our Dalston
+        while True:
+            chunk = audio.read(chunk_size)
+            if not chunk:
+                break
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ValueError(f"job audio exceeds {max_bytes} bytes")
+            yield chunk
 
 
 class DalstonTranscriber(Transcriber):
