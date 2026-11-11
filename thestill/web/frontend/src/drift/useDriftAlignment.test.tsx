@@ -271,6 +271,42 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(bodies()).toHaveLength(2)
   })
 
+  it('checks the episode afresh when the listener comes back to it', () => {
+    // Episode A, then B, then A again without a page reload: the element
+    // loads A anew and may be served another copy.
+    const { result, rerender } = play()
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+
+    Object.assign(player, { track: { episodeId: 'other', audioUrl: 'https://host.example/b.mp3' } })
+    beginAudioLoad('https://host.example/b.mp3', true)
+    rerender()
+    expect(result.current.status).toBe('idle')
+
+    settle(10)
+    Object.assign(player, { track: { episodeId: 'ep-1', audioUrl: AUDIO } })
+    beginAudioLoad(AUDIO, true)
+    act(() => recordMediaReport(range({ crc: 999 }))) // this time, a different copy
+    rerender()
+    // The alignment is kept, the old verdict is not.
+    expect(result.current).toMatchObject({ status: 'done', report, check: null })
+    settle(1500)
+    expect(result.current.check?.verification?.verdict).toBe('mismatch')
+    expect(bodies().map((b) => [b.outcome, b.revision])).toEqual([
+      ['aligned', 0],
+      ['variant_mismatch', 0],
+    ])
+    // The file was not downloaded again.
+    expect(FakeWorker.instances).toHaveLength(1)
+
+    // A re-render during the same load does not check it twice.
+    rerender()
+    settle(1500)
+    expect(bodies()).toHaveLength(2)
+  })
+
   it('stops when another source is loaded', () => {
     const { result } = play()
     recordMediaReport(range())

@@ -60,6 +60,8 @@ export function checkPlay(audioUrl: string, report: DriftReport): PlayCheck {
 // the page: the full pass downloads the file a second time.
 const attempts = new Map<string, DriftAlignmentState>()
 const listeners = new Map<string, Set<() => void>>()
+// The audio load (its start time) each attempt's check was made for.
+const checkedLoads = new Map<string, number>()
 
 function publish(key: string, state: DriftAlignmentState): void {
   attempts.set(key, state)
@@ -70,6 +72,7 @@ function publish(key: string, state: DriftAlignmentState): void {
 export function resetDriftAttempts(): void {
   attempts.clear()
   listeners.clear()
+  checkedLoads.clear()
 }
 
 /** The transcript's segments on the transcribed copy's timeline. */
@@ -135,6 +138,29 @@ function keepChecking(key: string, audioUrl: string, result: DriftReport, first:
   })
 }
 
+/**
+ * Check the play now in the element against an alignment, report it, and
+ * keep checking. Called when an alignment finishes, and again for every
+ * later load of the same audio on this page: coming back to an episode
+ * loads it afresh, possibly as another copy, and the earlier verdict says
+ * nothing about that. The alignment and its block digest are reused; the
+ * file is not downloaded again.
+ */
+function checkThisLoad(key: string, audioUrl: string, result: DriftReport, report: ReportPlay): void {
+  const load = currentAudioLoad()
+  checkedLoads.set(key, load && load.url === audioUrl ? load.t : -1)
+  publish(key, { ...IDLE, status: 'done', report: result })
+  setTimeout(() => {
+    const now = currentAudioLoad()
+    // Superseded by a newer load of the same audio, or by another source.
+    if (load && (!now || now.url !== load.url || now.t !== load.t)) return
+    const check = checkPlay(audioUrl, result)
+    publish(key, { ...IDLE, status: 'done', report: result, check })
+    report(result, check, 0)
+    keepChecking(key, audioUrl, result, check, report)
+  }, CHECK_SETTLE_MS)
+}
+
 function startAttempt(
   key: string,
   input: DriftWorkerRequest['input'],
@@ -155,17 +181,11 @@ function startAttempt(
     }
     worker.terminate()
     const result = message.report
-    publish(key, { ...IDLE, status: 'done', report: result })
     // The alignment's own fetch is the CORS probe: remember what it found
     // for this redirect chain, for the next load of the element.
     if (result.outcome === 'no_cors') setCorsVerdict(input.audioUrl, 'no_cors')
     else if (result.fetchedBytes !== null) setCorsVerdict(input.audioUrl, 'cors_ok')
-    setTimeout(() => {
-      const check = checkPlay(input.audioUrl, result)
-      publish(key, { ...IDLE, status: 'done', report: result, check })
-      report(result, check, 0)
-      keepChecking(key, input.audioUrl, result, check, report)
-    }, CHECK_SETTLE_MS)
+    checkThisLoad(key, input.audioUrl, result, report)
   }
   worker.postMessage({ type: 'start', input } satisfies DriftWorkerRequest)
 }
@@ -214,10 +234,29 @@ export function useDriftAlignment({
 
   const isPlaying = player.isPlaying
   useEffect(() => {
-    if (!key || !isPlaying || attempts.has(key)) return
+    if (!key || !isPlaying) return
     // A refetched transcript is a new object, but the attempt is keyed on
     // its generation, so it never restarts.
     if (!transcript || !generation || !audioUrl || !podcastSlug || !episodeSlug) return
+    const report: ReportPlay = (result, check, revision) => {
+      // Best effort: a lost report costs one data point.
+      void reportDriftOutcome(
+        podcastSlug,
+        episodeSlug,
+        toOutcomeBody(result, generation, navigator.userAgent, check, revision),
+      ).catch(() => {})
+    }
+    const earlier = attempts.get(key)
+    if (earlier) {
+      // Aligned before on this page. If the element has since loaded this
+      // audio again (the listener went to another episode and came back),
+      // that is a new play to check; the alignment itself is reused.
+      const load = currentAudioLoad()
+      if (earlier.status === 'done' && earlier.report && load?.url === audioUrl && checkedLoads.get(key) !== load.t) {
+        checkThisLoad(key, audioUrl, earlier.report, report)
+      }
+      return
+    }
     if (typeof Worker === 'undefined' || saveData()) return
     // Registered on the first play of an episode that has a track, never
     // at page load. It takes control of this page without a reload.
@@ -229,14 +268,7 @@ export function useDriftAlignment({
         audioUrl,
         segments: transcriptIntervals(transcript),
       },
-      (report, check, revision) => {
-        // Best effort: a lost report costs one data point.
-        void reportDriftOutcome(
-          podcastSlug,
-          episodeSlug,
-          toOutcomeBody(report, generation, navigator.userAgent, check, revision),
-        ).catch(() => {})
-      },
+      report,
     )
   }, [key, isPlaying, transcript, generation, audioUrl, podcastSlug, episodeSlug])
 
