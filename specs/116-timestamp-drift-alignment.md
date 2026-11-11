@@ -897,9 +897,11 @@ The service worker is the app's first. Its rules:
   register it.
 - `sw.js` is plain JavaScript with no build step, served from a fixed
   URL with `Cache-Control: no-cache`, and its URL never falls through to
-  the HTML shell. A session that does not hold `drift.align` removes the
-  worker on load, so switching the feature off reaches browsers that
-  already have it.
+  the HTML shell. A session that does not hold `drift.align` tells the
+  worker to stand down, unregisters it and, if the page was under its
+  control, reloads once: unregistering alone leaves a controlled page
+  controlled. So switching the feature off reaches browsers that already
+  have the worker.
 
 How this was built, where it differs from the sections above:
 

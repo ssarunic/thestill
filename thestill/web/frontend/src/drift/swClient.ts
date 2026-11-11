@@ -49,11 +49,25 @@ export function ensureDriftServiceWorker(): Promise<ServiceWorkerRegistration | 
   return registration
 }
 
-/** Remove the worker, if this origin has it. Never throws. */
-export async function removeDriftServiceWorker(): Promise<void> {
+/**
+ * Remove the worker, if this origin has it. Never throws.
+ *
+ * Unregistering does not detach a worker from a page it already controls:
+ * it keeps answering that page's media requests until the page goes away.
+ * So the controlling worker is first told to stand down, and the result
+ * says whether this page was under it, in which case the caller reloads
+ * once to end up uncontrolled.
+ */
+export async function removeDriftServiceWorker(): Promise<boolean> {
   registration = null
-  if (!supported()) return
+  if (!supported()) return false
+  let controlled = false
   try {
+    const controller = navigator.serviceWorker.controller
+    if (controller?.scriptURL.endsWith(SW_URL)) {
+      controlled = true
+      controller.postMessage({ kind: 'drift-disable' })
+    }
     const all = await navigator.serviceWorker.getRegistrations()
     await Promise.all(
       all
@@ -61,8 +75,29 @@ export async function removeDriftServiceWorker(): Promise<void> {
         .map((r) => r.unregister()),
     )
   } catch {
-    // Nothing to remove, or the browser refused: either way nothing runs.
+    // Nothing to remove, or the browser refused: either way nothing more can be done here.
   }
+  return controlled
+}
+
+const RELOADED_KEY = 'thestill:drift:reloaded'
+
+/** Indirection so tests can watch the reload without navigating. */
+export const page = { reload: () => window.location.reload() }
+
+/**
+ * Reload to get out from under a worker that was just unregistered. At most
+ * once per tab: if the reloaded page were somehow still controlled, it
+ * stays as it is rather than looping.
+ */
+export function reloadOnceUncontrolled(): void {
+  try {
+    if (sessionStorage.getItem(RELOADED_KEY) === '1') return
+    sessionStorage.setItem(RELOADED_KEY, '1')
+  } catch {
+    return // no way to guard against a loop: do not reload
+  }
+  page.reload()
 }
 
 export function serviceWorkerSupported(): boolean {

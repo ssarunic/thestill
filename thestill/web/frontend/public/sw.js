@@ -8,8 +8,9 @@
 //   stream loses Content-Range and the browser rejects it.
 // - Every other request is left to the browser. Nothing is cached and no
 //   navigation is handled.
-// - It is registered only for sessions that may align (drift.align) and is
-//   unregistered when they may not. This file is served with no-cache.
+// - It is registered only for sessions that may align (drift.align). A
+//   session that may not tells it to stand down, unregisters it and reloads
+//   once. This file is served with no-cache.
 //
 // Plain JavaScript, no build step: the URL and the bytes stay stable.
 
@@ -50,7 +51,13 @@ function blockPair(bytes) {
 self.addEventListener('install', () => self.skipWaiting())
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()))
 
+// Set by the page when its session may no longer align. Unregistering does
+// not detach a worker from a page it already controls, so the page tells it
+// to stand down and then reloads once to get out from under it.
+let disabled = false
+
 self.addEventListener('fetch', (event) => {
+  if (disabled) return
   const request = event.request
   if (request.destination !== 'audio' && request.destination !== 'video') return
   if (new URL(request.url).origin === self.location.origin) return
@@ -130,6 +137,10 @@ async function relay(event) {
 }
 
 self.addEventListener('message', (event) => {
+  if (event.data && event.data.kind === 'drift-disable') {
+    disabled = true
+    return
+  }
   if (event.data && event.data.kind === 'drift-ping' && event.source) {
     event.source.postMessage({ kind: 'drift-pong' })
   }

@@ -4,12 +4,13 @@
 // - held: the player may load audio with `crossorigin` for hosts known to
 //   allow it, so the service worker can check what the element is served;
 // - not held (signed out, not an admin, or DRIFT_ALIGNMENT_ENABLED=false):
-//   no element gets the attribute and the service worker is removed. This
-//   is the kill switch reaching browsers that already have the worker.
+//   no element gets the attribute, and the service worker is told to stand
+//   down, unregistered, and left behind by one reload. This is the kill
+//   switch reaching browsers that already have the worker.
 import { useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { setCrossOriginLoadingEnabled } from './corsVerdict'
-import { listenForMediaReports, removeDriftServiceWorker } from './swClient'
+import { listenForMediaReports, reloadOnceUncontrolled, removeDriftServiceWorker } from './swClient'
 
 export function useDriftSession(): void {
   const { can, isLoading } = useAuth()
@@ -22,6 +23,12 @@ export function useDriftSession(): void {
     // the player restores a source before this effect has run.
     setCrossOriginLoadingEnabled(held)
     if (held) listenForMediaReports()
-    else void removeDriftServiceWorker()
+    else {
+      // A page the worker already controls stays controlled after it is
+      // unregistered; one reload ends that.
+      void removeDriftServiceWorker().then((controlled) => {
+        if (controlled) reloadOnceUncontrolled()
+      })
+    }
   }, [held, isLoading])
 }

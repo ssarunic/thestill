@@ -178,4 +178,14 @@ describe('service worker', () => {
     worker.listeners.message({ data: { kind: 'drift-ping' }, source } as never)
     expect(source.postMessage).toHaveBeenCalledWith({ kind: 'drift-pong' })
   })
+
+  it('stands down when the page says the session may no longer align', async () => {
+    const worker = loadWorker(server.fetchImpl)
+    expect(await worker.request('https://cdn.example/a.mp3', { destination: 'audio', range: 'bytes=0-' })).not.toBeNull()
+    worker.listeners.message({ data: { kind: 'drift-disable' }, source: null } as never)
+    // From here the browser handles media requests itself, as with no worker.
+    expect(await worker.request('https://cdn.example/a.mp3', { destination: 'audio', range: 'bytes=0-' })).toBeNull()
+    expect(server.served).toHaveLength(1)
+    expect(worker.posted).toHaveLength(1)
+  })
 })

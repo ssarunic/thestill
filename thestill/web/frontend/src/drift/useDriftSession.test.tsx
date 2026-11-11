@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginAudioLoad, setCorsVerdict, setCrossOriginLoadingEnabled } from './corsVerdict'
-import { mediaReportsFor, resetDriftServiceWorkerClient } from './swClient'
+import { mediaReportsFor, page, resetDriftServiceWorkerClient } from './swClient'
 import { useDriftSession } from './useDriftSession'
 
 const auth = { isLoading: false, permissions: [] as string[] }
@@ -11,12 +11,18 @@ vi.mock('../contexts/AuthContext', () => ({
 
 const URL_A = 'https://cdn.test/a.mp3'
 const swListeners: ((event: { data: unknown }) => void)[] = []
+const controller = { scriptURL: 'https://thestill.me/sw.js', postMessage: vi.fn() }
+let controlledBy: typeof controller | null = null
 const unregister = vi.fn(async () => true)
 const other = vi.fn(async () => true)
 
 beforeEach(() => {
   localStorage.clear()
   unregister.mockClear()
+  controller.postMessage.mockClear()
+  controlledBy = null
+  sessionStorage.clear()
+  page.reload = vi.fn()
   swListeners.length = 0
   resetDriftServiceWorkerClient()
   other.mockClear()
@@ -26,7 +32,9 @@ beforeEach(() => {
   vi.stubGlobal('navigator', {
     userAgent: 'x',
     serviceWorker: {
-      controller: null,
+      get controller() {
+        return controlledBy
+      },
       addEventListener: (_name: string, listener: (event: { data: unknown }) => void) => swListeners.push(listener),
       getRegistrations: async () => [
         { active: { scriptURL: 'https://thestill.me/sw.js' }, unregister },
@@ -84,5 +92,30 @@ describe('useDriftSession', () => {
   it('does not listen for a session that may not align', () => {
     renderHook(() => useDriftSession())
     expect(swListeners).toHaveLength(0)
+  })
+
+  it('gets a page out from under a worker that already controls it', async () => {
+    // Unregistering alone leaves this page's media requests going through
+    // the worker until the page is gone.
+    controlledBy = controller
+    const { rerender } = renderHook(() => useDriftSession())
+    await vi.waitFor(() => expect(page.reload).toHaveBeenCalledTimes(1))
+    expect(controller.postMessage).toHaveBeenCalledWith({ kind: 'drift-disable' })
+    expect(unregister).toHaveBeenCalledTimes(1)
+
+    // Never a second reload in the same tab, whatever the next load finds.
+    auth.permissions = ['drift.align']
+    rerender()
+    auth.permissions = []
+    rerender()
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(2))
+    expect(page.reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not reload a page the worker does not control', async () => {
+    renderHook(() => useDriftSession())
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1))
+    expect(page.reload).not.toHaveBeenCalled()
+    expect(controller.postMessage).not.toHaveBeenCalled()
   })
 })
