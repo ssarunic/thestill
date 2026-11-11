@@ -14,7 +14,13 @@
 const CHROMIUM = /\b(?:Chrome|Chromium)\/\d+/
 const NOT_DESKTOP = /\b(?:Mobile|Android|iPhone|iPad|iPod|CriOS|FxiOS|EdgiOS)\b/
 
+// Build-time override, for trying a browser that is not yet on the list
+// against a local build (`VITE_DRIFT_ANY_BROWSER=1 npm run build`). Never
+// set for a release build.
+const ANY_BROWSER = import.meta.env.VITE_DRIFT_ANY_BROWSER === '1'
+
 export function driftAlignmentSupported(userAgent?: string): boolean {
+  if (ANY_BROWSER && userAgent === undefined) return true
   const ua = userAgent ?? (typeof navigator === 'undefined' ? '' : navigator.userAgent)
   return CHROMIUM.test(ua) && !NOT_DESKTOP.test(ua)
 }

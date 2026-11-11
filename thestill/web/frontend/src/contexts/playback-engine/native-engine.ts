@@ -98,13 +98,11 @@ export class NativeEngine implements PlaybackEngine {
   // by every source change.
   private timeline: AppliedTimeline | null = null
   // Spec #116 — a transcript-time start waiting for its map: the time the
-  // listener asked for, the mute state to give back, and the deadline.
+  // listener asked for, and the deadline. The element stays PAUSED for the
+  // wait (see beginHold) while the app is told playback is under way.
   private hold: {
     transcriptTime: number
-    muted: boolean
     timer: ReturnType<typeof setTimeout>
-    // The silent playback ran to the end of the file before the map came.
-    ended: boolean
   } | null = null
   // A held start that was paused before its map arrived: still owed.
   private pendingTranscriptTime: number | null = null
@@ -136,7 +134,15 @@ export class NativeEngine implements PlaybackEngine {
 
     const listeners: Array<[string, EventListener]> = [
       ['play', () => this.events.onPlay()],
-      ['pause', () => this.events.onPause()],
+      [
+        'pause',
+        () => {
+          // The hold's own pause is not the listener's: for them playback
+          // has started and is loading.
+          if (this.hold && this.wantsPlay) return
+          this.events.onPause()
+        },
+      ],
       ['playing', () => this.events.onPlaying()],
       ['waiting', () => this.events.onWaiting()],
       ['canplay', () => this.events.onCanPlay()],
@@ -160,14 +166,7 @@ export class NativeEngine implements PlaybackEngine {
       ],
       ['ratechange', () => this.events.onRateChange(this.el.playbackRate)],
       ['seeked', () => this.events.onSeeked()],
-      [
-        'volumechange',
-        () => {
-          // The hold's own muting is not the listener's.
-          if (this.hold) return
-          this.events.onVolumeChange(this.el.volume, this.el.muted)
-        },
-      ],
+      ['volumechange', () => this.events.onVolumeChange(this.el.volume, this.el.muted)],
       [
         'error',
         () => {
@@ -182,19 +181,7 @@ export class NativeEngine implements PlaybackEngine {
           this.events.onError(describeMediaError(this.el.error?.code))
         },
       ],
-      [
-        'ended',
-        () => {
-          // A held start that ran to the end of the file, unheard, has not
-          // ended for the listener: it has not begun. Playback is restarted
-          // when the hold ends (a paragraph clicked near the end).
-          if (this.hold) {
-            this.hold.ended = true
-            return
-          }
-          this.events.onEnded()
-        },
-      ],
+      ['ended', () => this.events.onEnded()],
     ]
     for (const [name, listener] of listeners) el.addEventListener(name, listener)
     this.unbind = () => {
@@ -272,7 +259,8 @@ export class NativeEngine implements PlaybackEngine {
     this.el.removeAttribute('crossorigin')
     this.pendingSeek = position
     this.el.src = url
-    if (this.wantsPlay) void this.el.play().catch(() => {})
+    // A held start stays paused; it is started when the hold ends.
+    if (this.wantsPlay && !this.hold) void this.el.play().catch(() => {})
   }
 
   // Detach the source (session stop). Keeps the element itself alive —
@@ -302,6 +290,15 @@ export class NativeEngine implements PlaybackEngine {
       this.pendingTranscriptTime = null
       this.beginHold(asked)
     }
+    if (this.hold) {
+      // Nothing may be heard yet, but this call is the listener's gesture
+      // and the real start comes later, outside it. Starting and at once
+      // pausing here is what lets that later play() through in Safari.
+      void this.el.play().catch(() => {})
+      this.el.pause()
+      this.events.onPlay()
+      return Promise.resolve()
+    }
     if (this.hlsRetry) {
       const { url, position } = this.hlsRetry
       this.hlsRetry = null
@@ -323,19 +320,19 @@ export class NativeEngine implements PlaybackEngine {
     // playYouTube() pausing this engine must not have it start later.
     this.deferredPlay++
     this.wantsPlay = false
-    // Paused, there is nothing to keep silent; the asked-for time is kept,
-    // so a map that arrives meanwhile still moves to it. The element goes
-    // back to that time: what ran on meanwhile was never heard.
-    const asked = this.hold?.transcriptTime ?? null
+    // The asked-for time of a held start is kept, so a map that arrives
+    // meanwhile still moves to it.
+    const held = this.hold !== null
     this.endHold(false, true)
-    if (asked !== null && this.el.readyState >= HTMLMediaElement.HAVE_METADATA) this.el.currentTime = asked
     this.el.pause()
+    // A held element is already paused, so no `pause` event is coming.
+    if (held) this.events.onPause()
   }
 
   /**
    * `holdForTimeline` (spec #116): `seconds` is a transcript time the
    * listener asked for and a map is expected but not yet in force. The
-   * engine goes silent, and the seek is redone on the map when it arrives.
+   * engine waits, paused, and the seek is redone on the map when it arrives.
    */
   seekTo(seconds: number, options?: { holdForTimeline?: boolean }): void {
     if (!Number.isFinite(seconds)) return
@@ -353,32 +350,49 @@ export class NativeEngine implements PlaybackEngine {
     if (this.timeline === null && options?.holdForTimeline && canHold) {
       if (this.hold) this.hold.transcriptTime = Math.max(0, seconds)
       else this.beginHold(Math.max(0, seconds))
-    } else {
-      // Any other seek is the listener choosing a place themselves.
-      this.endHold(false)
-      this.pendingTranscriptTime = null
+      this.el.currentTime = Math.max(0, seconds)
+      return
     }
+    // Any other seek is the listener choosing a place themselves.
+    const wasHeld = this.hold !== null
+    this.endHold(false)
+    this.pendingTranscriptTime = null
     this.el.currentTime = Math.max(0, this.toElementTime(seconds))
+    if (wasHeld) this.startAfterHold()
   }
 
   // --- Spec #116: holding a transcript-time start for its map --------------
 
+  /**
+   * The wait is spent PAUSED, never muted. Safari cannot play an audio-only
+   * file muted (or at volume 0): it ends the playback at once and reports
+   * the position reached as the duration, after which every seek is clamped
+   * and Play restarts from 0 (v1.42.0, 2026-11-11). A paused element has no
+   * such trouble in any browser, and nothing runs on unheard.
+   */
   private beginHold(transcriptTime: number): void {
     // One request at a time: a paused one (pendingTranscriptTime) is
     // replaced by whatever is held now.
     this.pendingTranscriptTime = null
-    const muted = this.el.muted
-    const timer = setTimeout(() => this.endHold(true), TIMELINE_HOLD_MAX_MS)
-    this.hold = { transcriptTime, muted, timer, ended: false }
-    this.el.muted = true
+    const timer = setTimeout(() => {
+      this.endHold(true)
+      this.startAfterHold()
+    }, TIMELINE_HOLD_MAX_MS)
+    this.hold = { transcriptTime, timer }
+    // Already playing (a click while the check is still running): the app
+    // goes on showing playback, so that is what resumes afterwards.
+    if (!this.el.paused) {
+      this.wantsPlay = true
+      this.el.pause()
+    }
     this.events.onTimelineHoldChange?.(true)
   }
 
   /**
-   * Let the audio be heard again. `restart` puts playback back at the time
-   * that was asked for, uncorrected: no map came, and the listener has
-   * heard nothing of what played meanwhile. `keepRequest` leaves the
-   * asked-for time in place for a map that may still arrive (a pause).
+   * End the wait. `restart` puts the element at the time that was asked
+   * for, uncorrected: no map came. `keepRequest` leaves the asked-for time
+   * in place for a map that may still arrive (a pause). Starting playback
+   * is the caller's move (startAfterHold), once the element is in place.
    */
   private endHold(restart: boolean, keepRequest = false): void {
     const hold = this.hold
@@ -389,15 +403,20 @@ export class NativeEngine implements PlaybackEngine {
     if (restart && this.url !== null) {
       if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = hold.transcriptTime
       else this.el.currentTime = hold.transcriptTime
-      this.replayIfRanOut(hold.ended)
     }
-    this.el.muted = hold.muted
     this.events.onTimelineHoldChange?.(false)
   }
 
-  // The element stops at the end of the file; the listener asked to play.
-  private replayIfRanOut(ended: boolean): void {
-    if (ended && this.wantsPlay) void this.el.play().catch(() => {})
+  // The start the listener asked for, now that the element is in place.
+  private startAfterHold(): void {
+    if (!this.wantsPlay || this.url === null) return
+    const url = this.url
+    void this.el.play().catch(() => {
+      // Refused (no gesture left to draw on): show it, so Play is one tap.
+      if (this.url !== url || this.hold || !this.el.paused) return
+      this.wantsPlay = false
+      this.events.onPause()
+    })
   }
 
   /** The hook's word that no map is coming for this source. */
@@ -405,9 +424,10 @@ export class NativeEngine implements PlaybackEngine {
     if (this.url !== url) return
     if (this.hold) {
       this.endHold(true)
+      this.startAfterHold()
       return
     }
-    // A held start that the listener paused: nothing is muted, but the
+    // A held start that the listener paused: nothing is waiting, but the
     // request is still pending and would be held again on resume. Settle it
     // here, at the asked-for time, without starting playback.
     const asked = this.pendingTranscriptTime
@@ -448,17 +468,17 @@ export class NativeEngine implements PlaybackEngine {
     this.timeline = timeline
     if (timeline !== null) {
       // A start that was waiting for this map: go to where the asked-for
-      // words are in this copy, then let the audio be heard.
+      // words are in this copy, then start.
+      const wasHeld = this.hold !== null
       const asked = this.hold?.transcriptTime ?? this.pendingTranscriptTime
-      const ranOut = this.hold?.ended ?? false
       this.pendingTranscriptTime = null
       if (asked !== null && asked !== undefined) {
         const target = Math.max(0, timeline.map.toAsset(asked).time)
         if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = target
         else this.el.currentTime = target
-        this.replayIfRanOut(ranOut)
       }
       this.endHold(false)
+      if (wasHeld) this.startAfterHold()
     }
     this.events.onTimeUpdate(this.getCurrentTime())
     if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.getDuration())
@@ -496,23 +516,10 @@ export class NativeEngine implements PlaybackEngine {
 
   setVolume(volume: number): void {
     this.el.volume = Math.min(1, Math.max(0, volume))
-    if (this.hold) {
-      // Raising the volume unmutes, but not during a hold: the element
-      // stays silent and the listener's unmute is kept for when it ends.
-      if (this.el.volume > 0) this.hold.muted = false
-      this.events.onVolumeChange(this.el.volume, this.hold.muted)
-      return
-    }
     if (this.el.volume > 0 && this.el.muted) this.el.muted = false
   }
 
   setMuted(muted: boolean): void {
-    if (this.hold) {
-      // The listener's choice takes effect when the hold ends.
-      this.hold.muted = muted
-      this.events.onVolumeChange(this.el.volume, muted)
-      return
-    }
     this.el.muted = muted
   }
 
@@ -529,11 +536,9 @@ export class NativeEngine implements PlaybackEngine {
    */
   getElementTime(): number {
     if (this.hlsRetry) return this.hlsRetry.position
-    // While a start is held (or paused before its map came) the element may
-    // have run on, unheard. For the listener playback is still at the place
-    // they asked for, and that is what a saved position must say: not a
-    // point they never heard, and never "finished" because the silent wait
-    // crossed the end.
+    // While a start is held (or paused before its map came), playback is,
+    // for the listener, at the place they asked for, and that is what a
+    // saved position must say even before the element has got there.
     const asked = this.hold?.transcriptTime ?? this.pendingTranscriptTime
     return asked ?? this.el.currentTime
   }
@@ -550,6 +555,8 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   isPlaying(): boolean {
+    // A held start is paused underneath, but under way for the listener.
+    if (this.hold) return this.wantsPlay
     return !this.el.paused && !this.el.ended
   }
 
@@ -563,7 +570,7 @@ export class NativeEngine implements PlaybackEngine {
    * deferred seek (a restore landing on loadedmetadata) is still pending.
    */
   destroy(): NativeEngineState {
-    // Give the listener's mute state back; the successor does not inherit a hold.
+    // The successor does not inherit a hold.
     this.endHold(false)
     this.unbind()
     const hls = this.hls
