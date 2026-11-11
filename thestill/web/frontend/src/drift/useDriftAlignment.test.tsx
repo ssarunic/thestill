@@ -20,6 +20,7 @@ const player = {
   releaseTimelineHold: vi.fn<(...args: unknown[]) => void>(),
   // False: nothing is being held (the listener pressed Play, not a paragraph).
   reloadHeldForCheck: vi.fn<(...args: unknown[]) => boolean>(() => false),
+  timelineHold: false,
 }
 vi.mock('../contexts/PlayerContext', () => ({ usePlayer: () => player }))
 
@@ -101,6 +102,7 @@ beforeEach(() => {
     isPlaying: true,
     activeEngine: 'native',
     activeRendition: 'audio',
+    timelineHold: false,
   })
 })
 afterEach(() => {
@@ -557,6 +559,64 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(bodies().map((b) => [b.outcome, b.sw_state])).toEqual([['aligned', 'no_requests']])
     // No more waiting on clicks for this load.
     expect(isTimelineExpected('ep-1')).toBe(false)
+  })
+
+  it('checks a play that was not held on the next click, by reloading it then', () => {
+    // The listener pressed Play on a host not seen before: the audio loaded
+    // without crossorigin and nothing is held, so nothing can be reloaded
+    // unheard. The map is kept for the next click on a paragraph.
+    vi.stubGlobal('navigator', {
+      userAgent: CHROME_UA,
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    beginAudioLoad(AUDIO, true)
+    const { result, rerender } = renderHook(() => useDriftAlignment(props()))
+    finish()
+    settle(1500)
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(1) // asked; nothing held
+    expect(result.current.applied).toBe(false)
+    expect(result.current.recheckable).toBe(true)
+    // A click on a paragraph must still wait for the map.
+    expect(isTimelineExpected('ep-1')).toBe(true)
+
+    // The click: the player holds the start, and now there is something to reload.
+    player.reloadHeldForCheck.mockImplementation(() => {
+      beginAudioLoad(AUDIO, true)
+      return true
+    })
+    player.timelineHold = true
+    act(() => rerender())
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(2)
+    act(() => recordMediaReport(range()))
+    settle(250)
+    expect(result.current.applied).toBe(true)
+    expect(result.current.recheckable).toBe(false)
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up on a load whose reload cannot be checked either', () => {
+    vi.stubGlobal('navigator', {
+      userAgent: CHROME_UA,
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    beginAudioLoad(AUDIO, true)
+    const { result, rerender } = renderHook(() => useDriftAlignment(props()))
+    finish()
+    settle(1500)
+    expect(result.current.recheckable).toBe(true)
+
+    player.reloadHeldForCheck.mockImplementation(() => {
+      beginAudioLoad(AUDIO, true)
+      return true
+    })
+    player.timelineHold = true
+    act(() => rerender())
+    player.releaseTimelineHold.mockClear()
+    settle(1500) // the worker reports nothing for the reloaded audio
+    expect(player.releaseTimelineHold).toHaveBeenCalledWith('ep-1', AUDIO)
+    expect(result.current.recheckable).toBe(false)
+    expect(isTimelineExpected('ep-1')).toBe(false)
+    expect(player.reloadHeldForCheck).toHaveBeenCalledTimes(2)
   })
 
   it('stops when another source is loaded', () => {
