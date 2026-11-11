@@ -110,6 +110,40 @@ interface Outcome {
   spans: { offset: number }[]
 }
 
+async function stubEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3') {
+  const outcomes: Outcome[] = []
+  await mockEpisodeApi(page, {
+    audioUrl: `${hostOrigin}/${file}`,
+    transcriptSegments: TRANSCRIPT,
+    permissions: ['drift.align'],
+    duration: 46,
+  })
+  await page.route(`**/api/podcasts/${PODCAST}/episodes/${EPISODE}/sync-track/e2e`, (route) =>
+    route.fulfill({ body: TRACK, contentType: 'application/octet-stream' }),
+  )
+  await page.route(`**/api/podcasts/${PODCAST}/episodes/${EPISODE}/drift-outcome`, (route) => {
+    outcomes.push(route.request().postDataJSON() as Outcome)
+    return route.fulfill({ json: { status: 'ok', accepted: true } })
+  })
+  return outcomes
+}
+
+/**
+ * Record what the listener can hear: every 50 ms, whether the element is
+ * audibly playing and where. Read back with `heard(page)`.
+ */
+async function recordWhatIsHeard(page: Page) {
+  await page.evaluate(() => {
+    const heard: number[] = []
+    ;(window as unknown as { __heard: number[] }).__heard = heard
+    setInterval(() => {
+      const el = document.querySelector('video')
+      if (el && !el.paused && !el.muted && el.volume > 0 && el.readyState >= 2) heard.push(el.currentTime)
+    }, 50)
+  })
+}
+const heard = (page: Page) => page.evaluate(() => (window as unknown as { __heard: number[] }).__heard)
+
 async function openEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3') {
   const outcomes: Outcome[] = []
   await mockEpisodeApi(page, {
@@ -188,5 +222,57 @@ test.describe('timeline map applied to a listener copy with other ads', () => {
     await expect.poll(() => elementTime(page), { timeout: 5_000 }).toBeGreaterThan(29.5)
     expect(await elementTime(page)).toBeLessThan(31.5)
     await expect(page.getByTestId('segment-content-5')).toHaveAttribute('data-active', 'true')
+  })
+})
+
+/**
+ * The requirement in one test: the listener opens an episode and their very
+ * first action is a click on a paragraph. Nothing is known yet — no map, no
+ * verdict on the host, no service worker. Playback must still start on that
+ * paragraph, and the listener must not hear any other audio first.
+ */
+test.describe('the first click on a paragraph', () => {
+  test('starts on the clicked paragraph in a copy with other ads, with nothing else heard first', async ({ page }) => {
+    const outcomes = await stubEpisode(page, 'listener.mp3')
+    await page.goto(`${EPISODE_PATH}?view=transcript&driftdebug=1`)
+    await expect(page.getByTestId('segment-content-5')).toBeVisible()
+    await recordWhatIsHeard(page)
+
+    // The paragraph at 30 s of the transcript: 39 s into this copy.
+    await page.getByTestId('segment-content-5').click()
+
+    const strip = page.getByTestId('drift-debug-strip')
+    await expect(strip).toContainText('Applied: seeks, the clock and the highlighting follow this map', {
+      timeout: 20_000,
+    })
+    await expect.poll(async () => (await heard(page)).length, { timeout: 10_000 }).toBeGreaterThan(5)
+
+    const audible = await heard(page)
+    // Everything the listener heard is the clicked paragraph onwards: never
+    // the uncorrected position (30 s of this copy is still the mid-roll ad).
+    expect(Math.min(...audible)).toBeGreaterThan(38.5)
+    expect(audible[0]).toBeLessThan(40.5)
+    await expect(page.getByTestId('segment-content-5')).toHaveAttribute('data-active', 'true')
+    expect(await page.evaluate(() => document.querySelector('video')!.muted)).toBe(false)
+
+    await expect.poll(() => outcomes.some((o) => o.applied)).toBe(true)
+    expect(outcomes.find((o) => o.applied)).toMatchObject({ outcome: 'aligned', sw_state: 'ok' })
+  })
+
+  test('starts where it always did when the copy is the transcribed one', async ({ page }) => {
+    const outcomes = await stubEpisode(page, 'transcribed.mp3')
+    await page.goto(`${EPISODE_PATH}?view=transcript&driftdebug=1`)
+    await expect(page.getByTestId('segment-content-5')).toBeVisible()
+    await recordWhatIsHeard(page)
+
+    await page.getByTestId('segment-content-5').click()
+
+    await expect.poll(async () => (await heard(page)).length, { timeout: 15_000 }).toBeGreaterThan(5)
+    const audible = await heard(page)
+    expect(Math.min(...audible)).toBeGreaterThan(29.5)
+    expect(audible[0]).toBeLessThan(31.5)
+    await expect(page.getByTestId('segment-content-5')).toHaveAttribute('data-active', 'true')
+    await expect.poll(() => outcomes.length).toBeGreaterThan(0)
+    expect(outcomes[0]).toMatchObject({ outcome: 'identity', applied: false })
   })
 })

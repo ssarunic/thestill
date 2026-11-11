@@ -34,6 +34,11 @@ function describeMediaError(code: number | undefined): string {
 // A late resume seek only moves a source that has barely started.
 const LATE_SEEK_WINDOW_SECONDS = 5
 
+// Spec #116 — the longest a transcript-time start waits in silence for its
+// timeline map. Past this the listener hears the uncorrected position: a
+// late correction is better than a player that seems stuck.
+export const TIMELINE_HOLD_MAX_MS = 10_000
+
 // hls.js's ErrorTypes values (stable strings) for the two fatal kinds the
 // engine treats differently.
 const HLS_NETWORK_ERROR = 'networkError'
@@ -92,6 +97,11 @@ export class NativeEngine implements PlaybackEngine {
   // Spec #116 — set only for the source it was verified against; cleared
   // by every source change.
   private timeline: AppliedTimeline | null = null
+  // Spec #116 — a transcript-time start waiting for its map: the time the
+  // listener asked for, the mute state to give back, and the deadline.
+  private hold: { transcriptTime: number; muted: boolean; timer: ReturnType<typeof setTimeout> } | null = null
+  // A held start that was paused before its map arrived: still owed.
+  private pendingTranscriptTime: number | null = null
   private unbind: () => void
   // Spec #113 — hls.js state. `hlsGeneration` invalidates an attach still
   // waiting for the chunk when the source changes underneath it.
@@ -144,7 +154,14 @@ export class NativeEngine implements PlaybackEngine {
       ],
       ['ratechange', () => this.events.onRateChange(this.el.playbackRate)],
       ['seeked', () => this.events.onSeeked()],
-      ['volumechange', () => this.events.onVolumeChange(this.el.volume, this.el.muted)],
+      [
+        'volumechange',
+        () => {
+          // The hold's own muting is not the listener's.
+          if (this.hold) return
+          this.events.onVolumeChange(this.el.volume, this.el.muted)
+        },
+      ],
       [
         'error',
         () => {
@@ -180,12 +197,21 @@ export class NativeEngine implements PlaybackEngine {
   load(source: EngineSource, opts?: LoadOptions): void {
     if (!source.url) return
     this.detachHls()
+    // A hold survives a reload of the same source (the reload that makes it
+    // checkable); any other load ends it.
+    const sameSource = this.url === source.url
+    if (this.hold && !(sameSource && opts?.holdForTimeline)) this.endHold(false)
     this.pendingSeek = opts?.seekTo ?? null
     this.userSeeked = false
     this.url = source.url
     this.wantsPlay = false
     // A map belongs to one verified load of one copy.
     this.timeline = null
+    if (!(sameSource && opts?.holdForTimeline)) this.pendingTranscriptTime = null
+    if (opts?.holdForTimeline && opts.seekTo != null) {
+      if (this.hold) this.hold.transcriptTime = opts.seekTo
+      else this.beginHold(opts.seekTo)
+    }
     const useHls = needsHlsJs(this.el, source.url, source.mimeType)
     // The attribute must be in place before the source is assigned.
     if (source.crossOrigin && !useHls) {
@@ -238,6 +264,8 @@ export class NativeEngine implements PlaybackEngine {
     this.crossOriginUrl = null
     this.wantsPlay = false
     this.timeline = null
+    this.endHold(false)
+    this.pendingTranscriptTime = null
     this.url = null
     this.pendingSeek = null
     this.userSeeked = false
@@ -266,10 +294,18 @@ export class NativeEngine implements PlaybackEngine {
     // playYouTube() pausing this engine must not have it start later.
     this.deferredPlay++
     this.wantsPlay = false
+    // Paused, there is nothing to keep silent; the asked-for time is kept,
+    // so a map that arrives meanwhile still moves to it.
+    this.endHold(false, true)
     this.el.pause()
   }
 
-  seekTo(seconds: number): void {
+  /**
+   * `holdForTimeline` (spec #116): `seconds` is a transcript time the
+   * listener asked for and a map is expected but not yet in force. The
+   * engine goes silent, and the seek is redone on the map when it arrives.
+   */
+  seekTo(seconds: number, options?: { holdForTimeline?: boolean }): void {
     if (!Number.isFinite(seconds)) return
     if (this.hlsRetry) {
       this.hlsRetry.position = Math.max(0, seconds)
@@ -279,7 +315,59 @@ export class NativeEngine implements PlaybackEngine {
     // An explicit seek supersedes a deferred one (a resume position queued
     // for loadedmetadata), or metadata would jump back to it.
     this.pendingSeek = null
+    if (this.timeline === null && options?.holdForTimeline && this.url !== null) {
+      if (this.hold) this.hold.transcriptTime = Math.max(0, seconds)
+      else this.beginHold(Math.max(0, seconds))
+    } else {
+      // Any other seek is the listener choosing a place themselves.
+      this.endHold(false)
+      this.pendingTranscriptTime = null
+    }
     this.el.currentTime = Math.max(0, this.toElementTime(seconds))
+  }
+
+  // --- Spec #116: holding a transcript-time start for its map --------------
+
+  private beginHold(transcriptTime: number): void {
+    const muted = this.el.muted
+    const timer = setTimeout(() => this.endHold(true), TIMELINE_HOLD_MAX_MS)
+    this.hold = { transcriptTime, muted, timer }
+    this.el.muted = true
+    this.events.onTimelineHoldChange?.(true)
+  }
+
+  /**
+   * Let the audio be heard again. `restart` puts playback back at the time
+   * that was asked for, uncorrected: no map came, and the listener has
+   * heard nothing of what played meanwhile. `keepRequest` leaves the
+   * asked-for time in place for a map that may still arrive (a pause).
+   */
+  private endHold(restart: boolean, keepRequest = false): void {
+    const hold = this.hold
+    if (!hold) return
+    clearTimeout(hold.timer)
+    this.hold = null
+    if (keepRequest) this.pendingTranscriptTime = hold.transcriptTime
+    if (restart && this.url !== null) {
+      if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = hold.transcriptTime
+      else this.el.currentTime = hold.transcriptTime
+    }
+    this.el.muted = hold.muted
+    this.events.onTimelineHoldChange?.(false)
+  }
+
+  /** The hook's word that no map is coming for this source. */
+  releaseTimelineHold(url: string): void {
+    if (this.url === url) this.endHold(true)
+  }
+
+  isHoldingForTimeline(): boolean {
+    return this.hold !== null
+  }
+
+  /** The transcript time a held start is waiting on, if any. */
+  heldTranscriptTime(): number | null {
+    return this.hold?.transcriptTime ?? null
   }
 
   // Spec #116 — between the time the app speaks (transcript time while a
@@ -302,6 +390,18 @@ export class NativeEngine implements PlaybackEngine {
     if (this.url !== url || this.hls !== null || this.hlsAttach !== null) return false
     if (this.timeline === timeline) return true
     this.timeline = timeline
+    if (timeline !== null) {
+      // A start that was waiting for this map: go to where the asked-for
+      // words are in this copy, then let the audio be heard.
+      const asked = this.hold?.transcriptTime ?? this.pendingTranscriptTime
+      this.pendingTranscriptTime = null
+      if (asked !== null && asked !== undefined) {
+        const target = Math.max(0, timeline.map.toAsset(asked).time)
+        if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = target
+        else this.el.currentTime = target
+      }
+      this.endHold(false)
+    }
     this.events.onTimeUpdate(this.getCurrentTime())
     if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.getDuration())
     return true
@@ -342,6 +442,12 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   setMuted(muted: boolean): void {
+    if (this.hold) {
+      // The listener's choice takes effect when the hold ends.
+      this.hold.muted = muted
+      this.events.onVolumeChange(this.el.volume, muted)
+      return
+    }
     this.el.muted = muted
   }
 
@@ -385,6 +491,8 @@ export class NativeEngine implements PlaybackEngine {
    * deferred seek (a restore landing on loadedmetadata) is still pending.
    */
   destroy(): NativeEngineState {
+    // Give the listener's mute state back; the successor does not inherit a hold.
+    this.endHold(false)
     this.unbind()
     const hls = this.hls
     const hlsAttaching = this.hlsAttach !== null

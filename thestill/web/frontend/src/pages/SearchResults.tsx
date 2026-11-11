@@ -350,7 +350,7 @@ function MomentRow({ result }: { result: SearchResult }) {
     if (!hasSlugs) return
     if (canPlayInline && result.audio_url) {
       if (player.isCurrent(result.episode_id)) {
-        player.seek(seconds)
+        player.seek(seconds, { transcript: true })
         if (!player.isPlaying) player.resume()
         return
       }

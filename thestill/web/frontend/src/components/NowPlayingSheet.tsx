@@ -113,7 +113,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           at: seconds / duration,
           colorClass: entityStyle(item.entity.type).dot,
           label: `${item.entity.canonical_name} at ${formatClock(seconds)}`,
-          onSelect: () => seek(seconds),
+          onSelect: () => seek(seconds, { transcript: true }),
         }
       }),
     )

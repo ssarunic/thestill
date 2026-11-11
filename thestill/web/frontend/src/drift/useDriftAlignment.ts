@@ -12,6 +12,7 @@ import { TimelineMap } from '../contexts/playback-engine/timeline-map'
 import type { DriftWorkerMessage, DriftWorkerRequest } from '../workers/driftAlign.worker'
 import type { TranscriptInterval } from './classify'
 import { currentAudioLoad, setCorsVerdict } from './corsVerdict'
+import { setTimelineExpected } from './expectation'
 import { toOutcomeBody, type PlayCheck } from './report'
 import {
   ensureDriftServiceWorker,
@@ -102,7 +103,18 @@ type ApplyTimeline = (timeline: AppliedTimeline | null) => boolean
 interface PlayHooks {
   report: ReportPlay
   apply: ApplyTimeline
+  /** No map is coming for the play now held: let it be heard as it is. */
+  release: () => void
+  /**
+   * Reload the held audio in a form that can be checked. True when a held
+   * start was reloaded; false when nothing is being held.
+   */
+  reloadForCheck: () => boolean
 }
+
+// A check that can already tell is taken at once; one that cannot waits
+// for the worker's reports up to CHECK_SETTLE_MS.
+const CHECK_EARLY_MS = 250
 
 /**
  * Spec #116 §4 step 7 — the map goes to the player only when the copy is
@@ -194,28 +206,65 @@ function checkThisLoad(
   /** The alignment has not been reported yet: its outcome must reach the
    * server even if the play it belongs to is over before it can be checked. */
   firstReport: boolean,
+  /** The held start has already been reloaded once for this check. */
+  reloaded = false,
 ): void {
   const { report } = hooks
   const load = currentAudioLoad()
   checkedLoads.set(key, load && load.url === audioUrl ? load.t : -1)
   publish(key, { ...IDLE, status: 'done', report: result })
-  setTimeout(() => {
+
+  const superseded = () => {
     const now = currentAudioLoad()
-    // Superseded by a newer load of the same audio, or by another source
-    // (the listener moved on within the settle delay). There is nothing
-    // left to check this alignment against, and checking it against the
-    // replacement would be wrong; the outcome is still reported, with the
-    // check unknown.
-    if (load && (!now || now.url !== load.url || now.t !== load.t)) {
-      if (firstReport) report(result, null, 0, false)
-      return
-    }
-    const check = checkPlay(audioUrl, result)
+    return load !== null && (!now || now.url !== load.url || now.t !== load.t)
+  }
+  const conclude = (check: PlayCheck) => {
     const applied = settleTimeline(result, check, hooks.apply)
+    if (!applied) {
+      // A start held for this map (spec §4 step 7) gets one more chance to
+      // be checkable: the first play on a host loads without crossorigin,
+      // and the first play in a browser starts before the service worker
+      // controls the page. Reloading the held audio fixes both, and the
+      // listener hears nothing of it.
+      const unverifiable = check.verification === null || check.verification.verdict === 'unverified'
+      if (!reloaded && result.outcome === 'aligned' && unverifiable && hooks.reloadForCheck()) {
+        checkThisLoad(key, audioUrl, result, hooks, firstReport, true)
+        return
+      }
+      hooks.release()
+    }
     publish(key, { ...IDLE, status: 'done', report: result, check, applied })
     report(result, check, 0, applied)
     keepChecking(key, audioUrl, result, check, hooks)
-  }, CHECK_SETTLE_MS)
+  }
+
+  // Without a shifted copy there is no map to wait for: a held start plays now.
+  if (result.outcome !== 'aligned') hooks.release()
+
+  setTimeout(() => {
+    if (superseded()) {
+      if (firstReport) report(result, null, 0, false)
+      return
+    }
+    const early = checkPlay(audioUrl, result)
+    const verdict = early.verification?.verdict
+    if (verdict === 'verified' || verdict === 'mismatch') {
+      conclude(early)
+      return
+    }
+    setTimeout(() => {
+      // Superseded by a newer load of the same audio, or by another source
+      // (the listener moved on within the settle delay). There is nothing
+      // left to check this alignment against, and checking it against the
+      // replacement would be wrong; the outcome is still reported, with the
+      // check unknown.
+      if (superseded()) {
+        if (firstReport) report(result, null, 0, false)
+        return
+      }
+      conclude(checkPlay(audioUrl, result))
+    }, CHECK_SETTLE_MS - CHECK_EARLY_MS)
+  }, CHECK_EARLY_MS)
 }
 
 function startAttempt(
@@ -228,6 +277,7 @@ function startAttempt(
   const fail = () => {
     worker.terminate()
     publish(key, { ...IDLE, status: 'done' })
+    hooks.release()
   }
   worker.onerror = fail
   worker.onmessage = (event: MessageEvent<DriftWorkerMessage>) => {
@@ -291,6 +341,8 @@ export function useDriftAlignment({
 
   const isPlaying = player.isPlaying
   const applyTimeline = player.applyTimeline
+  const releaseTimelineHold = player.releaseTimelineHold
+  const reloadHeldForCheck = player.reloadHeldForCheck
   useEffect(() => {
     if (!key || !isPlaying) return
     // A refetched transcript is a new object, but the attempt is keyed on
@@ -308,6 +360,10 @@ export function useDriftAlignment({
       // The player refuses unless this episode's audio is still what it is
       // playing, so a late verdict can never touch another source.
       apply: (timeline) => (episodeId ? applyTimeline(episodeId, audioUrl, timeline) : false),
+      release: () => {
+        if (episodeId) releaseTimelineHold(episodeId, audioUrl)
+      },
+      reloadForCheck: () => (episodeId ? reloadHeldForCheck(episodeId, audioUrl) : false),
     }
     const earlier = attempts.get(key)
     if (earlier) {
@@ -348,7 +404,33 @@ export function useDriftAlignment({
       },
       hooks,
     )
-  }, [key, isPlaying, transcript, generation, audioUrl, podcastSlug, episodeSlug, episodeId, applyTimeline])
+  }, [
+    key,
+    isPlaying,
+    transcript,
+    generation,
+    audioUrl,
+    podcastSlug,
+    episodeSlug,
+    episodeId,
+    applyTimeline,
+    releaseTimelineHold,
+    reloadHeldForCheck,
+  ])
+
+  // Spec #116 — tell the player whether a start from a transcript time
+  // should wait for a map. Yes while one may still come: the episode has a
+  // track and this browser can align, and no check of the current load has
+  // ended without a map. A new load of the audio clears that verdict.
+  const canAlign = enabled && Boolean(generation) && typeof Worker !== 'undefined'
+  const concludedWithoutMap =
+    state.status === 'done' && !state.applied && (state.report?.outcome !== 'aligned' || state.check !== null)
+  const expectMap = canAlign && !concludedWithoutMap
+  useEffect(() => {
+    if (!episodeId) return
+    setTimelineExpected(episodeId, expectMap && !saveData())
+    return () => setTimelineExpected(episodeId, false)
+  }, [episodeId, expectMap])
 
   return state
 }
