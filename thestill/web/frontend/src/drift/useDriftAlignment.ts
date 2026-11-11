@@ -315,6 +315,21 @@ export function useDriftAlignment({
       const load = currentAudioLoad()
       if (earlier.status === 'done' && earlier.report && load?.url === audioUrl && checkedLoads.get(key) !== load.t) {
         checkThisLoad(key, audioUrl, earlier.report, hooks, false)
+      } else if (
+        earlier.status === 'done' &&
+        earlier.report &&
+        earlier.check &&
+        !earlier.applied &&
+        load?.url === audioUrl
+      ) {
+        // Same load, verified, but the player refused the map when it was
+        // offered: the listener was on the YouTube player or the video
+        // rendition at that moment. This effect runs again once the audio
+        // is what is playing, so offer it again.
+        if (settleTimeline(earlier.report, earlier.check, hooks.apply)) {
+          publish(key, { ...earlier, applied: true })
+          hooks.report(earlier.report, earlier.check, MAX_REVISIONS + 1, true)
+        }
       }
       return
     }

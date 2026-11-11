@@ -393,6 +393,36 @@ describe('a play is checked again as later ranges arrive', () => {
     expect((bodies()[0] as Body & { applied: boolean }).applied).toBe(false)
   })
 
+  it('offers a verified map again once the audio is what is playing', () => {
+    // The listener was on the YouTube player when the check finished, so
+    // the player refused the map; back on audio, the same load is still
+    // verified and the map goes in.
+    player.applyTimeline.mockImplementation(() => false)
+    const { result, rerender } = play()
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(result.current.applied).toBe(false)
+
+    Object.assign(player, { activeEngine: 'youtube' })
+    rerender()
+    expect(result.current.status).toBe('idle')
+
+    player.applyTimeline.mockImplementation(() => true)
+    Object.assign(player, { activeEngine: 'native' })
+    rerender()
+    expect(result.current.applied).toBe(true)
+    expect(player.applyTimeline.mock.calls.at(-1)?.[2]).not.toBeNull()
+    const last = bodies().at(-1) as Body & { applied: boolean }
+    expect([last.outcome, last.applied, last.revision > 0]).toEqual(['aligned', true, true])
+    // No second download, and no repeat on a later re-render.
+    expect(FakeWorker.instances).toHaveLength(1)
+    const reports = bodies().length
+    rerender()
+    expect(bodies()).toHaveLength(reports)
+  })
+
   it('stops when another source is loaded', () => {
     const { result } = play()
     recordMediaReport(range())
