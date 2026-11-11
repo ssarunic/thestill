@@ -32,8 +32,8 @@ if TYPE_CHECKING:
 
 TRANSCRIPT_EDIT = "transcript.edit"
 #: Spec #116 Phase 2 — the reader may align the transcript with the
-#: listener's copy of the audio. A rollout switch as much as a permission:
-#: nobody holds it unless ``DRIFT_ALIGNMENT_ENABLED`` is on.
+#: listener's copy of the audio. Also the kill switch: nobody holds it when
+#: ``DRIFT_ALIGNMENT_ENABLED`` is set to false (it is on by default).
 DRIFT_ALIGN = "drift.align"
 
 #: Every named permission, in the order ``/api/auth/status`` lists them.
