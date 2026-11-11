@@ -26,6 +26,7 @@ Features:
 """
 
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -51,6 +52,22 @@ DEFAULT_TIMEOUT = 120.0
 # Polling configuration
 POLL_INTERVAL = 5.0  # seconds between polls
 MAX_POLL_DURATION = 7200  # 2 hours max wait
+
+
+@contextmanager
+def _quiet_loggers(*names: str):
+    """Raise the named stdlib loggers to WARNING for the duration of the block."""
+    import logging
+
+    loggers = [logging.getLogger(name) for name in names]
+    previous = [logger_.level for logger_ in loggers]
+    for logger_ in loggers:
+        logger_.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        for logger_, level in zip(loggers, previous):
+            logger_.setLevel(level)
 
 
 def iter_job_audio(
@@ -84,13 +101,17 @@ def iter_job_audio(
         response.raise_for_status()
         signed_url = response.json()["url"]
         total = 0
-        with client.stream("GET", signed_url) as audio:
-            audio.raise_for_status()
-            for chunk in audio.iter_bytes(chunk_size):
-                total += len(chunk)
-                if max_bytes is not None and total > max_bytes:
-                    raise ValueError(f"job audio exceeds {max_bytes} bytes")
-                yield chunk
+        # httpx logs every request URL at INFO (httpcore at DEBUG). This one
+        # is a presigned URL: its query string is a credential, valid for an
+        # hour. Keep it out of the logs for the duration of the download.
+        with _quiet_loggers("httpx", "httpcore"):
+            with client.stream("GET", signed_url) as audio:
+                audio.raise_for_status()
+                for chunk in audio.iter_bytes(chunk_size):
+                    total += len(chunk)
+                    if max_bytes is not None and total > max_bytes:
+                        raise ValueError(f"job audio exceeds {max_bytes} bytes")
+                    yield chunk
 
 
 class DalstonTranscriber(Transcriber):
