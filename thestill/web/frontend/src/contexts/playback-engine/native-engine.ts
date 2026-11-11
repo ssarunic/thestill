@@ -226,11 +226,14 @@ export class NativeEngine implements PlaybackEngine {
     // A map belongs to one verified load of one copy.
     this.timeline = null
     if (!(sameSource && opts?.holdForTimeline)) this.pendingTranscriptTime = null
-    if (opts?.holdForTimeline && opts.seekTo != null) {
+    const useHls = needsHlsJs(this.el, source.url, source.mimeType)
+    // Never for an HLS stream: no map can be made for one.
+    if (opts?.holdForTimeline && opts.seekTo != null && !useHls) {
       if (this.hold) this.hold.transcriptTime = opts.seekTo
       else this.beginHold(opts.seekTo)
+    } else if (this.hold) {
+      this.endHold(false)
     }
-    const useHls = needsHlsJs(this.el, source.url, source.mimeType)
     // The attribute must be in place before the source is assigned.
     if (source.crossOrigin && !useHls) {
       this.el.crossOrigin = 'anonymous'
@@ -341,7 +344,10 @@ export class NativeEngine implements PlaybackEngine {
     // An explicit seek supersedes a deferred one (a resume position queued
     // for loadedmetadata), or metadata would jump back to it.
     this.pendingSeek = null
-    if (this.timeline === null && options?.holdForTimeline && this.url !== null) {
+    // Never for an HLS stream: no map can be made for one (setTimeline
+    // refuses it), so a hold would only be ten seconds of silence.
+    const canHold = this.url !== null && this.hls === null && this.hlsAttach === null
+    if (this.timeline === null && options?.holdForTimeline && canHold) {
       if (this.hold) this.hold.transcriptTime = Math.max(0, seconds)
       else this.beginHold(Math.max(0, seconds))
     } else {

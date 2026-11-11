@@ -422,7 +422,9 @@ export function useDriftAlignment({
   // should wait for a map. Yes while one may still come: the episode has a
   // track and this browser can align, and no check of the current load has
   // ended without a map. A new load of the audio clears that verdict.
-  const canAlign = enabled && Boolean(generation) && typeof Worker !== 'undefined'
+  // Not for an HLS stream (once this episode is the one playing and its
+  // asset is known): the alignment never runs for one.
+  const canAlign = enabled && Boolean(generation) && typeof Worker !== 'undefined' && !(playingThis && isHls)
   const concludedWithoutMap =
     state.status === 'done' && !state.applied && (state.report?.outcome !== 'aligned' || state.check !== null)
   const expectMap = canAlign && !concludedWithoutMap

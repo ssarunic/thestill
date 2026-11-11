@@ -479,6 +479,19 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(isTimelineExpected('ep-1')).toBe(false)
   })
 
+  it('expects no map for an HLS stream', () => {
+    Object.assign(player, {
+      track: {
+        episodeId: 'ep-1',
+        audioUrl: 'x',
+        playback: { kind: 'audio', audio: { url: 'https://h/x.m3u8', mime_type: 'application/vnd.apple.mpegurl' } },
+      },
+    })
+    renderHook(() => useDriftAlignment(props()))
+    // Otherwise a paragraph click would be ten seconds of silence for nothing.
+    expect(isTimelineExpected('ep-1')).toBe(false)
+  })
+
   it('stops expecting a map once a check has ended without one', () => {
     // Identical audio: nothing to correct, so no click should ever wait.
     const identity = play()
