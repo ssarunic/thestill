@@ -907,11 +907,13 @@ or seek that comes from a transcript time (a paragraph, a citation, a
 chapter mark, a result that carries a time) is *held* while a map is
 expected and not yet in force:
 
-- the element plays muted, so the click still counts as the listener's
-  gesture and nothing wrong is heard; the player shows its loading state;
+- the element waits paused, so nothing wrong is heard; the player shows
+  playback as started and loading. Inside the click the element is
+  started and paused at once, which is what lets Safari accept the real
+  start later, outside the gesture;
 - when the map goes in, the element moves to `toAsset` of the time that
-  was asked for and the mute is lifted. The listener's own mute setting is
-  untouched and given back;
+  was asked for and playback starts. If the browser refuses that start
+  the player shows Play, already on the right words;
 - if no map is coming (identical copy, no CORS, low confidence, a failed
   check) the hold ends at once and playback starts at the asked-for time,
   uncorrected, as before. The wait is capped at 10 s;
@@ -1026,18 +1028,36 @@ reported three spans (0 s, +1.907 s, −30.798 s); a click on the 18:50
 paragraph played the 19:20 one, as the last span predicts.
 
 **Browser allow-list (2026-11-11).** `src/drift/support.ts` lets the
-feature run only in desktop Chromium browsers (Chrome, Edge), the one
-place the whole chain has been verified end to end. Everywhere else the
-permission counts as not held: no service worker (an installed one is
-removed), no `crossorigin` loading, no held start, no map. v1.40.0 to
-v1.42.0 ran it in every browser; in Safari, with a map applied and
-verified, playback restarted from the beginning on every seek. The cause
-is not known: it could not be reproduced outside real Safari (Playwright's
-WebKit mis-seeks this kind of file even without any of this code), and
-the Safari check of Phase 0 only counted `seeked` events and compared
-bytes, never where playback ended up. A browser is added to the list
-after a check in that browser that seeks, plays on, and reads back the
-position.
+feature run only where the whole chain has been verified end to end:
+desktop Chromium browsers (Chrome, Edge) and desktop Safari. Everywhere
+else the permission counts as not held: no service worker (an installed
+one is removed), no `crossorigin` loading, no held start, no map. A
+browser is added to the list after a check in that browser that seeks,
+plays on, and reads back the position. Playwright's WebKit cannot stand
+in for Safari: it mis-seeks this kind of file even without any of this
+code. A local build with `VITE_DRIFT_ANY_BROWSER=1` runs the feature in
+any browser, for such a check.
+
+**What went wrong in Safari (v1.40.0 to v1.42.0).** Two faults of
+Safari's media element, both ending the same way: it reports the
+position it is at as the duration and fires `ended`, after which every
+seek is clamped to that point and Play restarts from 0.
+
+- *Muted playback.* Safari cannot play an audio-only file muted or at
+  volume 0 in a `<video>` element; it ends it at once. The held start of
+  v1.42.0 waited muted. It now waits paused (above). A volume of 0.001
+  also works, and was not chosen: it still plays the wrong audio.
+- *A seek and a play together on an ended element.* After the file has
+  really ended, seeking back and calling `play()` in the same task ends
+  it again on the spot. The engine now starts playback once `seeked` has
+  fired. This one does not need the feature at all.
+
+As a net under both, the engine does not believe an end that comes on
+the spot of the last seek, more than 2 s short of a duration the same
+source reported earlier: it reloads the source at that position, once
+per place. In the Safari 27.2 check of 2026-11-11 (a Megaphone episode
+through podtrac, 13 s of shift, clicks before and after the end of the
+file) the net was never needed.
 
 Rollout: admins only, then per browser. Standalone browser probes stop
 here; the remaining questions (Safari on iOS, Firefox, more plays on

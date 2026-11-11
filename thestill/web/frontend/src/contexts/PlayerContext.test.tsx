@@ -407,15 +407,19 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
 
     expect(ctx.timelineHold).toBe(true)
     expect(ctx.isLoading).toBe(true) // the same spinner as buffering
-    expect(stateFor(video).muted).toBe(true)
-    expect(ctx.muted).toBe(false) // the listener did not mute anything
+    // Paused underneath, never muted (Safari ends muted audio at once);
+    // for the listener playback has started.
+    expect(stateFor(video).paused).toBe(true)
+    expect(stateFor(video).muted).toBe(false)
+    expect(ctx.isPlaying).toBe(true)
     expect(stateFor(video).currentTime).toBe(30)
 
     act(() => {
       ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
     })
     expect(stateFor(video).currentTime).toBe(39)
-    expect(stateFor(video).muted).toBe(false)
+    expect(stateFor(video).paused).toBe(false)
+    expect(ctx.isPlaying).toBe(true)
     expect(ctx.timelineHold).toBe(false)
     expect(ctx.getCurrentTime()).toBe(30)
   })
@@ -428,15 +432,17 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
 
     act(() => ctx.seek(12)) // the scrubber: a position in the audio
     expect(ctx.timelineHold).toBe(false)
-    expect(stateFor(video).muted).toBe(false)
+    expect(stateFor(video).paused).toBe(false)
 
     act(() => ctx.seek(30, { transcript: true })) // a paragraph
     expect(ctx.timelineHold).toBe(true)
-    expect(stateFor(video).muted).toBe(true)
+    expect(stateFor(video).paused).toBe(true)
+    expect(ctx.isPlaying).toBe(true)
     act(() => {
       ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
     })
     expect(stateFor(video).currentTime).toBe(39)
+    expect(stateFor(video).paused).toBe(false)
 
     // With the map in force a click needs no waiting.
     act(() => ctx.seek(100, { transcript: true }))
@@ -459,7 +465,8 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
 
     act(() => ctx.play(other, { startAt: 30 }))
     expect(ctx.timelineHold).toBe(true)
-    expect(stateFor(video).muted).toBe(true)
+    expect(stateFor(video).paused).toBe(true)
+    expect(ctx.isPlaying).toBe(true)
     expect(ctx.timelineApplied).toBe(false)
   })
 
@@ -469,7 +476,7 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
     act(() => ctx.play(audioTrack, { startAt: 30 }))
     loaded(video)
     expect(ctx.timelineHold).toBe(false)
-    expect(stateFor(video).muted).toBe(false)
+    expect(stateFor(video).paused).toBe(false)
     act(() => ctx.seek(40, { transcript: true }))
     expect(ctx.timelineHold).toBe(false)
   })
@@ -478,12 +485,11 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
     const { video } = renderPlayer()
     act(() => ctx.play(audioTrack, { startAt: 30 }))
     loaded(video)
-    stateFor(video).currentTime = 34 // it ran on, unheard
     act(() => ctx.releaseTimelineHold('ep-other', audioTrack.audioUrl))
     expect(ctx.timelineHold).toBe(true)
     act(() => ctx.releaseTimelineHold('ep-audio', audioTrack.audioUrl))
     expect(ctx.timelineHold).toBe(false)
-    expect(stateFor(video).muted).toBe(false)
+    expect(stateFor(video).paused).toBe(false)
     expect(stateFor(video).currentTime).toBe(30)
   })
 
@@ -504,7 +510,7 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
     expect(video.getAttribute('crossorigin')).toBe('anonymous')
     expect(playSpy).toHaveBeenCalledTimes(1)
     expect(ctx.timelineHold).toBe(true) // still silent
-    expect(stateFor(video).muted).toBe(true)
+    expect(stateFor(video).paused).toBe(true)
 
     // Nothing to reload when nothing is held.
     act(() => ctx.releaseTimelineHold('ep-audio', audioTrack.audioUrl))
