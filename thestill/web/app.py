@@ -67,6 +67,7 @@ from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
 from ..services.platform_link_service import PlatformLinkService
 from ..services.refresh_on_open import RefreshOnOpenService
+from ..services.sync_track_service import SyncTrackService
 from ..services.transcript_edit_service import TranscriptEditService
 from ..utils.config import (
     Config,
@@ -448,6 +449,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_delivery_repository=briefing_delivery_repository,
         briefing_delivery_service=briefing_delivery_service,
         pending_ops_repository=pending_ops_repository,
+        sync_track_service=SyncTrackService(config, repos.sync_track),
         platform_link_service=platform_link_service,
         entity_repository=entity_repository,
         link_decision_repository=repos.link_decision,

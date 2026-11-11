@@ -53,6 +53,46 @@ POLL_INTERVAL = 5.0  # seconds between polls
 MAX_POLL_DURATION = 7200  # 2 hours max wait
 
 
+def iter_job_audio(
+    job_id: str,
+    *,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    max_bytes: Optional[int] = None,
+    timeout: float = 120.0,
+    chunk_size: int = 1 << 20,
+):
+    """Stream the original audio Dalston stored for a completed job.
+
+    Spec #116: with URL fetch, Thestill never sees the bytes that were
+    transcribed. Dalston keeps them (30 days by default) and hands out a
+    presigned URL at ``GET /v1/audio/transcriptions/{job_id}/audio``. The
+    presigned URL is fetched without the API key.
+
+    Raises ``httpx.HTTPError`` on a failed request (404 unknown job, 410
+    audio purged) and ``ValueError`` when the audio exceeds ``max_bytes``.
+    """
+    import os
+
+    import httpx
+
+    base = (base_url or os.getenv("DALSTON_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    key = api_key or os.getenv("DALSTON_API_KEY") or None
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        response = client.get(f"{base}/v1/audio/transcriptions/{job_id}/audio", headers=headers)
+        response.raise_for_status()
+        signed_url = response.json()["url"]
+        total = 0
+        with client.stream("GET", signed_url) as audio:
+            audio.raise_for_status()
+            for chunk in audio.iter_bytes(chunk_size):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise ValueError(f"job audio exceeds {max_bytes} bytes")
+                yield chunk
+
+
 class DalstonTranscriber(Transcriber):
     """
     Dalston Speech-to-Text transcriber using the official SDK.

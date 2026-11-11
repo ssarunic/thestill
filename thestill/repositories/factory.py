@@ -47,6 +47,7 @@ from .podcast_follower_repository import PodcastFollowerRepository
 from .public_page_view_repository import PublicPageViewRepository
 from .settings_repository import SettingsRepository
 from .suspended_follow_repository import SuspendedFollowRepository
+from .sync_track_repository import SyncTrackRepository
 from .transcript_edit_repository import TranscriptEditRepository
 from .usage_event_repository import UsageEventRepository
 from .user_directory_repository import UserDirectoryRepository
@@ -151,6 +152,8 @@ class RepositoryBundle:
     public_page_view: PublicPageViewRepository
     # Spec #111: reader-local days with a successful connector call.
     connector_day: ConnectorDayRepository
+    # Spec #116: which sync track file describes each episode's transcript.
+    sync_track: SyncTrackRepository
     # Spec #104: runtime switches, the admin audit log, a banned user's
     # follows moved aside, and the operator's cross-user listing.
     settings: SettingsRepository
@@ -191,6 +194,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
         from .postgres_settings_repository import PostgresSettingsRepository
         from .postgres_suspended_follow_repository import PostgresSuspendedFollowRepository
+        from .postgres_sync_track_repository import PostgresSyncTrackRepository
         from .postgres_transcript_edit_repository import PostgresTranscriptEditRepository
         from .postgres_usage_event_repository import PostgresUsageEventRepository
         from .postgres_user_directory_repository import PostgresUserDirectoryRepository
@@ -217,6 +221,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             episode_view=PostgresEpisodeViewRepository(dsn),
             public_page_view=PostgresPublicPageViewRepository(dsn),
             connector_day=PostgresConnectorDayRepository(dsn),
+            sync_track=PostgresSyncTrackRepository(dsn),
             settings=PostgresSettingsRepository(dsn),
             audit_log=PostgresAuditLogRepository(dsn),
             suspended_follow=PostgresSuspendedFollowRepository(dsn),
@@ -246,6 +251,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
     from .sqlite_settings_repository import SqliteSettingsRepository
     from .sqlite_suspended_follow_repository import SqliteSuspendedFollowRepository
+    from .sqlite_sync_track_repository import SqliteSyncTrackRepository
     from .sqlite_transcript_edit_repository import SqliteTranscriptEditRepository
     from .sqlite_usage_event_repository import SqliteUsageEventRepository
     from .sqlite_user_directory_repository import SqliteUserDirectoryRepository
@@ -272,6 +278,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
         public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
         connector_day=SqliteConnectorDayRepository(db_path=db_path),
+        sync_track=SqliteSyncTrackRepository(db_path=db_path),
         settings=SqliteSettingsRepository(db_path=db_path),
         audit_log=SqliteAuditLogRepository(db_path=db_path),
         suspended_follow=SqliteSuspendedFollowRepository(db_path=db_path),
