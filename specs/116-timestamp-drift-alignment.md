@@ -1,8 +1,8 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 📝 Draft (2026-11-10); Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
+> **Status:** 🚧 Phase 1a implemented on `feat/116-phase1-sync-track` (2026-11-11): tracks are written at transcription. Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
 > **Created:** 2026-11-10
-> **Updated:** 2026-11-10
+> **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
 > summary citations, chapters, clips) lands in the wrong place on any
 > episode whose ads changed since transcription. Today the reader only
@@ -225,7 +225,7 @@ One binary artefact per episode, written once, never changed:
 | Field | Content |
 |---|---|
 | Header | algorithm version, transcript generation, codec, sample rate, frame count, byte length, duration of the transcribed copy |
-| Frame anchors | one per second: frame index (4 bytes) + hash of 4 consecutive compressed frames (6 bytes) |
+| Frame anchors | one per second: start time in milliseconds (4 bytes) + digest of 4 consecutive compressed frames (6 bytes) |
 | Base spans (Phase 5 only) | a short list of `{src_start, src_end, offset}` mapping transcript time onto the copy the anchors were taken from; empty when that copy is the transcribed one |
 | Perceptual track (Phase 3, flagged shows only) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
 
@@ -240,6 +240,18 @@ Rules for frame anchors:
   applies.
 
 At 10 bytes per anchor a one-hour episode is 36 KB before compression.
+
+The digest uses only CRC-32 and Adler-32, so the browser can compute the
+same value without a crypto library and each byte is hashed once:
+
+- frame digest: `crc32(frame)` and `adler32(frame)`, unsigned 32 bit;
+- anchor digest over four consecutive frames: pack the eight values
+  little-endian (crc, adler per frame, in order), then
+  `crc32(packed) << 16 | (adler32(packed) & 0xFFFF)`, 48 bits.
+
+An anchor stores a time, not a frame index, because a spliced file can
+mix sample rates. The binary layout is defined by `SyncTrack.to_bytes`
+in [sync_track.py](../thestill/core/sync_track.py).
 
 The track is written for every episode, including shows that have never
 carried ads. A publisher can switch on ad insertion for a back catalogue
@@ -281,36 +293,50 @@ There are two paths to those bytes:
 In both paths:
 
 - A track and the raw transcript it describes form one **generation**,
-  identified by the id of the transcribe task that produced that
-  transcript. The generation is in the track header and in its path,
-  written through `PathManager`
+  a random id minted when the track is built. The generation is in the
+  track header and in its path, written through `PathManager`
   (`sync_tracks/<podcast>/<episode>.<generation>.sync`).
-- A track built before its transcript exists (the local path builds it
-  at download) is written as pending and is not visible to readers.
-  When the transcribe task succeeds, the new raw transcript and
-  `sync_track_path` are switched together: to the pending track built
-  from the same bytes, or to null if none was built. The previous
-  generation's track is deleted after the switch.
-- Until that switch the old transcript keeps its old track, so a
-  reprocess that is running or failed never pairs a transcript with a
-  track built from other bytes. A reprocess that cannot rebuild the
-  track leaves the new transcript with none.
+- A track built before its transcript is stored (the local path builds
+  it at download) is **pending** and is not visible to readers. When
+  the transcribe task has stored the raw transcript it **publishes**:
+  the pending track becomes the episode's current one and the previous
+  one is deleted. With no pending track the previous one is deleted
+  anyway, because the transcript it described has just been replaced.
+- Publishing checks that track and transcript describe the same audio:
+  on the local path the track's duration must equal the measured
+  duration of the transcribed file within 2 s, and on every path no
+  transcribed segment may end after the track's audio does. A track
+  that fails is discarded and logged as
+  `sync_track_transcript_mismatch`.
+- **The cleaned transcript records its track.** Readers see the cleaned
+  transcript, and during a reprocess the old cleaned transcript stays
+  visible while the episode's current track already belongs to the new
+  raw transcript. The clean stage therefore stamps
+  `sync_track_generation` into the cleaned transcript, and a reader
+  uses a track only when its generation equals that stamp. In the
+  window between re-transcribing and re-cleaning the two differ, so no
+  correction is applied.
 - A failure logs `sync_track_failed` with `episode_id` and does not fail
   the stage. The episode simply has no track.
 - Non-MP3 enclosures get no frame anchors until Phase 3.
 
-Schema: one nullable column `episodes.sync_track_path`, added by an
-Alembic migration for both SQLite and Postgres. Phase 5 adds
-`episodes.sync_track_status`.
+Schema: a table `episode_sync_tracks` (Alembic 0028, SQLite and
+Postgres), not a column on `episodes`. One row per stored track:
+`episode_id`, `generation`, `state` (`pending` or `current`, at most one
+of each per episode), `path`, `source`, `frames`, `anchors`,
+`audio_bytes`, `audio_duration_s`, `created_at`. A separate table keeps
+the pending/current bookkeeping out of the episode row's many write
+paths and deletes with the episode. Phase 5 adds its status here.
 
 ### 3. API
 
 `GET /api/episodes/{id}/sync-track/{generation}` returns the artefact as
 `application/octet-stream` with `Cache-Control: immutable`, or 404 when
 that generation is not the episode's current one. It has the same
-visibility as the transcript. The episode payload gains
-`sync_track_generation: string | null` (null when there is no track) so
-the client does not probe. Because the generation is in the URL, an
+visibility as the transcript. The transcript payload carries
+`sync_track_generation: string | null`, the stamp of the cleaned
+transcript (section 2), and only when it equals the current track's
+generation; otherwise null, so the client does not probe. Because the generation is in the URL, an
 immutable cached track can never accompany a newer transcript.
 
 ### 4. Client: build the map
@@ -349,7 +375,11 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 5. **Fit.** Each hit gives one offset sample: listener frame index minus
    transcribed frame index. The fitter keeps a run only when at least 5
    consecutive anchors agree on the same offset, and drops isolated
-   hits. The result is a list of spans `{src_start, src_end, offset}`.
+   hits. The same audio can occur twice in a listener's copy (two of
+   the five measured pairs had a promo played both early and late), so
+   runs can overlap in source time; the fitter keeps the heaviest chain
+   of runs that moves forward in both copies. The result is a list of
+   spans `{src_start, src_end, offset}`.
    Missing anchors are not evidence of an ad, so each source-side
    interval between two spans is then refined and classified:
 
@@ -644,13 +674,26 @@ Art19. Phase 1 does not depend on any of these and can start.
 
 | # | Where | What |
 |---|---|---|
-| 1.1 | `thestill/core/sync_track.py` (new) | MP3 frame parser, anchor selection, binary writer and reader |
-| 1.2 | `thestill/core/task_handlers.py` | local path: write a pending track after download, before audio cleanup; switch transcript and track together when the transcribe task succeeds |
-| 1.2b | `thestill/core/dalston_transcriber.py`, transcribe handler | Dalston URL path: after the job completes, stream the job's stored original (signed URL from Dalston's audio endpoint) through the frame parser |
-| 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
-| 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` |
+| 1.1 ✅ | `thestill/core/sync_track.py` | MP3 frame parser, anchor selection, binary writer and reader, and the server-side aligner |
+| 1.2 ✅ | `thestill/core/task_handlers.py`, `thestill/services/sync_track_service.py` | local path: pending track after download; publish when the transcribe task has stored the transcript; clean stage stamps the generation |
+| 1.2b ✅ | `thestill/core/dalston_transcriber.py`, transcribe handler | Dalston URL path: after the job completes, stream the job's stored original (signed URL from Dalston's audio endpoint) through the frame parser |
+| 1.3 ✅ | `thestill/utils/path_manager.py`, migration 0028, repositories | `sync_tracks/` directory, `episode_sync_tracks` table |
+| 1.6 ✅ | `thestill/services/sync_track_service.py` | events of section 7.1, including the track/transcript invariant |
+| 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` in the transcript payload |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
-| 1.6 | `thestill/core/sync_track.py` | events of section 7.1, including the track/transcript duration invariant |
+| 1.7 | `thestill/cli.py` | `thestill sync-track --recent` backfill and `show` |
+
+Rows marked ✅ are Phase 1a. It writes tracks and nothing reads them
+yet. `SYNC_TRACKS_ENABLED=false` stops new tracks. Only episodes
+processed by the task worker get a track; the direct CLI commands
+(`thestill download`, `thestill transcribe`) do not.
+
+Checked on the five real episode pairs of the Background findings: the
+aligner returns the same offsets as the Haitsma-Kalker experiment
+(−40.725 s and −72.803 s on Today in Focus, +10.005 s on The News
+Agents, +28.824 s on No Such Thing As A Fish), with zero hits against a
+re-encoded copy. Building a track took 0.2–0.9 s per episode and
+aligning 0.2–0.8 s. Tracks were 14–43 KB.
 
 Acceptance: a contract test that builds a track from a fixture MP3,
 splices a second MP3 into a copy of it at two points, and recovers both

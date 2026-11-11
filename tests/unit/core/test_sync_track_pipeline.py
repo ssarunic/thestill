@@ -200,3 +200,55 @@ def test_download_leaves_a_pending_track_that_readers_cannot_see(env):
     assert pending.audio_bytes == len(AUDIO)
     assert env.service.current(EPISODE_ID) is None
     env.state.feed_manager.mark_episode_downloaded.assert_called_once()
+
+
+def _clean_kwargs(tmp_path, sync_track_service):
+    """Run handle_clean up to the cleaning call and return its arguments."""
+    from thestill.core.task_handlers import handle_clean
+
+    episode = MagicMock()
+    episode.id = EPISODE_ID
+    episode.raw_transcript_path = "the-show/ep_transcript.json"
+    podcast = MagicMock()
+    podcast.slug = "the-show"
+    podcast.language = "en"
+    state = MagicMock()
+    state.repository.get_episode.return_value = (podcast, episode)
+    state.transcript_edit_repository = None
+    state.sync_track_service = sync_track_service
+    state.path_manager.raw_transcript_file.return_value = Path("/data/raw/the-show/ep_transcript.json")
+    state.path_manager.clean_transcripts_dir.return_value = tmp_path
+    state.config.file_storage.read_text.return_value = "{}"
+    processor = MagicMock()
+    captured = {}
+
+    def stop(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after the call under test")
+
+    processor.clean_transcript.side_effect = stop
+    with (
+        patch("thestill.core.llm_provider.create_llm_provider_from_config"),
+        patch("thestill.core.transcript_cleaning_processor.TranscriptCleaningProcessor", return_value=processor),
+        pytest.raises(Exception),
+    ):
+        handle_clean(_task(TaskStage.CLEAN), state)
+    return captured
+
+
+def test_clean_stamps_the_generation_of_the_current_track(env, tmp_path):
+    _transcribe(env, _transcript(), lambda *a, **k: chunks(AUDIO))
+    generation = env.service.current(EPISODE_ID).generation
+
+    assert _clean_kwargs(tmp_path, env.service)["sync_track_generation"] == generation
+
+
+def test_clean_stamps_nothing_when_there_is_no_track(env, tmp_path):
+    assert _clean_kwargs(tmp_path, env.service)["sync_track_generation"] is None
+    assert _clean_kwargs(tmp_path, None)["sync_track_generation"] is None
+
+
+def test_clean_survives_a_broken_track_lookup(tmp_path):
+    broken = MagicMock()
+    broken.current.side_effect = RuntimeError("database is locked")
+    assert _clean_kwargs(tmp_path, broken)["sync_track_generation"] is None

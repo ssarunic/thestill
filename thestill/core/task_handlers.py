@@ -738,6 +738,19 @@ def handle_clean(task: Task, state: "AppState") -> None:
         cleaned_path = podcast_subdir / cleaned_filename
         clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
+        # Spec #116 — the sync track that describes the raw transcript being
+        # cleaned. Stamped into the cleaned transcript so readers never use
+        # a track cut from another download of the audio.
+        sync_track_generation = None
+        sync_tracks = getattr(state, "sync_track_service", None)
+        if sync_tracks is not None:
+            try:
+                current_track = sync_tracks.current(episode.id)
+                generation = getattr(current_track, "generation", None)
+                sync_track_generation = generation if isinstance(generation, str) else None
+            except Exception as exc:  # noqa: BLE001 — never fail cleaning over a sync track
+                logger.warning("sync_track_failed", episode_id=episode.id, reason="lookup_error", error=str(exc))
+
         # Clean transcript
         logger.info(f"Cleaning transcript with language: {podcast.language}")
         cleaning_result = cleaning_processor.clean_transcript(
@@ -752,6 +765,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
             path_manager=path_manager,
             language=podcast.language,
             refresh_episode_facts=bool((reprocess_options(task.metadata) or {}).get("refresh_episode_facts")),
+            sync_track_generation=sync_track_generation,
         )
 
         if not cleaning_result:
