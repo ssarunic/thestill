@@ -168,4 +168,30 @@ describe('NativeEngine timeline map', () => {
     next.seekTo(30)
     expect(t.elementTime()).toBe(47)
   })
+
+  it('keeps the audio’s own position and duration readable under a map', () => {
+    // What a saved listening position holds: a resume seeks before any map
+    // exists, so it must be a position in the audio itself.
+    const t = loaded()
+    t.engine.setTimeline(URL_A, timeline)
+    t.playTo(50)
+    expect(t.engine.getCurrentTime()).toBe(33)
+    expect(t.engine.getElementTime()).toBe(50)
+    expect(t.engine.getElementDuration()).toBe(63)
+  })
+
+  it('treats a resume position as a position in the audio', () => {
+    const t = makeEngine()
+    t.engine.load({ url: URL_A, crossOrigin: true }, { seekTo: 50 })
+    t.metadataLoaded(63)
+    expect(t.elementTime()).toBe(50)
+
+    // A late resume position (spec #90) arriving after a map is set.
+    const late = makeEngine()
+    late.engine.load({ url: URL_A, crossOrigin: true })
+    late.metadataLoaded(63)
+    late.engine.setTimeline(URL_A, timeline)
+    expect(late.engine.setPendingSeek(50)).toBe(true)
+    expect(late.elementTime()).toBe(50)
+  })
 })

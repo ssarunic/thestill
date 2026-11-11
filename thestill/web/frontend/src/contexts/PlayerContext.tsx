@@ -446,12 +446,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const port = useMemo<PlayerPort>(
     () => ({
       getTrack: () => trackRef.current,
+      // Spec #116 — the saved position is where the AUDIO is, also while a
+      // timeline map is in force (getElementTime): a resume seeks before
+      // any map exists, so only a position in the audio itself comes back
+      // to the same place when the copy is unchanged.
       getLogicalPosition: () => {
         if (engineKindRef.current === 'youtube') return Math.max(0, youtubeEngineRef.current?.getCurrentTime() ?? 0)
-        return Math.max(0, (nativeEngineRef.current?.getCurrentTime() ?? 0) - activeOffsetRef.current)
+        return Math.max(0, (nativeEngineRef.current?.getElementTime() ?? 0) - activeOffsetRef.current)
       },
       getLogicalDuration: () => {
-        const engineDuration = currentEngine()?.getDuration() ?? 0
+        const engineDuration =
+          (engineKindRef.current === 'youtube'
+            ? youtubeEngineRef.current?.getDuration()
+            : nativeEngineRef.current?.getElementDuration()) ?? 0
         if (!Number.isFinite(engineDuration) || engineDuration <= 0) return null
         const logical = engineKindRef.current === 'youtube' ? engineDuration : engineDuration - activeOffsetRef.current
         return logical > 0 ? logical : null
