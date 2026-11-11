@@ -468,9 +468,17 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
      compared: the browser check found them unreliable. The element's
      total is read without `Content-Range`: for an open-ended request
      (`bytes=N-`, Chrome) it is N plus the response's `Content-Length`;
-     for a closed request (`bytes=0-M`, Safari) it is M + 1 when the
-     response's `Content-Length` is also M + 1. A session that yields
-     neither has no length check and gets no map.
+     that is authoritative. A closed request (`bytes=A-M`, Safari)
+     proves only that the copy has at least M + 1 bytes, so it is used
+     differently. Safari's opening `bytes=0-1` request is ignored. Of
+     the element's other closed requests, any that ends at or beyond the
+     fetched length means a longer copy, and the map is discarded. The
+     lengths count as equal only when at least one of them ends exactly
+     at the fetched length minus one and none ends beyond it: Safari
+     ends its ranges at the last byte of the total it read from
+     `Content-Range`. A session that yields neither an authoritative
+     total nor that equality (for example a browser that asks for the
+     file in fixed chunks) has no length check and gets no map.
    - **Content.** Equal length does not prove equal content: two
      variants can carry breaks of different lengths that sum to the same
      total. A service worker reads the head of every response the
@@ -490,10 +498,22 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
      `sessionStorage` is restored with its digest and re-verified
      against the element's first response before it is applied.
 
-   Both checks need the element to load with `crossorigin="anonymous"`.
-   The attribute is set only after a probe `fetch()` of the URL has
-   succeeded, because an element with it fails to load on a host
-   without CORS. The worker must pass the original response through
+   Both checks need the element to load with `crossorigin="anonymous"`,
+   and an element with it fails to load on a host without CORS. The
+   attribute must be present before the element loads; changing it
+   reloads the audio. Playback never waits for that decision:
+
+   - The verdict is kept per final host of the redirect chain, in
+     `localStorage`, for 7 days: `cors_ok` or `no_cors`.
+   - A host with `cors_ok` loads with the attribute from the start.
+   - A host with no verdict loads without the attribute and plays as
+     today. A probe `fetch()` runs beside it with a 4 s timeout and
+     stores the verdict. That play gets no map and keeps the banner;
+     the next load of an episode from the host gets one.
+   - A host with `cors_ok` whose element then fails to load is reloaded
+     once without the attribute, and the verdict becomes `no_cors`.
+
+   The worker must pass the original response through
    unchanged. Desktop Chrome and desktop Safari both route media
    requests through the worker. Where the service worker is unavailable
    or does not see media requests (Firefox and iOS are not yet checked;
@@ -707,8 +727,8 @@ from the track header runs the full pass regardless of the profile.
 
 - **Redirect hop without CORS.** `fetch()` rejects; outcome `no_cors`.
   The host is remembered for the session so later episodes skip the
-  attempt. The rejection took up to 3.0 s in Safari, so the probe needs
-  a timeout, and whether playback waits for it is open question 7.
+  attempt. The rejection took up to 3.0 s in Safari, so the probe has a
+  4 s timeout and playback does not wait for it (section 4, step 6).
 - **Variable bit rate.** Frame parsing reads each header, so VBR is
   handled. Range offsets for the cheap check are estimates; a miss
   falls through to the full pass.
@@ -776,6 +796,9 @@ checks to pass before the flag is turned on for a browser.
 
 Rows marked ✅ are implemented (Phase 1a wrote the tracks; Phase 1b
 serves them and backfills). Nothing in the reader uses a track yet.
+Phase 1 is released on its own, ahead of Phase 2: an episode transcribed
+before the release has no track and can only be aligned by Phase 5, and
+the backfill reaches back only as far as Dalston still holds the audio.
 `SYNC_TRACKS_ENABLED=false` stops new tracks. Only episodes processed by
 the task worker get a track; the direct CLI commands (`thestill
 download`, `thestill transcribe`) do not.
@@ -853,6 +876,30 @@ need none of Phase 5.
 | 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome`: validates and logs `drift_map_reported`, updates the per-show ad profile (rate-limited, 4 KB cap) |
 | 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | server-side fitter sharing test vectors with the worker; `thestill sync-track audit` and `show`; scheduled audit sample |
 | 2.7 | `EpisodeReader.tsx` | admin-only `?driftdebug=1` strip |
+| 2.8 | `public/sw.js` (new), player | the service worker and its registration, under the rules below |
+
+Rows 2.4, 2.5 and 2.7 are built first, with the worker, so that every
+play reports its outcome from the first admin session.
+
+The service worker is the app's first. Its rules:
+
+- It answers only cross-origin requests whose destination is `audio` or
+  `video`, and returns the original response. Every other request is
+  left to the browser. It caches nothing and handles no navigation.
+- It is registered on the first play of an episode that has a track,
+  with the feature flag on, and takes control of the open page without
+  a reload. Signed-out visitors, public pages and crawlers never
+  register it.
+- `sw.js` is served from a fixed URL with `Cache-Control: no-cache`.
+  With the flag off, the app unregisters the worker on load.
+
+Rollout: admins only, then per browser. Standalone browser probes stop
+here; the remaining questions (Safari on iOS, Firefox, more plays on
+Acast and Art19, pass time on a phone) are answered by the outcome
+reports of real plays on thestill.me. A browser is switched on for
+everyone when its reports show no play in which the element's bytes
+differed from the fetched copy, over at least 50 plays on each of
+Megaphone, Acast and Art19.
 
 Acceptance: a Playwright test serves two spliced variants of one fixture
 and asserts that a segment click lands on the same audio in both. The
@@ -994,19 +1041,19 @@ with #110 Phase 4 and is not required here.
    Acceptable, or rely on client reports only? **Decided 2026-11-11:**
    client reports only; the probe is not built.
 7. **Where does `crossorigin` get decided?** The attribute must be on
-   the element before it loads, and changing it reloads the audio. The
-   probe `fetch()` that decides it returned in 0.2 s to 3.0 s when it
-   failed. Does the first play of a host wait for the probe (with what
-   timeout), or start without the attribute and get its map only on the
-   next load? A per-host result remembered across sessions would make
-   the wait a one-off.
+   the element before it loads, and the probe that decides it took up
+   to 3.0 s to fail. **Decided 2026-11-11:** playback never waits. The
+   verdict is remembered per host and applied from the next load
+   (section 4, step 6).
 8. **Other browsers.** Does a service worker see media requests in
    Safari on iOS and in Firefox, and how long does the full pass take on
-   a phone? Needed before the flag is on for those browsers, not before
-   Phase 2 is built.
+   a phone? **Decided 2026-11-11:** no further standalone probes; the
+   outcome reports of admin plays on thestill.me answer it, and each
+   browser is switched on separately (Phase 2, rollout).
 
 ## Rollback plan
 
-The client path is behind a feature flag; off restores the banner. The
+The client path is behind a feature flag; off restores the banner and
+unregisters the service worker on the next page load. The
 sync track is an inert file and a nullable column. Neither needs
 removal.
