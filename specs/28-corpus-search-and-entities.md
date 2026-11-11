@@ -1376,11 +1376,13 @@ Score: **7 of 20** affordances landed.
     page" link. No images in v1.
 
   **Right rail (desktop ≥ md breakpoint):**
-  - Sections in order: "People in this episode", "Companies
-    mentioned", "Related episodes".
-  - Persons sorted by `role='participant'` first (hosts/guests
-    surfaced from speaker diarisation/episode metadata), then
-    `mentioned`. Within each bucket sort by **salience** (see below)
+  - Sections in order: "In this episode", "People mentioned",
+    "Companies mentioned", "Related episodes".
+  - "In this episode" lists the people who take part (guests, then
+    hosts, then recurring voices, surfaced from speaker
+    diarisation/episode metadata), each with a role tag, no mention
+    count and no "Show all" fold. "People mentioned" lists everyone
+    else. Within each bucket sort by **salience** (see below)
     descending, not by raw mention count.
   - Each row shows entity name, mention count badge (`12×`), and a
     play-▷ affordance on hover that seeks `<FloatingPlayer/>` to the

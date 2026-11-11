@@ -212,6 +212,56 @@ class TestEpisodeEntitiesEndpoint:
         assert spacex["mention_count"] == 1  # only the ep_test_1 mention
         assert spacex["entity"]["type"] == "company"
 
+    def test_guest_sorts_ahead_of_host(self, client, app_state):
+        """The guest is what sets the episode apart; the host is on every one."""
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, _ = _seed_corpus(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("UPDATE podcasts SET host_entity_ids = ?", ('["company:spacex"]',))
+            conn.execute("UPDATE episodes SET guest_entity_ids = ?", ('["person:elon-musk"]',))
+            conn.commit()
+        finally:
+            conn.close()
+
+        entities = client.get(f"/api/episodes/{episode_id}/entities").json()["entities"]
+        assert [(e["entity"]["id"], e["speaker_kind"]) for e in entities] == [
+            ("person:elon-musk", "guest"),
+            ("company:spacex", "host"),
+        ]
+        # A guest anchor is per episode: the guest is on it.
+        assert entities[0]["takes_part"] is True
+
+    def test_show_host_takes_part_only_when_a_segment_is_theirs(self, client, app_state):
+        """A host anchor is per show. A host who is only talked about in an
+        episode is not on it; one with a ``speaking`` mention is."""
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, _ = _seed_corpus(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("UPDATE podcasts SET host_entity_ids = ?", ('["person:elon-musk"]',))
+            conn.commit()
+        finally:
+            conn.close()
+
+        def musk() -> dict:
+            entities = client.get(f"/api/episodes/{episode_id}/entities").json()["entities"]
+            return next(e for e in entities if e["entity"]["id"] == "person:elon-musk")
+
+        assert (musk()["speaker_kind"], musk()["takes_part"]) == ("host", False)
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE entity_mentions SET role = 'speaking' WHERE id = "
+                "(SELECT MIN(id) FROM entity_mentions WHERE entity_id = 'person:elon-musk' AND episode_id = ?)",
+                (episode_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        assert (musk()["speaker_kind"], musk()["takes_part"]) == ("host", True)
+
     def test_min_confidence_drops_low_confidence_mentions(self, client, app_state):
         _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
 

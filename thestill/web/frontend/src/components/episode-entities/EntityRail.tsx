@@ -1,16 +1,16 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { EpisodeEntity, EntityType, RelatedEpisode } from '../../api/types'
+import type { EpisodeEntity, EntityType, RelatedEpisode, SpeakerKind } from '../../api/types'
 import { entityStyle } from '../../utils/entityColors'
 import { useBackgroundLocation } from '../../hooks/useBackgroundLocation'
 import { useIsSmUp } from '../../hooks/useMediaQuery'
 import EntityHighlight from './EntityHighlight'
 import { NO_SEGMENT, synthesizeIndexMention } from './indexMention'
 
-// Spec #28 §5.2 right rail (desktop ≥ md). "People in this episode",
-// "Companies mentioned", "Related episodes". Hosts/guests/recurring
-// surfaced first within the People bucket; salience desc within
-// each bucket. Affordance #4: play-▷ on hover seeks to the first
+// Spec #28 §5.2 right rail (desktop ≥ md). "In this episode" (the people
+// who take part: guests, then hosts, then recurring voices), "People
+// mentioned" (people who are only talked about), "Companies mentioned",
+// "Related episodes". Salience desc within each bucket. Affordance #4: play-▷ on hover seeks to the first
 // mention. The name itself opens the same *peek* as a transcript
 // mention (hover card, pinned by a click) so the reader can check who or
 // what an entry is without leaving the page; the peek's name link is the
@@ -29,6 +29,19 @@ import { NO_SEGMENT, synthesizeIndexMention } from './indexMention'
 // strip's 5 so the rail genuinely adds something rather than echoing
 // the strip.
 const DEFAULT_VISIBLE_COUNT = 8
+
+// Guests lead: the guest is what sets this episode apart, the host is the
+// same on every episode of the show.
+const TAKING_PART_ORDER: Record<SpeakerKind, number> = { guest: 0, host: 1, recurring: 2, unknown: 3 }
+
+/** A person who is on this episode, as opposed to one who is talked about.
+ * A show's host who is absent from the episode is not: ``speaker_kind``
+ * alone only says who they are to the podcast. */
+function takesPart(e: EpisodeEntity): boolean {
+  if (e.entity.type !== 'person') return false
+  // A payload cached from before ``takes_part`` existed.
+  return e.takes_part ?? e.speaker_kind !== 'unknown'
+}
 
 export interface EntityRailProps {
   entities: EpisodeEntity[]
@@ -79,6 +92,7 @@ function RailRow({ entity: episodeEntity, episodeId, isSmUp, onSeek, onShowInTra
   const style = entityStyle(entity.type)
   const seekSeconds = first_mention_ms / 1000
   const isParticipant = speaker_kind !== 'unknown'
+  const inCast = takesPart(episodeEntity)
   const mention = useMemo(() => synthesizeIndexMention(episodeEntity), [episodeEntity])
 
   return (
@@ -105,7 +119,11 @@ function RailRow({ entity: episodeEntity, episodeId, isSmUp, onSeek, onShowInTra
           </span>
         )}
       </EntityHighlight>
-      <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">{mention_count}×</span>
+      {/* A participant's count is mostly their own speaking turns, which
+          says nothing next to "7×" for someone who is talked about. */}
+      {!inCast && (
+        <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">{mention_count}×</span>
+      )}
       {onSeek && (
         <button
           type="button"
@@ -138,17 +156,22 @@ export default function EntityRail({
   const isSmUp = useIsSmUp()
   const rowProps = { episodeId, isSmUp, onSeek, onShowInTranscript, onFocusEntity }
   // Group by type for the section labels. The payload is already
-  // sorted host/guest/recurring/unknown then count desc within each
-  // bucket, so we just need to bucket by type while preserving order.
+  // sorted guest/host/recurring/unknown then salience desc within each
+  // bucket, so we just need to bucket while preserving order. People
+  // split in two: those who take part, and those who are only mentioned.
   const buckets: Record<EntityType, EpisodeEntity[]> = {
     person: [],
     company: [],
     product: [],
     topic: [],
   }
+  const takingPart: EpisodeEntity[] = []
   for (const e of entities) {
-    buckets[e.entity.type].push(e)
+    if (takesPart(e)) takingPart.push(e)
+    else buckets[e.entity.type].push(e)
   }
+  // A cached payload may still be host-first.
+  takingPart.sort((a, b) => TAKING_PART_ORDER[a.speaker_kind] - TAKING_PART_ORDER[b.speaker_kind])
 
   const hasAny = entities.length > 0
 
@@ -158,8 +181,11 @@ export default function EntityRail({
       className="space-y-4 text-sm"
       data-testid="entity-rail"
     >
+      {takingPart.length > 0 && (
+        <RailSection title="In this episode" entities={takingPart} showAll {...rowProps} />
+      )}
       {hasAny && buckets.person.length > 0 && (
-        <RailSection title="People in this episode" entities={buckets.person} {...rowProps} />
+        <RailSection title="People mentioned" entities={buckets.person} {...rowProps} />
       )}
       {hasAny && buckets.company.length > 0 && (
         <RailSection title="Companies mentioned" entities={buckets.company} {...rowProps} />
@@ -250,11 +276,13 @@ function RelatedEpisodesSection({ episodes, loading, extractionPending }: Relate
 interface RailSectionProps extends Omit<RailRowProps, 'entity'> {
   title: string
   entities: EpisodeEntity[]
+  // Never fold the list behind "Show all".
+  showAll?: boolean
 }
 
-function RailSection({ title, entities, ...rowProps }: RailSectionProps) {
+function RailSection({ title, entities, showAll = false, ...rowProps }: RailSectionProps) {
   const [expanded, setExpanded] = useState(false)
-  const overflow = entities.length - DEFAULT_VISIBLE_COUNT
+  const overflow = showAll ? 0 : entities.length - DEFAULT_VISIBLE_COUNT
   const visible = expanded || overflow <= 0 ? entities : entities.slice(0, DEFAULT_VISIBLE_COUNT)
   return (
     <section>
