@@ -80,8 +80,11 @@ class SqliteSyncTrackRepository(SyncTrackRepository):
             )
             return old["path"] if old else None
 
-    def promote(self, episode_id: str, generation: str) -> Optional[List[str]]:
+    def promote(self, episode_id: str, generation: str, *, require_no_current: bool = False) -> Optional[List[str]]:
         with connect(self.db_path) as conn:
+            # Take the write lock before reading, so the checks below and the
+            # switch are one atomic step against other writers.
+            conn.execute("BEGIN IMMEDIATE")
             pending = conn.execute(
                 "SELECT 1 FROM episode_sync_tracks WHERE episode_id = ? AND generation = ? AND state = ?",
                 (episode_id, generation, STATE_PENDING),
@@ -95,6 +98,8 @@ class SqliteSyncTrackRepository(SyncTrackRepository):
                     (episode_id, STATE_CURRENT),
                 ).fetchall()
             ]
+            if require_no_current and retired:
+                return None
             conn.execute(
                 "DELETE FROM episode_sync_tracks WHERE episode_id = ? AND state = ?",
                 (episode_id, STATE_CURRENT),

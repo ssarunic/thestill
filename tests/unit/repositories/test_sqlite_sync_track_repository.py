@@ -92,3 +92,14 @@ def test_retire_by_state_and_all(repo):
     assert repo.retire(EPISODE) == ["sync_tracks/show/episode.g1.sync"]
     assert repo.get(EPISODE, STATE_CURRENT) is None
     assert repo.retire(EPISODE) == []
+
+
+def test_promote_requiring_no_current_refuses_to_replace(repo):
+    repo.put_pending(_record("g1"))
+    assert repo.promote(EPISODE, "g1", require_no_current=True) == []  # nothing to replace: allowed
+    repo.put_pending(_record("g2"))
+
+    assert repo.promote(EPISODE, "g2", require_no_current=True) is None
+
+    assert repo.get(EPISODE).generation == "g1"
+    assert repo.get(EPISODE, STATE_PENDING).generation == "g2"

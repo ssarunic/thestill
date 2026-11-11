@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1a implemented on `feat/116-phase1-sync-track` (2026-11-11): tracks are written at transcription. Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
+> **Status:** 🚧 Phase 1 implemented (2026-11-11): tracks are written at transcription, served by the API and backfilled by CLI; the reader does not use them yet. Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -330,7 +330,9 @@ paths and deletes with the episode. Phase 5 adds its status here.
 
 ### 3. API
 
-`GET /api/episodes/{id}/sync-track/{generation}` returns the artefact as
+`GET /api/podcasts/{podcast}/episodes/{episode}/sync-track/{generation}`
+(next to the transcript route, with the same session requirement)
+returns the artefact as
 `application/octet-stream` with `Cache-Control: immutable`, or 404 when
 that generation is not the episode's current one. It has the same
 visibility as the transcript. The transcript payload carries
@@ -682,14 +684,22 @@ Art19. Phase 1 does not depend on any of these and can start.
 | 1.2b ✅ | `thestill/core/dalston_transcriber.py`, transcribe handler | Dalston URL path: after the job completes, stream the job's stored original (signed URL from Dalston's audio endpoint) through the frame parser |
 | 1.3 ✅ | `thestill/utils/path_manager.py`, migration 0028, repositories | `sync_tracks/` directory, `episode_sync_tracks` table |
 | 1.6 ✅ | `thestill/services/sync_track_service.py` | events of section 7.1, including the track/transcript invariant |
-| 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` in the transcript payload |
-| 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
-| 1.7 | `thestill/cli.py` | `thestill sync-track --recent` backfill and `show` |
+| 1.4 ✅ | `thestill/web/routes/api_podcasts.py` | `GET /api/podcasts/{podcast}/episodes/{episode}/sync-track/{generation}`; `segments.sync_track_generation` in the transcript payload |
+| 1.7 ✅ | `thestill/cli.py`, `thestill/services/sync_track_backfill.py` | `thestill sync-track backfill` and `thestill sync-track show` |
+| 1.5 | deferred to Phase 2 | per-show ad profile (see the note below) |
 
-Rows marked ✅ are Phase 1a. It writes tracks and nothing reads them
-yet. `SYNC_TRACKS_ENABLED=false` stops new tracks. Only episodes
-processed by the task worker get a track; the direct CLI commands
-(`thestill download`, `thestill transcribe`) do not.
+Rows marked ✅ are implemented (Phase 1a wrote the tracks; Phase 1b
+serves them and backfills). Nothing in the reader uses a track yet.
+`SYNC_TRACKS_ENABLED=false` stops new tracks. Only episodes processed by
+the task worker get a track; the direct CLI commands (`thestill
+download`, `thestill transcribe`) do not.
+
+The two-user-agent size probe of section 8 is not built. It would send
+requests to publishers under browser and Apple user agents that Thestill
+is not, on every episode. That is a policy decision, not an engineering
+one (open question 6). The same question can be answered without it:
+Phase 2's client reports say directly whether a listener's copy
+differed.
 
 Checked on the five real episode pairs of the Background findings: the
 aligner returns the same offsets as the Haitsma-Kalker experiment
@@ -704,13 +714,34 @@ offsets from the track alone. A second test runs a transcribe task on
 the Dalston URL path with a stubbed job and asserts that the old track
 is gone and the new one comes from the job's artefact.
 
-Backfill at ship time: episodes transcribed through Dalston in the 30
-days before Phase 1 deploys still have their original in Dalston's
-storage. `thestill sync-track --recent` builds their tracks from those
-artefacts, using the job id recorded with each raw transcript. These
-are exact tracks of the transcribed copy, so they need none of Phase 5.
-To verify during implementation: that the job id is recoverable for
-every such transcript.
+Backfill at ship time: episodes transcribed through Dalston recently
+still have their original in Dalston's storage. `thestill sync-track
+backfill` builds their tracks from those artefacts, using the job id
+recorded with each raw transcript (`provider_metadata.job_id`), newest
+episode first. These are exact tracks of the transcribed copy, so they
+need none of Phase 5.
+
+- A backfilled track is usable by the reader only once the cleaned
+  transcript carries its generation. The backfill writes that stamp when
+  the cleaned transcript was written after the raw transcript and has
+  no stamp; otherwise it leaves it for the clean stage.
+- Episodes are taken most recently transcribed first (the raw
+  transcript's modified time), because Dalston's retention runs from
+  the job, not from the publication date. `--since-days` (default 45)
+  bounds the run.
+- The backfill runs beside the pipeline. It skips an episode with a
+  task in flight, re-checks after fetching the audio that the raw
+  transcript still names the same job, and publishes only if the episode
+  still has no track (checked in the same transaction). The pipeline in
+  turn publishes only the pending track it built itself.
+- The run stops after 20 episodes in a row whose audio Dalston no longer
+  has. How far back it reaches is not settled: one URL-fetch job
+  returned "audio deleted" at 25.7 days old, while a 21.6-day-old
+  file-upload job still had its audio.
+- A job submitted as a file upload stores the downsampled WAV, not the
+  publisher's MP3, and gets no track (`unsupported_codec`).
+- `thestill sync-track show --episode <slug>` prints an episode's track
+  and whether the reader may use it.
 
 ### Phase 2: client map and piecewise timeline
 
@@ -858,6 +889,9 @@ with #110 Phase 4 and is not required here.
    there?
 5. **Phase 5 cap.** What daily number of lazy re-transcriptions is
    acceptable, given the Mac and GPU pool?
+6. **Probing publishers under other user agents.** Section 8's ingest
+   probe needs requests that present as a browser and as Apple's player.
+   Acceptable, or rely on client reports only?
 
 ## Rollback plan
 

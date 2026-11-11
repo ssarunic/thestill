@@ -638,13 +638,14 @@ def _publish_sync_track(
         log.warning("sync_track_failed", reason="transcript_unreadable", error=str(exc), exc_info=True)
 
     transcribed_duration_s = None
+    built = None
     if via_dalston_url:
         # A pending track left by an earlier download is not what Dalston
         # fetched and transcribed.
         service.discard_pending(episode.id)
         if job_id and service.enabled:
             try:
-                service.build_pending(
+                built = service.build_pending(
                     episode_id=episode.id,
                     podcast_id=podcast.id,
                     podcast_slug=podcast.slug,
@@ -664,12 +665,17 @@ def _publish_sync_track(
         transcribed_duration_s = float(episode.duration)
 
     # Always runs: with no pending track it removes the previous one, which
-    # described the transcript that was just replaced.
+    # described the transcript that was just replaced. On the Dalston path
+    # only the track built just now may be published; a pending track that
+    # appeared from elsewhere (a backfill running beside the worker) is not
+    # this transcript's.
     service.publish(
         episode_id=episode.id,
         podcast_id=podcast.id,
         transcribed_duration_s=transcribed_duration_s,
         transcript_end_s=transcript_end_s,
+        expected_generation=built.generation if built is not None else None,
+        use_pending=built is not None or not via_dalston_url,
     )
 
 

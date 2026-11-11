@@ -55,6 +55,7 @@ Commands below).
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}` | GET | Sync track binary for the transcript's `sync_track_generation` (spec #116) |
 | `/api/episodes/{id}/failure` | GET | Get failure details |
 | `/api/episodes/{id}/retry` | POST | Clear failure and retry |
 | `/api/episodes/{id}/reprocess` | POST | Re-run an episode from a stage onwards (spec #106) |

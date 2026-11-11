@@ -4455,6 +4455,191 @@ def reprocess(ctx, episode_id, podcast_id, episode_slug, from_stage, refresh_epi
     )
 
 
+def _sync_track_service(ctx):
+    """The sync track service for CLI commands (spec #116)."""
+    from .repositories.factory import make_repositories
+    from .services.sync_track_service import SyncTrackService
+
+    return SyncTrackService(ctx.obj.config, make_repositories(ctx.obj.config).sync_track)
+
+
+@main.group("sync-track")
+def sync_track_group():
+    """Sync tracks (spec #116): landmarks of the audio an episode was transcribed from."""
+
+
+@sync_track_group.command("show")
+@click.option("--episode-id", help="Episode UUID.")
+@click.option("--podcast-id", help="Podcast UUID or slug (with --episode).")
+@click.option("--episode", "episode_slug", help="Episode slug (with --podcast-id).")
+@click.option("--json", "json_output", is_flag=True, help="Emit a single JSON object.")
+@click.pass_context
+@require_config
+@log_command
+def sync_track_show(ctx, episode_id, podcast_id, episode_slug, json_output):
+    """Show one episode's sync track and whether the reader may use it."""
+    repository = ctx.obj.repository
+    if episode_id:
+        found = repository.get_episode(episode_id)
+    elif podcast_id and episode_slug:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        found = repository.get_episode_by_slug(podcast.slug, episode_slug) if podcast else None
+    else:
+        raise click.UsageError("Pass --episode-id, or --podcast-id with --episode.")
+    if not found:
+        click.echo("❌ Episode not found", err=True)
+        ctx.exit(1)
+    _podcast, episode = found
+
+    config = ctx.obj.config
+    service = _sync_track_service(ctx)
+    record = service.current(episode.id)
+
+    stamp = None
+    if episode.clean_transcript_json_path:
+        sidecar_key = config.path_manager.to_relative(
+            config.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+        )
+        try:
+            stamp = json.loads(config.file_storage.read_text(sidecar_key)).get("sync_track_generation")
+        except FileNotFoundError:
+            stamp = None
+
+    info = {
+        "episode_id": episode.id,
+        "title": episode.title,
+        "has_track": record is not None,
+        "cleaned_transcript_stamp": stamp,
+        "usable_by_reader": bool(record and stamp and record.generation == stamp),
+    }
+    if record is not None:
+        track = service.load(record)
+        minutes = max(track.duration_s / 60.0, 1e-9)
+        info.update(
+            {
+                "generation": record.generation,
+                "source": record.source,
+                "path": record.path,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+                "audio_duration_s": round(track.duration_s, 3),
+                "audio_bytes": track.audio_bytes,
+                "frames": track.frame_count,
+                "anchors": len(track.anchors),
+                "anchors_per_minute": round(len(track.anchors) / minutes, 1),
+                "base_spans": len(track.base_spans),
+            }
+        )
+
+    if json_output:
+        click.echo(json.dumps(info, ensure_ascii=False))
+        return
+    click.echo(f"{episode.title}")
+    if record is None:
+        click.echo("  no sync track")
+    else:
+        click.echo(f"  generation   {info['generation']} ({info['source']}, {info['created_at']})")
+        click.echo(f"  audio        {info['audio_duration_s']} s, {info['audio_bytes']} bytes, {info['frames']} frames")
+        click.echo(f"  anchors      {info['anchors']} ({info['anchors_per_minute']} per minute)")
+        click.echo(f"  file         {info['path']}")
+    click.echo(f"  cleaned transcript stamp  {stamp or 'none'}")
+    click.echo(f"  usable by the reader      {'yes' if info['usable_by_reader'] else 'no'}")
+
+
+@sync_track_group.command("backfill")
+@click.option("--podcast-id", help="Only this podcast (UUID or slug).")
+@click.option("--max-episodes", "-m", type=int, help="Stop after this many episodes were attempted.")
+@click.option(
+    "--stop-after-gone",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Stop after this many episodes in a row whose audio Dalston no longer has (0 = never stop).",
+)
+@click.option(
+    "--since-days",
+    type=int,
+    default=45,
+    show_default=True,
+    help="Only episodes transcribed within this many days (0 = no limit).",
+)
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be built without fetching audio or writing.")
+@click.pass_context
+@require_config
+@log_command
+def sync_track_backfill(ctx, podcast_id, max_episodes, stop_after_gone, since_days, dry_run):
+    """Build sync tracks for episodes transcribed before spec #116.
+
+    Works for episodes transcribed through Dalston while Dalston still
+    stores the job's audio: the track is cut from that audio, so nothing is
+    re-transcribed. Most recently transcribed first (Dalston's retention
+    runs from the job, not from the publication date); older jobs' audio is
+    gone, so the run stops after a row of those. Episodes with a task in
+    flight are skipped.
+    """
+    from collections import Counter
+
+    from .services import sync_track_backfill as backfill
+
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        podcasts = [podcast]
+    else:
+        podcasts = ctx.obj.repository.get_all()
+
+    service = _sync_track_service(ctx)
+    if not service.enabled and not dry_run:
+        click.echo("❌ SYNC_TRACKS_ENABLED is false — nothing to do.", err=True)
+        ctx.exit(1)
+
+    # Order by when the raw transcript was written, i.e. by job age.
+    config = ctx.obj.config
+    cutoff = time.time() - since_days * 86400 if since_days else None
+    candidates = []
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            if not episode.raw_transcript_path:
+                continue
+            raw_key = config.path_manager.to_relative(
+                config.path_manager.raw_transcript_file(episode.raw_transcript_path)
+            )
+            try:
+                transcribed_at = config.file_storage.get_modified_time(raw_key)
+            except FileNotFoundError:
+                continue
+            if cutoff is None or transcribed_at >= cutoff:
+                candidates.append((transcribed_at, podcast, episode))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    queue_manager = make_queue_manager(config)
+
+    counts: Counter = Counter()
+    stamped = 0
+    attempted = 0
+    gone_in_a_row = 0
+    for _transcribed_at, podcast, episode in candidates:
+        result = backfill.backfill_episode(
+            config, service, podcast, episode, dry_run=dry_run, queue_manager=queue_manager
+        )
+        counts[result.outcome] += 1
+        stamped += int(result.stamped)
+        if result.outcome in (backfill.HAS_TRACK, backfill.NO_TRANSCRIPT, backfill.NOT_DALSTON, backfill.BUSY):
+            continue
+        attempted += 1
+        click.echo(f"  {result.outcome:<18} {podcast.slug}/{episode.slug}")
+        gone_in_a_row = gone_in_a_row + 1 if result.outcome == backfill.AUDIO_GONE else 0
+        if stop_after_gone and gone_in_a_row >= stop_after_gone:
+            click.echo(f"Stopping: Dalston no longer has the audio of {gone_in_a_row} episodes in a row.")
+            break
+        if max_episodes and attempted >= max_episodes:
+            break
+
+    summary = ", ".join(f"{name} {count}" for name, count in sorted(counts.items())) or "nothing to do"
+    stamp_verb = "would be stamped" if dry_run else "stamped"
+    click.echo(f"✓ {summary}; cleaned transcripts {stamp_verb}: {stamped}")
+
+
 @main.command("rebuild-entities")
 @click.option("--podcast-id", help="Restrict to one podcast (UUID or slug).")
 @click.option("--since", help="Only episodes published in this window (e.g. 30d, 24h, 2w).")

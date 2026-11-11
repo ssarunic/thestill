@@ -57,12 +57,17 @@ class SyncTrackRepository(ABC):
         that track's path so the caller can delete the file, or None."""
 
     @abstractmethod
-    def promote(self, episode_id: str, generation: str) -> Optional[List[str]]:
+    def promote(self, episode_id: str, generation: str, *, require_no_current: bool = False) -> Optional[List[str]]:
         """Make the pending track ``generation`` the episode's current one.
 
         The previous current track's row is removed in the same transaction.
         Returns the paths of removed tracks (possibly empty), or None when
-        there is no pending track with that generation (nothing changes)."""
+        there is no pending track with that generation (nothing changes).
+
+        With ``require_no_current`` the promotion only happens when the
+        episode has no current track, checked in the same transaction; if it
+        has one, nothing changes and None is returned. A backfill uses this
+        so it can never replace a track the pipeline published meanwhile."""
 
     @abstractmethod
     def retire(self, episode_id: str, state: Optional[str] = None) -> List[str]:

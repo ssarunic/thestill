@@ -458,6 +458,16 @@ def get_episode_transcript_by_slugs(
     segmented = state.podcast_service.get_segmented_transcript_for_episode(episode)
     if segmented is not None:
         response_payload["segments"] = segmented.annotated.model_dump()
+        # Spec #116 — only name a sync track the reader may use: the one
+        # this cleaned transcript was stamped with, while it is still the
+        # episode's current track. Otherwise null, so the client does not
+        # fetch one.
+        sync_tracks = getattr(state, "sync_track_service", None)
+        response_payload["segments"]["sync_track_generation"] = (
+            sync_tracks.usable_generation(episode.id, segmented.annotated.sync_track_generation)
+            if sync_tracks is not None
+            else None
+        )
         # Spec #69 Phase 6.3 — don't double-ship the transcript: when the
         # segmented structure is present the reader renders from it and
         # never reads ``content`` (the markdown is the segments' text again,
@@ -468,6 +478,37 @@ def get_episode_transcript_by_slugs(
 
     # Write-once resource: content-hash ETag + revalidation (Phase 6.2).
     return etag_json_response(request, response_payload)
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}")
+def get_episode_sync_track(
+    podcast_slug: str,
+    episode_slug: str,
+    generation: str,
+    state: AppState = Depends(get_app_state),
+) -> Response:
+    """The episode's sync track (spec #116), as the binary file.
+
+    ``generation`` comes from ``segments.sync_track_generation`` of the
+    transcript payload. A generation that is not the episode's current one
+    is a 404, so a track can never be paired with a transcript it does not
+    describe; and because the generation is in the URL, the response is
+    immutable and cached for a year.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    _, episode = result
+
+    sync_tracks = getattr(state, "sync_track_service", None)
+    payload = sync_tracks.read_current(episode.id, generation) if sync_tracks is not None else None
+    if payload is None:
+        not_found("Sync track", f"{podcast_slug}/{episode_slug}/{generation}")
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
