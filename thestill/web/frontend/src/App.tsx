@@ -8,6 +8,7 @@ import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 import { useAuth } from './contexts/AuthContext'
 import AnalyticsBridge from './analytics/AnalyticsBridge'
+import { useDriftSession } from './drift/useDriftSession'
 import { PublicApp } from './publicEntry'
 import { useScrollRestoration } from './hooks/useScrollRestoration'
 
@@ -68,6 +69,9 @@ function App() {
   // fall through to the standalone EpisodeDetail route as before.
   const backgroundLocation = useBackgroundLocation()
   const { isAnonymous } = useAuth()
+  // Spec #116 — crossorigin audio loading and the service worker follow
+  // the `drift.align` permission for the whole app.
+  useDriftSession()
 
   // Spec #94 — a signed-out visitor in multi-user mode gets the public site:
   // editorial pages for shows, episodes, people and entities, and sign-in

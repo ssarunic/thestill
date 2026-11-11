@@ -142,6 +142,10 @@ DriftOutcome = Literal[
 ]
 
 
+#: How the reader's service worker stood for one play (spec #116 §4 step 6).
+DriftSwState = Literal["unsupported", "not_controlling", "element_not_cors", "no_requests", "opaque", "ok"]
+
+
 class DriftAlignmentResult(_Event):
     """One attempt to map a transcript onto a listener's copy of the audio
     (spec #116); never which episode or show.
@@ -160,6 +164,10 @@ class DriftAlignmentResult(_Event):
     anchors_total: Optional[int] = Field(default=None, ge=0)
     anchors_hit: Optional[int] = Field(default=None, ge=0)
     verify_length_ok: Optional[bool] = None
+    verify_ranges_checked: Optional[int] = Field(default=None, ge=0)
+    verify_ranges_matched: Optional[int] = Field(default=None, ge=0)
+    sw_state: Optional[DriftSwState] = None
+    revision: int = Field(default=0, ge=0)
     fetch_ms: Optional[int] = Field(default=None, ge=0)
     fit_ms: Optional[int] = Field(default=None, ge=0)
 

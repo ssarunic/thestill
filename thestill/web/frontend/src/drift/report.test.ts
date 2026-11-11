@@ -39,6 +39,7 @@ const report: DriftReport = {
   fetchMs: 2100,
   fitMs: 35,
   error: null,
+  blocks: null,
 }
 
 describe('browserLabel', () => {
@@ -77,11 +78,39 @@ describe('toOutcomeBody', () => {
     })
   })
 
-  it('never claims the checks that are not built yet', () => {
-    const body = toOutcomeBody(report, 'abc123', UA.safari)
-    expect(body.verify_length_ok).toBeNull()
-    expect(body.verify_ranges_checked).toBeNull()
-    expect(body.verify_ranges_matched).toBeNull()
+  it('reports the checks as unknown, never as passed, when none was possible', () => {
+    for (const body of [
+      toOutcomeBody(report, 'abc123', UA.safari),
+      toOutcomeBody(report, 'abc123', UA.safari, { swState: 'element_not_cors', verification: null }),
+    ]) {
+      expect(body.verify_length_ok).toBeNull()
+      expect(body.verify_ranges_checked).toBeNull()
+      expect(body.verify_ranges_matched).toBeNull()
+    }
+    expect(toOutcomeBody(report, 'abc123', UA.safari).sw_state).toBeNull()
+    expect(
+      toOutcomeBody(report, 'abc123', UA.safari, { swState: 'element_not_cors', verification: null }).sw_state,
+    ).toBe('element_not_cors')
+  })
+
+  it('carries a passed check, and turns a failed one into variant_mismatch', () => {
+    const passed = toOutcomeBody(report, 'abc123', UA.chrome, {
+      swState: 'ok',
+      verification: { lengthOk: true, rangesChecked: 3, rangesMatched: 3, verdict: 'verified' },
+    })
+    expect(passed).toMatchObject({
+      outcome: 'aligned',
+      sw_state: 'ok',
+      verify_length_ok: true,
+      verify_ranges_checked: 3,
+      verify_ranges_matched: 3,
+    })
+
+    const failed = { swState: 'ok' as const, verification: { lengthOk: true, rangesChecked: 3, rangesMatched: 2, verdict: 'mismatch' as const } }
+    expect(toOutcomeBody(report, 'abc123', UA.chrome, failed).outcome).toBe('variant_mismatch')
+    expect(toOutcomeBody({ ...report, outcome: 'identity' }, 'abc123', UA.chrome, failed).outcome).toBe('variant_mismatch')
+    // An outcome without a map stays what it was.
+    expect(toOutcomeBody({ ...report, outcome: 'low_confidence' }, 'abc123', UA.chrome, failed).outcome).toBe('low_confidence')
   })
 
   it('drops a host that is not a bare host name, and caps the spans', () => {

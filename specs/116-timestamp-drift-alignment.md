@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 implemented (2026-11-11): tracks are written at transcription, served by the API and backfilled by CLI; the reader does not use them yet. Phase 0 run on desktop Chrome and desktop Safari, passed with gaps (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 partly built: browsers of sessions holding `drift.align` align on first play, check the playing audio through a service worker and report; **no timestamp is corrected yet** (row 2.3). Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -474,7 +474,9 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
      the element's other closed requests, any that ends at or beyond the
      fetched length means a longer copy, and the map is discarded. The
      lengths count as equal only when at least one of them ends exactly
-     at the fetched length minus one and none ends beyond it: Safari
+     at the fetched length minus one, was returned in full
+     (`Content-Length` equal to the range asked for), and none ends
+     beyond it: Safari
      ends its ranges at the last byte of the total it read from
      `Content-Range`. A session that yields neither an authoritative
      total nor that equality (for example a browser that asks for the
@@ -869,16 +871,21 @@ need none of Phase 5.
 
 | # | Where | What |
 |---|---|---|
-| 2.1 | `src/workers/driftAlign.worker.ts` (new) | stream fetch, frame hashing, fitter, verification |
-| 2.2 | `src/contexts/playback-engine/` | `TimelineMap` with `toAsset` / `toLogical` |
+| 2.1 ✅ | `src/workers/driftAlign.worker.ts`, `src/drift/` | stream fetch, frame hashing, fitter, gap classification, block digest, verification |
+| 2.2 ✅ | `src/contexts/playback-engine/timeline-map.ts` | `TimelineMap` with `toAsset` / `toLogical` (built and tested; not wired into the player) |
 | 2.3 | `src/contexts/PlayerContext.tsx`, `EpisodeReader.tsx` | route seeks and karaoke through the map; banner states |
-| 2.4 | analytics | `drift_alignment_result`, `segment_seek_corrected` |
-| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome`: validates and logs `drift_map_reported`, updates the per-show ad profile (rate-limited, 4 KB cap) |
-| 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | server-side fitter sharing test vectors with the worker; `thestill sync-track audit` and `show`; scheduled audit sample |
-| 2.7 | `EpisodeReader.tsx` | admin-only `?driftdebug=1` strip |
-| 2.8 | `public/sw.js` (new), player | the service worker and its registration, under the rules below |
+| 2.4 ✅ | analytics | `drift_alignment_result` (`segment_seek_corrected` comes with 2.3) |
+| 2.5 ✅ | `thestill/web/routes/api_podcasts.py` | `POST /api/podcasts/{podcast}/episodes/{episode}/drift-outcome`: validates and logs `drift_map_reported` (rate-limited, 4 KB cap enforced before the body is read) |
+| 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | ✅ server-side fitter sharing test vectors with the worker (`tests/fixtures/sync_track/align_vectors.json`); `thestill sync-track audit` and the scheduled audit sample are not built |
+| 2.7 ✅ | `src/drift/DriftDebugStrip.tsx` | admin-only `?driftdebug=1` strip, with "play corrected" and "play uncorrected" per span |
+| 2.8 ✅ | `public/sw.js`, `src/drift/swClient.ts`, `corsVerdict.ts`, native engine | the service worker, the `crossorigin` verdict and the two checks of section 4 step 6 |
 
-Rows 2.4, 2.5 and 2.7 are built first, with the worker, so that every
+Rows marked ✅ are implemented. **No map is applied to playback yet**:
+row 2.3 is what remains, and with it the Playwright acceptance test.
+Every play by a session that holds `drift.align` aligns, checks what it
+can, and reports.
+
+Rows 2.4, 2.5 and 2.7 were built first, with the worker, so that every
 play reports its outcome from the first admin session.
 
 The service worker is the app's first. Its rules:
@@ -886,12 +893,64 @@ The service worker is the app's first. Its rules:
 - It answers only cross-origin requests whose destination is `audio` or
   `video`, and returns the original response. Every other request is
   left to the browser. It caches nothing and handles no navigation.
-- It is registered on the first play of an episode that has a track,
-  with the feature flag on, and takes control of the open page without
-  a reload. Signed-out visitors, public pages and crawlers never
+- It is registered on the first play of an episode that has a track, by
+  a session that holds `drift.align`, and takes control of the open page
+  without a reload. Signed-out visitors, public pages and crawlers never
   register it.
-- `sw.js` is served from a fixed URL with `Cache-Control: no-cache`.
-  With the flag off, the app unregisters the worker on load.
+- `sw.js` is plain JavaScript with no build step, served from a fixed
+  URL with `Cache-Control: no-cache`, and its URL never falls through to
+  the HTML shell. A session that does not hold `drift.align` tells the
+  worker to stand down, unregisters it and, if the page was under its
+  control, reloads once: unregistering alone leaves a controlled page
+  controlled. So switching the feature off reaches browsers that already
+  have the worker.
+
+How this was built, where it differs from the sections above:
+
+- **Switch.** `DRIFT_ALIGNMENT_ENABLED` is on by default and exists to
+  turn the feature off. It grants a named permission, `drift.align`,
+  held by admins only for now; widening the rollout is a change to
+  `has_permission`.
+- **Route.** The report goes to `/api/podcasts/…/episodes/…/drift-outcome`,
+  next to the sync track route. Every route under `/api/episodes` is
+  operator-only.
+- **No separate probe.** The alignment's own `fetch()` of the audio is
+  the CORS probe of section 4 step 6: it runs beside playback, and its
+  result is the verdict for the next load. There is no 4 s timeout
+  because nothing waits.
+- **Verdict per redirect chain.** The verdict is keyed by what the
+  enclosure URL shows of its chain: its host plus the host names embedded
+  in its path (`dts.podtrac.com/redirect.mp3/traffic.megaphone.fm/…`).
+  The final host is not known when the element loads, and CORS has to
+  hold on every hop: a podtrac chain ending at Megaphone passes and one
+  ending at Simplecast does not.
+- **Block digest.** CRC-32 and Adler-32 per 64 KB block (8 bytes, as the
+  spec asks), the same two functions as the anchors, so the service
+  worker needs no other hash.
+- **Why a check is missing.** Each report carries `sw_state`:
+  `unsupported`, `not_controlling`, `element_not_cors` (the first play of
+  a chain), `no_requests`, `opaque` or `ok`. This is the per-browser
+  evidence the rollout rule below reads. A map whose check fails is
+  reported as `variant_mismatch`. The check is repeated for every later
+  response of the same play, and a changed verdict is reported again
+  with `revision` above 0, so a copy that differs only at a later ad
+  break is found when a seek reaches it.
+- **Not built:** the per-show ad profile (section 8) and the client
+  eagerness it drives, the identity shortcut and the cheap check (steps
+  2 and 3: every attempt is a full pass), the "Refine" step (the
+  stretches a run leaves short of a splice are cut along the transcript's
+  segments instead), caching a map in `sessionStorage`, and the audit
+  command.
+
+Measured on the built code (2026-11-11): the shipped `sw.js` with a
+`crossorigin` element in headless Chromium and headless WebKit, on one
+live Megaphone episode through podtrac. Playback worked through the
+worker in both; the element's blocks matched the fetched copy on 5 of 5
+ranges (Chromium, open-ended requests) and 2 of 2 (WebKit, closed
+requests, the later ones sent straight to the final host), with equal
+lengths. On production, an admin play of a Prof G Markets episode
+reported three spans (0 s, +1.907 s, −30.798 s); a click on the 18:50
+paragraph played the 19:20 one, as the last span predicts.
 
 Rollout: admins only, then per browser. Standalone browser probes stop
 here; the remaining questions (Safari on iOS, Firefox, more plays on

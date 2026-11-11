@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, Follow, Unfollow, follow_source
+from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
@@ -547,6 +547,11 @@ class DriftOutcomeRequest(BaseModel):
     verify_length_ok: Optional[bool] = None
     verify_ranges_checked: Optional[int] = Field(default=None, ge=0, le=100_000)
     verify_ranges_matched: Optional[int] = Field(default=None, ge=0, le=100_000)
+    # How the service worker stood for this play; says why a check is missing.
+    sw_state: Optional[DriftSwState] = None
+    # 0 for a play's first report; higher when a later range of the same play
+    # changed its verdict.
+    revision: int = Field(default=0, ge=0, le=10)
     # A host name only, never a URL: no scheme, path, query or port.
     audio_host: Optional[str] = Field(default=None, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
     audio_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
@@ -619,6 +624,10 @@ def report_drift_outcome(
             anchors_total=body.anchors_total,
             anchors_hit=body.anchors_hit,
             verify_length_ok=body.verify_length_ok,
+            verify_ranges_checked=body.verify_ranges_checked,
+            verify_ranges_matched=body.verify_ranges_matched,
+            sw_state=body.sw_state,
+            revision=body.revision,
             fetch_ms=body.fetch_ms,
             fit_ms=body.fit_ms,
         ),

@@ -39,6 +39,10 @@ export interface EngineSource {
   url?: string
   mimeType?: string | null
   videoId?: string
+  // Spec #116 — native only: load with `crossorigin="anonymous"` so a
+  // service worker can read what the element is served. Only ever set for
+  // a host known to allow it; the engine reloads without it on failure.
+  crossOrigin?: boolean
 }
 
 export interface LoadOptions {
