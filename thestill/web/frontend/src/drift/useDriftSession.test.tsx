@@ -1,4 +1,5 @@
 import { renderHook } from '@testing-library/react'
+import { CHROME_UA } from '../test/setup'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginAudioLoad, setCorsVerdict, setCrossOriginLoadingEnabled } from './corsVerdict'
 import { mediaReportsFor, page, resetDriftServiceWorkerClient } from './swClient'
@@ -30,7 +31,7 @@ beforeEach(() => {
   setCorsVerdict(URL_A, 'cors_ok')
   Object.assign(auth, { isLoading: false, permissions: [] })
   vi.stubGlobal('navigator', {
-    userAgent: 'x',
+    userAgent: CHROME_UA,
     serviceWorker: {
       get controller() {
         return controlledBy
@@ -117,5 +118,33 @@ describe('useDriftSession', () => {
     await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1))
     expect(page.reload).not.toHaveBeenCalled()
     expect(controller.postMessage).not.toHaveBeenCalled()
+  })
+
+  it('treats a browser the feature is not proven in as not holding the permission', async () => {
+    // Safari, with the worker and the remembered setting left by an earlier
+    // release: everything is taken away, permission or not.
+    const safari =
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15'
+    localStorage.setItem('thestill:drift:enabled', '1')
+    controlledBy = controller
+    vi.stubGlobal('navigator', {
+      userAgent: safari,
+      serviceWorker: {
+        get controller() {
+          return controlledBy
+        },
+        addEventListener: (_name: string, listener: (event: { data: unknown }) => void) => swListeners.push(listener),
+        getRegistrations: async () => [{ active: { scriptURL: 'https://thestill.me/sw.js' }, unregister }],
+      },
+    })
+    auth.permissions = ['drift.align']
+    renderHook(() => useDriftSession())
+
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1))
+    expect(controller.postMessage).toHaveBeenCalledWith({ kind: 'drift-disable' })
+    await vi.waitFor(() => expect(page.reload).toHaveBeenCalledTimes(1))
+    expect(localStorage.getItem('thestill:drift:enabled')).toBeNull()
+    expect(beginAudioLoad(URL_A, true)).toBe(false)
+    expect(swListeners).toHaveLength(0)
   })
 })

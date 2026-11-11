@@ -1019,6 +1019,20 @@ lengths. On production, an admin play of a Prof G Markets episode
 reported three spans (0 s, +1.907 s, −30.798 s); a click on the 18:50
 paragraph played the 19:20 one, as the last span predicts.
 
+**Browser allow-list (2026-11-11).** `src/drift/support.ts` lets the
+feature run only in desktop Chromium browsers (Chrome, Edge), the one
+place the whole chain has been verified end to end. Everywhere else the
+permission counts as not held: no service worker (an installed one is
+removed), no `crossorigin` loading, no held start, no map. v1.40.0 to
+v1.42.0 ran it in every browser; in Safari, with a map applied and
+verified, playback restarted from the beginning on every seek. The cause
+is not known: it could not be reproduced outside real Safari (Playwright's
+WebKit mis-seeks this kind of file even without any of this code), and
+the Safari check of Phase 0 only counted `seeked` events and compared
+bytes, never where playback ended up. A browser is added to the list
+after a check in that browser that seeks, plays on, and reads back the
+position.
+
 Rollout: admins only, then per browser. Standalone browser probes stop
 here; the remaining questions (Safari on iOS, Firefox, more plays on
 Acast and Art19, pass time on a phone) are answered by the outcome

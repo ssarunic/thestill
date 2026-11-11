@@ -5,6 +5,8 @@
 // chain, from the alignment's own fetch of the audio, remembered for a
 // week, and applied from the next load. Playback never waits for it.
 
+import { driftAlignmentSupported } from './support'
+
 const KEY_PREFIX = 'thestill:drift:cors:'
 const TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -66,6 +68,9 @@ export function setCorsVerdict(url: string, verdict: CorsVerdict, now = Date.now
 const ENABLED_KEY = 'thestill:drift:enabled'
 
 function rememberedEnabled(): boolean {
+  // Never in a browser the feature is not allowed in (support.ts), whatever
+  // an earlier release left in storage.
+  if (!driftAlignmentSupported()) return false
   try {
     return localStorage.getItem(ENABLED_KEY) === '1'
   } catch {
@@ -83,6 +88,7 @@ let enabled = rememberedEnabled()
 /** Switched on for sessions that hold `drift.align`; off, no element ever
  * gets the attribute. Remembered for the next page load. */
 export function setCrossOriginLoadingEnabled(on: boolean): void {
+  on = on && driftAlignmentSupported()
   enabled = on
   try {
     if (on) localStorage.setItem(ENABLED_KEY, '1')
