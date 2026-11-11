@@ -378,8 +378,11 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    hits. The same audio can occur twice in a listener's copy (two of
    the five measured pairs had a promo played both early and late), so
    runs can overlap in source time; the fitter keeps the heaviest chain
-   of runs that moves forward in both copies. The result is a list of
-   spans `{src_start, src_end, offset}`.
+   of runs that moves forward in both copies. A run also ends when more
+   than two of the track's anchors in a row go unmatched: an ad replaced
+   by another of the same length leaves the offset unchanged on both
+   sides, and the stretch between must not be reported as aligned. The
+   result is a list of spans `{src_start, src_end, offset}`.
    Missing anchors are not evidence of an ad, so each source-side
    interval between two spans is then refined and classified:
 

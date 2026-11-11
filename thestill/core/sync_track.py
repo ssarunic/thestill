@@ -34,6 +34,7 @@ CRC-32 and Adler-32:
 
 from __future__ import annotations
 
+import bisect
 import statistics
 import struct
 import zlib
@@ -54,6 +55,11 @@ ANCHOR_INTERVAL_S = 1.0
 #: before the offset is trusted (single hits false-match on silence and
 #: repeated ads; see the spec's Background findings).
 MIN_RUN = 5
+#: A run may skip at most this many of the track's landmarks in a row. More
+#: unmatched landmarks than that means the audio between two hits is not the
+#: tracked audio (an ad swapped for another of the same length keeps the
+#: offset on both sides), so the run ends there.
+MAX_MISSED_IN_RUN = 2
 #: Two offsets are "the same" within this many seconds. Anchor times are
 #: stored in milliseconds, so rounding alone can differ by one.
 OFFSET_TOLERANCE_S = 0.02
@@ -445,12 +451,21 @@ def align(track: SyncTrack, chunks: Iterable[bytes], *, min_run: int = MIN_RUN) 
 
     A span is a run of at least ``min_run`` landmarks, consecutive in the
     order they are found in the other copy, in increasing source order, all
-    agreeing on one offset. Isolated hits are dropped. Where runs overlap
+    agreeing on one offset, with no more than ``MAX_MISSED_IN_RUN`` of the
+    track's landmarks unmatched between two neighbours. Isolated hits are
+    dropped. Where runs overlap
     (the same audio occurs twice in the other copy) the heaviest chain that
     moves forward in both copies wins. Adjacent runs with the same offset
-    are merged.
+    are merged unless landmarks went unmatched between them.
     """
     wanted = {a.digest: a.time_ms / 1000.0 for a in track.anchors}
+    anchor_times = sorted(wanted.values())
+
+    def unbroken(earlier_src: float, later_src: float) -> bool:
+        """True when few enough landmarks lie unmatched between two hits."""
+        between = bisect.bisect_left(anchor_times, later_src) - bisect.bisect_right(anchor_times, earlier_src)
+        return between <= MAX_MISSED_IN_RUN
+
     hits: List[Tuple[float, float]] = []  # (src_s, other_s), in other-copy order
     other_duration = 0.0  # start of the last window; close enough for a report
     other_bytes = 0
@@ -467,7 +482,7 @@ def align(track: SyncTrack, chunks: Iterable[bytes], *, min_run: int = MIN_RUN) 
         if current:
             prev_src, prev_other = current[-1]
             same_offset = abs((other_s - src_s) - (prev_other - prev_src)) <= OFFSET_TOLERANCE_S
-            if same_offset and src_s > prev_src:
+            if same_offset and src_s > prev_src and unbroken(prev_src, src_s):
                 current.append((src_s, other_s))
                 continue
             runs.append(current)
@@ -502,7 +517,11 @@ def align(track: SyncTrack, chunks: Iterable[bytes], *, min_run: int = MIN_RUN) 
     for run in chain:
         offset = statistics.median(o - s for s, o in run)
         inliers += len(run)
-        if spans and abs(spans[-1].offset_s - offset) <= OFFSET_TOLERANCE_S:
+        if (
+            spans
+            and abs(spans[-1].offset_s - offset) <= OFFSET_TOLERANCE_S
+            and unbroken(spans[-1].src_end_s, run[0][0])
+        ):
             last = spans[-1]
             spans[-1] = Span(last.src_start_s, run[-1][0], last.offset_s, last.anchors + len(run))
         else:

@@ -158,3 +158,32 @@ def test_re_encoded_copy_does_not_match():
     result = align(track, chunks(stream(frames(99, seconds(60)))))
     assert result.spans == []
     assert result.anchors_hit == 0
+
+
+def test_ad_replaced_by_another_of_the_same_length_is_not_reported_as_aligned():
+    """Both copies: 60 s content, a 30 s ad, 60 s content. The ads differ.
+    The offset is zero on both sides, but the ad itself is not the same audio."""
+    a, b = frames(1, seconds(60)), frames(2, seconds(60))
+    track = build_sync_track(chunks(stream(a, frames(8, seconds(30)), b)), "g")
+
+    result = align(track, chunks(stream(a, frames(9, seconds(30)), b)))
+
+    assert len(result.spans) == 2
+    assert all(span.offset_s == pytest.approx(0.0, abs=0.01) for span in result.spans)
+    assert result.spans[0].src_end_s < 61 and result.spans[1].src_start_s > 89
+    assert result.to_other(75.0) is None  # inside the replaced ad
+    assert result.to_other(30.0) == pytest.approx(30.0, abs=0.01)
+    assert result.to_other(120.0) == pytest.approx(120.0, abs=0.01)
+    assert 0.75 < result.coverage < 0.85
+
+
+def test_a_couple_of_missed_landmarks_do_not_split_a_run():
+    """One second of damage inside otherwise identical audio."""
+    episode = frames(1, seconds(120))
+    track = build_sync_track(chunks(stream(episode)), "g")
+    damaged = episode[: seconds(60)] + frames(5, seconds(1)) + episode[seconds(61) :]
+
+    result = align(track, chunks(stream(damaged)))
+
+    assert len(result.spans) == 1
+    assert result.coverage > 0.95
