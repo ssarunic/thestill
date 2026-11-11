@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 implemented (2026-11-11): tracks are written at transcription, served by the API and backfilled by CLI; the reader does not use them yet. Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
+> **Status:** 🚧 Phase 1 implemented (2026-11-11): tracks are written at transcription, served by the API and backfilled by CLI; the reader does not use them yet. Phase 0 run on desktop Chrome and desktop Safari, passed with gaps (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -187,10 +187,71 @@ What this settles:
   4, by 52 and 62 ms on 2, and by 9.9 s on one (Flightcast, The Diary Of A CEO).
   Byte totals are exact and are used for the length check.
 
-Not covered: Safari, Firefox, any phone, hashing cost, and playback
-over hours or across networks. The 9.9 s outlier is unexplained; if
-Chrome's time-to-byte seeking is off on that file, seeks land wrong
-there whatever the map says.
+Not covered: Firefox, any phone, hashing cost, and playback over hours
+or across networks. The 9.9 s outlier is unexplained; if Chrome's
+time-to-byte seeking is off on that file, seeks land wrong there
+whatever the map says.
+
+### Safari check (desktop, 2026-11-11)
+
+The same page, rebuilt, run once in Safari 27.2 on macOS against 8
+episodes, one per host, from `localhost`. One play per episode.
+
+| Measurement | Result |
+|---|---|
+| Service worker controls the page and sees the element's requests | 8 of 8, all with `destination: "audio"` |
+| `fetch()` with CORS succeeds | 6 of 8 |
+| Element's bytes identical to the fetched copy at every sampled range | 6 of 6 (19 ranges) |
+| Element's total equals the fetched total | 6 of 6 |
+| Element `duration` minus summed frame durations | 0 ms on 3, one frame (±26 ms) on 2, 52 ms on 1 |
+| Full fetch | 0.4–9.2 s for 10–86 MB |
+
+Hosts that passed: Megaphone, Acast, Art19 (through podtrac),
+Audioboom, Omny/Triton (through podtrac), Flightcast. Failed on CORS:
+Captivate, and one podtrac chain ending at Simplecast whose final
+response carries no `Access-Control-Allow-Origin`. That chain fails the
+same way in Chromium, so it is the chain and not the browser. On both,
+the element with `crossorigin` failed to load and the plain element
+played.
+
+What this settles, and what it changes in section 4:
+
+- **The content check works in desktop Safari.** The worker sees every
+  media request and can read the bytes on hosts with CORS.
+- **`Content-Range` is usually unreadable.** It is not a CORS-safelisted
+  response header, and only 1 of the 6 hosts exposed it. The worker
+  must take the offset of a response from the `Range` header of the
+  request. `Content-Length` is always readable.
+- **Requests cannot be matched by the enclosure URL.** Safari sends
+  `bytes=0-1` to the enclosure URL, then sends every later range
+  straight to the final URL of the redirect chain (a session URL on
+  Megaphone, Acast, Art19, Audioboom and Triton). The worker matches on
+  the request's destination and client, not its URL.
+- **Safari asks for closed ranges.** After `bytes=0-1` it asks for
+  `bytes=0-(N−1)`, where N is the total it read from `Content-Range`.
+  The element's total is therefore read from its own request. Chrome
+  asks for `bytes=0-`, and the total is the response's `Content-Length`.
+- **The probe fetch can fail slowly.** Captivate failed in 0.2 s; the
+  Simplecast chain took 3.0 s. The 0.6 s seen in Chrome is not a bound.
+- **Duration.** The Flightcast show that was 9.9 s off in Chrome was
+  0 ms off here, on a different episode. Open question 3 stands.
+
+A side observation on how common inserted ads are: the copies served to
+this browser were longer than the feed's declared `itunes:duration` by
+61 s to 317 s on 6 of the 8 episodes (Megaphone, Art19, Audioboom, Omny,
+Captivate, Flightcast) and equal on 2 (Acast, Simplecast). The declared
+duration is the publisher's figure, not the copy Thestill transcribed,
+so this measures inserted audio, not drift against a transcript.
+
+A browser check of this kind shows what a host does on the day it is
+run. It cannot show that a host without ads today will have none
+tomorrow, or that a host will keep serving one variant per session. The
+design does not depend on either: the map is built for every play from
+the copy that play receives, and the content check of section 4 runs in
+every session.
+
+Not covered: Safari on iOS (the page needs HTTPS to run on a phone),
+Firefox, more than one play per episode, and private browsing.
 
 ## Clarifications
 
@@ -404,14 +465,32 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    - **Length.** The total byte length the element was served must
      equal the length of the fetched stream, exactly. A mismatch means
      a different ad set, and the map is discarded. Durations are not
-     compared: the browser check found them unreliable.
+     compared: the browser check found them unreliable. The element's
+     total is read without `Content-Range`: for an open-ended request
+     (`bytes=N-`, Chrome) it is N plus the response's `Content-Length`;
+     that is authoritative. A closed request (`bytes=A-M`, Safari)
+     proves only that the copy has at least M + 1 bytes, so it is used
+     differently. Safari's opening `bytes=0-1` request is ignored. Of
+     the element's other closed requests, any that ends at or beyond the
+     fetched length means a longer copy, and the map is discarded. The
+     lengths count as equal only when at least one of them ends exactly
+     at the fetched length minus one and none ends beyond it: Safari
+     ends its ranges at the last byte of the total it read from
+     `Content-Range`. A session that yields neither an authoritative
+     total nor that equality (for example a browser that asks for the
+     file in fixed chunks) has no length check and gets no map.
    - **Content.** Equal length does not prove equal content: two
      variants can carry breaks of different lengths that sum to the same
      total. A service worker reads the head of every response the
      element receives, hashes the first whole 64 KB block in it
      (blocks are aligned to the start of the file, so a range that
      starts mid-block is checked from the next boundary), and compares
-     that hash with the block digest of the fetched copy. The digest
+     that hash with the block digest of the fetched copy. The offset of
+     a response is the start of the request's `Range` header;
+     `Content-Range` is unreadable on most hosts (see Safari check). The
+     worker picks out the element's requests by destination (`audio` or
+     `video`) and client, because after a redirect the browser may
+     request the final URL directly. The digest
      is kept with the map for as long as the map is in use, so ranges
      requested after a later seek are checked the same way. The first
      response and every later range must match; any mismatch discards
@@ -419,12 +498,27 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
      `sessionStorage` is restored with its digest and re-verified
      against the element's first response before it is applied.
 
-   Both checks need the element to load with `crossorigin="anonymous"`.
-   The attribute is set only after a probe `fetch()` of the URL has
-   succeeded, because an element with it fails to load on a host
-   without CORS. The worker must pass the original response through
-   unchanged. Where the service worker is unavailable or does not see
-   media requests (to be established for Safari and Firefox), the
+   Both checks need the element to load with `crossorigin="anonymous"`,
+   and an element with it fails to load on a host without CORS. The
+   attribute must be present before the element loads; changing it
+   reloads the audio. Playback never waits for that decision:
+
+   - The verdict is kept per final host of the redirect chain, in
+     `localStorage`, for 7 days: `cors_ok` or `no_cors`.
+   - A host with `cors_ok` loads with the attribute from the start.
+   - A host with no verdict loads without the attribute and plays as
+     today. A probe `fetch()` runs beside it with a 4 s timeout and
+     stores the verdict. That play gets no map and keeps the banner;
+     the next load of an episode from the host gets one.
+   - A host with `cors_ok` whose element then fails to load is reloaded
+     once without the attribute, and the verdict becomes `no_cors`.
+
+   The worker must pass the original response through
+   unchanged. Desktop Chrome and desktop Safari both route media
+   requests through the worker. Where the service worker is unavailable
+   or does not see media requests (Firefox and iOS are not yet checked;
+   private browsing may have no worker), the worker detects it at run
+   time, by seeing no request from the element, and the
    fallback is single fetch (see Alternatives) or the banner. Length
    alone never applies a map.
 7. **Publish.** The map goes to the player only after the stream has
@@ -609,10 +703,11 @@ playback and little at ingest:
 | `ads_seen_at` | the ingest probe sees two sizes, or a client reports `aligned` with a non-zero offset | client eagerness |
 | `needs_perceptual_track` | clients report `low_confidence` on episodes that do have frame anchors, above a threshold; or set by hand | writing the 155 KB perceptual track (Phase 3) |
 
-- **Ingest probe.** At download, two `Range: bytes=0-1` requests with
-  different user agents read the total size from `Content-Range`. Two
-  sizes mean the show inserts ads. This is two tiny requests per
-  episode, not a second download.
+- **Ingest probe (not built, by decision of 2026-11-11).** At download,
+  two `Range: bytes=0-1` requests with different user agents would read
+  the total size from `Content-Range`; two sizes mean the show inserts
+  ads. Until that decision changes, `ads_seen_at` is set by client
+  reports only.
 - **Client report.** `POST /api/episodes/{id}/drift-outcome` carries the
   outcome of section 4. It updates the two fields and, in Phase 5,
   enqueues alignment for an old episode.
@@ -623,13 +718,17 @@ playback and little at ingest:
   it there.
 
 The profile never suppresses the frame-anchor track. It only decides how
-much work happens around it.
+much work happens around it. A missing `ads_seen_at` means no listener
+has reported a shifted copy yet, not that the show has no ads: any show
+can start inserting them, and the first play whose byte length differs
+from the track header runs the full pass regardless of the profile.
 
 ## Edge cases
 
 - **Redirect hop without CORS.** `fetch()` rejects; outcome `no_cors`.
   The host is remembered for the session so later episodes skip the
-  attempt.
+  attempt. The rejection took up to 3.0 s in Safari, so the probe has a
+  4 s timeout and playback does not wait for it (section 4, step 6).
 - **Variable bit rate.** Frame parsing reads each header, so VBR is
   handled. Range offsets for the cheap check are estimates; a miss
   falls through to the full pass.
@@ -670,10 +769,17 @@ Result (2026-11-10, desktop Chrome only; see Browser check): the
 service-worker content check works and no variant mismatch was seen.
 Megaphone met the 50-play bar; Acast (25) and Art19 (9) matched on
 every play but fall short of it; Captivate fails CORS and keeps the
-banner. Questions 1, 2, 4 and 5 are answered for Chrome. Still open
-before Phase 2: Safari and Firefox (does a service worker see media
-requests there), a phone (question 3), and more plays on Acast and
-Art19. Phase 1 does not depend on any of these and can start.
+banner. Questions 1, 2, 4 and 5 are answered for Chrome. Phase 1 does
+not depend on the rest and was built.
+
+Result (2026-11-11, desktop Safari; see Safari check): the service
+worker sees media requests and the content check works there too, on
+one play per episode. Questions 1, 2, 4 and 5 are answered for desktop
+Safari. Still open: a phone (question 3, and whether Safari on iOS
+behaves like the desktop), Firefox, and more plays on Acast and Art19.
+None of these blocks building Phase 2 behind its flag, because a browser
+where the worker sees no media request keeps the banner. They are the
+checks to pass before the flag is turned on for a browser.
 
 ### Phase 1: sync track in the pipeline
 
@@ -690,16 +796,32 @@ Art19. Phase 1 does not depend on any of these and can start.
 
 Rows marked ✅ are implemented (Phase 1a wrote the tracks; Phase 1b
 serves them and backfills). Nothing in the reader uses a track yet.
+Phase 1 is released on its own, ahead of Phase 2: an episode transcribed
+before the release has no track and can only be aligned by Phase 5, and
+the backfill reaches back only as far as Dalston still holds the audio.
 `SYNC_TRACKS_ENABLED=false` stops new tracks. Only episodes processed by
 the task worker get a track; the direct CLI commands (`thestill
 download`, `thestill transcribe`) do not.
 
-The two-user-agent size probe of section 8 is not built. It would send
-requests to publishers under browser and Apple user agents that Thestill
-is not, on every episode. That is a policy decision, not an engineering
-one (open question 6). The same question can be answered without it:
-Phase 2's client reports say directly whether a listener's copy
-differed.
+The two-user-agent size probe of section 8 is not built, by decision
+(2026-11-11, open question 6). It would send requests to publishers
+under browser and Apple user agents that Thestill is not, on every
+episode. The same question is answered without it: Phase 2's client
+reports say directly whether a listener's copy differed.
+
+Checked end to end on a local server (2026-11-11), with the track built
+on the Dalston URL path from the job's stored MP3:
+
+| Episode | Track | Listener copy | Map found | Check |
+|---|---|---|---|---|
+| Today in Focus (Acast), 52 min | 3,372 anchors, 33.8 KB, built in 1.6 s | 45 s longer, Chrome and Apple user agents | 0 s up to 2,623 s, +40.124 s from 2,688.7 s; the gap is the transcript's mid-roll `ad_break` | 12 of 12 segments |
+| The Prof G Pod (Megaphone through podtrac) | 983 anchors, 9.9 KB | two different copies | +7.967 s (Chrome user agent), +31.974 s (Apple user agent) | 10 of 10 on both |
+
+The check is independent of the track: decoded audio of the transcribed
+copy and of the listener's copy, cross-correlated at each sampled
+transcript segment after applying the map (correlation at least 0.987,
+residual 0 ms; without the map the correlation after the mid-roll was
+about 0).
 
 Checked on the five real episode pairs of the Background findings: the
 aligner returns the same offsets as the Haitsma-Kalker experiment
@@ -754,6 +876,30 @@ need none of Phase 5.
 | 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome`: validates and logs `drift_map_reported`, updates the per-show ad profile (rate-limited, 4 KB cap) |
 | 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | server-side fitter sharing test vectors with the worker; `thestill sync-track audit` and `show`; scheduled audit sample |
 | 2.7 | `EpisodeReader.tsx` | admin-only `?driftdebug=1` strip |
+| 2.8 | `public/sw.js` (new), player | the service worker and its registration, under the rules below |
+
+Rows 2.4, 2.5 and 2.7 are built first, with the worker, so that every
+play reports its outcome from the first admin session.
+
+The service worker is the app's first. Its rules:
+
+- It answers only cross-origin requests whose destination is `audio` or
+  `video`, and returns the original response. Every other request is
+  left to the browser. It caches nothing and handles no navigation.
+- It is registered on the first play of an episode that has a track,
+  with the feature flag on, and takes control of the open page without
+  a reload. Signed-out visitors, public pages and crawlers never
+  register it.
+- `sw.js` is served from a fixed URL with `Cache-Control: no-cache`.
+  With the flag off, the app unregisters the worker on load.
+
+Rollout: admins only, then per browser. Standalone browser probes stop
+here; the remaining questions (Safari on iOS, Firefox, more plays on
+Acast and Art19, pass time on a phone) are answered by the outcome
+reports of real plays on thestill.me. A browser is switched on for
+everyone when its reports show no play in which the element's bytes
+differed from the fetched copy, over at least 50 plays on each of
+Megaphone, Acast and Art19.
 
 Acceptance: a Playwright test serves two spliced variants of one fixture
 and asserts that a segment click lands on the same audio in both. The
@@ -882,7 +1028,8 @@ with #110 Phase 4 and is not required here.
 3. **Duration outlier.** On one Flightcast episode Chrome's reported
    duration was 9.9 s longer than the summed frame durations of the
    same bytes. Is time-based seeking on that file accurate, and how
-   common is this?
+   common is this? Safari reported 0 ms on another episode of the same
+   show.
 4. **Server consumers.** `get_episode_clip` and the clip work of #114
    hand out transcript times against the publisher URL. They cannot know
    the recipient's ad set. Is a "times are approximate" note enough
@@ -891,10 +1038,22 @@ with #110 Phase 4 and is not required here.
    acceptable, given the Mac and GPU pool?
 6. **Probing publishers under other user agents.** Section 8's ingest
    probe needs requests that present as a browser and as Apple's player.
-   Acceptable, or rely on client reports only?
+   Acceptable, or rely on client reports only? **Decided 2026-11-11:**
+   client reports only; the probe is not built.
+7. **Where does `crossorigin` get decided?** The attribute must be on
+   the element before it loads, and the probe that decides it took up
+   to 3.0 s to fail. **Decided 2026-11-11:** playback never waits. The
+   verdict is remembered per host and applied from the next load
+   (section 4, step 6).
+8. **Other browsers.** Does a service worker see media requests in
+   Safari on iOS and in Firefox, and how long does the full pass take on
+   a phone? **Decided 2026-11-11:** no further standalone probes; the
+   outcome reports of admin plays on thestill.me answer it, and each
+   browser is switched on separately (Phase 2, rollout).
 
 ## Rollback plan
 
-The client path is behind a feature flag; off restores the banner. The
+The client path is behind a feature flag; off restores the banner and
+unregisters the service worker on the next page load. The
 sync track is an inert file and a nullable column. Neither needs
 removal.
