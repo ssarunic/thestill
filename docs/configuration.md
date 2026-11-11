@@ -125,6 +125,7 @@ are optional.
 | `MAX_EPISODES_PER_PODCAST` | Limit episodes tracked per podcast | - (no limit) |
 | `DELETE_AUDIO_AFTER_PROCESSING` | Delete audio after each stage | `false` |
 | `SYNC_TRACKS_ENABLED` | Write a sync track for each transcribed episode (see [spec #116](../specs/116-timestamp-drift-alignment.md)) | `true` |
+| `DRIFT_ALIGNMENT_ENABLED` | Let admins' browsers align a transcript with the copy of the audio they are served and report the result (see [spec #116](../specs/116-timestamp-drift-alignment.md), Phase 2). Changes no playback yet | `false` |
 | `REFRESH_MAX_WORKERS` | Parallel workers for `thestill refresh` (see [spec #19](../specs/19-refresh-performance.md)) | `1` |
 | `REFRESH_MAX_PER_HOST` | Cap on concurrent HTTP fetches per host during refresh | `2` |
 | `REFRESH_QUARANTINE_PROBE_INTERVAL_SECONDS` | Spec #60: how long a `feed_gone`/`invalid_content` quarantine sits before one automatic re-probe (`auth_required`/`blocked_unsafe` are never auto-probed) | `604800` (weekly) |

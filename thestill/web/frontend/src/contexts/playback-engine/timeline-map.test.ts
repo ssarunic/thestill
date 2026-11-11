@@ -39,6 +39,21 @@ describe('TimelineMap', () => {
     expect(map.toLogical(35)).toBeNull()
   })
 
+  it('joins unplaced audio to the span on its own side of an absent stretch', () => {
+    // 20–22 is content the aligner missed after the first span, 22–24 an ad
+    // only the transcribed copy has, 24–26 content before the second span.
+    const map = new TimelineMap(spans, [
+      { srcStartS: 20, srcEndS: 22, kind: 'unresolved' },
+      { srcStartS: 22, srcEndS: 24, kind: 'confirmed' },
+      { srcStartS: 24, srcEndS: 26, kind: 'unresolved' },
+    ])
+    expect(map.toAsset(21)).toEqual({ time: 29, approximate: true })
+    expect(map.toAsset(25)).toEqual({ time: 42, approximate: true })
+    expect(map.toLogical(29)).toBe(21)
+    expect(map.toLogical(42)).toBe(25)
+    expect(map.toLogical(35)).toBeNull() // the listener's own mid-roll
+  })
+
   it('uses the nearest span outside the mapped range', () => {
     const map = new TimelineMap([{ srcStartS: 5, srcEndS: 20, offsetS: 8 }])
     expect(map.toAsset(2)).toEqual({ time: 10, approximate: true })

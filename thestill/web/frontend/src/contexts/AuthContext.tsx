@@ -43,7 +43,7 @@ interface AuthStatus {
 }
 
 /** Spec #110 — the named permissions the app knows about. */
-export type Permission = 'transcript.edit'
+export type Permission = 'transcript.edit' | 'drift.align'
 
 interface AuthContextType {
   user: User | null

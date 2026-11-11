@@ -10,6 +10,8 @@ import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
 import { useIsSmUp } from '../hooks/useMediaQuery'
+import { useDriftAlignment } from '../drift/useDriftAlignment'
+import DriftDebugStrip from '../drift/DriftDebugStrip'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
@@ -518,6 +520,19 @@ export default function EpisodeReader({
 
   const transcriptSegments = transcriptData?.segments?.segments ?? null
 
+  // Spec #116 Phase 2 — align the transcript with this browser's copy of
+  // the audio once playback starts, and report the outcome. Nothing is
+  // corrected yet; `?driftdebug=1` shows the result.
+  const canAlignDrift = can('drift.align')
+  const driftAlignment = useDriftAlignment({
+    enabled: canAlignDrift,
+    podcastSlug,
+    episodeSlug,
+    episodeId: episode?.id,
+    transcript: transcriptData?.segments,
+  })
+  const showDriftDebug = canAlignDrift && searchParams.get('driftdebug') === '1'
+
   // Spec #72 §Deep link — `?t=` lands the reader on that segment regardless
   // of the follow toggle: once per history entry, fresh entries only. A POP
   // back to an entry already handled does nothing here, so the saved
@@ -810,6 +825,14 @@ export default function EpisodeReader({
                   onShowInTranscript={jumpToTranscriptSegment}
                 />
               ) : (
+                <>
+                {showDriftDebug && (
+                  <DriftDebugStrip
+                    state={driftAlignment}
+                    hasTrack={Boolean(transcriptData?.segments?.sync_track_generation)}
+                    onPlayAt={handleSegmentSeek}
+                  />
+                )}
                 <TranscriptPanel
                   transcriptData={transcriptData}
                   transcriptLoading={transcriptLoading}
@@ -839,6 +862,7 @@ export default function EpisodeReader({
                   karaokeChipDisabled={karaokeUnavailable}
                   onKaraokeToggle={handleKaraokeToggle}
                 />
+                </>
               )}
             </Suspense>
           </div>

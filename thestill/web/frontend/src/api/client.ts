@@ -77,6 +77,7 @@ import type {
 } from './types'
 
 import { ApiStatusError, apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import type { DriftOutcomeBody } from '../drift/report'
 
 const API_BASE = '/api'
 
@@ -181,6 +182,22 @@ export async function followPodcast(podcastSlug: string, source?: FollowSource):
     const error = await response.json()
     throw new Error(apiErrorMessage(error, response.status))
   }
+}
+
+// Spec #116 — what this browser made of aligning the transcript with its
+// copy of the audio. Fire and forget; see drift/useDriftAlignment.ts.
+export async function reportDriftOutcome(
+  podcastSlug: string,
+  episodeSlug: string,
+  body: DriftOutcomeBody,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/episodes/${episodeSlug}/drift-outcome`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`drift-outcome: ${response.status}`)
 }
 
 // Unfollow a podcast
