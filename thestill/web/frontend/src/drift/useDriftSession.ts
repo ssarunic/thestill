@@ -9,7 +9,7 @@
 import { useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { setCrossOriginLoadingEnabled } from './corsVerdict'
-import { removeDriftServiceWorker } from './swClient'
+import { listenForMediaReports, removeDriftServiceWorker } from './swClient'
 
 export function useDriftSession(): void {
   const { can, isLoading } = useAuth()
@@ -18,7 +18,10 @@ export function useDriftSession(): void {
     // Until the session is known, change nothing: a held permission must
     // not lose its worker on every page load.
     if (isLoading) return
+    // Both are remembered or attached for the next page load too, where
+    // the player restores a source before this effect has run.
     setCrossOriginLoadingEnabled(held)
-    if (!held) void removeDriftServiceWorker()
+    if (held) listenForMediaReports()
+    else void removeDriftServiceWorker()
   }, [held, isLoading])
 }

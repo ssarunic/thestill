@@ -3,7 +3,9 @@ import {
   beginAudioLoad,
   chainKey,
   currentAudioLoad,
+  crossOriginLoadingEnabled,
   getCorsVerdict,
+  reloadCrossOriginLoadingSetting,
   rejectCrossOrigin,
   setCorsVerdict,
   setCrossOriginLoadingEnabled,
@@ -74,5 +76,19 @@ describe('beginAudioLoad', () => {
     expect(getCorsVerdict(SAME_CHAIN)).toBe('no_cors')
     expect(currentAudioLoad()?.crossOrigin).toBe(false)
     expect(beginAudioLoad(SAME_CHAIN, true)).toBe(false)
+  })
+
+  it('is in force on the next page load before the session is known', () => {
+    // A reload restores the saved source in an effect that runs before the
+    // app can ask who is signed in.
+    setCorsVerdict(MEGAPHONE, 'cors_ok')
+    setCrossOriginLoadingEnabled(true)
+    reloadCrossOriginLoadingSetting()
+    expect(crossOriginLoadingEnabled()).toBe(true)
+    expect(beginAudioLoad(MEGAPHONE, true)).toBe(true)
+
+    setCrossOriginLoadingEnabled(false)
+    reloadCrossOriginLoadingSetting()
+    expect(beginAudioLoad(MEGAPHONE, true)).toBe(false)
   })
 })

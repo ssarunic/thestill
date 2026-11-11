@@ -63,12 +63,43 @@ export function setCorsVerdict(url: string, verdict: CorsVerdict, now = Date.now
 
 // --- What the player does with it -----------------------------------------
 
-let enabled = false
+const ENABLED_KEY = 'thestill:drift:enabled'
+
+function rememberedEnabled(): boolean {
+  try {
+    return localStorage.getItem(ENABLED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+// The permission is only known once the session has loaded, but the player
+// restores a saved source before that, in an effect that runs ahead of the
+// app's. So the last known answer is kept across loads and is in force
+// from the moment this module is imported. A withdrawn permission costs
+// one load with the attribute, on a host known to allow it.
+let enabled = rememberedEnabled()
 
 /** Switched on for sessions that hold `drift.align`; off, no element ever
- * gets the attribute. */
+ * gets the attribute. Remembered for the next page load. */
 export function setCrossOriginLoadingEnabled(on: boolean): void {
   enabled = on
+  try {
+    if (on) localStorage.setItem(ENABLED_KEY, '1')
+    else localStorage.removeItem(ENABLED_KEY)
+  } catch {
+    // No storage: the setting holds for this page only.
+  }
+}
+
+/** Whether crossorigin loading is in force right now. */
+export function crossOriginLoadingEnabled(): boolean {
+  return enabled
+}
+
+/** Test seam: re-read the remembered answer, as a fresh page load does. */
+export function reloadCrossOriginLoadingSetting(): void {
+  enabled = rememberedEnabled()
 }
 
 export interface AudioLoad {

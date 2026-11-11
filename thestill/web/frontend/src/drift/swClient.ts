@@ -1,6 +1,7 @@
 // Spec #116 §4 step 6 — the page's side of public/sw.js: register it, keep
 // what it reports about the audio element's requests, unregister it when
 // the session may no longer align.
+import { crossOriginLoadingEnabled } from './corsVerdict'
 import type { MediaReport } from './verify'
 
 export const SW_URL = '/sw.js'
@@ -23,7 +24,13 @@ function supported(): boolean {
   return typeof navigator !== 'undefined' && 'serviceWorker' in navigator
 }
 
-function listen(): void {
+/**
+ * Start keeping what an installed worker reports. Called as soon as a
+ * session may align, not when the reader opens: playback can start
+ * elsewhere (Continue listening, a restored session), and the worker's
+ * report of the element's first response is sent once.
+ */
+export function listenForMediaReports(): void {
   if (listening || !supported()) return
   listening = true
   navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
@@ -37,7 +44,7 @@ function listen(): void {
 /** Register the worker (idempotent). Never throws. */
 export function ensureDriftServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (!supported()) return Promise.resolve(null)
-  listen()
+  listenForMediaReports()
   registration ??= navigator.serviceWorker.register(SW_URL, { scope: '/' }).catch(() => null)
   return registration
 }
@@ -88,7 +95,12 @@ export function mediaReportsFor(audioUrl: string, finalHost: string | null, sinc
 export function resetDriftServiceWorkerClient(): void {
   reports.length = 0
   registration = null
+  listening = false
 }
+
+// A page load by a session that could align last time listens from the
+// start, before the session has even loaded (see corsVerdict.ts).
+if (crossOriginLoadingEnabled()) listenForMediaReports()
 
 /** Test seam: what a `drift-media` message does. */
 export function recordMediaReport(report: MediaReport): void {
