@@ -19,7 +19,7 @@ import {
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
-import { NativeEngine, type NativeEngineState } from './playback-engine/native-engine'
+import { NativeEngine, type AppliedTimeline, type NativeEngineState } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { beginAudioLoad } from '../drift/corsVerdict'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
@@ -163,6 +163,16 @@ export interface PlayerContextValue {
   pipSupported: boolean
   pipActive: boolean
   requestPip: () => void
+  // Spec #116 — put a verified timeline map in force for the audio now
+  // playing (or lift it with null). While one is set, every time this
+  // context takes or reports for that source is transcript time: `seek`
+  // lands on the words asked for, `usePlayerTime`/`getCurrentTime` follow
+  // the words being spoken, and saved positions mean the same sentence in
+  // any copy. Refused (false) unless `episodeId` and `audioUrl` are what
+  // the native engine is playing as the audio rendition.
+  applyTimeline: (episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => boolean
+  // True while a map is in force. Any change of source lifts it.
+  timelineApplied: boolean
   // Media error surface (§8). Cleared on the next successful source.
   mediaError: string | null
   // Volume / mute (§8).
@@ -250,6 +260,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [videoPreference, setVideoPreference] = useState<VideoPreference>('shown')
   const [pipActive, setPipActive] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
+  const [timelineApplied, setTimelineApplied] = useState(false)
   const [volume, setVolumeState] = useState(1)
   const [muted, setMuted] = useState(false)
   const [theaterSlot, setTheaterSlot] = useState<{ episodeId: string; el: HTMLElement } | null>(null)
@@ -412,6 +423,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     srcRef.current = source.url
     setNativeDuration(null)
     setMediaError(null)
+    // The engine drops its map with the old source.
+    setTimelineApplied(false)
+  }, [])
+
+  const applyTimeline = useCallback((episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => {
+    const native = nativeEngineRef.current
+    if (!native) return false
+    if (trackRef.current?.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+    // Lifting must always reach the source the map was set on, even while
+    // it is parked: after a switch to the YouTube player the native engine
+    // keeps its source, and a switch back reuses it. A map found invalid in
+    // the meantime must not come back with it.
+    if (timeline !== null && (engineKindRef.current !== 'native' || renditionRef.current !== 'audio')) return false
+    if (!native.setTimeline(audioUrl, timeline)) return false
+    setTimelineApplied(timeline !== null)
+    return true
   }, [])
 
   // Spec #90 — the persistence layer reads and drives the player through
@@ -628,6 +655,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setNativeDuration(null)
     setMediaError(null)
+    setTimelineApplied(false)
     setAvailableRates(null)
   }, [persistence, setEngineKind, setRendition])
 
@@ -1003,6 +1031,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported: pipSupported && activeEngine !== 'youtube',
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
       mediaError,
       volume,
       muted,
@@ -1042,6 +1072,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported,
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
       mediaError,
       volume,
       muted,

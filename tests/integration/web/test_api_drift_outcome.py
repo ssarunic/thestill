@@ -256,3 +256,24 @@ def test_a_later_report_of_the_same_play_is_marked(client, app_state, episode, l
 
     assert [event["revision"] for event in log.named("drift_map_reported")] == [0, 1]
     assert [event.properties()["revision"] for event, _ in sink.events] == [0, 1]
+
+
+def test_applied_map_is_recorded_and_must_have_been_verified(client, app_state, episode, log):
+    """Spec #116 section 4 step 7 — a map in force without both checks is a bug."""
+    url, generation = episode
+    app_state.analytics_sink = sink = RecordingSink()
+    verified = {**_aligned(generation), "sw_state": "ok", "applied": True}
+
+    assert client.post(url, json=verified).status_code == 200
+    for broken in (
+        {"verify_length_ok": None},
+        {"verify_ranges_checked": 0, "verify_ranges_matched": 0},
+        {"verify_ranges_matched": 3},
+        {"outcome": "identity"},
+    ):
+        assert client.post(url, json={**verified, **broken}).status_code == 200
+
+    events = log.named("drift_map_reported")
+    assert [event["log_level"] for event in events] == ["info", "error", "error", "error", "error"]
+    assert all(event["applied"] is True for event in events)
+    assert sink.events[0][0].properties()["applied"] is True

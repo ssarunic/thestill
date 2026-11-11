@@ -14,6 +14,7 @@ const player = {
   isPlaying: false,
   activeEngine: 'native',
   activeRendition: 'audio',
+  applyTimeline: vi.fn<(...args: unknown[]) => boolean>(() => true),
 }
 vi.mock('../contexts/PlayerContext', () => ({ usePlayer: () => player }))
 
@@ -58,6 +59,7 @@ const report: DriftReport = {
   anchorsInlier: 10,
   audioHost: 'cdn.example',
   audioBytes: 1,
+  trackDurationS: 20,
   fetchedBytes: 2,
   fetchMs: 3,
   fitMs: 4,
@@ -75,6 +77,8 @@ const props = (overrides: Partial<Parameters<typeof useDriftAlignment>[0]> = {})
 })
 
 beforeEach(() => {
+  player.applyTimeline.mockClear()
+  player.applyTimeline.mockImplementation(() => true)
   vi.useFakeTimers()
   localStorage.clear()
   resetDriftServiceWorkerClient()
@@ -322,6 +326,111 @@ describe('a play is checked again as later ranges arrive', () => {
     const body = reportDriftOutcome.mock.calls[0][2] as Body & { verify_length_ok: boolean | null }
     expect([body.outcome, body.revision, body.sw_state, body.verify_length_ok]).toEqual(['aligned', 0, null, null])
     expect(result.current).toMatchObject({ status: 'done', report, check: null })
+  })
+
+  it('puts the map in force once the play is verified, and lifts it when a range stops matching', () => {
+    const { result } = play()
+    recordMediaReport(range())
+    finish()
+    // Nothing moves before the check.
+    expect(player.applyTimeline).not.toHaveBeenCalled()
+    settle(1500)
+
+    expect(result.current.applied).toBe(true)
+    const [episodeId, audioUrl, timeline] = player.applyTimeline.mock.calls[0] as [
+      string,
+      string,
+      { map: { toAsset: (t: number) => { time: number } }; durationS: number },
+    ]
+    expect([episodeId, audioUrl, timeline.durationS]).toEqual(['ep-1', AUDIO, 20])
+    expect(timeline.map.toAsset(5).time).toBe(13) // the report's one span plays 8 s later
+    expect((bodies()[0] as Body & { applied: boolean }).applied).toBe(true)
+
+    act(() => recordMediaReport(range({ range: 'bytes=65536-', blockIndex: 1, crc: 999, adler: 44 })))
+    settle(500)
+    expect(player.applyTimeline).toHaveBeenLastCalledWith('ep-1', AUDIO, null)
+    expect(result.current.applied).toBe(false)
+    expect(bodies().map((b) => [b.outcome, (b as Body & { applied: boolean }).applied])).toEqual([
+      ['aligned', true],
+      ['variant_mismatch', false],
+    ])
+  })
+
+  it('applies a map that could only be verified later', () => {
+    const { result } = play()
+    finish()
+    settle(1500)
+    expect(result.current.applied).toBe(false)
+    expect(player.applyTimeline).toHaveBeenLastCalledWith('ep-1', AUDIO, null)
+
+    act(() => recordMediaReport(range()))
+    settle(500)
+    expect(result.current.applied).toBe(true)
+    expect((bodies()[1] as Body & { applied: boolean }).applied).toBe(true)
+  })
+
+  it('never applies without a verified check, or for a copy that needs no map', () => {
+    // Verified, but identical audio: nothing to correct.
+    const identity = play()
+    recordMediaReport(range())
+    act(() =>
+      FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
+    )
+    settle(1500)
+    expect(identity.result.current.check?.verification?.verdict).toBe('verified')
+    expect(identity.result.current.applied).toBe(false)
+    expect(player.applyTimeline.mock.calls.every((call) => call[2] === null)).toBe(true)
+  })
+
+  it('says not applied when the player refuses the map', () => {
+    // The player only accepts a map for the audio it is playing right now.
+    player.applyTimeline.mockImplementation(() => false)
+    const { result } = play()
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    expect(result.current.applied).toBe(false)
+    expect((bodies()[0] as Body & { applied: boolean }).applied).toBe(false)
+  })
+
+  it('offers a verified map again once the audio is what is playing', () => {
+    // The listener was on the YouTube player when the check finished, so
+    // the player refused the map; back on audio, the same load is still
+    // verified and the map goes in.
+    player.applyTimeline.mockImplementation(() => false)
+    const { result, rerender } = play()
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(result.current.applied).toBe(false)
+
+    Object.assign(player, { activeEngine: 'youtube' })
+    rerender()
+    expect(result.current.status).toBe('idle')
+
+    player.applyTimeline.mockImplementation(() => true)
+    Object.assign(player, { activeEngine: 'native' })
+    rerender()
+    expect(result.current.applied).toBe(true)
+    expect(player.applyTimeline.mock.calls.at(-1)?.[2]).not.toBeNull()
+    const last = bodies().at(-1) as Body & { applied: boolean }
+    expect([last.outcome, last.applied, last.revision > 0]).toEqual(['aligned', true, true])
+    // No second download, and no repeat on a later re-render.
+    expect(FakeWorker.instances).toHaveLength(1)
+    const reports = bodies().length
+    rerender()
+    expect(bodies()).toHaveLength(reports)
+
+    // A further matching range updates the count shown; the map stays in
+    // force and the state keeps saying so.
+    act(() =>
+      recordMediaReport(range({ range: 'bytes=65536-', contentLength: null, blockIndex: 1, crc: 33, adler: 44 })),
+    )
+    settle(500)
+    expect(result.current.check?.verification).toMatchObject({ rangesChecked: 2, verdict: 'verified' })
+    expect(result.current.applied).toBe(true)
+    expect(player.applyTimeline.mock.calls.at(-1)?.[2]).not.toBeNull()
   })
 
   it('stops when another source is loaded', () => {

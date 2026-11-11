@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 partly built: browsers of sessions holding `drift.align` align on first play, check the playing audio through a service worker and report; **no timestamp is corrected yet** (row 2.3). Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resume correction, the audit command, the per-show ad profile. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-11
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -872,18 +872,40 @@ need none of Phase 5.
 | # | Where | What |
 |---|---|---|
 | 2.1 ✅ | `src/workers/driftAlign.worker.ts`, `src/drift/` | stream fetch, frame hashing, fitter, gap classification, block digest, verification |
-| 2.2 ✅ | `src/contexts/playback-engine/timeline-map.ts` | `TimelineMap` with `toAsset` / `toLogical` (built and tested; not wired into the player) |
-| 2.3 | `src/contexts/PlayerContext.tsx`, `EpisodeReader.tsx` | route seeks and karaoke through the map; banner states |
+| 2.2 ✅ | `src/contexts/playback-engine/timeline-map.ts` | `TimelineMap` with `toAsset` / `toLogical` |
+| 2.3 ✅ | `src/contexts/playback-engine/native-engine.ts`, `PlayerContext.tsx`, `EpisodeReader.tsx` | the verified map applied inside the native engine, so every seek and every reported time goes through it; banner states |
 | 2.4 ✅ | analytics | `drift_alignment_result` (`segment_seek_corrected` comes with 2.3) |
 | 2.5 ✅ | `thestill/web/routes/api_podcasts.py` | `POST /api/podcasts/{podcast}/episodes/{episode}/drift-outcome`: validates and logs `drift_map_reported` (rate-limited, 4 KB cap enforced before the body is read) |
 | 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | ✅ server-side fitter sharing test vectors with the worker (`tests/fixtures/sync_track/align_vectors.json`); `thestill sync-track audit` and the scheduled audit sample are not built |
 | 2.7 ✅ | `src/drift/DriftDebugStrip.tsx` | admin-only `?driftdebug=1` strip, with "play corrected" and "play uncorrected" per span |
 | 2.8 ✅ | `public/sw.js`, `src/drift/swClient.ts`, `corsVerdict.ts`, native engine | the service worker, the `crossorigin` verdict and the two checks of section 4 step 6 |
 
-Rows marked ✅ are implemented. **No map is applied to playback yet**:
-row 2.3 is what remains, and with it the Playwright acceptance test.
-Every play by a session that holds `drift.align` aligns, checks what it
-can, and reports.
+Rows marked ✅ are implemented. A map is applied for sessions that hold
+`drift.align`, and only when the copy is shifted (`aligned`) and both
+checks of section 4 step 6 have passed for the audio now playing. Any
+other verdict lifts it, also after it has been applied.
+
+Where the map is applied: inside `NativeEngine`, not at each caller.
+While a map is set, every time the engine takes or reports is transcript
+time. So segment clicks, citations, chapters, the scrubber, the clock,
+karaoke and the saved listening position are corrected by one change and
+none of them knows about the map:
+
+- a seek to transcript time t moves the element to `toAsset(t)`;
+- the reported time is `toLogicalHeld(elementTime)`: through an ad that
+  only the listener's copy has, the clock (and the karaoke highlight)
+  waits at the point the ad interrupted;
+- the reported duration is the transcribed copy's, so the drift banner,
+  which compares durations, goes by itself once a map is in force;
+- setting or lifting the map does not move the audio. Only the time
+  reported for it changes.
+
+The acceptance test is `tests/drift-alignment.spec.ts`: two real MP3
+copies of one episode with different ads, served from a second origin
+with CORS and Range, in Chromium. With the listener's copy, a click on
+the paragraph at 30 s of the transcript moves the element to 39 s and
+that paragraph is highlighted; with the transcribed copy the element goes
+to 30 s and no map is set.
 
 Rows 2.4, 2.5 and 2.7 were built first, with the worker, so that every
 play reports its outcome from the first admin session.
@@ -935,12 +957,18 @@ How this was built, where it differs from the sections above:
   response of the same play, and a changed verdict is reported again
   with `revision` above 0, so a copy that differs only at a later ad
   break is found when a seek reaches it.
+- **Not corrected yet: resuming.** A position saved while a map is in
+  force is transcript time. On the next load the element seeks to it
+  before any map exists, so it starts as far off as the ads differ, as it
+  does today; the clock then shows the true transcript time. Correcting
+  the start needs the map before the first seek (a cached map, step 7).
 - **Not built:** the per-show ad profile (section 8) and the client
   eagerness it drives, the identity shortcut and the cheap check (steps
   2 and 3: every attempt is a full pass), the "Refine" step (the
   stretches a run leaves short of a splice are cut along the transcript's
-  segments instead), caching a map in `sessionStorage`, and the audit
-  command.
+  segments instead), caching a map in `sessionStorage`, the drift note on
+  segments inside an unresolved stretch, the `segment_seek_corrected`
+  event, and the audit command.
 
 Measured on the built code (2026-11-11): the shipped `sw.js` with a
 `crossorigin` element in headless Chromium and headless WebKit, on one

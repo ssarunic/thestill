@@ -11,6 +11,7 @@
 
 import { canPlayHlsNatively, HLS_ERROR_EVENT, loadHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
 import { rejectCrossOrigin } from '../../drift/corsVerdict'
+import type { TimelineMap } from './timeline-map'
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 
 // Numeric codes rather than the MediaError constants — the global is not
@@ -48,6 +49,21 @@ export interface NativeEngineState {
   // attach of `url` is still waiting for the hls.js chunk.
   hls?: HlsInstance | null
   hlsAttaching?: boolean
+  // Spec #116 — the timeline map in force for `url`, if any.
+  timeline?: AppliedTimeline | null
+}
+
+/**
+ * Spec #116 §5 — a verified map between transcript time and the time of
+ * the copy this element is playing, with the transcribed copy's duration.
+ * While one is set, every time the engine takes or reports is transcript
+ * time: seeks land on the words that were clicked, the clock and karaoke
+ * follow the words being spoken, and a saved position means the same
+ * sentence in any copy.
+ */
+export interface AppliedTimeline {
+  map: TimelineMap
+  durationS: number
 }
 
 interface HlsErrorData {
@@ -73,6 +89,9 @@ export class NativeEngine implements PlaybackEngine {
   // play was asked for on it (to resume after the fallback reload).
   private crossOriginUrl: string | null = null
   private wantsPlay = false
+  // Spec #116 — set only for the source it was verified against; cleared
+  // by every source change.
+  private timeline: AppliedTimeline | null = null
   private unbind: () => void
   // Spec #113 — hls.js state. `hlsGeneration` invalidates an attach still
   // waiting for the chunk when the source changes underneath it.
@@ -96,6 +115,7 @@ export class NativeEngine implements PlaybackEngine {
       this.url = carried.url
       this.pendingSeek = carried.pendingSeek
       this.userSeeked = carried.userSeeked
+      this.timeline = carried.timeline ?? null
     }
 
     const listeners: Array<[string, EventListener]> = [
@@ -109,7 +129,7 @@ export class NativeEngine implements PlaybackEngine {
         'loadedmetadata',
         () => {
           if (this.pendingSeek != null) {
-            this.el.currentTime = this.pendingSeek
+            this.el.currentTime = this.toElementTime(this.pendingSeek)
             this.pendingSeek = null
           }
         },
@@ -117,7 +137,7 @@ export class NativeEngine implements PlaybackEngine {
       [
         'durationchange',
         () => {
-          if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.el.duration)
+          if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.getDuration())
         },
       ],
       ['ratechange', () => this.events.onRateChange(this.el.playbackRate)],
@@ -162,6 +182,8 @@ export class NativeEngine implements PlaybackEngine {
     this.userSeeked = false
     this.url = source.url
     this.wantsPlay = false
+    // A map belongs to one verified load of one copy.
+    this.timeline = null
     const useHls = needsHlsJs(this.el, source.url, source.mimeType)
     // The attribute must be in place before the source is assigned.
     if (source.crossOrigin && !useHls) {
@@ -193,6 +215,8 @@ export class NativeEngine implements PlaybackEngine {
     if (url === null) return
     rejectCrossOrigin(url)
     this.crossOriginUrl = null
+    // Without the attribute nothing can be verified, so no map stays in force.
+    this.timeline = null
     // Keep where playback was meant to be: a deferred seek that never ran
     // (the failure comes before metadata), else the position reached.
     const position = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
@@ -211,6 +235,7 @@ export class NativeEngine implements PlaybackEngine {
     this.el.removeAttribute('crossorigin')
     this.crossOriginUrl = null
     this.wantsPlay = false
+    this.timeline = null
     this.url = null
     this.pendingSeek = null
     this.userSeeked = false
@@ -252,7 +277,36 @@ export class NativeEngine implements PlaybackEngine {
     // An explicit seek supersedes a deferred one (a resume position queued
     // for loadedmetadata), or metadata would jump back to it.
     this.pendingSeek = null
-    this.el.currentTime = Math.max(0, seconds)
+    this.el.currentTime = Math.max(0, this.toElementTime(seconds))
+  }
+
+  // Spec #116 — between the time the app speaks (transcript time while a
+  // map is set) and the element's own clock.
+  private toElementTime(seconds: number): number {
+    return this.timeline ? this.timeline.map.toAsset(seconds).time : seconds
+  }
+
+  private fromElementTime(seconds: number): number {
+    return this.timeline ? this.timeline.map.toLogicalHeld(seconds) : seconds
+  }
+
+  /**
+   * Put a verified map in force for the current source, or lift it (null).
+   * Returns false when `url` is no longer the loaded source. The audio does
+   * not move: only the time the engine reports for it changes, so the app
+   * is told at once.
+   */
+  setTimeline(url: string, timeline: AppliedTimeline | null): boolean {
+    if (this.url !== url || this.hls !== null || this.hlsAttach !== null) return false
+    if (this.timeline === timeline) return true
+    this.timeline = timeline
+    this.events.onTimeUpdate(this.getCurrentTime())
+    if (Number.isFinite(this.el.duration)) this.events.onDurationChange(this.getDuration())
+    return true
+  }
+
+  hasTimeline(): boolean {
+    return this.timeline !== null
   }
 
   // Spec #90 — apply a resume position learned after the source was
@@ -271,7 +325,7 @@ export class NativeEngine implements PlaybackEngine {
       return true
     }
     if (this.el.currentTime >= LATE_SEEK_WINDOW_SECONDS) return false
-    this.el.currentTime = seconds
+    this.el.currentTime = this.toElementTime(seconds)
     return true
   }
 
@@ -290,11 +344,13 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   getCurrentTime(): number {
-    return this.hlsRetry ? this.hlsRetry.position : this.el.currentTime
+    return this.hlsRetry ? this.hlsRetry.position : this.fromElementTime(this.el.currentTime)
   }
 
   getDuration(): number {
-    return Number.isFinite(this.el.duration) ? this.el.duration : 0
+    if (!Number.isFinite(this.el.duration)) return 0
+    // With a map, the app's timeline is the transcribed copy's.
+    return this.timeline ? this.timeline.durationS : this.el.duration
   }
 
   isPlaying(): boolean {
@@ -320,7 +376,14 @@ export class NativeEngine implements PlaybackEngine {
     this.hlsAttach = null
     this.hlsGeneration++
     this.deferredPlay++ // a destroyed engine never starts playback
-    return { url: this.url, pendingSeek: this.pendingSeek, userSeeked: this.userSeeked, hls, hlsAttaching }
+    return {
+      url: this.url,
+      pendingSeek: this.pendingSeek,
+      userSeeked: this.userSeeked,
+      hls,
+      hlsAttaching,
+      timeline: this.timeline,
+    }
   }
 
   private clearSrc(): void {

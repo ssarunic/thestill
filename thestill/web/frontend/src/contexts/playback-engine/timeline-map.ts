@@ -125,4 +125,22 @@ export class TimelineMap {
     }
     return null
   }
+
+  /**
+   * Audio time to transcript time for a clock that must always read
+   * something: inside audio that only the listener's copy has (an ad), the
+   * transcript time stands still at the point the ad interrupted. This is
+   * what the player shows and what karaoke follows, so the highlight holds
+   * its last word through an ad.
+   */
+  toLogicalHeld(a: number): number {
+    const t = this.toLogical(a)
+    if (t !== null) return t
+    let held: number | null = null
+    for (const span of this.spans) {
+      if (span.srcEndS + span.offsetS < a) held = span.srcEndS
+    }
+    // Before the first span (a pre-roll): wait at its start.
+    return held ?? this.spans[0]?.srcStartS ?? a
+  }
 }
