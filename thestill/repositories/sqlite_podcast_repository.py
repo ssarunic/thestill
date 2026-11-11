@@ -1652,6 +1652,30 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             """
         )
 
+        # Spec #116 (Postgres migration 0028): index of sync track files.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS episode_sync_tracks (
+                episode_id       TEXT NOT NULL,
+                generation       TEXT NOT NULL,
+                state            TEXT NOT NULL CHECK (state IN ('pending', 'current')),
+                path             TEXT NOT NULL,
+                source           TEXT NOT NULL,
+                frames           INTEGER NOT NULL,
+                anchors          INTEGER NOT NULL,
+                audio_bytes      INTEGER NOT NULL,
+                audio_duration_s REAL NOT NULL,
+                created_at       TIMESTAMP NOT NULL,
+                PRIMARY KEY (episode_id, generation),
+                FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_tracks_one_per_state"
+            " ON episode_sync_tracks(episode_id, state)"
+        )
+
         # Spec #103 Phase 2 (Postgres migration 0020): signed-out views per
         # public page per UTC day. ``day`` is an ISO date string.
         conn.execute(

@@ -86,9 +86,11 @@ from ..utils.console import ConsoleOutput
 from ..utils.url_patterns import is_remote_fetchable_audio_url
 from .audio_downloader import AudioDownloader
 from .audio_preprocessor import AudioPreprocessor
+from .dalston_transcriber import iter_job_audio
 from .error_classifier import classify_and_raise
 from .progress import ProgressCallback, ProgressUpdate, TranscriptionStage
 from .queue_manager import Task, TaskStage
+from .sync_track import iter_file_chunks
 from .transcriber_factory import create_transcriber
 
 if TYPE_CHECKING:
@@ -296,6 +298,20 @@ def handle_download(task: Task, state: "AppState") -> None:
             target_path = state.path_manager.original_audio_file(audio_path)
             state.config.file_storage.upload_file(local_audio_file, state.path_manager.to_relative(target_path))
             duration_seconds = get_audio_duration(local_audio_file)
+
+            # Spec #116 — cut the sync track from these exact bytes while
+            # they are on disk. It stays pending until the transcript of
+            # this audio is stored (handle_transcribe publishes it).
+            sync_tracks = getattr(state, "sync_track_service", None)
+            if sync_tracks is not None:
+                sync_tracks.build_pending(
+                    episode_id=episode.id,
+                    podcast_id=podcast.id,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
+                    chunks=iter_file_chunks(local_audio_file),
+                    source="local",
+                )
 
         state.feed_manager.mark_episode_downloaded(
             str(podcast.rss_url), episode.external_id, audio_path, duration=duration_seconds
@@ -574,6 +590,8 @@ def handle_transcribe(
             summary_path=None if reprocessing else "",
         )
 
+        _publish_sync_track(state, podcast, episode, relative_transcript_path, via_dalston_url=use_dalston_url)
+
         # Auto-cleanup: delete downsampled audio file after successful transcription
         if config.delete_audio_after_processing and episode.downsampled_audio_path:
             from .audio_preprocessor import AudioPreprocessor
@@ -587,6 +605,72 @@ def handle_transcribe(
                 logger.info(f"Cleaned up downsampled audio file for episode: {episode.title}")
 
         logger.info(f"Transcription completed for episode: {episode.title}")
+
+
+def _publish_sync_track(
+    state: "AppState", podcast: Podcast, episode: Episode, relative_transcript_path: str, *, via_dalston_url: bool
+) -> None:
+    """Pair the transcript that was just stored with its sync track (spec #116).
+
+    Local path: the download stage left a pending track cut from the file
+    that was then downsampled and transcribed. Dalston URL path: Thestill
+    never had the bytes, so the track is cut here from the original audio
+    Dalston stored for the job named in the transcript.
+
+    Never raises: an episode without a sync track is a supported state.
+    """
+    service = getattr(state, "sync_track_service", None)
+    if service is None:
+        return
+    config = state.config
+    log = logger.bind(episode_id=episode.id, podcast_id=podcast.id)
+
+    job_id = None
+    transcript_end_s = None
+    try:
+        raw = json.loads(config.file_storage.read_text(relative_transcript_path))
+        metadata = raw.get("provider_metadata") or {}
+        if metadata.get("provider") == "dalston":
+            job_id = metadata.get("job_id")
+        ends = [segment.get("end") for segment in raw.get("segments") or []]
+        transcript_end_s = max((end for end in ends if isinstance(end, (int, float))), default=None)
+    except Exception as exc:  # noqa: BLE001 — never fail transcription over a sync track
+        log.warning("sync_track_failed", reason="transcript_unreadable", error=str(exc), exc_info=True)
+
+    transcribed_duration_s = None
+    if via_dalston_url:
+        # A pending track left by an earlier download is not what Dalston
+        # fetched and transcribed.
+        service.discard_pending(episode.id)
+        if job_id and service.enabled:
+            try:
+                service.build_pending(
+                    episode_id=episode.id,
+                    podcast_id=podcast.id,
+                    podcast_slug=podcast.slug,
+                    episode_slug=episode.slug,
+                    chunks=iter_job_audio(
+                        str(job_id),
+                        base_url=config.dalston_base_url or None,
+                        api_key=config.dalston_api_key or None,
+                        max_bytes=config.max_audio_bytes,
+                    ),
+                    source="dalston",
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("sync_track_failed", reason="job_audio_unavailable", error=str(exc), exc_info=True)
+    elif isinstance(episode.duration, (int, float)) and episode.duration > 0:
+        # Measured from the downsampled file this transcript came from.
+        transcribed_duration_s = float(episode.duration)
+
+    # Always runs: with no pending track it removes the previous one, which
+    # described the transcript that was just replaced.
+    service.publish(
+        episode_id=episode.id,
+        podcast_id=podcast.id,
+        transcribed_duration_s=transcribed_duration_s,
+        transcript_end_s=transcript_end_s,
+    )
 
 
 def handle_clean(task: Task, state: "AppState") -> None:
@@ -654,6 +738,19 @@ def handle_clean(task: Task, state: "AppState") -> None:
         cleaned_path = podcast_subdir / cleaned_filename
         clean_transcript_db_path = f"{podcast.slug}/{cleaned_filename}"
 
+        # Spec #116 — the sync track that describes the raw transcript being
+        # cleaned. Stamped into the cleaned transcript so readers never use
+        # a track cut from another download of the audio.
+        sync_track_generation = None
+        sync_tracks = getattr(state, "sync_track_service", None)
+        if sync_tracks is not None:
+            try:
+                current_track = sync_tracks.current(episode.id)
+                generation = getattr(current_track, "generation", None)
+                sync_track_generation = generation if isinstance(generation, str) else None
+            except Exception as exc:  # noqa: BLE001 — never fail cleaning over a sync track
+                logger.warning("sync_track_failed", episode_id=episode.id, reason="lookup_error", error=str(exc))
+
         # Clean transcript
         logger.info(f"Cleaning transcript with language: {podcast.language}")
         cleaning_result = cleaning_processor.clean_transcript(
@@ -668,6 +765,7 @@ def handle_clean(task: Task, state: "AppState") -> None:
             path_manager=path_manager,
             language=podcast.language,
             refresh_episode_facts=bool((reprocess_options(task.metadata) or {}).get("refresh_episode_facts")),
+            sync_track_generation=sync_track_generation,
         )
 
         if not cleaning_result:
