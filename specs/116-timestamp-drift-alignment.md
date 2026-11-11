@@ -474,7 +474,9 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
      the element's other closed requests, any that ends at or beyond the
      fetched length means a longer copy, and the map is discarded. The
      lengths count as equal only when at least one of them ends exactly
-     at the fetched length minus one and none ends beyond it: Safari
+     at the fetched length minus one, was returned in full
+     (`Content-Length` equal to the range asked for), and none ends
+     beyond it: Safari
      ends its ranges at the last byte of the total it read from
      `Content-Range`. A session that yields neither an authoritative
      total nor that equality (for example a browser that asks for the

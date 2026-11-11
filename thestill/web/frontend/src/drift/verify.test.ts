@@ -89,6 +89,17 @@ describe('verifyAgainst', () => {
     expect(result.rangesMatched).toBe(1)
   })
 
+  it('does not take a closed request for proof when the server returned less', () => {
+    // Safari asked for the whole file as it knew it, but the copy had
+    // changed: a shorter one came back, with the same opening block.
+    const last = FILE.length - 1
+    const short = { ...seen(`bytes=0-${last}`, 0, FILE.length), contentLength: FILE.length - 200_000 }
+    expect(verifyAgainst([short], COPY)).toMatchObject({ lengthOk: false, rangesMatched: 1, verdict: 'mismatch' })
+    // A length the worker could not read proves nothing either way.
+    const unknown = { ...seen(`bytes=0-${last}`, 0, FILE.length), contentLength: null }
+    expect(verifyAgainst([unknown], COPY)).toMatchObject({ lengthOk: null, verdict: 'unverified' })
+  })
+
   it('finds a longer copy by its length, open-ended or closed', () => {
     const longer = FILE.length + 40_000
     expect(verifyAgainst([seen('bytes=0-', 0, longer)], COPY).verdict).toBe('mismatch')

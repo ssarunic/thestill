@@ -70,10 +70,15 @@ function lengthCheck(reports: readonly MediaReport[], fetchedBytes: number): boo
     // beyond the fetched copy means a longer one; a range that ends exactly
     // on its last byte is how Safari asks for "to the end" of the total it
     // read from Content-Range.
+    // The server must also have returned the whole range: fewer bytes
+    // than asked for means the copy changed under the element (a variant
+    // swapped after Safari read the total), whatever the request said.
     const end = Number(match[2])
     if (start === 0 && end === 1) continue
     if (end >= fetchedBytes) return false
-    if (end === fetchedBytes - 1) equal = true
+    const asked = end - start + 1
+    if (report.contentLength !== null && report.contentLength !== asked) return false
+    if (end === fetchedBytes - 1 && report.contentLength === asked) equal = true
   }
   return equal ? true : null
 }
