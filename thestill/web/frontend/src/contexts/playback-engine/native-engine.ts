@@ -390,7 +390,19 @@ export class NativeEngine implements PlaybackEngine {
 
   /** The hook's word that no map is coming for this source. */
   releaseTimelineHold(url: string): void {
-    if (this.url === url) this.endHold(true)
+    if (this.url !== url) return
+    if (this.hold) {
+      this.endHold(true)
+      return
+    }
+    // A held start that the listener paused: nothing is muted, but the
+    // request is still pending and would be held again on resume. Settle it
+    // here, at the asked-for time, without starting playback.
+    const asked = this.pendingTranscriptTime
+    if (asked === null) return
+    this.pendingTranscriptTime = null
+    if (this.el.readyState < HTMLMediaElement.HAVE_METADATA) this.pendingSeek = asked
+    else this.el.currentTime = asked
   }
 
   isHoldingForTimeline(): boolean {
@@ -472,6 +484,13 @@ export class NativeEngine implements PlaybackEngine {
 
   setVolume(volume: number): void {
     this.el.volume = Math.min(1, Math.max(0, volume))
+    if (this.hold) {
+      // Raising the volume unmutes, but not during a hold: the element
+      // stays silent and the listener's unmute is kept for when it ends.
+      if (this.el.volume > 0) this.hold.muted = false
+      this.events.onVolumeChange(this.el.volume, this.hold.muted)
+      return
+    }
     if (this.el.volume > 0 && this.el.muted) this.el.muted = false
   }
 

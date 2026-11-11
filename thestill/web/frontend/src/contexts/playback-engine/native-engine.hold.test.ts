@@ -201,6 +201,47 @@ describe('NativeEngine holding a transcript-time start', () => {
     expect(released.el.muted).toBe(false)
   })
 
+  it('stays silent when the listener moves the volume during the wait', () => {
+    const t = clickedStart()
+    t.engine.setMuted(true)
+    t.engine.setVolume(0.4)
+    // The slider unmutes, as it always does, but only once the hold ends.
+    expect(t.el.muted).toBe(true)
+    expect(t.el.volume).toBe(0.4)
+    expect(t.onVolumeChange).toHaveBeenLastCalledWith(0.4, false)
+    expect(t.engine.isHoldingForTimeline()).toBe(true)
+    t.engine.setTimeline(URL_A, timeline)
+    expect(t.el.muted).toBe(false)
+    expect(t.el.volume).toBe(0.4)
+
+    // Volume to zero does not unmute, with or without a hold.
+    const quiet = clickedStart()
+    quiet.engine.setMuted(true)
+    quiet.engine.setVolume(0)
+    quiet.engine.setTimeline(URL_A, timeline)
+    expect(quiet.el.muted).toBe(true)
+  })
+
+  it('settles a paused held start when no map is coming, so resume is not silent', () => {
+    const t = clickedStart()
+    const play = t.el.play as ReturnType<typeof vi.fn>
+    t.playTo(34)
+    t.engine.pause()
+    play.mockClear()
+    // The alignment ends without a map while the listener is paused.
+    t.engine.releaseTimelineHold(URL_A)
+    expect(t.elementTime()).toBe(30) // ready at the clicked position
+    expect(play).not.toHaveBeenCalled() // still paused: their call
+
+    void t.engine.play()
+    expect(t.el.muted).toBe(false)
+    expect(t.engine.isHoldingForTimeline()).toBe(false)
+    // Nothing left for a late map to act on.
+    t.playTo(36)
+    t.engine.setTimeline(URL_A, timeline)
+    expect(t.elementTime()).toBe(36)
+  })
+
   it('plays a paragraph near the end even if the silent wait ran off the end of the file', () => {
     // The click is close to the end: the muted playback finishes before the
     // map is ready, and the element stops.
