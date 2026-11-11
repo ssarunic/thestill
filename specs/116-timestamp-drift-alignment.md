@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 📝 Draft (2026-11-10)
+> **Status:** 📝 Draft (2026-11-10); Phase 0 run on desktop Chrome, passed with gaps (see Browser check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-10
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -139,8 +139,58 @@ Findings:
 - **Cost.** Decoding a 74-minute MP3 took 11 s and fingerprinting 5 s in
   unoptimised numpy. Frame hashing needs no decode and took under 2 s.
 
-Not tested: Chromaprint (the `fpcalc` binary was not available), AAC
-enclosures, and any of this inside a real browser.
+Not tested: Chromaprint (the `fpcalc` binary was not available) and AAC
+enclosures.
+
+### Browser check (Phase 0, 2026-11-10)
+
+A throwaway page on `localhost`, driven in desktop Chrome 157. For the
+latest episode of 18 shows it loaded an `<audio crossorigin="anonymous">`
+element, fetched the same URL with `fetch()`, and used a service worker
+to read the first 256 KB of every response the element received. The
+element was then seeked to 20%, 45%, 70% and 93%, and each range it
+requested was compared byte for byte with the fetched copy. Eight
+further rounds, about a minute apart with the HTTP cache bypassed,
+compared the total size each of the two requests was served.
+
+| Check | Result |
+|---|---|
+| CORS: `fetch()` and the `crossorigin` element both load | 15 of 18 |
+| Element and fetch served the same total bytes | 15 of 15 |
+| Element's bytes identical to the fetched copy at every sampled range | 15 of 15 (71 ranges) |
+| Rounds in which the two requests were served different totals | 0 of 111 completed (of 120: 7 lost the element's size to a measurement gap, 2 hit a network error) |
+| Distinct sizes seen per episode across about 10 minutes | 1 for all 15 |
+| Full fetch on a desktop connection | 0.5–11 s for 10–313 MB |
+| Parsing frame headers of the whole file | 4–47 ms |
+
+Hosts that passed: Megaphone (7 episodes), Acast (3), Art19,
+Simplecast (2), Audioboom, Triton/Omny, Flightcast. Failed on CORS:
+Captivate, one podtrac chain (The Ezra Klein Show), and the BBC.
+
+What this settles:
+
+- **One variant per session.** No host served the element and the fetch
+  different copies. Megaphone has 63 matching plays; Acast 25 and Art19
+  9, short of the 50 the exit asked for.
+- **A service worker is a working content check.** It sees the exact
+  bytes the element receives, so the comparison is exact and needs no
+  audio decoding. Two conditions: the element must carry
+  `crossorigin="anonymous"`, and the worker must return the original
+  response. A response rebuilt from a teed stream loses `Content-Range`
+  and Chrome rejects it with a format error.
+- **`crossorigin` breaks playback where CORS fails.** The three failing
+  hosts did not load at all with the attribute set. It must be set only
+  after a probe `fetch()` has succeeded; those failed within 0.6 s.
+- **Reported duration is not a reliable length.** For identical bytes
+  the element's `duration` differed from the summed frame durations by
+  under 1 ms on 7 episodes, by 8 ms on 1, by about one frame (25 ms) on
+  4, by 52 and 62 ms on 2, and by 9.9 s on one (Flightcast, The Diary Of A CEO).
+  Byte totals are exact and are used for the length check.
+
+Not covered: Safari, Firefox, any phone, hashing cost, and playback
+over hours or across networks. The 9.9 s outlier is unexplained; if
+Chrome's time-to-byte seeking is off on that file, seeks land wrong
+there whatever the map says.
 
 ## Clarifications
 
@@ -269,10 +319,14 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 
 1. **Gate.** Run only when the episode has a track, the engine is the
    native audio engine, and the playing asset is the RSS audio.
-2. **Identity shortcut.** If the live duration equals the duration in
-   the track header within 50 ms, the map is a *provisional* identity
-   and nothing is fetched yet. This needs no CORS, so it also covers
-   hosts the full pass cannot reach. Equal duration is not proof: a
+2. **Identity shortcut.** If the copy being played has the byte length
+   recorded in the track header, the map is a *provisional* identity
+   and nothing more is fetched. The byte length comes from the service
+   worker (step 6). Where CORS fails it cannot be read, and the
+   shortcut falls back to comparing the live duration with the header's
+   within 100 ms; the browser check measured up to 62 ms of difference
+   on identical bytes, and one host far outside that, which simply
+   misses the shortcut. Equal duration is not proof: a
    longer break followed by a shorter one gives the same total with a
    shifted stretch in between. So:
    - for a show without `ads_seen_at` (section 8), the worker stops
@@ -288,8 +342,10 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    ads.
 4. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
    `mode: 'cors'`. Parse MP3 frame headers as bytes arrive, keep a
-   rolling 4-frame hash, and look each one up in the anchor table. Bytes
-   are discarded after hashing, so memory stays flat.
+   rolling 4-frame hash, and look each one up in the anchor table. In
+   the same pass, keep an 8-byte hash of every 64 KB block of the
+   stream (the block digest, about 7 KB for a 60 MB file). The bytes
+   themselves are discarded, so memory stays flat.
 5. **Fit.** Each hit gives one offset sample: listener frame index minus
    transcribed frame index. The fitter keeps a run only when at least 5
    consecutive anchors agree on the same offset, and drops isolated
@@ -310,27 +366,32 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
 6. **Verify.** The map describes the fetched copy. It is valid for
    playback only if the audio element is playing the same copy. Two
    checks, both required:
-   - **Length.** The stream's total frame count must match the audio
-     element's `duration` within 50 ms. A mismatch means a different ad
-     set, and the map is discarded.
+   - **Length.** The total byte length the element was served must
+     equal the length of the fetched stream, exactly. A mismatch means
+     a different ad set, and the map is discarded. Durations are not
+     compared: the browser check found them unreliable.
    - **Content.** Equal length does not prove equal content: two
      variants can carry breaks of different lengths that sum to the same
-     total. Phase 0 must establish one of the following before any map
-     is applied, per host:
-     1. the host serves one variant to both requests from the same
-        browser session, shown by measurement (the curl probe saw one
-        variant per IP and user agent on 42 of 42 episodes, across
-        repeats and after 15 minutes); or
-     2. a spot check through the element itself: with
-        `crossOrigin="anonymous"`, capture a few seconds of what the
-        element plays through Web Audio at one point inside each span,
-        and compare it with the fetched bytes decoded at the mapped
-        position; or
-     3. single fetch: the element plays the fetched bytes (see
-        Alternatives), so there is only one copy.
+     total. A service worker reads the head of every response the
+     element receives, hashes the first whole 64 KB block in it
+     (blocks are aligned to the start of the file, so a range that
+     starts mid-block is checked from the next boundary), and compares
+     that hash with the block digest of the fetched copy. The digest
+     is kept with the map for as long as the map is in use, so ranges
+     requested after a later seek are checked the same way. The first
+     response and every later range must match; any mismatch discards
+     the map, also after it has been applied. A map restored from
+     `sessionStorage` is restored with its digest and re-verified
+     against the element's first response before it is applied.
 
-   Hosts with none of the three keep the banner. Length alone never
-   applies a map.
+   Both checks need the element to load with `crossorigin="anonymous"`.
+   The attribute is set only after a probe `fetch()` of the URL has
+   succeeded, because an element with it fails to load on a host
+   without CORS. The worker must pass the original response through
+   unchanged. Where the service worker is unavailable or does not see
+   media requests (to be established for Safari and Firefox), the
+   fallback is single fetch (see Alternatives) or the banner. Length
+   alone never applies a map.
 7. **Publish.** The map goes to the player only after the stream has
    ended, both checks of step 6 have passed and the confidence threshold
    below is met. While it is building the worker reports progress, not
@@ -378,15 +439,130 @@ same word.
 - Map building: the existing banner text, with "Aligning…" beneath it.
 - Map failed or not attempted: today's banner, unchanged.
 
-### 7. Logging and analytics
+### 7. Logging, audit and proof of correctness
 
-- Server: `sync_track_written` (`episode_id`, `anchors`, `bytes`,
-  `duration_ms`), `sync_track_failed`.
-- Client (PostHog, per #95): `drift_alignment_result` with `outcome`
-  (`identity_assumed`, `identity`, `aligned`, `no_cors`, `variant_mismatch`,
-  `low_confidence`, `unsupported_codec`, `error`), span count, largest
-  offset, and bytes fetched. This is the measure of how often the banner
-  is replaced.
+A log of what the aligner decided does not show that the decision was
+right. This section has three layers: what each step records, what the
+listener's behaviour shows, and an independent audit that checks the
+result against the audio itself.
+
+All server events use `structlog` with `episode_id`, `podcast_id` and the
+track `generation`. No event carries a user id, an IP address or a full
+audio URL (host only).
+
+#### 7.1 Building the track (server)
+
+| Event | Fields | What it confirms |
+|---|---|---|
+| `sync_track_written` | `source` (`local`, `dalston`, `realign`), `frames`, `anchors_kept`, `anchors_dropped_duplicate`, `unique_ratio`, `audio_bytes`, `audio_duration_s`, `track_bytes`, `duration_ms` | a track exists and how dense it is |
+| `sync_track_transcript_mismatch` (error) | `audio_duration_s`, `transcribed_input_duration_s`, `delta_s` | the track and the transcript do **not** describe the same bytes |
+| `sync_track_failed` | `source`, `reason`, `exc_info` | no track, and why |
+| `sync_track_switched` | `old_generation`, `new_generation` | transcript and track changed together |
+
+`sync_track_transcript_mismatch` is the key invariant. The audio the
+track was cut from and the audio the transcript came from must have the
+same duration within 1 s. The comparison uses the input duration the
+transcription job reports for its audio, not the time of the last
+transcribed word: an episode that ends on music has a last word well
+before the end of the file. When the two differ, the track is discarded
+rather than published. To verify during implementation: that every
+provider reports its input duration.
+
+#### 7.2 Building the map (client, reported to the server)
+
+The worker posts one report per attempt to
+`POST /api/episodes/{id}/drift-outcome` (section 8). The server logs it
+as `drift_map_reported` and forwards the summary to PostHog as
+`drift_alignment_result` (#95). The body is validated and capped at
+4 KB; a map is a handful of spans, so the whole map fits.
+
+| Field | Meaning |
+|---|---|
+| `outcome` | `identity_assumed`, `identity`, `aligned`, `no_cors`, `variant_mismatch`, `low_confidence`, `unsupported_codec`, `error` |
+| `spans` | the fitted map: `[{src_start, src_end, offset}]` |
+| `gaps_confirmed_s`, `unresolved_s`, `listener_ads_s` | seconds in each class of interval (section 4, step 5) |
+| `coverage` | share of non-`ad_break` transcript time inside matched spans |
+| `anchors_total`, `anchors_hit`, `anchors_inlier`, `anchors_outlier` | how many landmarks were found, and how many agree with the span they fall in |
+| `verify_length_ok`, `verify_ranges_checked`, `verify_ranges_matched` | the two checks of step 6 |
+| `audio_host`, `audio_bytes`, `fetched_bytes`, `fetch_ms`, `fit_ms` | where the audio came from and what the pass cost |
+| `browser` | family and major version |
+
+What to read from it:
+
+- **Inlier share.** In a correct map nearly every landmark that was
+  found agrees with its span. A map with many outliers was fitted to
+  noise even if it passed the coverage threshold.
+- **Unresolved seconds.** Time where the aligner declined to decide.
+  Large values on one show point at a host that re-encodes.
+- **Verification counts.** `verify_ranges_matched` below
+  `verify_ranges_checked` on an applied map is a bug, and is logged at
+  error level.
+
+#### 7.3 Aligning old episodes (Phase 5)
+
+`sync_track_realigned`: `words_old`, `words_new`, `words_matched`,
+`match_ratio`, `spans`, and for each span the number of word samples and
+the spread of their offsets (median absolute deviation). A tight spread
+(under 0.1 s) with a high match ratio is the evidence that the old
+timings map cleanly onto the new copy. `sync_track_unalignable` carries
+the same fields when the thresholds are missed.
+
+#### 7.4 What listeners do
+
+A segment click that lands in the wrong place is usually followed by a
+manual correction. The client records `segment_seek_corrected` when a
+seek started from a transcript segment, a citation or a chapter is
+followed within 10 s by a manual seek of less than 90 s. The rate is
+compared across three groups: episodes with an applied map, episodes
+with a provisional identity, and episodes showing the banner. An applied
+map that works should bring the rate down to the identity group's.
+
+#### 7.5 Independent audit
+
+The checks above all rest on the same landmarks. The audit does not. It
+asks the question directly: is the sentence the transcript promises
+actually spoken at the mapped time?
+
+`thestill sync-track audit [--podcast-id X] [--episode <slug>] [--sample N]`:
+
+1. Download the episode afresh. This is a new copy with whatever ads
+   the server is given, as a listener would get.
+2. Build the map with the same fitter the browser uses (one
+   implementation, shared by test vectors with the client).
+3. Pick sample points: one shortly after each span boundary, where an
+   error would show first, and others spread across the episode.
+4. At each point cut 10 s of audio at the *mapped* time, transcribe that
+   clip, and compare its words with the stored transcript's words for
+   the same 10 s.
+5. For each sample, also search the clip's words in the transcript
+   within ±120 s to measure how far off the timing is, not just whether
+   it matched.
+
+Logged as `sync_track_audit` per episode: `samples`, `samples_matched`,
+`median_error_s`, `max_error_s`, `spans`, and the failing sample times.
+An episode passes when every sample matches with an error under 0.5 s
+(Goal 1).
+
+The audit runs on a schedule over a small random sample of recently
+played episodes (a runtime setting, default 5 per day) and on demand. It
+costs one download and under two minutes of transcription per episode.
+Its pass rate and median error go on the admin analytics surface next to
+the outcome mix.
+
+The audit checks the map against a server download, not against one
+listener's copy. It proves the method on that episode; the service
+worker check of step 6 is what ties a map to a listener.
+
+#### 7.6 Looking at one episode
+
+- `thestill sync-track show --episode <slug>` prints the track header,
+  anchor density per minute, and the last reported maps and audit for
+  the episode from the logs.
+- For admins, the reader takes `?driftdebug=1`: a strip above the
+  transcript draws the spans, confirmed gaps, unresolved intervals and
+  listener-side ads on the episode timeline, shows the offset applied to
+  each seek, and offers "play 5 s from the start of each span" for a
+  check by ear.
 
 ### 8. Per-show ad profile
 
@@ -455,6 +631,15 @@ least 50 plays. If same-session variants differ on any host, that host
 uses single fetch or keeps the banner, and the plan is revised before
 any pipeline work.
 
+Result (2026-11-10, desktop Chrome only; see Browser check): the
+service-worker content check works and no variant mismatch was seen.
+Megaphone met the 50-play bar; Acast (25) and Art19 (9) matched on
+every play but fall short of it; Captivate fails CORS and keeps the
+banner. Questions 1, 2, 4 and 5 are answered for Chrome. Still open
+before Phase 2: Safari and Firefox (does a service worker see media
+requests there), a phone (question 3), and more plays on Acast and
+Art19. Phase 1 does not depend on any of these and can start.
+
 ### Phase 1: sync track in the pipeline
 
 | # | Where | What |
@@ -465,6 +650,7 @@ any pipeline work.
 | 1.3 | `thestill/utils/path_manager.py`, migration | `sync_tracks/` directory, `episodes.sync_track_path` |
 | 1.4 | `thestill/web/routes/` | `GET /api/episodes/{id}/sync-track/{generation}`, `sync_track_generation` |
 | 1.5 | download stage, migration | two-user-agent size probe; `podcasts.ads_seen_at`, `podcasts.needs_perceptual_track` |
+| 1.6 | `thestill/core/sync_track.py` | events of section 7.1, including the track/transcript duration invariant |
 
 Acceptance: a contract test that builds a track from a fixture MP3,
 splices a second MP3 into a copy of it at two points, and recovers both
@@ -487,11 +673,15 @@ every such transcript.
 | 2.1 | `src/workers/driftAlign.worker.ts` (new) | stream fetch, frame hashing, fitter, verification |
 | 2.2 | `src/contexts/playback-engine/` | `TimelineMap` with `toAsset` / `toLogical` |
 | 2.3 | `src/contexts/PlayerContext.tsx`, `EpisodeReader.tsx` | route seeks and karaoke through the map; banner states |
-| 2.4 | analytics | `drift_alignment_result` |
-| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome` updating the per-show ad profile (rate-limited) |
+| 2.4 | analytics | `drift_alignment_result`, `segment_seek_corrected` |
+| 2.5 | `thestill/web/routes/` | `POST /api/episodes/{id}/drift-outcome`: validates and logs `drift_map_reported`, updates the per-show ad profile (rate-limited, 4 KB cap) |
+| 2.6 | `thestill/core/sync_track.py`, `thestill/cli.py` | server-side fitter sharing test vectors with the worker; `thestill sync-track audit` and `show`; scheduled audit sample |
+| 2.7 | `EpisodeReader.tsx` | admin-only `?driftdebug=1` strip |
 
 Acceptance: a Playwright test serves two spliced variants of one fixture
-and asserts that a segment click lands on the same audio in both.
+and asserts that a segment click lands on the same audio in both. The
+audit command passes on that fixture, and fails when the fixture's map
+is shifted by 2 s on purpose.
 
 ### Phase 3: perceptual fallback and AAC
 
@@ -612,9 +802,10 @@ with #110 Phase 4 and is not required here.
    acceptable on mobile, or should the full pass wait for Wi-Fi?
 2. **Listener-side ads in the karaoke view.** Hold the last word (this
    spec), or show a neutral "Ad" marker?
-3. **Identity tolerance.** The shortcut assumes the audio element
-   reports the same duration for the same bytes within 50 ms, across
-   browsers and for VBR files. Phase 0 measures this.
+3. **Duration outlier.** On one Flightcast episode Chrome's reported
+   duration was 9.9 s longer than the summed frame durations of the
+   same bytes. Is time-based seeking on that file accurate, and how
+   common is this?
 4. **Server consumers.** `get_episode_clip` and the clip work of #114
    hand out transcript times against the publisher URL. They cannot know
    the recipient's ad set. Is a "times are approximate" note enough
