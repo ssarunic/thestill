@@ -56,6 +56,11 @@ thestill link-platforms [--podcast-id X] [--dry-run] [--force]
 # Curate a show's Apple / YouTube / Spotify link (survives chart syncs and resolvers):
 thestill set-show-link --podcast-id X --platform spotify --url https://open.spotify.com/show/<id>
 
+# Sync tracks (spec #116): landmarks of the transcribed audio, written at
+# transcription and used to correct timestamps when a listener's ads differ.
+thestill sync-track show --podcast-id X --episode <slug> [--json]
+thestill sync-track backfill [--podcast-id X] [--max-episodes N] [--dry-run]   # recent Dalston jobs only
+
 # Summary genre profiles (spec #98): override > Apple category > general;
 # genre profiles only apply once listed in SUMMARY_PROFILES_ENABLED.
 thestill summary-profiles                  # each show's profile and why

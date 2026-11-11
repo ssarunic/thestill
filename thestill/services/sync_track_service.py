@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 from structlog import get_logger
 
@@ -73,6 +73,30 @@ class SyncTrackService:
     ) -> Optional[SyncTrackRecord]:
         """Build a track from ``chunks`` and store it as the episode's pending
         track. Returns its record, or None when no track was written.
+        """
+        record, _reason = self.build_pending_detailed(
+            episode_id=episode_id,
+            podcast_id=podcast_id,
+            podcast_slug=podcast_slug,
+            episode_slug=episode_slug,
+            chunks=chunks,
+            source=source,
+        )
+        return record
+
+    def build_pending_detailed(
+        self,
+        *,
+        episode_id: str,
+        podcast_id: Optional[str],
+        podcast_slug: str,
+        episode_slug: str,
+        chunks: Iterable[bytes],
+        source: str,
+    ) -> Tuple[Optional[SyncTrackRecord], Optional[str]]:
+        """``build_pending`` that also says why no track was written:
+        ``disabled``, ``unsupported_codec``, ``no_unique_anchors``,
+        ``audio_gone`` (the audio source answered 404 or 410) or ``error``.
 
         An earlier pending track is dropped first, whatever happens next:
         it was cut from audio that this call's audio replaces, so a build
@@ -80,7 +104,7 @@ class SyncTrackService:
         """
         self.discard_pending(episode_id)
         if not self.enabled:
-            return None
+            return None, "disabled"
         generation = uuid.uuid4().hex
         log = logger.bind(episode_id=episode_id, podcast_id=podcast_id, generation=generation, source=source)
         started = time.monotonic()
@@ -89,14 +113,11 @@ class SyncTrackService:
                 track = build_sync_track(chunks, generation)
             except SyncTrackError as exc:
                 log.info("sync_track_failed", reason="unsupported_codec", detail=str(exc))
-                return None
+                return None, "unsupported_codec"
             if track.frame_count < MIN_FRAMES or not track.anchors:
-                log.info(
-                    "sync_track_failed",
-                    reason="unsupported_codec" if track.frame_count < MIN_FRAMES else "no_unique_anchors",
-                    frames=track.frame_count,
-                )
-                return None
+                reason = "unsupported_codec" if track.frame_count < MIN_FRAMES else "no_unique_anchors"
+                log.info("sync_track_failed", reason=reason, frames=track.frame_count)
+                return None, reason
             payload = track.to_bytes()
             path = self._config.path_manager.to_relative(
                 self._config.path_manager.sync_track_file(podcast_slug, episode_slug, generation)
@@ -126,10 +147,14 @@ class SyncTrackService:
                 track_bytes=len(payload),
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
-            return record
+            return record, None
         except Exception as exc:  # noqa: BLE001 — must never fail the stage
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (404, 410):
+                log.info("sync_track_failed", reason="audio_gone", status=status)
+                return None, "audio_gone"
             log.warning("sync_track_failed", reason="error", error=str(exc), exc_info=True)
-            return None
+            return None, "error"
 
     def publish(
         self,
@@ -208,6 +233,37 @@ class SyncTrackService:
             self._delete_files(self._repo.retire(episode_id, STATE_PENDING), log)
         except Exception as exc:  # noqa: BLE001 — must never fail the stage
             log.warning("sync_track_failed", reason="discard_error", error=str(exc), exc_info=True)
+
+    def usable_generation(self, episode_id: str, stamped: Optional[str]) -> Optional[str]:
+        """The generation a reader may use for a cleaned transcript stamped
+        with ``stamped``: the stamp itself when it names the episode's
+        current track, otherwise None.
+
+        The two differ between re-transcribing and re-cleaning an episode
+        (the visible cleaned transcript is still the old one), and on
+        cleaned transcripts written before sync tracks existed. Never
+        raises: a reader without a sync track is a supported state.
+        """
+        if not stamped:
+            return None
+        try:
+            current = self._repo.get(episode_id, STATE_CURRENT)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sync_track_failed", episode_id=episode_id, reason="lookup_error", error=str(exc))
+            return None
+        return stamped if current is not None and current.generation == stamped else None
+
+    def read_current(self, episode_id: str, generation: str) -> Optional[bytes]:
+        """The bytes of the episode's current track when it is ``generation``,
+        otherwise None (unknown episode, superseded generation, missing file)."""
+        current = self._repo.get(episode_id, STATE_CURRENT)
+        if current is None or current.generation != generation:
+            return None
+        try:
+            return self._config.file_storage.read_bytes(current.path)
+        except FileNotFoundError:
+            logger.warning("sync_track_file_missing", episode_id=episode_id, generation=generation, path=current.path)
+            return None
 
     def current(self, episode_id: str) -> Optional[SyncTrackRecord]:
         """The episode's published track record, or None."""

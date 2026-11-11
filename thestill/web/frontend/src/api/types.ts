@@ -541,6 +541,10 @@ export interface AnnotatedTranscriptDump {
   // the live audio element's duration to detect DAI-induced drift.
   // `null` for legacy transcripts cleaned before we recorded this.
   transcript_source_duration_s: number | null
+  // Spec #116 — the sync track the reader may use to correct drifted
+  // timestamps: fetch `.../sync-track/{generation}`. `null` (or absent on
+  // older payloads) when the episode has none that matches this transcript.
+  sync_track_generation?: string | null
   // Provenance of the LLM cleaning run (provider, model, prompt
   // revision). `null` for sidecars written before provenance recording.
   cleaning: CleaningProvenance | null
