@@ -72,7 +72,13 @@ class SyncTrackService:
         source: str,
     ) -> Optional[SyncTrackRecord]:
         """Build a track from ``chunks`` and store it as the episode's pending
-        track. Returns its record, or None when no track was written."""
+        track. Returns its record, or None when no track was written.
+
+        An earlier pending track is dropped first, whatever happens next:
+        it was cut from audio that this call's audio replaces, so a build
+        that is disabled or fails must not leave it to be published.
+        """
+        self.discard_pending(episode_id)
         if not self.enabled:
             return None
         generation = uuid.uuid4().hex

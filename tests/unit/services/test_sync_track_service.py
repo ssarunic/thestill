@@ -168,3 +168,41 @@ def test_discard_pending_removes_row_and_file(env):
     env.service.discard_pending(EPISODE_ID)
     assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
     assert not (env.root / record.path).exists()
+
+
+def test_failed_rebuild_does_not_leave_the_earlier_pending_track(env):
+    """A download is retried: the first attempt's track describes audio that
+    the second attempt replaced, so it must go even when the rebuild fails."""
+    stale = _build(env.service, AUDIO_60)
+
+    def broken():
+        yield AUDIO_60[:5000]
+        raise ConnectionError("stream died")
+
+    assert (
+        env.service.build_pending(
+            episode_id=EPISODE_ID,
+            podcast_id=PODCAST_ID,
+            podcast_slug="the-show",
+            episode_slug="ep",
+            chunks=broken(),
+            source="local",
+        )
+        is None
+    )
+
+    assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
+    assert not (env.root / stale.path).exists()
+    # Same length as the stale track, so only its removal prevents a wrong pairing.
+    assert env.service.publish(episode_id=EPISODE_ID, transcribed_duration_s=60) is None
+
+
+def test_rebuild_of_unsupported_audio_or_while_disabled_also_drops_it(env):
+    _build(env.service, AUDIO_60)
+    assert _build(env.service, bytes(range(256)) * 2000) is None
+    assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
+
+    _build(env.service, AUDIO_60)
+    env.config.sync_tracks_enabled = False
+    assert _build(env.service, AUDIO_90) is None
+    assert env.repo.get(EPISODE_ID, STATE_PENDING) is None
