@@ -132,8 +132,17 @@ jobs:
       # poll timers, and whether an invalidation reaches the painted DOM. These
       # specs stub /api/** and drive the built bundle in a real Chromium.
       # `test:e2e:ci` excludes @live specs, which need a populated backend.
+      # `--with-deps` installs a few font packages with apt. When the runner
+      # cannot reach Ubuntu's package servers (2026-11-11: every run failed
+      # here for hours with "Temporary failure resolving"), install the
+      # browser alone: the runner image already carries Chromium's libraries,
+      # and the specs below still have to pass.
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps chromium || {
+            echo "::warning::apt was unreachable; installing Chromium without system packages"
+            npx playwright install chromium
+          }
 
       - name: E2E (playwright)
         run: npm run test:e2e:ci
