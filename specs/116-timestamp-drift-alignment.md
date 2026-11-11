@@ -929,7 +929,10 @@ How this was built, where it differs from the sections above:
   `unsupported`, `not_controlling`, `element_not_cors` (the first play of
   a chain), `no_requests`, `opaque` or `ok`. This is the per-browser
   evidence the rollout rule below reads. A map whose check fails is
-  reported as `variant_mismatch`.
+  reported as `variant_mismatch`. The check is repeated for every later
+  response of the same play, and a changed verdict is reported again
+  with `revision` above 0, so a copy that differs only at a later ad
+  break is found when a seek reaches it.
 - **Not built:** the per-show ad profile (section 8) and the client
   eagerness it drives, the identity shortcut and the cheap check (steps
   2 and 3: every attempt is a full pass), the "Refine" step (the

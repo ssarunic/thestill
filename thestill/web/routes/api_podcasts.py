@@ -549,6 +549,9 @@ class DriftOutcomeRequest(BaseModel):
     verify_ranges_matched: Optional[int] = Field(default=None, ge=0, le=100_000)
     # How the service worker stood for this play; says why a check is missing.
     sw_state: Optional[DriftSwState] = None
+    # 0 for a play's first report; higher when a later range of the same play
+    # changed its verdict.
+    revision: int = Field(default=0, ge=0, le=10)
     # A host name only, never a URL: no scheme, path, query or port.
     audio_host: Optional[str] = Field(default=None, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
     audio_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
@@ -624,6 +627,7 @@ def report_drift_outcome(
             verify_ranges_checked=body.verify_ranges_checked,
             verify_ranges_matched=body.verify_ranges_matched,
             sw_state=body.sw_state,
+            revision=body.revision,
             fetch_ms=body.fetch_ms,
             fit_ms=body.fit_ms,
         ),

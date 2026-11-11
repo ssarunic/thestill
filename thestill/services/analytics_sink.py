@@ -167,6 +167,7 @@ class DriftAlignmentResult(_Event):
     verify_ranges_checked: Optional[int] = Field(default=None, ge=0)
     verify_ranges_matched: Optional[int] = Field(default=None, ge=0)
     sw_state: Optional[DriftSwState] = None
+    revision: int = Field(default=0, ge=0)
     fetch_ms: Optional[int] = Field(default=None, ge=0)
     fit_ms: Optional[int] = Field(default=None, ge=0)
 

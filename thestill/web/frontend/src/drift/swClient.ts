@@ -18,6 +18,7 @@ export type SwState =
 const MAX_REPORTS = 400
 const reports: MediaReport[] = []
 let listening = false
+const watchers = new Set<() => void>()
 let registration: Promise<ServiceWorkerRegistration | null> | null = null
 
 function supported(): boolean {
@@ -38,6 +39,7 @@ export function listenForMediaReports(): void {
     if (data?.kind !== 'drift-media' || !data.report) return
     reports.push(data.report)
     if (reports.length > MAX_REPORTS) reports.splice(0, reports.length - MAX_REPORTS)
+    watchers.forEach((watcher) => watcher())
   })
 }
 
@@ -131,6 +133,7 @@ export function resetDriftServiceWorkerClient(): void {
   reports.length = 0
   registration = null
   listening = false
+  watchers.clear()
 }
 
 // A page load by a session that could align last time listens from the
@@ -140,4 +143,13 @@ if (crossOriginLoadingEnabled()) listenForMediaReports()
 /** Test seam: what a `drift-media` message does. */
 export function recordMediaReport(report: MediaReport): void {
   reports.push(report)
+  watchers.forEach((watcher) => watcher())
+}
+
+/** Be told whenever the worker reports another response. Returns the unsubscribe. */
+export function onMediaReport(watcher: () => void): () => void {
+  watchers.add(watcher)
+  return () => {
+    watchers.delete(watcher)
+  }
 }

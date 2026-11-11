@@ -42,6 +42,9 @@ export interface DriftOutcomeBody {
   verify_ranges_checked: number | null
   verify_ranges_matched: number | null
   sw_state: SwState | null
+  // 0 for a play's first report; 1 and up when a later range changed the
+  // verdict of the same play, so counts of plays can leave those out.
+  revision: number
   audio_host: string | null
   audio_bytes: number | null
   fetched_bytes: number | null
@@ -71,6 +74,7 @@ export function toOutcomeBody(
   generation: string,
   userAgent: string,
   check: PlayCheck | null = null,
+  revision = 0,
 ): DriftOutcomeBody {
   const outlier =
     report.anchorsHit !== null && report.anchorsInlier !== null ? report.anchorsHit - report.anchorsInlier : null
@@ -95,6 +99,7 @@ export function toOutcomeBody(
     verify_ranges_checked: check?.verification?.rangesChecked ?? null,
     verify_ranges_matched: check?.verification?.rangesMatched ?? null,
     sw_state: check?.swState ?? null,
+    revision,
     audio_host: report.audioHost && HOST.test(report.audioHost) ? report.audioHost : null,
     audio_bytes: report.audioBytes,
     fetched_bytes: report.fetchedBytes,

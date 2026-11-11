@@ -242,3 +242,17 @@ def test_a_map_reported_for_another_copy_is_not_an_error(client, episode, log):
 
     (event,) = log.named("drift_map_reported")
     assert event["log_level"] == "info"
+
+
+def test_a_later_report_of_the_same_play_is_marked(client, app_state, episode, log):
+    """A seek exposed another copy after the play had been reported as aligned."""
+    url, generation = episode
+    app_state.analytics_sink = sink = RecordingSink()
+
+    assert client.post(url, json=_aligned(generation)).status_code == 200
+    later = {**_aligned(generation), "outcome": "variant_mismatch", "verify_ranges_matched": 3, "revision": 1}
+    assert client.post(url, json=later).status_code == 200
+    assert client.post(url, json={**later, "revision": 99}).status_code == 422
+
+    assert [event["revision"] for event in log.named("drift_map_reported")] == [0, 1]
+    assert [event.properties()["revision"] for event, _ in sink.events] == [0, 1]

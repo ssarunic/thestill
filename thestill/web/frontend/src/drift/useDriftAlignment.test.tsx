@@ -198,6 +198,92 @@ describe('useDriftAlignment', () => {
   })
 })
 
+describe('a play is checked again as later ranges arrive', () => {
+  const AUDIO = 'https://host.example/a.mp3'
+  const range = (overrides: object = {}) => ({
+    url: AUDIO,
+    range: 'bytes=0-',
+    status: 206,
+    opaque: false,
+    contentLength: 2,
+    blockIndex: 0,
+    crc: 11,
+    adler: 22,
+    t: Date.now() + 1,
+    ...overrides,
+  })
+  type Body = { outcome: string; revision: number; verify_ranges_checked: number | null; sw_state: string }
+  const bodies = () => reportDriftOutcome.mock.calls.map((call) => call[2] as Body)
+
+  function play() {
+    vi.stubGlobal('navigator', {
+      userAgent: 'x',
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    setCorsVerdict(AUDIO, 'cors_ok')
+    beginAudioLoad(AUDIO, true)
+    const hook = renderHook(() => useDriftAlignment(props()))
+    return hook
+  }
+  const finish = () => act(() => FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report } }))
+  const settle = (ms: number) => act(() => vi.advanceTimersByTime(ms))
+
+  it('finds out a copy that only differs at a later ad break', () => {
+    const { result } = play()
+    recordMediaReport(range()) // the opening block matches
+    finish()
+    settle(1500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(bodies().map((b) => [b.outcome, b.revision])).toEqual([['aligned', 0]])
+
+    // The listener seeks past the ad break: this block is not in the fetched copy.
+    act(() => recordMediaReport(range({ range: 'bytes=65536-', contentLength: 2, blockIndex: 1, crc: 999, adler: 44 })))
+    settle(500)
+    expect(result.current.check?.verification).toMatchObject({ rangesChecked: 2, rangesMatched: 1, verdict: 'mismatch' })
+    expect(bodies().map((b) => [b.outcome, b.revision])).toEqual([
+      ['aligned', 0],
+      ['variant_mismatch', 1],
+    ])
+
+    // A mismatch is final: nothing more is reported for this play.
+    act(() => recordMediaReport(range({ blockIndex: 1, crc: 33, adler: 44 })))
+    settle(500)
+    expect(bodies()).toHaveLength(2)
+  })
+
+  it('reports a play that could only be verified once the worker saw it', () => {
+    const { result } = play()
+    finish()
+    settle(1500)
+    expect(result.current.check).toEqual({ swState: 'no_requests', verification: null })
+
+    act(() => recordMediaReport(range()))
+    settle(500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(bodies().map((b) => [b.sw_state, b.revision])).toEqual([
+      ['no_requests', 0],
+      ['ok', 1],
+    ])
+    // More matching ranges change the count shown, not the verdict: no new report.
+    act(() => recordMediaReport(range({ blockIndex: 1, crc: 33, adler: 44 })))
+    settle(500)
+    expect(result.current.check?.verification?.rangesChecked).toBe(2)
+    expect(bodies()).toHaveLength(2)
+  })
+
+  it('stops when another source is loaded', () => {
+    const { result } = play()
+    recordMediaReport(range())
+    finish()
+    settle(1500)
+    beginAudioLoad('https://host.example/next.mp3', true)
+    act(() => recordMediaReport(range({ crc: 999 })))
+    settle(500)
+    expect(result.current.check?.verification?.verdict).toBe('verified')
+    expect(bodies()).toHaveLength(1)
+  })
+})
+
 describe('checkPlay', () => {
   const AUDIO = 'https://host.example/a.mp3'
   const seen = (overrides: object = {}) => ({

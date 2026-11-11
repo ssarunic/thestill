@@ -14,6 +14,7 @@ import { toOutcomeBody, type PlayCheck } from './report'
 import {
   ensureDriftServiceWorker,
   mediaReportsFor,
+  onMediaReport,
   serviceWorkerControlling,
   serviceWorkerSupported,
 } from './swClient'
@@ -86,10 +87,58 @@ function saveData(): boolean {
   return connection?.saveData === true
 }
 
+type ReportPlay = (result: DriftReport, check: PlayCheck, revision: number) => void
+
+/** A play is re-reported at most this many times after its first report. */
+const MAX_REVISIONS = 2
+
+const verdictOf = (check: PlayCheck) => check.verification?.verdict ?? 'unverified'
+
+/**
+ * Spec #116 §4 step 6 — "the first response and every later range must
+ * match". The first check sees only what the element had asked for by
+ * then; two copies of equal length can share their opening and differ at a
+ * later ad break, which only a seek exposes. So every further response of
+ * the same audio load is checked too. The state follows each change, and a
+ * changed verdict is reported again: a play found to be another copy after
+ * all, or one that could only be verified later.
+ */
+function keepChecking(key: string, audioUrl: string, result: DriftReport, first: PlayCheck, report: ReportPlay): void {
+  const load = currentAudioLoad()
+  if (!load || load.url !== audioUrl) return
+  let reported = verdictOf(first)
+  let shown = JSON.stringify(first)
+  let revision = 0
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const stop = onMediaReport(() => {
+    if (timer !== null) return
+    // Several ranges arrive together after a seek; judge them once.
+    timer = setTimeout(() => {
+      timer = null
+      const now = currentAudioLoad()
+      // Another source has been loaded: this play is over.
+      if (!now || now.url !== load.url || now.t !== load.t) return stop()
+      const check = checkPlay(audioUrl, result)
+      const signature = JSON.stringify(check)
+      if (signature !== shown) {
+        shown = signature
+        publish(key, { ...IDLE, status: 'done', report: result, check })
+      }
+      const verdict = verdictOf(check)
+      // A mismatch is final. A verified play can still be found out.
+      if (verdict === reported || verdict === 'unverified') return
+      reported = verdict
+      revision += 1
+      report(result, check, revision)
+      if (verdict === 'mismatch' || revision >= MAX_REVISIONS) stop()
+    }, 500)
+  })
+}
+
 function startAttempt(
   key: string,
   input: DriftWorkerRequest['input'],
-  report: (result: DriftReport, check: PlayCheck) => void,
+  report: ReportPlay,
 ): void {
   publish(key, { ...IDLE, status: 'running' })
   const worker = new Worker(new URL('../workers/driftAlign.worker.ts', import.meta.url), { type: 'module' })
@@ -114,7 +163,8 @@ function startAttempt(
     setTimeout(() => {
       const check = checkPlay(input.audioUrl, result)
       publish(key, { ...IDLE, status: 'done', report: result, check })
-      report(result, check)
+      report(result, check, 0)
+      keepChecking(key, input.audioUrl, result, check, report)
     }, CHECK_SETTLE_MS)
   }
   worker.postMessage({ type: 'start', input } satisfies DriftWorkerRequest)
@@ -179,12 +229,12 @@ export function useDriftAlignment({
         audioUrl,
         segments: transcriptIntervals(transcript),
       },
-      (report, check) => {
+      (report, check, revision) => {
         // Best effort: a lost report costs one data point.
         void reportDriftOutcome(
           podcastSlug,
           episodeSlug,
-          toOutcomeBody(report, generation, navigator.userAgent, check),
+          toOutcomeBody(report, generation, navigator.userAgent, check, revision),
         ).catch(() => {})
       },
     )
