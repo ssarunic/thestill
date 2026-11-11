@@ -532,6 +532,13 @@ export default function EpisodeReader({
     transcript: transcriptData?.segments,
   })
   const showDriftDebug = canAlignDrift && searchParams.get('driftdebug') === '1'
+  // Spec #116 §6 — while a map is being built or checked, the drift banner
+  // says so. Once a map is applied the banner goes by itself: the player
+  // then reports the transcribed copy's duration.
+  const driftAligning =
+    canAlignDrift &&
+    (driftAlignment.status === 'running' ||
+      (driftAlignment.status === 'done' && driftAlignment.report?.outcome === 'aligned' && !driftAlignment.check))
 
   // Spec #72 §Deep link — `?t=` lands the reader on that segment regardless
   // of the follow toggle: once per history entry, fresh entries only. A POP
@@ -839,6 +846,7 @@ export default function EpisodeReader({
                   episodeState={episode?.state}
                   episodeId={episode?.id ?? null}
                   audioUrl={episode?.audio_url ?? null}
+                  driftAligning={driftAligning}
                   onSegmentSeek={handleSegmentSeek}
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
@@ -919,6 +927,8 @@ interface TranscriptPanelProps {
   episodeState: string | undefined
   episodeId: string | null
   audioUrl: string | null
+  // Spec #116 — a timeline map for this copy is being built or checked.
+  driftAligning?: boolean
   onSegmentSeek: (seconds: number) => void
   // Spec #28 §5.2 — episode-page entity UX. All optional so a viewer
   // mounted without entity data (legacy episodes, tests) keeps working.
@@ -1009,6 +1019,7 @@ function TranscriptPanel({
   episodeState,
   episodeId,
   audioUrl,
+  driftAligning,
   onSegmentSeek,
   entitiesById,
   mentionsBySegmentId,
@@ -1065,6 +1076,7 @@ function TranscriptPanel({
               (likely dynamic ads inserted by the host). Clicking a segment will seek
               to the displayed time, but the audio at that position may not match.
             </p>
+            {driftAligning && <p className="mt-1 text-amber-800/90">Aligning…</p>}
           </div>
         </div>
       )}

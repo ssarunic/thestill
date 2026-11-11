@@ -552,6 +552,8 @@ class DriftOutcomeRequest(BaseModel):
     # 0 for a play's first report; higher when a later range of the same play
     # changed its verdict.
     revision: int = Field(default=0, ge=0, le=10)
+    # Whether the browser put the map in force in its player for this play.
+    applied: bool = False
     # A host name only, never a URL: no scheme, path, query or port.
     audio_host: Optional[str] = Field(default=None, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
     audio_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
@@ -593,12 +595,17 @@ def report_drift_outcome(
     max_offset_s = max((abs(span.offset) for span in body.spans), default=0.0)
     # An applied map whose ranges did not all match the fetched copy means
     # the checks of section 4 step 6 let a wrong map through.
-    verification_bug = (
-        body.outcome == "aligned"
-        and body.verify_ranges_checked is not None
+    unmatched = (
+        body.verify_ranges_checked is not None
         and body.verify_ranges_matched is not None
         and body.verify_ranges_matched < body.verify_ranges_checked
     )
+    # A map may only be in force when both checks passed. Reported otherwise,
+    # the browser moved seeks on a map it could not tie to the audio playing.
+    applied_unverified = body.applied and (
+        body.outcome != "aligned" or body.verify_length_ok is not True or not body.verify_ranges_checked or unmatched
+    )
+    verification_bug = (body.outcome == "aligned" and unmatched) or applied_unverified
     log = logger.error if verification_bug else logger.info
     log(
         "drift_map_reported",
@@ -628,6 +635,7 @@ def report_drift_outcome(
             verify_ranges_matched=body.verify_ranges_matched,
             sw_state=body.sw_state,
             revision=body.revision,
+            applied=body.applied,
             fetch_ms=body.fetch_ms,
             fit_ms=body.fit_ms,
         ),

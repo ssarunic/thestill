@@ -7,6 +7,8 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { reportDriftOutcome } from '../api/client'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer } from '../contexts/PlayerContext'
+import type { AppliedTimeline } from '../contexts/playback-engine/native-engine'
+import { TimelineMap } from '../contexts/playback-engine/timeline-map'
 import type { DriftWorkerMessage, DriftWorkerRequest } from '../workers/driftAlign.worker'
 import type { TranscriptInterval } from './classify'
 import { currentAudioLoad, setCorsVerdict } from './corsVerdict'
@@ -27,9 +29,11 @@ export interface DriftAlignmentState {
   report: DriftReport | null
   /** Whether the audio element was shown to be playing the aligned copy. */
   check: PlayCheck | null
+  /** True while the map is in force in the player (spec §5). */
+  applied: boolean
 }
 
-const IDLE: DriftAlignmentState = { status: 'idle', progress: null, report: null, check: null }
+const IDLE: DriftAlignmentState = { status: 'idle', progress: null, report: null, check: null, applied: false }
 
 // The worker's reports of the element's first responses can trail the
 // alignment by a moment; wait this long before judging the play.
@@ -90,7 +94,30 @@ function saveData(): boolean {
   return connection?.saveData === true
 }
 
-type ReportPlay = (result: DriftReport, check: PlayCheck | null, revision: number) => void
+type ReportPlay = (result: DriftReport, check: PlayCheck | null, revision: number, applied: boolean) => void
+
+/** Put a map in force in the player, or lift it; false when the player refused. */
+type ApplyTimeline = (timeline: AppliedTimeline | null) => boolean
+
+interface PlayHooks {
+  report: ReportPlay
+  apply: ApplyTimeline
+}
+
+/**
+ * Spec #116 §4 step 7 — the map goes to the player only when the copy is
+ * shifted (`aligned`; an identity needs no map) and both checks of step 6
+ * have passed for the audio now playing. Any other verdict lifts it: a map
+ * that cannot be tied to the playing copy must not move a single seek.
+ */
+function settleTimeline(result: DriftReport, check: PlayCheck | null, apply: ApplyTimeline): boolean {
+  const verified = check?.verification?.verdict === 'verified'
+  if (verified && result.outcome === 'aligned' && result.trackDurationS !== null && result.spans.length > 0) {
+    return apply({ map: new TimelineMap(result.spans, result.gaps), durationS: result.trackDurationS })
+  }
+  apply(null)
+  return false
+}
 
 /** A play is re-reported at most this many times after its first report. */
 const MAX_REVISIONS = 2
@@ -106,11 +133,19 @@ const verdictOf = (check: PlayCheck) => check.verification?.verdict ?? 'unverifi
  * changed verdict is reported again: a play found to be another copy after
  * all, or one that could only be verified later.
  */
-function keepChecking(key: string, audioUrl: string, result: DriftReport, first: PlayCheck, report: ReportPlay): void {
+function keepChecking(
+  key: string,
+  audioUrl: string,
+  result: DriftReport,
+  first: PlayCheck,
+  wasApplied: boolean,
+  { report, apply }: PlayHooks,
+): void {
   const load = currentAudioLoad()
   if (!load || load.url !== audioUrl) return
   let reported = verdictOf(first)
   let shown = JSON.stringify(first)
+  let applied = wasApplied
   let revision = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   const stop = onMediaReport(() => {
@@ -123,16 +158,19 @@ function keepChecking(key: string, audioUrl: string, result: DriftReport, first:
       if (!now || now.url !== load.url || now.t !== load.t) return stop()
       const check = checkPlay(audioUrl, result)
       const signature = JSON.stringify(check)
+      const verdict = verdictOf(check)
+      // The map follows the verdict at once: lifted the moment a range does
+      // not match, also after it has been applied.
+      if (verdict !== reported) applied = settleTimeline(result, check, apply)
       if (signature !== shown) {
         shown = signature
-        publish(key, { ...IDLE, status: 'done', report: result, check })
+        publish(key, { ...IDLE, status: 'done', report: result, check, applied })
       }
-      const verdict = verdictOf(check)
       // A mismatch is final. A verified play can still be found out.
       if (verdict === reported || verdict === 'unverified') return
       reported = verdict
       revision += 1
-      report(result, check, revision)
+      report(result, check, revision, applied)
       if (verdict === 'mismatch' || revision >= MAX_REVISIONS) stop()
     }, 500)
   })
@@ -150,11 +188,12 @@ function checkThisLoad(
   key: string,
   audioUrl: string,
   result: DriftReport,
-  report: ReportPlay,
+  hooks: PlayHooks,
   /** The alignment has not been reported yet: its outcome must reach the
    * server even if the play it belongs to is over before it can be checked. */
   firstReport: boolean,
 ): void {
+  const { report } = hooks
   const load = currentAudioLoad()
   checkedLoads.set(key, load && load.url === audioUrl ? load.t : -1)
   publish(key, { ...IDLE, status: 'done', report: result })
@@ -166,20 +205,21 @@ function checkThisLoad(
     // replacement would be wrong; the outcome is still reported, with the
     // check unknown.
     if (load && (!now || now.url !== load.url || now.t !== load.t)) {
-      if (firstReport) report(result, null, 0)
+      if (firstReport) report(result, null, 0, false)
       return
     }
     const check = checkPlay(audioUrl, result)
-    publish(key, { ...IDLE, status: 'done', report: result, check })
-    report(result, check, 0)
-    keepChecking(key, audioUrl, result, check, report)
+    const applied = settleTimeline(result, check, hooks.apply)
+    publish(key, { ...IDLE, status: 'done', report: result, check, applied })
+    report(result, check, 0, applied)
+    keepChecking(key, audioUrl, result, check, applied, hooks)
   }, CHECK_SETTLE_MS)
 }
 
 function startAttempt(
   key: string,
   input: DriftWorkerRequest['input'],
-  report: ReportPlay,
+  hooks: PlayHooks,
 ): void {
   publish(key, { ...IDLE, status: 'running' })
   const worker = new Worker(new URL('../workers/driftAlign.worker.ts', import.meta.url), { type: 'module' })
@@ -200,7 +240,7 @@ function startAttempt(
     // for this redirect chain, for the next load of the element.
     if (result.outcome === 'no_cors') setCorsVerdict(input.audioUrl, 'no_cors')
     else if (result.fetchedBytes !== null) setCorsVerdict(input.audioUrl, 'cors_ok')
-    checkThisLoad(key, input.audioUrl, result, report, true)
+    checkThisLoad(key, input.audioUrl, result, hooks, true)
   }
   worker.postMessage({ type: 'start', input } satisfies DriftWorkerRequest)
 }
@@ -248,18 +288,24 @@ export function useDriftAlignment({
   const state = useSyncExternalStore(subscribe, () => (key ? (attempts.get(key) ?? IDLE) : IDLE))
 
   const isPlaying = player.isPlaying
+  const applyTimeline = player.applyTimeline
   useEffect(() => {
     if (!key || !isPlaying) return
     // A refetched transcript is a new object, but the attempt is keyed on
     // its generation, so it never restarts.
     if (!transcript || !generation || !audioUrl || !podcastSlug || !episodeSlug) return
-    const report: ReportPlay = (result, check, revision) => {
-      // Best effort: a lost report costs one data point.
-      void reportDriftOutcome(
-        podcastSlug,
-        episodeSlug,
-        toOutcomeBody(result, generation, navigator.userAgent, check, revision),
-      ).catch(() => {})
+    const hooks: PlayHooks = {
+      report: (result, check, revision, applied) => {
+        // Best effort: a lost report costs one data point.
+        void reportDriftOutcome(
+          podcastSlug,
+          episodeSlug,
+          toOutcomeBody(result, generation, navigator.userAgent, check, revision, applied),
+        ).catch(() => {})
+      },
+      // The player refuses unless this episode's audio is still what it is
+      // playing, so a late verdict can never touch another source.
+      apply: (timeline) => (episodeId ? applyTimeline(episodeId, audioUrl, timeline) : false),
     }
     const earlier = attempts.get(key)
     if (earlier) {
@@ -268,7 +314,7 @@ export function useDriftAlignment({
       // that is a new play to check; the alignment itself is reused.
       const load = currentAudioLoad()
       if (earlier.status === 'done' && earlier.report && load?.url === audioUrl && checkedLoads.get(key) !== load.t) {
-        checkThisLoad(key, audioUrl, earlier.report, report, false)
+        checkThisLoad(key, audioUrl, earlier.report, hooks, false)
       }
       return
     }
@@ -283,9 +329,9 @@ export function useDriftAlignment({
         audioUrl,
         segments: transcriptIntervals(transcript),
       },
-      report,
+      hooks,
     )
-  }, [key, isPlaying, transcript, generation, audioUrl, podcastSlug, episodeSlug])
+  }, [key, isPlaying, transcript, generation, audioUrl, podcastSlug, episodeSlug, episodeId, applyTimeline])
 
   return state
 }

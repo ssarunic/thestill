@@ -13,6 +13,7 @@ import {
   type PlayerTrack,
 } from './PlayerContext'
 import type { PlaybackManifest } from '../api/types'
+import { TimelineMap } from './playback-engine/timeline-map'
 import * as listeningApi from '../api/listening'
 import { listeningCache } from './listening/listeningCache'
 import { LOCAL_USER_KEY, readSnapshot, writeSnapshot } from './listening/sessionSnapshot'
@@ -305,6 +306,78 @@ describe('playback session basics', () => {
     expect(video.src).toBe('https://cdn.test/ep2.mp4')
     act(() => { video.dispatchEvent(new Event('loadedmetadata')) })
     expect(video.currentTime).toBe(30) // not 32
+  })
+})
+
+describe('spec #116 §5 — a verified timeline map', () => {
+  const timeline = () => ({
+    map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: -30 }]),
+    durationS: 3000,
+  })
+
+  it('makes seeks and the reported time transcript time for the audio it was verified for', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      stateFor(video).currentTime = 1100
+      video.dispatchEvent(new Event('timeupdate'))
+    })
+    expect(ctx.timelineApplied).toBe(false)
+
+    let accepted = false
+    act(() => {
+      accepted = ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(accepted).toBe(true)
+    expect(ctx.timelineApplied).toBe(true)
+    // The audio did not move; the time the app sees is now the transcript's.
+    expect(stateFor(video).currentTime).toBe(1100)
+    expect(ctx.getCurrentTime()).toBe(1130)
+
+    // The 18:50 paragraph is 30 s earlier in this copy.
+    act(() => ctx.seek(1130))
+    expect(stateFor(video).currentTime).toBe(1100)
+
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, null)
+    })
+    expect(ctx.timelineApplied).toBe(false)
+    expect(ctx.getCurrentTime()).toBe(1100)
+  })
+
+  it('refuses a map for another episode, another URL or the video rendition', () => {
+    renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      expect(ctx.applyTimeline('ep-other', audioTrack.audioUrl, timeline())).toBe(false)
+      expect(ctx.applyTimeline('ep-audio', 'https://cdn.test/else.mp3', timeline())).toBe(false)
+    })
+    expect(ctx.timelineApplied).toBe(false)
+
+    act(() => ctx.play(videoTrack))
+    act(() => {
+      expect(ctx.applyTimeline('ep-video', dualManifest.video!.url, timeline())).toBe(false)
+    })
+    expect(ctx.timelineApplied).toBe(false)
+  })
+
+  it('lifts the map when another source is loaded or playback stops', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    act(() => ctx.play(videoTrack))
+    expect(ctx.timelineApplied).toBe(false)
+    act(() => ctx.seek(50))
+    expect(stateFor(video).currentTime).toBe(50)
+
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    act(() => ctx.stop())
+    expect(ctx.timelineApplied).toBe(false)
   })
 })
 

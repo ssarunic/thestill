@@ -51,6 +51,8 @@ export interface DriftReport {
   audioHost: string | null
   /** Byte length of the transcribed copy, from the track. */
   audioBytes: number | null
+  /** Duration of the transcribed copy, from the track. */
+  trackDurationS: number | null
   fetchedBytes: number | null
   fetchMs: number | null
   fitMs: number | null
@@ -85,6 +87,7 @@ function emptyReport(outcome: DriftOutcome, error: string | null = null): DriftR
     anchorsInlier: null,
     audioHost: null,
     audioBytes: null,
+    trackDurationS: null,
     fetchedBytes: null,
     fetchMs: null,
     fitMs: null,
@@ -126,6 +129,7 @@ export async function runDriftAlignment(
   const report = emptyReport('error')
   report.generation = track.generation
   report.audioBytes = track.audioBytes
+  report.trackDurationS = track.durationS
   report.anchorsTotal = track.anchors.length
   report.audioHost = hostOf(input.audioUrl)
   if (track.codec !== CODEC_MP3 || track.anchors.length === 0) {

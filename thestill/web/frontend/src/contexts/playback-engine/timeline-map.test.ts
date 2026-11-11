@@ -102,4 +102,13 @@ describe('TimelineMap', () => {
     expect(map.isIdentity).toBe(false)
     expect(TimelineMap.constant().isIdentity).toBe(true)
   })
+
+  it('toLogicalHeld waits at the point an ad interrupted', () => {
+    const map = new TimelineMap(spans, [adInOurCopy])
+    expect(map.toLogicalHeld(3)).toBe(0) // pre-roll: the start of the episode
+    expect(map.toLogicalHeld(18)).toBe(10)
+    expect(map.toLogicalHeld(35)).toBe(20) // mid-roll: where the first part ended
+    expect(map.toLogicalHeld(47)).toBe(30)
+    expect(new TimelineMap([]).toLogicalHeld(12)).toBe(12)
+  })
 })

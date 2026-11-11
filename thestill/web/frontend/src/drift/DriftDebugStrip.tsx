@@ -35,6 +35,18 @@ const SW_TEXT: Record<string, string> = {
   opaque: 'the service worker could not read the audio responses',
 }
 
+/** One line on whether the map is moving timestamps, and if not why. */
+function appliedText(state: DriftAlignmentState): string {
+  if (state.applied) return 'Applied: seeks, the clock and the highlighting follow this map.'
+  const report = state.report
+  if (state.status !== 'done' || !report) return 'Not applied yet.'
+  if (report.outcome === 'identity') return 'Nothing to correct: this is the transcribed audio.'
+  if (report.outcome !== 'aligned') return 'Not applied: there is no usable map for this copy.'
+  if (!state.check) return 'Not applied yet: checking the playing audio.'
+  if (state.check.verification?.verdict === 'mismatch') return 'Not applied: the audio playing is a different copy.'
+  return 'Not applied: the playing audio could not be checked against this map.'
+}
+
 /** One line on whether the element was shown to be playing the aligned copy. */
 function checkText(check: PlayCheck | null): string {
   if (!check) return 'Check against the playing audio: pending.'
@@ -61,7 +73,10 @@ export default function DriftDebugStrip({
   state: DriftAlignmentState
   /** Whether the transcript names a sync track at all. */
   hasTrack: boolean
-  /** Seek the player to a time on the listener's copy and play. */
+  /**
+   * Seek the player and play. The time is what the player takes: transcript
+   * time while the map is applied, the time on this copy otherwise.
+   */
   onPlayAt: (seconds: number) => void
 }) {
   const report = state.report
@@ -90,7 +105,7 @@ export default function DriftDebugStrip({
         Drift alignment (admin) — {headline}
         {report?.error ? ` (${report.error})` : ''}
       </p>
-      <p className="mt-1 text-slate-600">Reported only. Seeks and highlighting are not corrected yet.</p>
+      <p className="mt-1 text-slate-600">{appliedText(state)}</p>
       {state.status === 'done' && report && <p className="mt-1 text-slate-600">{checkText(state.check)}</p>}
 
       {report && (
@@ -200,16 +215,26 @@ export default function DriftDebugStrip({
                     </td>
                     <td className="py-1 pr-3 tabular-nums">{signed(span.offsetS)}</td>
                     <td className="py-1">
-                      <button
-                        type="button"
-                        className="mr-3 underline"
-                        onClick={() => onPlayAt(span.srcStartS + span.offsetS)}
-                      >
-                        Play span start, corrected
-                      </button>
-                      <button type="button" className="underline" onClick={() => onPlayAt(span.srcStartS)}>
-                        Play uncorrected
-                      </button>
+                      {state.applied ? (
+                        // The player already maps: asking for the transcript
+                        // time is the corrected seek.
+                        <button type="button" className="underline" onClick={() => onPlayAt(span.srcStartS)}>
+                          Play span start
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="mr-3 underline"
+                            onClick={() => onPlayAt(span.srcStartS + span.offsetS)}
+                          >
+                            Play span start, corrected
+                          </button>
+                          <button type="button" className="underline" onClick={() => onPlayAt(span.srcStartS)}>
+                            Play uncorrected
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
