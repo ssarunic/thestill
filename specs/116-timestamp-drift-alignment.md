@@ -944,8 +944,14 @@ play reports its outcome from the first admin session.
 
 The service worker is the app's first. Its rules:
 
-- It answers only cross-origin requests whose destination is `audio` or
-  `video`, and returns the original response. Every other request is
+- It answers only cross-origin requests made with CORS (an element
+  loaded with `crossorigin`) whose destination is `audio` or `video`, and
+  returns the original response. A request made without CORS is left to
+  the browser: nothing can be read from it, and a worker's `fetch` is not
+  a media element's. The browser upgrades a redirect to plain `http` for
+  the element and blocks it for a worker, so relaying one stops playback.
+  v1.40.0 to v1.42.0 relayed them, and audio on the BBC's host (which
+  redirects to `http`) would not play for sessions with the worker. Every other request is
   left to the browser. It caches nothing and handles no navigation.
 - It is registered on the first play of an episode that has a track, by
   a session that holds `drift.align`, and takes control of the open page
