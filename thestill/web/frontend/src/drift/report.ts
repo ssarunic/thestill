@@ -51,11 +51,15 @@ export interface DriftOutcomeBody {
 const HOST = /^[A-Za-z0-9.-]{1,253}$/
 /** The server takes at most this many spans; a real map has a handful. */
 export const MAX_REPORTED_SPANS = 64
+/** The server refuses a body over this many bytes (`DRIFT_OUTCOME_MAX_BYTES`). */
+export const MAX_REPORT_BYTES = 4096
+
+const byteLength = (body: DriftOutcomeBody): number => new TextEncoder().encode(JSON.stringify(body)).length
 
 export function toOutcomeBody(report: DriftReport, generation: string, userAgent: string): DriftOutcomeBody {
   const outlier =
     report.anchorsHit !== null && report.anchorsInlier !== null ? report.anchorsHit - report.anchorsInlier : null
-  return {
+  const body: DriftOutcomeBody = {
     generation: report.generation ?? generation,
     outcome: report.outcome,
     spans: report.spans.slice(0, MAX_REPORTED_SPANS).map((span) => ({
@@ -82,4 +86,8 @@ export function toOutcomeBody(report: DriftReport, generation: string, userAgent
     browser: browserLabel(userAgent),
     error: report.error,
   }
+  // 64 spans of long timestamps can overrun the byte cap on their own; drop
+  // spans from the end so a fragmented map still reports its outcome.
+  while (body.spans.length > 0 && byteLength(body) > MAX_REPORT_BYTES) body.spans.pop()
+  return body
 }

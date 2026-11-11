@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { browserLabel, MAX_REPORTED_SPANS, toOutcomeBody } from './report'
+import { browserLabel, MAX_REPORT_BYTES, MAX_REPORTED_SPANS, toOutcomeBody } from './report'
 import type { DriftReport } from './run'
 
 const UA = {
@@ -95,5 +95,20 @@ describe('toOutcomeBody', () => {
     const body = toOutcomeBody({ ...report, generation: null, outcome: 'error' }, 'from-transcript', UA.firefox)
     expect(body.generation).toBe('from-transcript')
     expect(JSON.stringify(body).length).toBeLessThan(4096)
+  })
+
+  it('keeps a fragmented map under the server’s byte cap', () => {
+    // 64 spans with four-digit, three-decimal times serialise to over 4 KB.
+    const many = Array.from({ length: MAX_REPORTED_SPANS }, (_, i) => ({
+      srcStartS: 1000.123 + i * 40,
+      srcEndS: 1030.456 + i * 40,
+      offsetS: -1234.567,
+    }))
+    expect(MAX_REPORT_BYTES).toBe(4096) // DRIFT_OUTCOME_MAX_BYTES in api_podcasts.py
+    const body = toOutcomeBody({ ...report, spans: many }, 'abc123', UA.chrome)
+    expect(new TextEncoder().encode(JSON.stringify(body)).length).toBeLessThanOrEqual(MAX_REPORT_BYTES)
+    expect(body.spans.length).toBeGreaterThan(0)
+    expect(body.spans[0]).toEqual({ src_start: 1000.123, src_end: 1030.456, offset: -1234.567 })
+    expect(body.outcome).toBe('aligned')
   })
 })
