@@ -212,6 +212,24 @@ class TestEpisodeEntitiesEndpoint:
         assert spacex["mention_count"] == 1  # only the ep_test_1 mention
         assert spacex["entity"]["type"] == "company"
 
+    def test_guest_sorts_ahead_of_host(self, client, app_state):
+        """The guest is what sets the episode apart; the host is on every one."""
+        db_path = Path(app_state.repository.db_path)
+        _, episode_id, _ = _seed_corpus(db_path)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("UPDATE podcasts SET host_entity_ids = ?", ('["company:spacex"]',))
+            conn.execute("UPDATE episodes SET guest_entity_ids = ?", ('["person:elon-musk"]',))
+            conn.commit()
+        finally:
+            conn.close()
+
+        entities = client.get(f"/api/episodes/{episode_id}/entities").json()["entities"]
+        assert [(e["entity"]["id"], e["speaker_kind"]) for e in entities] == [
+            ("person:elon-musk", "guest"),
+            ("company:spacex", "host"),
+        ]
+
     def test_min_confidence_drops_low_confidence_mentions(self, client, app_state):
         _, episode_id, _ = _seed_corpus(Path(app_state.repository.db_path))
 

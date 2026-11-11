@@ -7,6 +7,7 @@ import {
   Avatar,
   Button,
   EntityGroups,
+  TakingPart,
   FilterChip,
   ListenOn,
   QuoteCard,
@@ -26,9 +27,10 @@ import {
 import NotFound, { ModuleError } from './NotFound'
 
 
-// The signed-in reader's section names (EntityRail).
+// The signed-in reader's section names (EntityRail). The people who take
+// part are listed apart, under "In this episode" (TakingPart).
 const MENTIONED_TITLES = {
-  person: 'People in this episode',
+  person: 'People mentioned',
   company: 'Companies mentioned',
   product: 'Products',
   topic: 'Topics',
@@ -62,6 +64,10 @@ export default function Episode() {
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]
   const more = usePublicPodcastEpisodes(podcastSlug)
+
+  const mentioned = firstPage?.mentioned ?? []
+  const takingPart = mentioned.flatMap((entity) => (entity.role ? [{ ...entity, role: entity.role }] : []))
+  const onlyMentioned = mentioned.filter((entity) => !entity.role)
 
   const linked = firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
@@ -253,11 +259,14 @@ export default function Episode() {
 
         <aside className="ts-rail" aria-label="About this episode">
           {firstPage && (
-            <EntityGroups
-              items={firstPage.mentioned}
-              titles={MENTIONED_TITLES}
-              count={(entity) => `${entity.count}×`}
-            />
+            <>
+              <TakingPart people={takingPart} />
+              <EntityGroups
+                items={onlyMentioned}
+                titles={MENTIONED_TITLES}
+                count={(entity) => `${entity.count}×`}
+              />
+            </>
           )}
           {episode?.description && (
             <section className="ts-rail-module">

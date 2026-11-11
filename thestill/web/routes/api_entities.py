@@ -410,13 +410,14 @@ def get_episode_entities(
             )
         )
 
-    # Spec §5.2 right-rail sort: hosts/guests/recurring first
-    # (participants), mentioned-only after. Within each bucket sort by
+    # Spec §5.2 right-rail sort: participants first, mentioned-only
+    # after. Guests lead: the guest is what sets this episode apart, the
+    # host is the same on every episode of the show. Within each bucket sort by
     # salience descending — see ``_compute_salience`` for the formula.
     # Tiebreak by canonical_name for deterministic output. Replaces the
     # raw ``mention_count`` sort that let one-shot tangents outrank
     # broadly-referenced entities.
-    kind_priority = {"host": 0, "guest": 1, "recurring": 2, "unknown": 3}
+    kind_priority = {"guest": 0, "host": 1, "recurring": 2, "unknown": 3}
     items.sort(key=lambda i: (kind_priority[i.speaker_kind], -i.salience, i.entity.canonical_name))
 
     return EpisodeEntitiesResponse(

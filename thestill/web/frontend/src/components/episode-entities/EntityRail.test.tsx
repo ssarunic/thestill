@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import EntityRail from './EntityRail'
@@ -86,7 +86,8 @@ describe('EntityRail', () => {
   it('renders an empty-state message when no entities are present', () => {
     renderRail([])
     expect(screen.getByText(/No entities extracted/)).toBeInTheDocument()
-    expect(screen.queryByText('People in this episode')).toBeNull()
+    expect(screen.queryByText('In this episode')).toBeNull()
+    expect(screen.queryByText('People mentioned')).toBeNull()
     // Nothing to list at all: one combined note, no bare section header.
     expect(screen.queryByText('Related episodes')).toBeNull()
   })
@@ -103,9 +104,44 @@ describe('EntityRail', () => {
       entity('company:b', 'Acme', 'company', 3),
       entity('topic:c', 'Compute', 'topic', 2),
     ])
-    expect(screen.getByText('People in this episode')).toBeInTheDocument()
+    expect(screen.getByText('People mentioned')).toBeInTheDocument()
+    // Nobody takes part, so there is no cast section.
+    expect(screen.queryByText('In this episode')).toBeNull()
     expect(screen.getByText('Companies mentioned')).toBeInTheDocument()
     expect(screen.getByText('Topics')).toBeInTheDocument()
+  })
+
+  it('lists the people who take part apart from the people only mentioned, guests first', () => {
+    renderRail([
+      // Host-first, as a payload cached from before the order changed.
+      entity('person:host', 'Hosty', 'person', 81, 'host'),
+      entity('person:guest', 'Guesty', 'person', 253, 'guest'),
+      entity('person:regular', 'Regular', 'person', 4, 'recurring'),
+      entity('person:other', 'Stranger', 'person', 7, 'unknown'),
+    ])
+    const cast = screen.getByText('In this episode').closest('section') as HTMLElement
+    const mentioned = screen.getByText('People mentioned').closest('section') as HTMLElement
+    expect(within(cast).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Guestyguest',
+      'Hostyhost',
+      'Regularrecurring',
+    ])
+    // A participant's count is their own speaking turns: not shown.
+    expect(within(cast).queryByText(/×/)).toBeNull()
+    expect(within(mentioned).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Stranger7×'])
+  })
+
+  it('never folds the people who take part behind "Show all"', () => {
+    renderRail(Array.from({ length: 10 }, (_, i) => entity(`person:g${i}`, `Guest ${i}`, 'person', 1, 'guest')))
+    expect(screen.getAllByRole('listitem')).toHaveLength(10)
+    expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
+  })
+
+  it('keeps the count on a company that is also a host anchor', () => {
+    renderRail([entity('company:acme', 'Acme', 'company', 3, 'host')])
+    const section = screen.getByText('Companies mentioned').closest('section') as HTMLElement
+    expect(within(section).getByText('3×')).toBeInTheDocument()
+    expect(screen.queryByText('In this episode')).toBeNull()
   })
 
   it('shows a host/guest tag for participants', () => {
