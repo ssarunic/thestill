@@ -47,12 +47,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -61,6 +63,44 @@ from mcp import Client  # noqa: E402
 from thestill.mcp.registration import tool_result_ok  # noqa: E402
 
 URL_ENV = "THESTILL_MCP_URL"
+REDACTED = "<connector-url>"
+
+
+def redactor(url: Optional[str]) -> Callable[[str], str]:
+    """Strip the personal connector URL, and its token, from text.
+
+    The token is the URL's last path segment; it is matched on its own so a
+    redirect to another scheme, host or path cannot carry it through.
+    """
+    secrets = []
+    if url:
+        secrets.append(url.rstrip("/"))
+        token = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+        if len(token) >= 8:
+            secrets.append(token)
+
+    def redact(text: str) -> str:
+        for secret in secrets:
+            text = text.replace(secret, REDACTED)
+        return text
+
+    return redact
+
+
+class _RedactingFilter(logging.Filter):
+    """Rewrites every log record on its way out so the URL never reaches stderr."""
+
+    def __init__(self, redact: Callable[[str], str]) -> None:
+        super().__init__()
+        self._redact = redact
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = self._redact(record.getMessage())
+        if record.exc_info:
+            message += " (" + self._redact(f"{record.exc_info[0].__name__}: {record.exc_info[1]}") + ")"
+        record.msg, record.args, record.exc_info, record.exc_text = message, None, None, None
+        return True
+
 
 #: Tools that are never called: they queue or run pipeline work for everyone.
 OPERATOR_TOOLS = frozenset(
@@ -97,9 +137,10 @@ class Outcome:
 @dataclass
 class Report:
     outcomes: List[Outcome] = field(default_factory=list)
+    redact: Callable[[str], str] = field(default=lambda text: text, repr=False)
 
     def add(self, tool: str, status: str, detail: str = "", ms: Optional[int] = None) -> None:
-        self.outcomes.append(Outcome(tool, status, detail, ms))
+        self.outcomes.append(Outcome(tool, status, self.redact(detail), ms))
 
     @property
     def failed(self) -> List[Outcome]:
@@ -133,9 +174,9 @@ def _error_text(result: Any) -> str:
     payload = _payload(result)
     message = payload.get("error") or payload.get("message")
     if message:
-        return str(message)[:160]
+        return str(message)
     first = result.content[0] if result.content else None
-    return (getattr(first, "text", "") or "no content")[:160]
+    return getattr(first, "text", "") or "no content"
 
 
 def check_annotations(tools: List[Any], report: Report) -> None:
@@ -151,9 +192,12 @@ def check_annotations(tools: List[Any], report: Report) -> None:
         report.add("tools/list", "ok", f"{len(tools)} tools, each with a title and hints")
 
 
-async def run_checks(client: Any, options: Options) -> Report:
-    """Call each tool the connector lists; later calls use earlier answers."""
-    report = Report()
+async def run_checks(client: Any, options: Options, url: Optional[str] = None) -> Report:
+    """Call each tool the connector lists; later calls use earlier answers.
+
+    ``url`` is the connector address, redacted from every reported detail.
+    """
+    report = Report(redact=redactor(url))
     tools = (await client.list_tools()).tools
     listed = {tool.name for tool in tools}
     check_annotations(tools, report)
@@ -172,11 +216,16 @@ async def run_checks(client: Any, options: Options) -> Report:
         try:
             result = await client.call_tool(name, arguments)
         except Exception as exc:  # noqa: BLE001 - one broken tool must not hide the rest
-            report.add(name, "FAIL", f"{type(exc).__name__}: {exc}"[:160], int((time.monotonic() - started) * 1000))
+            report.add(
+                name,
+                "FAIL",
+                report.redact(f"{type(exc).__name__}: {exc}")[:160],
+                int((time.monotonic() - started) * 1000),
+            )
             return None
         took = int((time.monotonic() - started) * 1000)
         if not tool_result_ok(result):
-            report.add(name, "FAIL", _error_text(result), took)
+            report.add(name, "FAIL", report.redact(_error_text(result))[:160], took)
             return None
         payload = _payload(result)
         report.add(name, "ok", describe(payload), took)
@@ -275,7 +324,7 @@ def _parse(argv: Optional[List[str]]) -> Options:
 
 async def _main(options: Options, url: str) -> Report:
     async with Client(url) as client:
-        return await run_checks(client, options)
+        return await run_checks(client, options, url=url)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -284,6 +333,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not url:
         sys.stderr.write(f"Set {URL_ENV} to your personal connector URL (thestill Settings → Advanced).\n")
         return 2
+    # The MCP transport logs redirects with their target, which can be the
+    # connector URL: every record goes through one redacting stderr handler.
+    handler = logging.StreamHandler(sys.stderr)
+    handler.addFilter(_RedactingFilter(redactor(url)))
+    logging.basicConfig(level=logging.WARNING, handlers=[handler], force=True)
     try:
         report = asyncio.run(_main(options, url))
     except Exception as exc:  # noqa: BLE001 - the URL must never reach the terminal through a traceback

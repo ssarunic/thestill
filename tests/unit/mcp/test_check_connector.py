@@ -156,3 +156,59 @@ def test_missing_url_exits_without_connecting(monkeypatch, capsys):
     monkeypatch.delenv(check_connector.URL_ENV, raising=False)
     assert check_connector.main([]) == 2
     assert check_connector.URL_ENV in capsys.readouterr().err
+
+
+SECRET_URL = "https://thestill.example/mcp/REVIEW_TEST_SECRET"
+
+
+class _RaisingClient:
+    """A client whose tool calls fail with the connector URL in the error."""
+
+    async def list_tools(self):
+        tools = annotate([Tool(name="get_status", description="d", input_schema={"type": "object"})])
+        return type("Listed", (), {"tools": tools})()
+
+    async def call_tool(self, name, arguments):
+        raise RuntimeError(f"Redirect to http://thestill.example/mcp/REVIEW_TEST_SECRET/ for {name}")
+
+
+@pytest.mark.anyio
+async def test_a_tool_error_never_prints_the_connector_url():
+    report = await check_connector.run_checks(_RaisingClient(), check_connector.Options(), url=SECRET_URL)
+    rendered = report.render()
+    assert _status(report)["get_status"] == "FAIL"
+    assert "REVIEW_TEST_SECRET" not in rendered
+    assert "RuntimeError" in rendered
+
+
+def test_transport_warnings_never_print_the_connector_url(monkeypatch, capsys):
+    import logging
+
+    monkeypatch.setenv(check_connector.URL_ENV, SECRET_URL)
+
+    async def fake_main(options, url):
+        logging.getLogger("mcp.client.streamable_http").warning("Redirect to %s/", url)
+        return check_connector.Report()
+
+    monkeypatch.setattr(check_connector, "_main", fake_main)
+    root = logging.getLogger()
+    before = list(root.handlers)
+    try:
+        assert check_connector.main([]) == 0
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in before:
+                root.removeHandler(handler)
+    err = capsys.readouterr().err
+    assert "REVIEW_TEST_SECRET" not in err
+    assert "Redirect to" in err
+
+
+@pytest.mark.anyio
+async def test_a_long_tool_error_is_redacted_before_it_is_cut_short():
+    class LongError(_RaisingClient):
+        async def call_tool(self, name, arguments):
+            raise RuntimeError("x" * 140 + SECRET_URL)
+
+    report = await check_connector.run_checks(LongError(), check_connector.Options(), url=SECRET_URL)
+    assert "REVIEW_TEST" not in report.render()
