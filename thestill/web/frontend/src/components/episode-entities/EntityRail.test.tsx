@@ -274,3 +274,35 @@ describe('EntityRail', () => {
     expect(screen.queryByRole('button', { name: /Show all/ })).toBeNull()
   })
 })
+
+describe('EntityRail type toggles (the strip is not shown from lg up)', () => {
+  const renderRail = (props: Partial<Parameters<typeof EntityRail>[0]> = {}) =>
+    render(
+      <MemoryRouter>
+        <EntityRail entities={[entity('person:a', 'Ada'), entity('company:b', 'Acme', 'company')]} {...props} />
+      </MemoryRouter>,
+    )
+
+  it('carries the type toggles and reports a click', () => {
+    const onToggleType = vi.fn()
+    renderRail({ hiddenTypes: new Set<EntityType>(['company']), onToggleType })
+    const toggles = within(screen.getByTestId('entity-rail-type-toggles'))
+    expect(toggles.getByLabelText('Hide persons')).toHaveAttribute('aria-pressed', 'true')
+    expect(toggles.getByLabelText('Show companys')).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(toggles.getByLabelText('Hide persons'))
+    expect(onToggleType).toHaveBeenCalledWith('person')
+    // The rail is the index: a type hidden from the highlights is still listed.
+    expect(screen.getByText('Acme')).toBeInTheDocument()
+  })
+
+  it('shows no toggles without the props, or when the episode has no entities', () => {
+    renderRail()
+    expect(screen.queryByTestId('entity-rail-type-toggles')).toBeNull()
+    render(
+      <MemoryRouter>
+        <EntityRail entities={[]} hiddenTypes={new Set()} onToggleType={vi.fn()} />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('entity-rail-type-toggles')).toBeNull()
+  })
+})

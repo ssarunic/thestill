@@ -1445,10 +1445,14 @@ Score: **7 of 20** affordances landed.
     as inline rendering. Each pill: type-colored dot + name +
     mention count. Click → entity page; play-▷ on hover seeks to first
     mention.
-  - This is the mobile substitute for the right rail (which collapses
-    below `md`); on desktop it remains visible as a compact gist
-    above the fold so the reader doesn't have to scroll to see who
-    matters in the episode.
+  - This is the substitute for the right rail where the rail is not
+    shown (below `lg`, 1024 px, as built). Changed 2026-11-12: from
+    `lg` up the strip is no longer rendered. It was first kept there
+    "as a compact gist above the fold", but the rail sits beside the
+    text at that width and lists the same entities and more, so the
+    strip only repeated it. The type toggles (affordance #3) moved
+    with it: they are in the strip below `lg` and at the top of the
+    rail from `lg` up.
 
   **Mention density timeline (left of the audio scrubber):**
   - Thin vertical strip alongside `<FloatingPlayer/>` showing one row
