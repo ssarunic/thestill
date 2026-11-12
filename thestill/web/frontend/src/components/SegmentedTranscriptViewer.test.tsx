@@ -156,6 +156,18 @@ describe('SegmentedTranscriptViewer', () => {
         expect(screen.getByTestId('segment-content-4')).toHaveAttribute('data-linked', 'true')
       })
 
+      it('puts the button on the first passage for a moment before the first segment', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=0')
+        const data = defaultTranscript()
+        data.playback_time_offset_seconds = 5 // the first segment starts at 00:05
+        const onSeek = vi.fn()
+        renderViewer({ transcript: data, episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(screen.getByTestId('segment-content-1')).toHaveAttribute('data-linked', 'true')
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:00' }))
+        expect(onSeek).toHaveBeenCalledWith(0)
+      })
+
       it('shows nothing without a moment in the URL', () => {
         setActivation(false)
         const onSeek = vi.fn()

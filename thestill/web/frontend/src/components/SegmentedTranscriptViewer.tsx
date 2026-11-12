@@ -1016,12 +1016,13 @@ export default function SegmentedTranscriptViewer({
   }, [matchingIds, renderedSegments, expandedHiddenGroups])
 
   // The row the cued moment sits on. When its own segment is not on screen
-  // (filler hidden, a search or entity filter), the next row that is.
+  // (filler hidden, a search or entity filter), the next row that is. A
+  // moment before the first segment (intro silence, a playback offset) cues
+  // the first passage, still playing from the linked seconds.
   const cuedSegmentId = useMemo(() => {
-    if (cuedSeconds === null) return null
+    if (cuedSeconds === null || transcript.segments.length === 0) return null
     const idx = deepLinkSegmentIndex(transcript.segments, cuedSeconds, offset)
-    if (idx < 0) return null
-    const target = transcript.segments[idx]
+    const target = transcript.segments[Math.max(idx, 0)]
     let last: number | null = null
     for (const row of renderRows) {
       if (row.type !== 'segment') continue
