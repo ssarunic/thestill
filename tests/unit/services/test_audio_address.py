@@ -135,19 +135,50 @@ def test_a_far_expiry_is_capped_and_a_short_one_keeps_most_of_its_life():
     assert len(short.calls) == 4
 
 
-def test_reads_the_other_ways_a_signed_address_states_its_life():
-    for name in ("X-Amz-Expires", "X-Goog-Expires"):
+def _dated_chain(query: str) -> Dict[str, Tuple[int, Optional[str]]]:
+    final = f"https://cdn.example.net/abc.mp3?{query}&Signature=s"
+    return {"https://open.example.org/redir/proto/http/vpid/abc.mp3": (302, final), final: (206, None)}
+
+
+# 2026-11-12T20:00:00Z
+SIGNED_AT = 1794513600.0
+
+
+@pytest.mark.parametrize("prefix", ["X-Amz", "X-Goog"])
+def test_a_lifetime_in_seconds_runs_from_the_signing_time(prefix):
+    # Signed 55 minutes ago for an hour: five minutes are left, not sixty.
+    now = [SIGNED_AT + 55 * 60]
+    host = FakeHost(_dated_chain(f"{prefix}-Date=20261112T200000Z&{prefix}-Expires=3600"))
+    resolver = AudioAddressResolver(get_fn=host.get, clock=lambda: now[0])
+    resolver.playable_url(ENCLOSURE)
+    # Kept for three quarters of the five minutes that remain.
+    now[0] += 224
+    resolver.playable_url(ENCLOSURE)
+    assert len(host.calls) == 2
+    now[0] += 2
+    resolver.playable_url(ENCLOSURE)
+    assert len(host.calls) == 4
+
+
+def test_a_lifetime_without_a_readable_signing_time_is_not_trusted():
+    # Nothing says when the hour began: the default applies, not the hour.
+    for query in ("X-Amz-Expires=3600", "X-Amz-Date=yesterday&X-Amz-Expires=3600"):
         now = [1000.0]
-        final = f"https://cdn.example.net/abc.mp3?{name}=120&Signature=s"
-        host = FakeHost({"https://open.example.org/redir/proto/http/vpid/abc.mp3": (302, final), final: (206, None)})
+        host = FakeHost(_dated_chain(query))
         resolver = AudioAddressResolver(get_fn=host.get, clock=lambda: now[0])
         resolver.playable_url(ENCLOSURE)
-        now[0] += 89
+        now[0] += audio_address.DEFAULT_TTL_S + 1
         resolver.playable_url(ENCLOSURE)
-        assert len(host.calls) == 2, name
-        now[0] += 2
-        resolver.playable_url(ENCLOSURE)
-        assert len(host.calls) == 4, name
+        assert len(host.calls) == 4, query
+
+
+def test_an_address_that_has_already_expired_is_not_remembered():
+    now = [SIGNED_AT + 2 * 3600]
+    host = FakeHost(_dated_chain("X-Amz-Date=20261112T200000Z&X-Amz-Expires=3600"))
+    resolver = AudioAddressResolver(get_fn=host.get, clock=lambda: now[0])
+    resolver.playable_url(ENCLOSURE)
+    resolver.playable_url(ENCLOSURE)
+    assert len(host.calls) == 4
 
 
 def test_each_listener_gets_and_keeps_their_own_address():

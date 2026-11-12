@@ -607,6 +607,12 @@ export class NativeEngine implements PlaybackEngine {
     return this.timeline !== null
   }
 
+  /** Whether the element has audio to play right now (it is not waiting
+   * on the network): a start accepted in this state is already under way. */
+  canPlayNow(): boolean {
+    return this.el.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+  }
+
   /** Whether any of the source has arrived: metadata or more, or a clock
    * that has moved off zero. */
   hasLoadedAnything(): boolean {

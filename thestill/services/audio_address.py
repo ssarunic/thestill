@@ -40,6 +40,7 @@ per listener.
 
 from __future__ import annotations
 
+import calendar
 import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
@@ -95,23 +96,36 @@ def _host(url: str) -> str:
     return urlsplit(url).hostname or ""
 
 
+def _signed_at(value: str) -> Optional[float]:
+    """The epoch second of a signing date such as ``20261112T200000Z``."""
+    try:
+        return float(calendar.timegm(time.strptime(value, "%Y%m%dT%H%M%SZ")))
+    except ValueError:
+        return None
+
+
 def _ttl(resolved: str, wall_now: float) -> float:
     """How long ``resolved`` may be reused.
 
-    A signed address says when it stops working: ``Expires`` is an epoch
-    second, ``X-Amz-Expires`` / ``X-Goog-Expires`` a number of seconds from
-    signing (taken as from now). It is dropped a margin before that, within
-    the cap. An address that says nothing gets the default.
+    A signed address says when it stops working. ``Expires`` is an epoch
+    second. ``X-Amz-Expires`` / ``X-Goog-Expires`` are a number of seconds
+    from the signing time in ``X-Amz-Date`` / ``X-Goog-Date``: an address
+    signed a while ago has that much less left, and without a readable
+    signing time the number says nothing. The address is dropped a margin
+    before it expires, within the cap. One that states no expiry gets the
+    default.
     """
+    query = {name.lower(): value for name, value in parse_qsl(urlsplit(resolved).query)}
     remaining: Optional[float] = None
-    for name, value in parse_qsl(urlsplit(resolved).query):
-        if not value.isdigit():
-            continue
-        key = name.lower()
-        if key == "expires":
-            remaining = int(value) - wall_now
-        elif key in ("x-amz-expires", "x-goog-expires"):
-            remaining = float(value)
+    if query.get("expires", "").isdigit():
+        remaining = int(query["expires"]) - wall_now
+    else:
+        for prefix in ("x-amz", "x-goog"):
+            lifetime = query.get(f"{prefix}-expires", "")
+            signed_at = _signed_at(query.get(f"{prefix}-date", ""))
+            if lifetime.isdigit() and signed_at is not None:
+                remaining = signed_at + int(lifetime) - wall_now
+                break
     if remaining is None:
         return DEFAULT_TTL_S
     margin = min(EXPIRY_MARGIN_S, remaining * EXPIRY_MARGIN_SHARE)

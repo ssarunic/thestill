@@ -101,6 +101,21 @@ describe('feedback after a press on Play', () => {
     expect(ctx.isPlaying).toBe(true)
   })
 
+  it('does not start a wait for audio that is already playing', async () => {
+    const video = renderPlayer()
+    await act(async () => ctx.play(track))
+    readyState = 4
+    fire(video, 'playing')
+    expect(ctx.isLoading).toBe(false)
+
+    // Pressing the playing episode again (Continue listening does this):
+    // play() on a playing element fires no `playing` or `canplay`.
+    await act(async () => ctx.play(track))
+    expect(ctx.isLoading).toBe(false)
+    await act(async () => ctx.resume())
+    expect(ctx.isLoading).toBe(false)
+  })
+
   it('stops waiting when the listener pauses before any audio arrived', async () => {
     renderPlayer()
     await act(async () => ctx.play(track))
