@@ -1,4 +1,5 @@
 import {
+  useId,
   Fragment,
   memo,
   useCallback,
@@ -25,7 +26,8 @@ import {
   useAutoScrollFollow,
   usePersistedBoolean,
 } from '../hooks/useAutoScrollFollow'
-import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
+import { buildTimestampDeepLink, settleDeepLinkCue, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
+import { deepLinkSegmentIndex } from '../hooks/useDeepLinkScrollTarget'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import EntityHighlight from './episode-entities/EntityHighlight'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
@@ -161,6 +163,9 @@ interface SegmentedTranscriptViewerProps {
   // rendered. Spec §5.2 inline filter bar — pure client-side filter.
   visibleSegmentIds?: Set<number> | null
   scrollToSegmentId?: { segmentId: number; nonce: number } | null
+  // The router's `location.key`: a link to a moment (`?t=` / `#t=`) acts
+  // once per history entry, so Back to the entry does not seek again.
+  locationKey?: string
   // The entity the user last focused (hovered/clicked). Drives the
   // `[`/`]` keyboard nav (spec §5.2 affordance #1).
   focusedEntityId?: string | null
@@ -368,6 +373,8 @@ interface ContentSegmentProps {
   searchQuery: string
   dimmed: boolean
   isFiller: boolean
+  // The passage a link to a moment landed on, until it is played.
+  linked?: boolean
   segmentMentions: SegmentMentionSet | null
   entityHighlightsEnabled: boolean
   onFocusEntity?: (entityId: string) => void
@@ -396,6 +403,7 @@ const ContentSegment = memo(function ContentSegment({
   searchQuery,
   dimmed,
   isFiller,
+  linked = false,
   segmentMentions,
   entityHighlightsEnabled,
   onFocusEntity,
@@ -421,7 +429,11 @@ const ContentSegment = memo(function ContentSegment({
   // the transcript gets one.
   const speakerMention = entityHighlightsEnabled ? findSpeakerMention(segmentMentions) : null
   const absoluteSeconds = segment.start + offset
-  const containerActive = isActive ? 'bg-primary-50/70' : 'hover:bg-gray-50/70'
+  const containerActive = isActive
+    ? 'bg-primary-50/70'
+    : linked
+      ? 'bg-primary-50/50 ring-1 ring-inset ring-primary-200'
+      : 'hover:bg-gray-50/70'
   const paragraphAccent = 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   const dimClass = dimmed ? 'opacity-70' : ''
@@ -441,6 +453,7 @@ const ContentSegment = memo(function ContentSegment({
       data-testid={`segment-content-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
+      data-linked={linked ? 'true' : undefined}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <p
@@ -501,6 +514,54 @@ const ContentSegment = memo(function ContentSegment({
     </div>
   )
 })
+
+interface LinkedMomentBarProps {
+  seconds: number
+  onPlay: () => void
+  // True until the button has taken focus once for this offer.
+  focusOnArrival: boolean
+  onFocused: () => void
+}
+
+/**
+ * Sits on the passage a shared link (`#t=` / `?t=`) landed on. The link was
+ * opened cold, so nothing is playing: this button is the visitor's own tap,
+ * which is what lets the audio start in every browser.
+ */
+function LinkedMomentBar({ seconds, onPlay, focusOnArrival, onFocused }: LinkedMomentBarProps) {
+  const noteId = useId()
+  // The page scrolled here by itself; bring the keyboard along, or the
+  // button is hundreds of Tab stops away. No scroll: the jump owns that.
+  // Once per offer: the bar mounts again when a search or filter moves it
+  // to another passage, and must not pull focus out of the search field.
+  const takeFocus = useCallback(
+    (el: HTMLButtonElement | null) => {
+      if (!el || !focusOnArrival) return
+      el.focus({ preventScroll: true })
+      onFocused()
+    },
+    [focusOnArrival, onFocused],
+  )
+  return (
+    <div data-testid="linked-moment" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-3 pb-1">
+      <button
+        ref={takeFocus}
+        type="button"
+        onClick={onPlay}
+        aria-describedby={noteId}
+        className="inline-flex items-center gap-1.5 rounded-full bg-primary-900 px-3.5 py-1.5 text-sm font-medium text-white hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2"
+      >
+        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        Play from {formatTimestamp(seconds)}
+      </button>
+      <span id={noteId} className="text-xs text-gray-500">
+        The moment this link points to
+      </span>
+    </div>
+  )
+}
 
 interface ToggleBarProps {
   presentKinds: TogglableKind[]
@@ -606,6 +667,7 @@ export default function SegmentedTranscriptViewer({
   entityHighlightsEnabled: entityHighlightsEnabledProp,
   visibleSegmentIds,
   scrollToSegmentId,
+  locationKey,
   focusedEntityId: focusedEntityIdProp,
   onFocusEntity: onFocusEntityProp,
   karaokeEnabled,
@@ -711,7 +773,7 @@ export default function SegmentedTranscriptViewer({
     }
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
-  const { track, getCurrentTime } = usePlayer()
+  const { track, getCurrentTime, isPlaying, isLoading } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
   // Spec #69 Phase 7.2 — the 4Hz player clock is confined to the
@@ -757,8 +819,21 @@ export default function SegmentedTranscriptViewer({
 
   useEffect(() => {
     if (!scrollToSegmentId) return
-    follow.scrollToKey(scrollToSegmentId.segmentId)
-    // follow is stable from useAutoScrollFollow; intentionally exclude.
+    let key = scrollToSegmentId.segmentId
+    if (!renderedIdSet.has(key)) {
+      // The target has no row (hidden filler, an entity filter): go to the
+      // next passage that has one — where a linked moment's "Play from"
+      // sits too — or the last one.
+      const target = transcript.segments.find((s) => s.id === key)
+      const next = target
+        ? (renderedSegments.find((s) => s.start >= target.start) ?? renderedSegments[renderedSegments.length - 1])
+        : undefined
+      if (!next) return
+      key = next.id
+    }
+    follow.scrollToKey(key)
+    // Fires per requested jump, not when the row set changes; follow is
+    // stable from useAutoScrollFollow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollToSegmentId?.segmentId, scrollToSegmentId?.nonce])
 
@@ -776,14 +851,44 @@ export default function SegmentedTranscriptViewer({
     [showToast],
   )
 
+  // A link to a moment marks its passage and offers "Play from". Opened cold
+  // that is all: nothing sounds until asked. Clicked inside the app it also
+  // plays at once, and the offer is the fallback if the browser refuses.
+  // Kept with its episode and history entry, so it cannot show on another
+  // episode or on another entry of this one (Back/Forward keep the viewer
+  // mounted).
+  const [cue, setCue] = useState<{ entry: string; seconds: number; focus: boolean } | null>(null)
+  const cueEpisodeId = episodeId ?? null
+  const cueEntry = `${cueEpisodeId}|${locationKey ?? ''}`
   useDeepLinkSeek(
-    episodeId ?? null,
+    cueEpisodeId,
     useCallback(
       (seconds: number) => onSeekRequest?.(seconds),
       [onSeekRequest],
     ),
     !!onSeekRequest && transcript.segments.length > 0,
+    useCallback((seconds: number) => setCue({ entry: cueEntry, seconds, focus: true }), [cueEntry]),
+    locationKey,
   )
+  const cuedSeconds = cue !== null && cue.entry === cueEntry ? cue.seconds : null
+  const cueNeedsFocus = cue?.focus === true
+  const markCueFocused = useCallback(() => setCue((c) => (c && c.focus ? { ...c, focus: false } : c)), [])
+  const dropCue = useCallback(() => {
+    setCue(null)
+    settleDeepLinkCue(cueEpisodeId, locationKey)
+  }, [cueEpisodeId, locationKey])
+  const playCuedMoment = useCallback(() => {
+    if (cuedSeconds === null) return
+    dropCue()
+    onSeekRequest?.(cuedSeconds)
+  }, [cuedSeconds, dropCue, onSeekRequest])
+  // The episode is audibly playing — from the offer, a paragraph, the hero
+  // button, or the in-app play going through — so the offer has served.
+  const playbackFlowing = isCurrentEpisode && isPlaying && !isLoading
+  if (cuedSeconds !== null && playbackFlowing) setCue(null)
+  useEffect(() => {
+    if (playbackFlowing) settleDeepLinkCue(cueEpisodeId, locationKey)
+  }, [playbackFlowing, cueEpisodeId, locationKey])
 
   const { matchingIds, matchOrder } = useMemo(() => {
     if (!searchQuery) return { matchingIds: null as Set<number> | null, matchOrder: [] as number[] }
@@ -969,6 +1074,26 @@ export default function SegmentedTranscriptViewer({
     return rows
   }, [matchingIds, renderedSegments, expandedHiddenGroups])
 
+  // The row the cued moment sits on. When its own segment is not on screen
+  // (filler hidden, a search or entity filter), the next row that is. A
+  // moment before the first segment (intro silence, a playback offset) cues
+  // the first passage, still playing from the linked seconds. With nothing
+  // at or after it, the last row — unless a search or filter is what hid
+  // it: the offer does not belong on an unrelated earlier match.
+  const filtered = matchingIds !== null || visibleSegmentIds != null
+  const cuedSegmentId = useMemo(() => {
+    if (cuedSeconds === null || transcript.segments.length === 0) return null
+    const idx = deepLinkSegmentIndex(transcript.segments, cuedSeconds, offset)
+    const target = transcript.segments[Math.max(idx, 0)]
+    let last: number | null = null
+    for (const row of renderRows) {
+      if (row.type !== 'segment') continue
+      if (row.segment.id === target.id || row.segment.start >= target.start) return row.segment.id
+      last = row.segment.id
+    }
+    return filtered ? null : last
+  }, [cuedSeconds, transcript.segments, offset, renderRows, filtered])
+
   if (transcript.segments.length === 0) {
     return (
       <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
@@ -1121,51 +1246,65 @@ export default function SegmentedTranscriptViewer({
             }
             const { segment, expandedFromHidden } = row
             const isActive = segment.id === activeSegmentId
+            const isCued = cuedSeconds !== null && segment.id === cuedSegmentId
+            const cueBar = isCued ? (
+              <LinkedMomentBar
+                seconds={cuedSeconds}
+                onPlay={playCuedMoment}
+                focusOnArrival={cueNeedsFocus}
+                onFocused={markCueFocused}
+              />
+            ) : null
             const segmentMentions = segmentMentionSets.get(segment.id) ?? null
             if (segment.kind === 'content' || segment.kind === 'filler') {
               const isKaraokeSegment =
                 activeKaraoke !== null && activeKaraoke.segmentId === segment.id
               return (
-                <ContentSegment
-                  key={segment.id}
+                <Fragment key={segment.id}>
+                  {cueBar}
+                  <ContentSegment
+                    segment={segment}
+                    offset={offset}
+                    isActive={isActive}
+                    speakerColor={resolveSpeakerColor(segment.speaker, speakerColorMap)}
+                    onSeek={onSeekRequest}
+                    registerRef={follow.registerRef(segment.id)}
+                    onCopyTimestamp={handleCopyTimestamp}
+                    searchQuery={searchQuery}
+                    dimmed={expandedFromHidden}
+                    isFiller={segment.kind === 'filler'}
+                    segmentMentions={segmentMentions}
+                    entityHighlightsEnabled={entityHighlightsEnabled}
+                    onFocusEntity={onFocusEntity}
+                    karaokeWords={isKaraokeSegment ? activeKaraoke.words : undefined}
+                    karaokeGetCurrentTime={
+                      isKaraokeSegment ? getCurrentTime : undefined
+                    }
+                    linked={isCued}
+                  />
+                </Fragment>
+              )
+            }
+            const togglableKind = segment.kind as TogglableKind
+            return (
+              <Fragment key={segment.id}>
+                {cueBar}
+                <BlockSegment
                   segment={segment}
+                  kind={togglableKind}
                   offset={offset}
                   isActive={isActive}
-                  speakerColor={resolveSpeakerColor(segment.speaker, speakerColorMap)}
                   onSeek={onSeekRequest}
                   registerRef={follow.registerRef(segment.id)}
                   onCopyTimestamp={handleCopyTimestamp}
                   searchQuery={searchQuery}
                   dimmed={expandedFromHidden}
-                  isFiller={segment.kind === 'filler'}
+                  collapsed={hiddenKinds.has(togglableKind)}
                   segmentMentions={segmentMentions}
                   entityHighlightsEnabled={entityHighlightsEnabled}
                   onFocusEntity={onFocusEntity}
-                  karaokeWords={isKaraokeSegment ? activeKaraoke.words : undefined}
-                  karaokeGetCurrentTime={
-                    isKaraokeSegment ? getCurrentTime : undefined
-                  }
                 />
-              )
-            }
-            const togglableKind = segment.kind as TogglableKind
-            return (
-              <BlockSegment
-                key={segment.id}
-                segment={segment}
-                kind={togglableKind}
-                offset={offset}
-                isActive={isActive}
-                onSeek={onSeekRequest}
-                registerRef={follow.registerRef(segment.id)}
-                onCopyTimestamp={handleCopyTimestamp}
-                searchQuery={searchQuery}
-                dimmed={expandedFromHidden}
-                collapsed={hiddenKinds.has(togglableKind)}
-                segmentMentions={segmentMentions}
-                entityHighlightsEnabled={entityHighlightsEnabled}
-                onFocusEntity={onFocusEntity}
-              />
+              </Fragment>
             )
           })}
         </div>

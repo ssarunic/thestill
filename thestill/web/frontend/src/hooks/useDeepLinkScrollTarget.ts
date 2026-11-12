@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { AnnotatedSegment } from '../api/types'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
-import { deepLinkParam } from './useDeepLinkSeek'
+import { deepLinkSeconds } from './useDeepLinkSeek'
 
 // History entries (`location.key`) whose `?t=` has already been turned into a
 // scroll target. A Back/Forward to one of them is a return, and the saved
@@ -14,6 +14,24 @@ const handledEntries = new Set<string>()
 /** Test seam. */
 export function __resetDeepLinkScrollForTests(): void {
   handledEntries.clear()
+}
+
+/**
+ * The segment a deep-linked moment lands on: the one under `seconds`, or,
+ * when it falls in a gap between segments (or past the last one), the last
+ * segment that had started. -1 when the moment is before the first segment.
+ */
+export function deepLinkSegmentIndex(
+  segments: ReadonlyArray<AnnotatedSegment>,
+  seconds: number,
+  offset: number,
+): number {
+  const idx = findActiveSegmentIndex(segments, seconds, offset)
+  if (idx >= 0) return idx
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i].start + offset <= seconds) return i
+  }
+  return -1
 }
 
 interface Options {
@@ -33,25 +51,13 @@ interface Options {
  */
 export function useDeepLinkScrollTarget({ episodeId, segments, offset, onTarget }: Options): void {
   const location = useLocation()
-  const raw = deepLinkParam(location.search, location.hash, 't')
+  const seconds = deepLinkSeconds(location.search, location.hash)
 
   useEffect(() => {
-    if (!episodeId || !segments || segments.length === 0 || raw === null) return
+    if (!episodeId || !segments || segments.length === 0 || seconds === null) return
     if (handledEntries.has(location.key)) return
     handledEntries.add(location.key)
-    const seconds = Number(raw)
-    if (!Number.isFinite(seconds) || seconds < 0) return
-    let idx = findActiveSegmentIndex(segments, seconds, offset)
-    if (idx < 0) {
-      // `t` fell in a gap between segments (or past the last one): land on
-      // the last segment that had started.
-      for (let i = segments.length - 1; i >= 0; i--) {
-        if (segments[i].start + offset <= seconds) {
-          idx = i
-          break
-        }
-      }
-    }
+    const idx = deepLinkSegmentIndex(segments, seconds, offset)
     if (idx >= 0) onTarget(segments[idx].id)
-  }, [episodeId, segments, offset, raw, location.key, onTarget])
+  }, [episodeId, segments, offset, seconds, location.key, onTarget])
 }
