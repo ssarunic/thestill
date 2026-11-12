@@ -101,6 +101,10 @@ export class NativeEngine implements PlaybackEngine {
   private url: string | null = null
   // What the element loads for `url`, when it is not `url` itself.
   private elementUrl: string | null = null
+  // Counts every change of what the listener asked for (a load, a play, a
+  // pause, an unload). A restart the engine makes by itself belongs to the
+  // request it was made under and to no later one.
+  private request = 0
   // Spec #116 — the URL currently loaded with `crossorigin`, and whether a
   // play was asked for on it (to resume after the fallback reload).
   private crossOriginUrl: string | null = null
@@ -262,6 +266,7 @@ export class NativeEngine implements PlaybackEngine {
     this.userSeeked = false
     this.url = source.url
     this.elementUrl = source.elementUrl ?? null
+    this.request++
     this.wantsPlay = false
     this.longestDuration = 0
     this.lastSeekTarget = null
@@ -317,14 +322,20 @@ export class NativeEngine implements PlaybackEngine {
     this.pendingSeek = position
     this.el.src = this.elementUrl ?? url
     // A held start stays paused; it is started when the hold ends.
-    if (this.wantsPlay && !this.hold) void this.el.play().catch(() => this.startRefused())
+    if (this.wantsPlay && !this.hold) this.restart()
   }
 
-  // A start the engine made by itself (after a reload) was refused: the
-  // app must not go on showing playback that is not happening.
-  private startRefused(): void {
-    this.wantsPlay = false
-    this.events.onPause()
+  // Start again by itself after a reload. If that start is refused, the
+  // app must not go on showing playback that is not happening; unless the
+  // listener has asked for something else meanwhile (a new source aborts
+  // this start, and its rejection is no news about the new one).
+  private restart(): void {
+    const request = this.request
+    void this.el.play().catch(() => {
+      if (this.request !== request) return
+      this.wantsPlay = false
+      this.events.onPause()
+    })
   }
 
   /**
@@ -354,7 +365,7 @@ export class NativeEngine implements PlaybackEngine {
     this.lastSeekTarget = null
     this.pendingSeek = at
     this.el.src = this.elementUrl ?? url
-    if (this.wantsPlay) void this.el.play().catch(() => this.startRefused())
+    if (this.wantsPlay) this.restart()
     else this.events.onPause()
   }
 
@@ -363,6 +374,7 @@ export class NativeEngine implements PlaybackEngine {
   unload(): void {
     this.detachHls()
     this.elementUrl = null
+    this.request++
     this.el.pause()
     this.clearSrc()
     this.el.removeAttribute('crossorigin')
@@ -377,6 +389,7 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   play(): Promise<void> {
+    this.request++
     this.wantsPlay = true
     // A held start that was paused before its map arrived is held again on
     // resume: still silent, with a fresh cap on the wait. (A hold that was
@@ -437,6 +450,7 @@ export class NativeEngine implements PlaybackEngine {
     // Also cancels a play() still waiting on an hls.js attach — e.g.
     // playYouTube() pausing this engine must not have it start later.
     this.deferredPlay++
+    this.request++
     this.wantsPlay = false
     // The asked-for time of a held start is kept, so a map that arrives
     // meanwhile still moves to it.

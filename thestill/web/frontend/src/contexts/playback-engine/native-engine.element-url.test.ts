@@ -83,4 +83,50 @@ describe('NativeEngine element address', () => {
     void engine.play()
     expect(el.getAttribute('src')).toBe(VIA)
   })
+
+  it('ignores a refused restart of its own once another source has taken over', async () => {
+    const el = document.createElement('video')
+    Object.defineProperty(el, 'readyState', { configurable: true, get: () => 0 })
+    const rejects: Array<(reason: unknown) => void> = []
+    vi.spyOn(el, 'play').mockImplementation(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejects.push(reject)
+        }),
+    )
+    vi.spyOn(el, 'pause').mockImplementation(() => {})
+    const onPause = vi.fn()
+    const noop = vi.fn()
+    const events = new Proxy({} as EngineEvents, { get: (_t, name) => (name === 'onPause' ? onPause : noop) })
+    const engine = new NativeEngine(el, events)
+
+    // A load with `crossorigin` fails; the engine reloads without it and
+    // starts again by itself.
+    engine.load({ url: ENCLOSURE, crossOrigin: true })
+    void engine.play().catch(() => {})
+    Object.defineProperty(el, 'error', { configurable: true, get: () => ({ code: 4 }) })
+    el.dispatchEvent(new Event('error'))
+    expect(rejects).toHaveLength(2)
+
+    // The listener switches episode while that restart is still pending.
+    Object.defineProperty(el, 'error', { configurable: true, get: () => null })
+    engine.load({ url: 'https://cdn.example.net/b.mp3' })
+    void engine.play().catch(() => {})
+
+    // Assigning the new source aborts the restart's play().
+    rejects[1](new DOMException('aborted', 'AbortError'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onPause).not.toHaveBeenCalled()
+
+    // A restart that is refused with nothing else going on is still reported.
+    engine.load({ url: ENCLOSURE, crossOrigin: true })
+    void engine.play().catch(() => {})
+    Object.defineProperty(el, 'error', { configurable: true, get: () => ({ code: 4 }) })
+    el.dispatchEvent(new Event('error'))
+    rejects[rejects.length - 1](new DOMException('no gesture', 'NotAllowedError'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(onPause).toHaveBeenCalledTimes(1)
+  })
 })
