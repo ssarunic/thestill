@@ -222,6 +222,7 @@ These IDs enable tracing requests across all layers of the application.
 - [evals.md](docs/evals.md) - LLM-as-judge quality eval runs (`thestill eval`)
 - [analytics.md](docs/analytics.md) - Product analytics: the Scorecard (spec #111), the `/analytics` funnel and PostHog usage events (spec #95)
 - [experiments.md](docs/experiments.md) - Log of product changes aimed at a Scorecard metric, and how each was read (spec #111)
+- [claude-directory-listing.md](docs/claude-directory-listing.md) - Listing kit for Claude's connector directory, and the scripted connector check (`scripts/check_connector.py`)
 - [code-guidelines.md](docs/code-guidelines.md) - Development standards
 
 ### Technical Specs (`specs/`)
