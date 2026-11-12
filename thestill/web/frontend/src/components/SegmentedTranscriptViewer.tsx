@@ -831,9 +831,12 @@ export default function SegmentedTranscriptViewer({
   // A link to a moment marks its passage and offers "Play from". Opened cold
   // that is all: nothing sounds until asked. Clicked inside the app it also
   // plays at once, and the offer is the fallback if the browser refuses.
-  // Kept with its episode so it cannot outlive a change of episode.
-  const [cue, setCue] = useState<{ episodeId: string | null; seconds: number } | null>(null)
+  // Kept with its episode and history entry, so it cannot show on another
+  // episode or on another entry of this one (Back/Forward keep the viewer
+  // mounted).
+  const [cue, setCue] = useState<{ entry: string; seconds: number } | null>(null)
   const cueEpisodeId = episodeId ?? null
+  const cueEntry = `${cueEpisodeId}|${locationKey ?? ''}`
   useDeepLinkSeek(
     cueEpisodeId,
     useCallback(
@@ -841,10 +844,10 @@ export default function SegmentedTranscriptViewer({
       [onSeekRequest],
     ),
     !!onSeekRequest && transcript.segments.length > 0,
-    useCallback((seconds: number) => setCue({ episodeId: cueEpisodeId, seconds }), [cueEpisodeId]),
+    useCallback((seconds: number) => setCue({ entry: cueEntry, seconds }), [cueEntry]),
     locationKey,
   )
-  const cuedSeconds = cue !== null && cue.episodeId === cueEpisodeId ? cue.seconds : null
+  const cuedSeconds = cue !== null && cue.entry === cueEntry ? cue.seconds : null
   const dropCue = useCallback(() => {
     setCue(null)
     settleDeepLinkCue(cueEpisodeId, locationKey)

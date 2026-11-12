@@ -191,6 +191,37 @@ describe('SegmentedTranscriptViewer', () => {
         expect(onSeek).toHaveBeenLastCalledWith(3)
       })
 
+      it('does not carry one entry\'s offer onto another entry of the same episode', () => {
+        setActivation(false)
+        const onSeek = vi.fn()
+        const transcript = defaultTranscript()
+        const wrap = (locationKey: string) => (
+          <ToastProvider>
+            <PlayerProvider>
+              <SegmentedTranscriptViewer transcript={transcript} episodeId="ep1" onSeekRequest={onSeek} locationKey={locationKey} />
+            </PlayerProvider>
+          </ToastProvider>
+        )
+        // Entry A: offer left pending.
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const { rerender } = render(wrap('entry-a'))
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+
+        // Entry B: its own moment, taken up.
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:03' }))
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+
+        // Back to A (its offer returns), Forward to B (settled: no offer).
+        openAt('/podcasts/show/episodes/ep?t=12')
+        rerender(wrap('entry-a'))
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+
       it('moves focus to Play from and ties the note to it', () => {
         setActivation(false)
         openAt('/podcasts/show/episodes/ep#t=12')
