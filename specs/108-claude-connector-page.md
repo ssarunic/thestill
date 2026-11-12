@@ -303,8 +303,8 @@ personal URL from Settings". Do that only where a directory allows it.
   URL this spec assumed: the address, what to ask, setup, permissions,
   the tool list, disconnecting and privacy. The copy lives in
   `public/help/claude.md`, with one real exchange from a prod session
-  (2026-11-12, quotes checked against the transcripts). Still open: the
-  "Create your connector" button.
+  (2026-11-12, quotes checked against the transcripts). The "Create your connector" button is dropped: with OAuth
+  there is nothing to create, the reader pastes the address into Claude.
 - [ ] Landing "See how" link. Settings card anchor and `source`
   passthrough.
 - [ ] `docs/analytics.md`: event table, dashboard insights.
