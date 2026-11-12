@@ -31,6 +31,9 @@ function describeMediaError(code: number | undefined): string {
   }
 }
 
+/** Said when a source never loaded at all: refused, unreachable, or silent. */
+export const AUDIO_NOT_LOADED_MESSAGE = "Couldn't load the audio. Try again in a moment."
+
 // A late resume seek only moves a source that has barely started.
 const LATE_SEEK_WINDOW_SECONDS = 5
 
@@ -48,6 +51,7 @@ const HLS_MEDIA_ERROR = 'mediaError'
 // element keeps its source across the swap, the engine's own state would not.
 export interface NativeEngineState {
   url: string | null
+  elementUrl?: string | null
   pendingSeek: number | null
   userSeeked: boolean
   // Spec #113 — the hls.js instance feeding the element, or true when an
@@ -95,6 +99,8 @@ export class NativeEngine implements PlaybackEngine {
   // Last URL assigned. Also the error-suppression guard: clearing src
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
+  // What the element loads for `url`, when it is not `url` itself.
+  private elementUrl: string | null = null
   // Spec #116 — the URL currently loaded with `crossorigin`, and whether a
   // play was asked for on it (to resume after the fallback reload).
   private crossOriginUrl: string | null = null
@@ -139,6 +145,7 @@ export class NativeEngine implements PlaybackEngine {
     this.events = events
     if (carried) {
       this.url = carried.url
+      this.elementUrl = carried.elementUrl ?? null
       this.pendingSeek = carried.pendingSeek
       this.userSeeked = carried.userSeeked
       this.timeline = carried.timeline ?? null
@@ -206,7 +213,10 @@ export class NativeEngine implements PlaybackEngine {
             this.reloadWithoutCrossOrigin()
             return
           }
-          this.events.onError(describeMediaError(this.el.error?.code))
+          // Before any of the file arrived, the code says little: a refused
+          // or unreachable address is reported as an unsupported format.
+          const neverLoaded = this.el.readyState === 0 && this.longestDuration === 0
+          this.events.onError(neverLoaded ? AUDIO_NOT_LOADED_MESSAGE : describeMediaError(this.el.error?.code))
         },
       ],
       [
@@ -247,6 +257,7 @@ export class NativeEngine implements PlaybackEngine {
     this.pendingSeek = opts?.seekTo ?? null
     this.userSeeked = false
     this.url = source.url
+    this.elementUrl = source.elementUrl ?? null
     this.wantsPlay = false
     this.longestDuration = 0
     this.lastSeekTarget = null
@@ -277,7 +288,7 @@ export class NativeEngine implements PlaybackEngine {
       if (this.el.hasAttribute('src')) this.clearSrc()
       this.attachHls(source.url)
     } else {
-      this.el.src = source.url
+      this.el.src = this.elementUrl ?? source.url
     }
     const rate = opts?.rate
     if (rate != null && Number.isFinite(rate) && rate > 0) {
@@ -300,7 +311,7 @@ export class NativeEngine implements PlaybackEngine {
     const position = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
     this.el.removeAttribute('crossorigin')
     this.pendingSeek = position
-    this.el.src = url
+    this.el.src = this.elementUrl ?? url
     // A held start stays paused; it is started when the hold ends.
     if (this.wantsPlay && !this.hold) void this.el.play().catch(() => {})
   }
@@ -331,7 +342,7 @@ export class NativeEngine implements PlaybackEngine {
     this.recoveredAt = at
     this.lastSeekTarget = null
     this.pendingSeek = at
-    this.el.src = url
+    this.el.src = this.elementUrl ?? url
     if (this.wantsPlay) void this.el.play().catch(() => {})
     else this.events.onPause()
   }
@@ -340,6 +351,7 @@ export class NativeEngine implements PlaybackEngine {
   // it is the one stable media node (spec #61 invariant 2).
   unload(): void {
     this.detachHls()
+    this.elementUrl = null
     this.el.pause()
     this.clearSrc()
     this.el.removeAttribute('crossorigin')
@@ -578,6 +590,11 @@ export class NativeEngine implements PlaybackEngine {
     return this.timeline !== null
   }
 
+  /** Whether any of the source has arrived (metadata or more). */
+  hasLoadedAnything(): boolean {
+    return this.el.readyState > 0
+  }
+
   // Spec #90 — apply a resume position learned after the source was
   // assigned (a parallel fetch for surfaces whose payload had none). Never
   // after a user seek on this source. Otherwise, before metadata it replaces
@@ -672,6 +689,7 @@ export class NativeEngine implements PlaybackEngine {
     this.deferredPlay++ // a destroyed engine never starts playback
     return {
       url: this.url,
+      elementUrl: this.elementUrl,
       pendingSeek: this.pendingSeek,
       userSeeked: this.userSeeked,
       hls,

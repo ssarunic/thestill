@@ -176,7 +176,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const { isPlaying, isLoading, playbackRate, availableRates, mediaError, volume, muted, videoPreference, pipSupported, pipActive } = player
   const hasVisualRendition = player.mediaKind === 'video' || player.activeEngine === 'youtube'
   const hasDuration = duration > 0 && Number.isFinite(duration)
-  const busy = isLoading && !isPlaying
+  const busy = isLoading
 
   const panel = (
     <div
@@ -286,7 +286,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             size="iconLg"
             variant="primary"
             icon={isPlaying ? <PauseIcon /> : <PlayIcon />}
-            isLoading={busy}
+            busy={busy}
             onClick={player.toggle}
             aria-label={isPlaying ? 'Pause' : 'Play'}
           >

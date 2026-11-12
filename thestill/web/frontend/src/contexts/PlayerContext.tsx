@@ -19,7 +19,13 @@ import {
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
-import { NativeEngine, type AppliedTimeline, type NativeEngineState } from './playback-engine/native-engine'
+import {
+  AUDIO_NOT_LOADED_MESSAGE,
+  NativeEngine,
+  type AppliedTimeline,
+  type NativeEngineState,
+} from './playback-engine/native-engine'
+import { elementAudioUrl } from '../utils/elementAudioUrl'
 import type { ListenerAd, TimelineMap } from './playback-engine/timeline-map'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { beginAudioLoad } from '../drift/corsVerdict'
@@ -46,6 +52,10 @@ import { YouTubeEngine } from './playback-engine/youtube-engine'
 
 export type MediaKind = 'audio' | 'video'
 type Presentation = 'hidden' | 'theater' | 'floating' | 'native-pip'
+// How long a press on Play may go without any of the audio arriving
+// before the player says it could not be loaded.
+export const LOAD_PATIENCE_MS = 15_000
+
 export type VideoPreference = 'shown' | 'audio-only'
 export type RenditionKind = 'audio' | 'video'
 export type { EngineKind } from './playback-engine/types'
@@ -291,6 +301,33 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [videoPreference, setVideoPreference] = useState<VideoPreference>('shown')
   const [pipActive, setPipActive] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
+  // A press on Play is answered at once (the button shows it is loading)
+  // and never left hanging: if nothing of the audio has arrived after
+  // LOAD_PATIENCE_MS, the player says so. A browser that refuses a source
+  // outright does not always fire `error`.
+  const loadWatch = useRef<number | undefined>(undefined)
+  const stopLoadWatch = useCallback(() => {
+    window.clearTimeout(loadWatch.current)
+    loadWatch.current = undefined
+  }, [])
+  const startLoading = useCallback(() => {
+    setIsLoading(true)
+    window.clearTimeout(loadWatch.current)
+    loadWatch.current = window.setTimeout(() => {
+      loadWatch.current = undefined
+      if (engineKindRef.current !== 'native' || nativeEngineRef.current?.hasLoadedAnything() !== false) return
+      setMediaError(AUDIO_NOT_LOADED_MESSAGE)
+      setIsLoading(false)
+      setIsPlaying(false)
+    }, LOAD_PATIENCE_MS)
+  }, [])
+  useEffect(() => stopLoadWatch, [stopLoadWatch])
+  // The browser refused to start (no gesture) or the start was superseded.
+  const playRefused = useCallback(() => {
+    setIsPlaying(false)
+    setIsLoading(false)
+    stopLoadWatch()
+  }, [stopLoadWatch])
   const [timelineApplied, setTimelineApplied] = useState(false)
   // Spec #116 §6.1 — the map itself, for the reader's ad rows, and the ad
   // of the listener's own that is playing. The ref serves the time handler.
@@ -357,13 +394,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onPlaying: () => {
         setIsPlaying(true)
         setIsLoading(false)
+        stopLoadWatch()
         // Playback is flowing again, so any earlier error has been
         // recovered from (spec #113: hls.js recoverMediaError after the
         // element already reported MEDIA_ERR_DECODE).
         setMediaError(null)
       },
       onWaiting: () => setIsLoading(true),
-      onCanPlay: () => setIsLoading(false),
+      onCanPlay: () => {
+        setIsLoading(false)
+        stopLoadWatch()
+      },
       onTimeUpdate: (seconds: number) => {
         setCurrentTime(seconds)
         const map = timelineMapRef.current
@@ -394,6 +435,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onError: (message: string) => {
         setMediaError(message)
         setIsLoading(false)
+        setIsPlaying(false)
+        stopLoadWatch()
       },
       onEnded: () => {
         persistenceRef.current?.onEngineEvent('ended')
@@ -404,7 +447,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       onAvailableRatesChange: (rates: number[] | null) => setAvailableRates(rates),
     }),
-    [syncPositionState]
+    [syncPositionState, stopLoadWatch]
   )
 
   const guardedEvents = useCallback(
@@ -472,8 +515,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // known to allow it).
     const eligible = source.rendition === 'audio' && !/mpegurl/i.test(source.mimeType ?? '')
     const crossOrigin = beginAudioLoad(source.url, eligible)
+    // An http enclosure is loaded through our https redirect (it cannot be
+    // loaded into this page as it is); the source keeps its own address as
+    // its identity.
+    const elementUrl = source.rendition === 'audio' ? elementAudioUrl(source.url, trackRef.current) : source.url
     nativeEngineRef.current?.load(
-      { url: source.url, mimeType: source.mimeType, crossOrigin },
+      { url: source.url, mimeType: source.mimeType, crossOrigin, elementUrl },
       { seekTo, rate, holdForTimeline: holdForTimeline && eligible },
     )
     srcRef.current = source.url
@@ -646,7 +693,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const rate = native.getRate()
         activeOffsetRef.current = desired.offset
         beginSource(desired, resumeAt, rate)
-        native.play().catch(() => setIsPlaying(false))
+        startLoading()
+        native.play().catch(playRefused)
         return
       }
       if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
@@ -657,7 +705,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         native.seekTo(0)
       }
       // Still inside user-gesture stack.
-      native.play().catch(() => setIsPlaying(false))
+      startLoading()
+      native.play().catch(playRefused)
       return
     }
     // New episode — always starts on the native engine (the YouTube
@@ -690,28 +739,40 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(next.durationHint ?? 0)
     // Spec #72 §5 — a fresh source starts at the persisted preference.
     beginSource(desired, holdStart ? (seekTo ?? asked) : seekTo, preferredRateRef.current, holdStart)
-    native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition, shouldHoldFor])
+    startLoading()
+    native.play().catch(playRefused)
+  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition, shouldHoldFor, startLoading, playRefused])
+
+  // A pause the listener asked for ends the wait for audio too: the button
+  // must go back to Play, not stay on its spinner.
+  const stopWaiting = useCallback(() => {
+    setIsLoading(false)
+    stopLoadWatch()
+  }, [stopLoadWatch])
 
   const pause = useCallback(() => {
+    stopWaiting()
     currentEngine()?.pause()
-  }, [currentEngine])
+  }, [currentEngine, stopWaiting])
 
   const resume = useCallback(() => {
+    startLoading()
     currentEngine()
       ?.play()
-      .catch(() => setIsPlaying(false))
-  }, [currentEngine])
+      .catch(playRefused)
+  }, [currentEngine, startLoading, playRefused])
 
   const toggle = useCallback(() => {
     const engine = currentEngine()
     if (!engine) return
     if (engine.isPlaying()) {
+      stopWaiting()
       engine.pause()
     } else {
-      engine.play().catch(() => setIsPlaying(false))
+      startLoading()
+      engine.play().catch(playRefused)
     }
-  }, [currentEngine])
+  }, [currentEngine, startLoading, playRefused, stopWaiting])
 
   const seek = useCallback(
     (seconds: number, options?: { transcript?: boolean }) => {
@@ -772,11 +833,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setNativeDuration(null)
     setMediaError(null)
+    setIsLoading(false)
+    stopLoadWatch()
     setTimelineApplied(false)
     setTimelineMap(null)
     setTimelineHold(false)
     setAvailableRates(null)
-  }, [persistence, setEngineKind, setRendition, setTimelineMap])
+  }, [persistence, setEngineKind, setRendition, setTimelineMap, stopLoadWatch])
 
   const isCurrent = useCallback(
     (episodeId: string) => track?.episodeId === episodeId,

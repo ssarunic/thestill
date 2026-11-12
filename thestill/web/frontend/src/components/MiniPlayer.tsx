@@ -62,6 +62,7 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
     youtubeAvailable,
     setVideoPreference,
     listenerAd,
+    mediaError,
   } = usePlayer()
   const currentTime = usePlayerTime()
   const barRef = useRef<HTMLDivElement>(null)
@@ -202,7 +203,13 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
           <Artwork role="rowSm" sources={[track.artworkUrl]} />
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-medium text-ink truncate">{track.title}</span>
-            {track.podcastTitle || listenerAd ? (
+            {mediaError ? (
+              // The audio failed or never arrived: say so where the listener
+              // is looking, not only inside the Now Playing sheet.
+              <span role="alert" className="block truncate text-xs font-medium text-red-700" data-testid="mini-player-error">
+                {mediaError}
+              </span>
+            ) : track.podcastTitle || listenerAd ? (
               <span className="flex items-center gap-1.5 text-xs text-muted">
                 {/* Spec #116 §6.1 — an ad of the listener's own copy. */}
                 {listenerAd && <AdTag />}
@@ -266,9 +273,9 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
             onClick={toggle}
             aria-label={isPlaying ? 'Pause' : 'Play'}
             className="w-11 h-11 sm:w-10 sm:h-10 flex items-center justify-center rounded-full bg-accent text-accent-contrast hover:bg-primary-800 active:bg-primary-700 disabled:opacity-50"
-            disabled={isLoading && !isPlaying}
+            aria-busy={isLoading || undefined}
           >
-            {isLoading && !isPlaying ? (
+            {isLoading ? (
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />

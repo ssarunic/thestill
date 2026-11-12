@@ -85,7 +85,9 @@ export default function EpisodeHeader({
       : resumable
         ? `Resume episode${left ? `, ${left}` : ''}`
         : `Play episode${minutes ? `, ${minutes}` : ''}`
-  const busy = isLoading && !isPlaying
+  // Waiting for audio after a press, or buffering mid-play. The button
+  // stays pressable: a second press cancels the wait.
+  const busy = isLoading
   const description = episode.description_html || episode.description
 
   return (
@@ -136,7 +138,7 @@ export default function EpisodeHeader({
             size="lg"
             pill
             onClick={onToggle}
-            isLoading={busy}
+            busy={busy}
             aria-label={primaryName}
             icon={isPlaying ? <PauseIcon /> : <PlayIcon />}
           >
