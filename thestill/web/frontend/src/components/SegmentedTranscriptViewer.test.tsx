@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { EpisodeEntity, MentionLite } from '../api/types'
 import { PlayerProvider } from '../contexts/PlayerContext'
 import SegmentedTranscriptViewer from './SegmentedTranscriptViewer'
+import { __resetDeepLinkSeekForTests } from '../hooks/useDeepLinkSeek'
 import { ToastProvider } from './Toast'
 
 function seg(overrides: Partial<AnnotatedSegment> & { id: number }): AnnotatedSegment {
@@ -115,6 +116,7 @@ describe('SegmentedTranscriptViewer', () => {
         })
       const openAt = (url: string) => window.history.replaceState(null, '', url)
 
+      beforeEach(() => __resetDeepLinkSeekForTests())
       afterEach(() => {
         setActivation(null)
         openAt('/')
@@ -137,13 +139,74 @@ describe('SegmentedTranscriptViewer', () => {
         expect(screen.getByTestId('segment-content-2')).not.toHaveAttribute('data-linked')
       })
 
-      it('followed inside the app: plays the moment, no extra button', () => {
+      it('followed inside the app: plays the moment, and keeps the offer in case the browser refuses', () => {
         setActivation(true)
         openAt('/podcasts/show/episodes/ep?t=12')
         const onSeek = vi.fn()
         renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
         expect(onSeek).toHaveBeenCalledWith(12)
+        // The stubbed handler starts no audio, as a browser refusing would.
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+      })
+
+      it('does not seek again on a return to the same history entry, but keeps an untaken offer', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        const props = { transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek, locationKey: 'entry-a' }
+        const first = renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        first.unmount()
+
+        // Back to the entry: the viewer mounts again with the same key.
+        const second = renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:12' }))
+        expect(onSeek).toHaveBeenCalledTimes(2)
+        second.unmount()
+
+        // Taken up: a further return offers nothing.
+        renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(2)
         expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+
+      it('acts again for a new history entry on the same episode', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        const transcript = defaultTranscript()
+        const wrap = (locationKey: string) => (
+          <ToastProvider>
+            <PlayerProvider>
+              <SegmentedTranscriptViewer transcript={transcript} episodeId="ep1" onSeekRequest={onSeek} locationKey={locationKey} />
+            </PlayerProvider>
+          </ToastProvider>
+        )
+        const { rerender } = render(wrap('entry-a'))
+        expect(onSeek).toHaveBeenLastCalledWith(12)
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        expect(onSeek).toHaveBeenCalledTimes(2)
+        expect(onSeek).toHaveBeenLastCalledWith(3)
+      })
+
+      it('moves focus to Play from and ties the note to it', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12')
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        const play = screen.getByRole('button', { name: 'Play from 00:12' })
+        expect(play).toHaveFocus()
+        expect(play).toHaveAccessibleDescription('The moment this link points to')
+      })
+
+      it('does not move the offer onto an unrelated match when a search hides the passage', async () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12') // segment 2, "Second segment about shipping"
+        const user = userEvent.setup()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        await user.type(screen.getByRole('searchbox', { name: 'Search transcript' }), 'First')
+        await waitFor(() => expect(screen.queryByTestId('linked-moment')).toBeNull())
       })
 
       it('puts the button on the next visible passage when the linked one is hidden', () => {

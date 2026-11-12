@@ -51,6 +51,7 @@ function settleOnNode(node: HTMLElement, onCorrect: () => void): () => void {
   let polls = 0
   let corrections = 0
   let lastTop = Number.NaN
+  let topBeforeCorrection = Number.NaN
   const cancel = () => {
     window.clearTimeout(timer)
     window.removeEventListener('wheel', cancel)
@@ -67,12 +68,17 @@ function settleOnNode(node: HTMLElement, onCorrect: () => void): () => void {
     const moving = top !== lastTop
     lastTop = top
     if (!moving) {
-      // At rest. On screen means the row's first lines are: its top inside
-      // the viewport with room below (a row taller than the screen counts).
+      // At rest. On screen means the row lies wholly inside the viewport, or
+      // (taller than it, or a neighbour of the middle) across its middle.
       const viewport = window.innerHeight
-      const onScreen = top >= 0 && top <= viewport - Math.min(height, viewport / 3)
-      if (onScreen || corrections >= SETTLE_MAX_CORRECTIONS) return cancel()
+      const bottom = top + height
+      const onScreen = (top >= 0 && bottom <= viewport) || (top <= viewport / 2 && bottom >= viewport / 2)
+      // A re-aim that moved nothing has nowhere left to go (the row is at
+      // the very start or end of what can scroll).
+      const stuck = top === topBeforeCorrection
+      if (onScreen || stuck || corrections >= SETTLE_MAX_CORRECTIONS) return cancel()
       corrections += 1
+      topBeforeCorrection = top
       onCorrect()
       // Instant: a second glide would be aimed at an estimate again.
       node.scrollIntoView?.({ block: 'center', behavior: 'instant' })
@@ -109,21 +115,35 @@ export function useAutoScrollFollow({
     return callback
   }, [])
 
+  // Every scroll this hook makes — a follow step, Resume, a jump — goes
+  // through here: the newest one wins (an older jump still settling would
+  // pull the page back), and each is checked after it lands, because any of
+  // them can cross the whole transcript (follow switched on far into an
+  // episode, a deep link, a citation).
+  const cancelSettle = useRef<(() => void) | null>(null)
+  const aim = useCallback((node: HTMLElement) => {
+    programmaticScrollAt.current = now()
+    scrollNodeIntoCenter(node)
+    cancelSettle.current?.()
+    cancelSettle.current = settleOnNode(node, () => {
+      programmaticScrollAt.current = now()
+    })
+  }, [])
+  useEffect(() => () => cancelSettle.current?.(), [])
+
   const resume = useCallback(() => {
     setPausedUntil(0)
-    programmaticScrollAt.current = now()
     const node = activeKey != null ? refs.current.get(activeKey) : undefined
-    if (node) scrollNodeIntoCenter(node)
-  }, [activeKey])
+    if (node) aim(node)
+  }, [activeKey, aim])
 
   useEffect(() => {
     if (!enabled || activeKey == null) return
     if (pausedUntil > now()) return
     const node = refs.current.get(activeKey)
     if (!node) return
-    programmaticScrollAt.current = now()
-    scrollNodeIntoCenter(node)
-  }, [activeKey, enabled, pausedUntil])
+    aim(node)
+  }, [activeKey, enabled, pausedUntil, aim])
 
   useEffect(() => {
     if (!enabled) return
@@ -146,20 +166,10 @@ export function useAutoScrollFollow({
     }
   }, [enabled, pauseAfterUserScrollMs])
 
-  // A jump (deep link, citation, mention) can cross the whole transcript, so
-  // unlike the follow's small steps it is checked after it lands.
-  const cancelSettle = useRef<(() => void) | null>(null)
   const scrollToKey = useCallback((key: string | number) => {
     const node = refs.current.get(key)
-    if (!node) return
-    programmaticScrollAt.current = now()
-    scrollNodeIntoCenter(node)
-    cancelSettle.current?.()
-    cancelSettle.current = settleOnNode(node, () => {
-      programmaticScrollAt.current = now()
-    })
-  }, [])
-  useEffect(() => () => cancelSettle.current?.(), [])
+    if (node) aim(node)
+  }, [aim])
 
   const userScrolledAway = pausedUntil > now()
 

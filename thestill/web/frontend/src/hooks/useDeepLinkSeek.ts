@@ -29,32 +29,61 @@ export function hasUserGesture(): boolean {
   return typeof navigator !== 'undefined' && navigator.userActivation?.hasBeenActive === true
 }
 
+// What became of the moment each history entry linked to: the seconds still
+// offered by "Play from", or null once dealt with (played, or no moment).
+// Module-level so a return to the entry (Back/Forward, a remount across
+// page/overlay hosts) neither seeks again — it would restart or rewind the
+// audio — nor forgets an offer the visitor has not taken up.
+const entries = new Map<string, number | null>()
+
+const entryId = (key: string | number, entryKey: string) => `${key}|${entryKey}`
+
+/** The visitor took up (or no longer needs) the "Play from" offer. */
+export function settleDeepLinkCue(key: string | number | null, entryKey = 'default'): void {
+  if (key != null && entries.has(entryId(key, entryKey))) entries.set(entryId(key, entryKey), null)
+}
+
+/** Test seam. */
+export function __resetDeepLinkSeekForTests(): void {
+  entries.clear()
+}
+
 /**
- * Parses a `?t=<seconds>` (or `#t=`) deep link once per key change. `key` is
- * typically the episode id, and `ready` waits for real data before firing.
+ * Parses a `?t=<seconds>` (or `#t=`) deep link once per history entry. `key`
+ * is the episode id, `entryKey` the router's `location.key`, and `ready`
+ * waits for real data before firing.
  *
  * A moment the visitor clicked inside the app goes to `onSeek`, which plays
- * it. A link opened cold goes to `onCue` instead: nothing plays until the
- * visitor asks, so the page offers the moment rather than attempting an
- * autoplay the browser would block.
+ * it. A link opened cold does not: a browser blocks audio nobody asked for.
+ * Either way `onCue` gets the moment, so the page can offer "Play from" —
+ * the only way in for a cold link, and the fallback when the browser refuses
+ * the in-app play as well (Safari, once the click is no longer fresh).
  */
 export function useDeepLinkSeek(
   key: string | number | null,
   onSeek: (seconds: number) => void,
   ready: boolean,
   onCue?: (seconds: number) => void,
+  entryKey = 'default',
 ) {
-  const firedForKey = useRef<string | number | null>(null)
+  const firedFor = useRef<string | null>(null)
   useEffect(() => {
     if (!ready || key == null) return
-    if (firedForKey.current === key) return
     if (typeof window === 'undefined') return
-    firedForKey.current = key
+    const id = entryId(key, entryKey)
+    if (firedFor.current === id) return
+    firedFor.current = id
+    if (entries.has(id)) {
+      const pending = entries.get(id)
+      if (pending != null) onCue?.(pending)
+      return
+    }
     const seconds = deepLinkSeconds(window.location.search, window.location.hash)
+    entries.set(id, seconds)
     if (seconds === null) return
     if (hasUserGesture()) onSeek(seconds)
-    else onCue?.(seconds)
-  }, [key, onSeek, onCue, ready])
+    onCue?.(seconds)
+  }, [key, entryKey, onSeek, onCue, ready])
 }
 
 export function buildTimestampDeepLink(seconds: number): string {

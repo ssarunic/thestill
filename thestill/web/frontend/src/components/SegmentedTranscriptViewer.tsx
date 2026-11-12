@@ -1,4 +1,5 @@
 import {
+  useId,
   Fragment,
   memo,
   useCallback,
@@ -25,7 +26,7 @@ import {
   useAutoScrollFollow,
   usePersistedBoolean,
 } from '../hooks/useAutoScrollFollow'
-import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
+import { buildTimestampDeepLink, settleDeepLinkCue, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
 import { deepLinkSegmentIndex } from '../hooks/useDeepLinkScrollTarget'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import EntityHighlight from './episode-entities/EntityHighlight'
@@ -162,6 +163,9 @@ interface SegmentedTranscriptViewerProps {
   // rendered. Spec §5.2 inline filter bar — pure client-side filter.
   visibleSegmentIds?: Set<number> | null
   scrollToSegmentId?: { segmentId: number; nonce: number } | null
+  // The router's `location.key`: a link to a moment (`?t=` / `#t=`) acts
+  // once per history entry, so Back to the entry does not seek again.
+  locationKey?: string
   // The entity the user last focused (hovered/clicked). Drives the
   // `[`/`]` keyboard nav (spec §5.2 affordance #1).
   focusedEntityId?: string | null
@@ -522,11 +526,19 @@ interface LinkedMomentBarProps {
  * which is what lets the audio start in every browser.
  */
 function LinkedMomentBar({ seconds, onPlay }: LinkedMomentBarProps) {
+  const noteId = useId()
+  // The page scrolled here by itself; bring the keyboard along, or the
+  // button is hundreds of Tab stops away. No scroll: the jump owns that.
+  const focusOnArrival = useCallback((el: HTMLButtonElement | null) => {
+    el?.focus({ preventScroll: true })
+  }, [])
   return (
     <div data-testid="linked-moment" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-3 pb-1">
       <button
+        ref={focusOnArrival}
         type="button"
         onClick={onPlay}
+        aria-describedby={noteId}
         className="inline-flex items-center gap-1.5 rounded-full bg-primary-900 px-3.5 py-1.5 text-sm font-medium text-white hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2"
       >
         <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -534,7 +546,9 @@ function LinkedMomentBar({ seconds, onPlay }: LinkedMomentBarProps) {
         </svg>
         Play from {formatTimestamp(seconds)}
       </button>
-      <span className="text-xs text-gray-500">The moment this link points to</span>
+      <span id={noteId} className="text-xs text-gray-500">
+        The moment this link points to
+      </span>
     </div>
   )
 }
@@ -643,6 +657,7 @@ export default function SegmentedTranscriptViewer({
   entityHighlightsEnabled: entityHighlightsEnabledProp,
   visibleSegmentIds,
   scrollToSegmentId,
+  locationKey,
   focusedEntityId: focusedEntityIdProp,
   onFocusEntity: onFocusEntityProp,
   karaokeEnabled,
@@ -748,7 +763,7 @@ export default function SegmentedTranscriptViewer({
     }
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
-  const { track, getCurrentTime } = usePlayer()
+  const { track, getCurrentTime, isPlaying, isLoading } = usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
   // Spec #69 Phase 7.2 — the 4Hz player clock is confined to the
@@ -813,23 +828,39 @@ export default function SegmentedTranscriptViewer({
     [showToast],
   )
 
-  // A moment clicked inside the app plays; a link opened cold is cued — the
-  // passage is marked and offers "Play from", and nothing sounds until asked.
-  const [cuedSeconds, setCuedSeconds] = useState<number | null>(null)
+  // A link to a moment marks its passage and offers "Play from". Opened cold
+  // that is all: nothing sounds until asked. Clicked inside the app it also
+  // plays at once, and the offer is the fallback if the browser refuses.
+  // Kept with its episode so it cannot outlive a change of episode.
+  const [cue, setCue] = useState<{ episodeId: string | null; seconds: number } | null>(null)
+  const cueEpisodeId = episodeId ?? null
   useDeepLinkSeek(
-    episodeId ?? null,
+    cueEpisodeId,
     useCallback(
       (seconds: number) => onSeekRequest?.(seconds),
       [onSeekRequest],
     ),
     !!onSeekRequest && transcript.segments.length > 0,
-    setCuedSeconds,
+    useCallback((seconds: number) => setCue({ episodeId: cueEpisodeId, seconds }), [cueEpisodeId]),
+    locationKey,
   )
+  const cuedSeconds = cue !== null && cue.episodeId === cueEpisodeId ? cue.seconds : null
+  const dropCue = useCallback(() => {
+    setCue(null)
+    settleDeepLinkCue(cueEpisodeId, locationKey)
+  }, [cueEpisodeId, locationKey])
   const playCuedMoment = useCallback(() => {
     if (cuedSeconds === null) return
-    setCuedSeconds(null)
+    dropCue()
     onSeekRequest?.(cuedSeconds)
-  }, [cuedSeconds, onSeekRequest])
+  }, [cuedSeconds, dropCue, onSeekRequest])
+  // The episode is audibly playing — from the offer, a paragraph, the hero
+  // button, or the in-app play going through — so the offer has served.
+  const playbackFlowing = isCurrentEpisode && isPlaying && !isLoading
+  if (cuedSeconds !== null && playbackFlowing) setCue(null)
+  useEffect(() => {
+    if (playbackFlowing) settleDeepLinkCue(cueEpisodeId, locationKey)
+  }, [playbackFlowing, cueEpisodeId, locationKey])
 
   const { matchingIds, matchOrder } = useMemo(() => {
     if (!searchQuery) return { matchingIds: null as Set<number> | null, matchOrder: [] as number[] }
@@ -1018,7 +1049,10 @@ export default function SegmentedTranscriptViewer({
   // The row the cued moment sits on. When its own segment is not on screen
   // (filler hidden, a search or entity filter), the next row that is. A
   // moment before the first segment (intro silence, a playback offset) cues
-  // the first passage, still playing from the linked seconds.
+  // the first passage, still playing from the linked seconds. With nothing
+  // at or after it, the last row — unless a search or filter is what hid
+  // it: the offer does not belong on an unrelated earlier match.
+  const filtered = matchingIds !== null || visibleSegmentIds != null
   const cuedSegmentId = useMemo(() => {
     if (cuedSeconds === null || transcript.segments.length === 0) return null
     const idx = deepLinkSegmentIndex(transcript.segments, cuedSeconds, offset)
@@ -1029,8 +1063,8 @@ export default function SegmentedTranscriptViewer({
       if (row.segment.id === target.id || row.segment.start >= target.start) return row.segment.id
       last = row.segment.id
     }
-    return last
-  }, [cuedSeconds, transcript.segments, offset, renderRows])
+    return filtered ? null : last
+  }, [cuedSeconds, transcript.segments, offset, renderRows, filtered])
 
   if (transcript.segments.length === 0) {
     return (

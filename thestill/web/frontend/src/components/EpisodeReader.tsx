@@ -1052,6 +1052,7 @@ function TranscriptPanel({
   // video on a video-first episode) once the native engine has reported
   // it; until then, and on the YouTube engine, probe the audio enclosure.
   const player = usePlayer()
+  const { key: locationKey } = useLocation()
   const loadedDuration =
     episodeId && player.isCurrent(episodeId) && player.activeEngine === 'native' ? player.nativeDuration : null
   const probedAudioDuration = useAudioDuration(loadedDuration == null ? audioUrl : null)
@@ -1105,6 +1106,7 @@ function TranscriptPanel({
             mentionsBySegmentId={mentionsBySegmentId}
             visibleSegmentIds={visibleSegmentIds}
             scrollToSegmentId={scrollToSegment}
+            locationKey={locationKey}
             focusedEntityId={focusedEntityId}
             onFocusEntity={onFocusEntity}
             karaokeEnabled={karaokeEnabled}
