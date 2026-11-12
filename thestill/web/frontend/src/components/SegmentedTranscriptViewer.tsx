@@ -518,6 +518,9 @@ const ContentSegment = memo(function ContentSegment({
 interface LinkedMomentBarProps {
   seconds: number
   onPlay: () => void
+  // True until the button has taken focus once for this offer.
+  focusOnArrival: boolean
+  onFocused: () => void
 }
 
 /**
@@ -525,17 +528,24 @@ interface LinkedMomentBarProps {
  * opened cold, so nothing is playing: this button is the visitor's own tap,
  * which is what lets the audio start in every browser.
  */
-function LinkedMomentBar({ seconds, onPlay }: LinkedMomentBarProps) {
+function LinkedMomentBar({ seconds, onPlay, focusOnArrival, onFocused }: LinkedMomentBarProps) {
   const noteId = useId()
   // The page scrolled here by itself; bring the keyboard along, or the
   // button is hundreds of Tab stops away. No scroll: the jump owns that.
-  const focusOnArrival = useCallback((el: HTMLButtonElement | null) => {
-    el?.focus({ preventScroll: true })
-  }, [])
+  // Once per offer: the bar mounts again when a search or filter moves it
+  // to another passage, and must not pull focus out of the search field.
+  const takeFocus = useCallback(
+    (el: HTMLButtonElement | null) => {
+      if (!el || !focusOnArrival) return
+      el.focus({ preventScroll: true })
+      onFocused()
+    },
+    [focusOnArrival, onFocused],
+  )
   return (
     <div data-testid="linked-moment" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-3 pb-1">
       <button
-        ref={focusOnArrival}
+        ref={takeFocus}
         type="button"
         onClick={onPlay}
         aria-describedby={noteId}
@@ -847,7 +857,7 @@ export default function SegmentedTranscriptViewer({
   // Kept with its episode and history entry, so it cannot show on another
   // episode or on another entry of this one (Back/Forward keep the viewer
   // mounted).
-  const [cue, setCue] = useState<{ entry: string; seconds: number } | null>(null)
+  const [cue, setCue] = useState<{ entry: string; seconds: number; focus: boolean } | null>(null)
   const cueEpisodeId = episodeId ?? null
   const cueEntry = `${cueEpisodeId}|${locationKey ?? ''}`
   useDeepLinkSeek(
@@ -857,10 +867,12 @@ export default function SegmentedTranscriptViewer({
       [onSeekRequest],
     ),
     !!onSeekRequest && transcript.segments.length > 0,
-    useCallback((seconds: number) => setCue({ entry: cueEntry, seconds }), [cueEntry]),
+    useCallback((seconds: number) => setCue({ entry: cueEntry, seconds, focus: true }), [cueEntry]),
     locationKey,
   )
   const cuedSeconds = cue !== null && cue.entry === cueEntry ? cue.seconds : null
+  const cueNeedsFocus = cue?.focus === true
+  const markCueFocused = useCallback(() => setCue((c) => (c && c.focus ? { ...c, focus: false } : c)), [])
   const dropCue = useCallback(() => {
     setCue(null)
     settleDeepLinkCue(cueEpisodeId, locationKey)
@@ -1235,7 +1247,14 @@ export default function SegmentedTranscriptViewer({
             const { segment, expandedFromHidden } = row
             const isActive = segment.id === activeSegmentId
             const isCued = cuedSeconds !== null && segment.id === cuedSegmentId
-            const cueBar = isCued ? <LinkedMomentBar seconds={cuedSeconds} onPlay={playCuedMoment} /> : null
+            const cueBar = isCued ? (
+              <LinkedMomentBar
+                seconds={cuedSeconds}
+                onPlay={playCuedMoment}
+                focusOnArrival={cueNeedsFocus}
+                onFocused={markCueFocused}
+              />
+            ) : null
             const segmentMentions = segmentMentionSets.get(segment.id) ?? null
             if (segment.kind === 'content' || segment.kind === 'filler') {
               const isKaraokeSegment =

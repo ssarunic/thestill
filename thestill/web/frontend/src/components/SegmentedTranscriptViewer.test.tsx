@@ -231,6 +231,22 @@ describe('SegmentedTranscriptViewer', () => {
         expect(play).toHaveAccessibleDescription('The moment this link points to')
       })
 
+      it('takes focus on arrival only, not when a search moves the offer to another passage', async () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=5') // segment 1, "First segment"
+        const user = userEvent.setup()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        expect(screen.getByRole('button', { name: 'Play from 00:05' })).toHaveFocus()
+
+        // "shipping" hides segment 1 and matches segment 2: the offer moves there.
+        const search = screen.getByRole('searchbox', { name: 'Search transcript' })
+        await user.click(search)
+        await user.type(search, 'shipping')
+        await waitFor(() => expect(screen.getByTestId('segment-content-2')).toHaveAttribute('data-linked', 'true'))
+        expect(search).toHaveFocus()
+        expect(search).toHaveValue('shipping')
+      })
+
       it('does not move the offer onto an unrelated match when a search hides the passage', async () => {
         setActivation(false)
         openAt('/podcasts/show/episodes/ep#t=12') // segment 2, "Second segment about shipping"
