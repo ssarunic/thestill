@@ -1,8 +1,8 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Designed, not built: ad breaks as one row in the reader (section 6.1, Phase 2b). Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
-> **Updated:** 2026-11-11
+> **Updated:** 2026-11-12
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
 > summary citations, chapters, clips) lands in the wrong place on any
 > episode whose ads changed since transcription. Today the reader only
@@ -59,9 +59,10 @@ the banner stays as it is today.
 
 ## Non-goals
 
-- **Skipping or marking ads for the listener.** The map knows where
-  listener-side ads are. Using that to skip them is a policy decision
-  for a separate spec.
+- **Skipping ads for the listener.** The map knows where listener-side
+  ads are. Using that to skip them is a policy decision for a separate
+  spec. Section 6.1 uses the map only to say that a break differs in
+  the listener's copy and that an ad is playing; it offers no skip.
 - **Proxying or re-hosting audio.** It removes drift, and it also removes
   the publisher's ad impressions and download counts.
 - **Eager backfill of every old episode.** Their transcribed copy is
@@ -570,6 +571,101 @@ same word.
 - Map building: the existing banner text, with "Aligning…" beneath it.
 - Map failed or not attempted: today's banner, unchanged.
 
+#### 6.1 Ad breaks as one row
+
+Added 2026-11-12. Proposed; not built.
+
+**Problem.** The transcript shows the ads of the copy that was
+transcribed. A listener whose copy carries other ads hears something
+else at each break: other words, another length, sometimes another
+number of ads. Today each `ad_break` segment is its own row, drawn as
+full text by default (the "Ads" pill turns every one into a chip). Once
+a map is applied, those rows describe audio the listener does not have.
+
+Changing the rows when drift is detected is not the fix. The map
+arrives after playback starts, so merging or hiding rows at that moment
+moves the page under someone who is reading, and the same episode looks
+different before and after Play.
+
+**Rule.** An ad break is one row at all times, with or without a map.
+A map changes the text on the row. It never changes the row's height,
+the number of rows or the scroll position.
+
+**The row.**
+
+- An ad break is a maximal run of consecutive `ad_break` segments.
+  `filler` segments inside a run do not split it.
+- The row keeps the amber style of today's ad chip and is one line
+  high. Text that does not fit is cut with an ellipsis, so the height
+  is the same in every state and at every width.
+- It is collapsed by default. A "Show ad text" control on the row
+  opens the segments' text inside the same box, under the line "From
+  the copy we transcribed". The choice is per row and is not stored.
+- The "Ads" pill is removed from the toggle bar, and the stored
+  `ad_break` entry of `thestill:transcriptViewer:hiddenKinds` is
+  ignored. Music, intro and outro keep their pills.
+- The transcript editor (#110) is unchanged: editors see each segment.
+
+**What the row says.** `break` is the transcript interval from the
+first segment's start to the last segment's end.
+
+| State | When | Text | Click on the row |
+|---|---|---|---|
+| Plain | no map: not played yet, map building, failed or not attempted, YouTube or HLS rendition | `Ad break · Navan, Shopify · 1:32` | seeks to the break's start, as today |
+| Same | map applied, `break` lies inside a matched span | as Plain | seeks through the map |
+| Different | map applied, `break` overlaps a confirmed source-side gap, and the listener's copy has an ad between the two neighbouring spans | `Ad break · different in your copy · 1:05` | none |
+| Absent | as Different, with no listener-side ad between those spans | `Ad break · not in your copy` | none |
+| Unresolved | map applied, `break` overlaps only an `unresolved` interval | as Plain, with the drift note of section 5 | seeks, flagged approximate |
+
+- Sponsors are the distinct `sponsor` values of the run in order, at
+  most three, then `+N`. They are dropped in Different and Absent: they
+  name ads the listener does not hear.
+- The duration is the transcribed break's length in Plain, Same and
+  Unresolved, and the listener-side ad's length in Different.
+- The timestamp on the row still copies a link to the break's start in
+  every state.
+- A row that is open stays open when its state changes. In Different
+  and Absent the line above the text becomes "From the copy we
+  transcribed. Your copy plays other ads here."
+- The state is part of the control's accessible name. It is not
+  announced as a live region; a change during playback is not urgent.
+
+**During playback.**
+
+- No map: the row is the active row while the clock is inside `break`,
+  as each ad segment is today.
+- Map applied, `toLogical` returns `null` (a listener-side ad is
+  playing): the break row between the same two spans is the active row
+  and reads `Ad playing · 0:23 left`. Karaoke holds its last word
+  (section 5). Follow-playback keeps that row in view.
+- A listener-side ad where the transcript has no break (an ad only in
+  the listener's copy): no row is added, because that would move the
+  page. The highlight stays on the last passage, and the mini player
+  and the Now Playing sheet show an "Ad" tag beside the time. The tag
+  is shown for every listener-side ad, so the two cases read the same
+  in the player.
+
+This answers open question 2.
+
+**What opens a row by itself.** The text of a collapsed row is still
+part of the transcript.
+
+- In-transcript search matches ad text and sponsor names. A row with a
+  match opens while the search is active and returns to its earlier
+  state when the search is cleared.
+- The `[` / `]` mention keys and "Show in transcript" open the row
+  that holds the mention.
+- An entity filter that selects an ad segment shows the row, open.
+- A link to a moment (`?t=` / `#t=`) inside a break lands on the row,
+  collapsed.
+- A segment wrongly tagged `ad_break` hides real content behind one
+  click. No state removes the control, so the text is always
+  reachable. Fixing the tag is the editor's job (#110).
+
+**Measuring it.** A new usage event `ad_break_expanded` with the row's
+state, added to the event allowlist of #95. If almost nobody opens a
+row, the text can go (see Alternatives considered).
+
 ### 7. Logging, audit and proof of correctness
 
 A log of what the aligner decided does not show that the decision was
@@ -743,6 +839,16 @@ from the track header runs the full pass regardless of the profile.
   up as a source-side or listener-side gap, the same as an ad.
 - **Metered connections.** The full pass downloads the file a second
   time. It is skipped when `navigator.connection.saveData` is set.
+- **A break that is partly the same** (section 6.1): two ads in the
+  transcribed copy, one replaced in the listener's. Any overlap with a
+  confirmed gap makes the whole row Different. The row does not say
+  which part.
+- **A break at the very start or end** (pre-roll, post-roll). There is
+  only one neighbouring span. A listener-side ad before the first span
+  or after the last one counts as the ad "between".
+- **A map that is replaced or dropped mid-session** (a rendition switch,
+  a failed check on a later load). Rows return to Plain. Heights do not
+  change, so nothing moves.
 
 ## Execution plan
 
@@ -1072,6 +1178,31 @@ and asserts that a segment click lands on the same audio in both. The
 audit command passes on that fixture, and fails when the fixture's map
 is shifted by 2 s on purpose.
 
+### Phase 2b: ad breaks as one row
+
+Section 6.1. Step 2b.1 needs no map and ships to every reader; the
+rest only shows for sessions in which a map is applied.
+
+| # | Where | What |
+|---|---|---|
+| 2b.1 | `SegmentedTranscriptViewer.tsx` (new `AdBreakRow`) | group each run of `ad_break` segments into one row, collapsed by default, with a per-row "Show ad text"; remove the "Ads" pill; open the row for a search match, a mention jump or an entity filter; the row is the scroll and active-segment target for every segment in its run |
+| 2b.2 | `src/contexts/playback-engine/timeline-map.ts` | `classifyBreak(startS, endS)` returns Same, Different, Absent or Unresolved, with the listener-side ad's length; `listenerAdAt(assetTime)` returns the ad's interval or `null` |
+| 2b.3 | `PlayerContext.tsx`, `SegmentedTranscriptViewer.tsx` | expose the applied map's break classification and "in a listener-side ad" to the reader; row text per state; `Ad playing · m:ss left` |
+| 2b.4 | mini player, `NowPlayingSheet.tsx` | the "Ad" tag while a listener-side ad plays |
+| 2b.5 | analytics | `ad_break_expanded` with the row's state, on the #95 allowlist |
+
+Acceptance:
+
+- Unit tests for `classifyBreak` on the fixture maps of Phase 2,
+  including a break that is partly the same and a pre-roll.
+- A Playwright test loads an episode with three ad breaks, records the
+  document height and the top of a content row below the second break,
+  applies a map that makes one break Different and one Absent, and
+  asserts that both numbers are unchanged and that the rows read as in
+  the table of section 6.1.
+- The same test with a search for a sponsor name: the row opens, and
+  closes when the search is cleared.
+
 ### Phase 3: perceptual fallback and AAC
 
 Add the Haitsma-Kalker track at ingest for shows flagged
@@ -1183,6 +1314,23 @@ with #110 Phase 4 and is not required here.
 - **Pre-roll scalar plus user nudge.** Corrects only the first break.
   Three of five measured episodes had more than one.
 
+For the ad rows of section 6.1:
+
+- **Leave the ad text as it is, with the banner.** Nothing to build,
+  and the page shows words the listener is not hearing.
+- **Merge the ad rows into one box only once drift is detected.** It
+  removes the stale text. The map arrives after playback starts, so the
+  rows merge under the reader, and the episode looks different before
+  and after Play.
+- **Remove ads from the transcript, leaving a divider.** Stable and
+  simple. It loses the sponsor names, breaks sponsor search, and hides
+  real content whenever a segment is wrongly tagged. `ad_break_expanded`
+  will show whether the text is worth keeping.
+- **Keep the text and dim or strike it as "not in your copy".**
+  Accurate, and it draws the eye to the least useful text on the page.
+- **Show the listener's own ads.** That needs the listener's copy
+  transcribed, and no episode audio is retained (Goals, 3).
+
 ## Open questions
 
 1. **Second download.** The full pass fetches the file again. IAB
@@ -1190,7 +1338,9 @@ with #110 Phase 4 and is not required here.
    publisher counts should not inflate. Is the listener's bandwidth
    acceptable on mobile, or should the full pass wait for Wi-Fi?
 2. **Listener-side ads in the karaoke view.** Hold the last word (this
-   spec), or show a neutral "Ad" marker?
+   spec), or show a neutral "Ad" marker? **Proposed 2026-11-12:** both.
+   Karaoke holds the last word, the break's row reads "Ad playing", and
+   the player shows an "Ad" tag (section 6.1).
 3. **Duration outlier.** On one Flightcast episode Chrome's reported
    duration was 9.9 s longer than the summed frame durations of the
    same bytes. Is time-based seeking on that file accurate, and how
