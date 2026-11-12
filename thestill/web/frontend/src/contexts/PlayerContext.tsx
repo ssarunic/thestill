@@ -190,6 +190,10 @@ export interface PlayerContextValue {
   // Where the audio element itself is (seconds on the listener's copy),
   // whatever map is in force. Stable; for counting down a `listenerAd`.
   getAssetTime: () => number
+  // How long the listener's copy itself is, or null until the element
+  // says. Stable. Not `duration` / `nativeDuration`: while a map is in
+  // force those are the transcribed copy's length.
+  getAssetDuration: () => number | null
   // True while a transcript-time start is being held, silent, for its map.
   timelineHold: boolean
   // The reader's word that no map is coming for the held start: play from
@@ -790,6 +794,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementTime() ?? 0) : 0
   }, [])
 
+  const getAssetDuration = useCallback(() => {
+    const seconds = engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementDuration() ?? 0) : 0
+    return seconds > 0 ? seconds : null
+  }, [])
+
   // Spec #61 §5 — "Use audio rendition": a controlled source transition to
   // the other rendition preserving logical position/rate/play state
   // (offset-adjusted). Distinct from the visual-off videoPreference toggle.
@@ -1154,6 +1163,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       timelineMap: activeEngine === 'native' ? timelineMap : null,
       listenerAd: activeEngine === 'native' ? listenerAd : null,
       getAssetTime,
+      getAssetDuration,
       timelineHold,
       releaseTimelineHold,
       reloadHeldForCheck,
@@ -1201,6 +1211,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       timelineMap,
       listenerAd,
       getAssetTime,
+      getAssetDuration,
       timelineHold,
       releaseTimelineHold,
       reloadHeldForCheck,

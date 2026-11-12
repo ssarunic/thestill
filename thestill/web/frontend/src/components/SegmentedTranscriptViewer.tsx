@@ -985,7 +985,7 @@ export default function SegmentedTranscriptViewer({
     }
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
-  const { track, getCurrentTime, isPlaying, isLoading, timelineMap, listenerAd, nativeDuration, getAssetTime } =
+  const { track, getCurrentTime, isPlaying, isLoading, timelineMap, listenerAd, getAssetTime, getAssetDuration } =
     usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
 
@@ -1002,10 +1002,13 @@ export default function SegmentedTranscriptViewer({
   const breakMap = isCurrentEpisode ? timelineMap : null
   const breakStates = useMemo(() => {
     if (!breakMap) return null
+    // The length of the listener's copy, read when the map arrives: the
+    // player's own duration is the transcribed copy's while a map is set.
+    const assetDurationS = getAssetDuration()
     const out = new Map<number, BreakState>()
-    for (const run of adRuns) out.set(run.id, breakMap.classifyBreak(run.startS, run.endS, nativeDuration))
+    for (const run of adRuns) out.set(run.id, breakMap.classifyBreak(run.startS, run.endS, assetDurationS))
     return out
-  }, [breakMap, adRuns, nativeDuration])
+  }, [breakMap, adRuns, getAssetDuration])
   // The break an ad of the listener's own is playing at: the one between
   // the same two spans. None when the ad is only in the listener's copy.
   const playingAd = isCurrentEpisode ? listenerAd : null

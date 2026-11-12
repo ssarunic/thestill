@@ -419,6 +419,9 @@ describe('spec #116 §6.1 — the map and the listener’s own ads, for the read
     tick(video, 22)
     expect(ctx.listenerAd).toEqual({ startS: 20, endS: 35, srcFromS: 20, srcToS: 26 })
     expect(ctx.getAssetTime()).toBe(22)
+    // The copy's own length, where `duration` is now the transcribed copy's.
+    Object.defineProperty(video, 'duration', { configurable: true, get: () => 55 })
+    expect(ctx.getAssetDuration()).toBe(55)
     // The transcript clock stands still at the point the ad interrupted.
     expect(ctx.getCurrentTime()).toBe(20)
     // The same ad on the next tick is the same object: consumers re-render

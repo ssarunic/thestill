@@ -20,6 +20,7 @@ const player = {
   timelineMap: null as TimelineMap | null,
   listenerAd: null as ListenerAd | null,
   nativeDuration: null as number | null,
+  assetDuration: null as number | null,
   assetTime: 0,
   time: 0,
 }
@@ -33,6 +34,7 @@ vi.mock('../contexts/PlayerContext', () => ({
     listenerAd: player.listenerAd,
     nativeDuration: player.nativeDuration,
     getAssetTime: () => player.assetTime,
+    getAssetDuration: () => player.assetDuration,
     getCurrentTime: () => player.time,
   }),
   usePlayerTime: () => player.time,
@@ -113,6 +115,7 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
       timelineMap: null,
       listenerAd: null,
       nativeDuration: null,
+      assetDuration: null,
       assetTime: 0,
       time: 0,
     })
@@ -248,6 +251,31 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
       expect(screen.getByTestId('ad-break-2')).toHaveAttribute('data-state', 'same')
       expect(text(6)).toBe('Ad break · Navan · 0:04 · timing approximate')
       expect(screen.getByTestId('ad-break-6')).toHaveAttribute('data-state', 'unresolved')
+    })
+
+    it('judges a break after the last span by the length of the listener’s copy, not the transcribed one', () => {
+      // Nothing of the transcript plays after 46 s (55 s in this copy).
+      player.timelineMap = new TimelineMap(
+        [
+          { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+          { srcStartS: 26, srcEndS: 46, offsetS: 9 },
+        ],
+        [
+          { srcStartS: 20, srcEndS: 26, kind: 'confirmed' },
+          { srcStartS: 46, srcEndS: 60, kind: 'confirmed' },
+        ],
+      )
+      // With a map in force the player's duration is the transcribed copy's.
+      player.nativeDuration = 60
+      // The copy ends where its last span does: the break is simply gone.
+      player.assetDuration = 55
+      const { rerender } = render(ui())
+      expect(text(6)).toBe('Ad break · not in your copy')
+      // A copy that runs 8 s longer carries an ad of its own there.
+      player.assetDuration = 63
+      player.timelineMap = new TimelineMap(player.timelineMap.spans, player.timelineMap.gaps)
+      rerender(ui())
+      expect(text(6)).toBe('Ad break · different in your copy · 0:08')
     })
 
     it('does not seek from a break that is gone from the copy, and says so when opened', async () => {
