@@ -1061,7 +1061,9 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
     hidden = visibility.hidden_entity_ids()
     # Grouped by type on the page (people, companies, products, topics, as
     # in the signed-in reader), so the cap is per type, in the reader's
-    # order: hosts and guests first, then by mentions.
+    # order: guests and hosts first, then by mentions. ``role`` marks the
+    # people who take part in this episode (``takes_part``), so the page lists them apart from the people
+    # who are only talked about.
     mentioned = []
     per_type: Dict[str, int] = {}
     for row in get_episode_entities(episode.id, min_confidence=0.0, state=state).entities:
@@ -1075,6 +1077,7 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
                 "type": kind,
                 "slug": entity_slug(row.entity.id),
                 "count": row.mention_count,
+                "role": row.speaker_kind if kind == "person" and row.takes_part else None,
             }
         )
     return {"every": [_quote_item(r) for r in rows], "mentioned": mentioned}

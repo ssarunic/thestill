@@ -476,6 +476,14 @@ class Config(BaseModel):
     # Cleanup Configuration
     cleanup_days: int = 30
     delete_audio_after_processing: bool = False  # Delete audio files after each pipeline stage completes
+    # Spec #116 — write a sync track for each transcribed episode. Off stops
+    # new tracks; existing ones stay.
+    sync_tracks_enabled: bool = True
+    # Spec #116 Phase 2 — the reader aligns the transcript with the
+    # listener's copy of the audio. On by default; the setting exists to
+    # turn it off. It grants the ``drift.align`` permission (admins only
+    # for now), so off means nobody holds it.
+    drift_alignment_enabled: bool = True
 
     # Debug/Testing Configuration
     debug_clip_duration: Optional[int] = None  # Clip audio to N seconds for testing
@@ -932,6 +940,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "eval_judge_temperature": float(os.getenv("EVAL_JUDGE_TEMPERATURE", "0.0")),
         "cleanup_days": int(os.getenv("CLEANUP_DAYS", "30")),
         "delete_audio_after_processing": os.getenv("DELETE_AUDIO_AFTER_PROCESSING", "false").lower() == "true",
+        "sync_tracks_enabled": os.getenv("SYNC_TRACKS_ENABLED", "true").lower() == "true",
+        "drift_alignment_enabled": os.getenv("DRIFT_ALIGNMENT_ENABLED", "true").lower() == "true",
         "debug_clip_duration": int(os.getenv("DEBUG_CLIP_DURATION")) if os.getenv("DEBUG_CLIP_DURATION") else None,
         "narration_enabled": os.getenv("NARRATION_ENABLED", "false").lower() == "true",
         "narration_default_duration_seconds": int(os.getenv("NARRATION_DEFAULT_DURATION_SECONDS", "300")),

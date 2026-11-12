@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from ..services.narration import NarrationRunner
     from ..services.platform_link_service import PlatformLinkService
     from ..services.refresh_on_open import RefreshOnOpenService
+    from ..services.sync_track_service import SyncTrackService
     from ..services.transcript_edit_service import TranscriptEditService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -141,6 +142,9 @@ class AppState:
     # ``Optional`` only so legacy test fixtures that construct AppState by
     # hand don't have to update yet; production paths always pass a repo.
     pending_ops_repository: "Optional[PendingOperationsRepository]" = None
+    # Spec #116 — sync tracks. ``None`` (hand-built test states) means the
+    # pipeline writes no tracks.
+    sync_track_service: "Optional[SyncTrackService]" = None
     # Spec #48 — background refresh scheduler (set at startup when enabled).
     refresh_scheduler: "Optional[RefreshScheduler]" = None
     # Spec #87 — per-episode platform links; None disables the refresh hook.

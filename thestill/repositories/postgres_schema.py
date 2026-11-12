@@ -519,6 +519,24 @@ CREATE TABLE IF NOT EXISTS user_connector_days (
 );
 CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
 
+-- Spec #116 — index of per-episode sync track files (alembic 0028). One
+-- 'current' track (describes the raw transcript) and one 'pending' track
+-- (audio whose transcript is not stored yet) per episode at most.
+CREATE TABLE IF NOT EXISTS episode_sync_tracks (
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    generation text NOT NULL,
+    state text NOT NULL CHECK (state IN ('pending', 'current')),
+    path text NOT NULL,
+    source text NOT NULL,
+    frames integer NOT NULL,
+    anchors integer NOT NULL,
+    audio_bytes bigint NOT NULL,
+    audio_duration_s double precision NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (episode_id, generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_tracks_one_per_state ON episode_sync_tracks(episode_id, state);
+
 -- Spec #103 Phase 2 — signed-out views per public page per UTC day, keyed
 -- by object id ('' for landing and top). No visitor id, IP or referrer.
 CREATE TABLE IF NOT EXISTS public_page_daily_views (

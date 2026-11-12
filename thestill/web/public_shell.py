@@ -75,7 +75,7 @@ _LOOKUP_CACHE_MAX = 4096
 _DESCRIPTION_MAX = 160
 
 # Paths a crawler may index. Everything else gets ``noindex``.
-_PUBLIC_STATIC_PATHS = {"": "landing", "top": "top", "terms": "terms", "privacy": "privacy"}
+_PUBLIC_STATIC_PATHS = {"": "landing", "top": "top", "terms": "terms", "privacy": "privacy", "claude": "claude"}
 
 
 def shell_kind(path: str) -> Optional[str]:
@@ -350,6 +350,18 @@ class ShellRenderer:
                 canonical_path="/top",
                 index=True,
             )
+        if kind == "claude":
+            # Spec #108 — the connector guide; also the documentation URL of
+            # the connector's directory listing (spec #109 Phase 3).
+            return HeadTags(
+                title=f"Use {SITE_NAME} in Claude · {SITE_NAME}",
+                description=(
+                    "Connect Thestill to Claude to search podcast transcripts and summaries, "
+                    "find who said what, and follow shows. Setup, permissions and privacy."
+                ),
+                canonical_path="/claude",
+                index=True,
+            )
         name = "Terms of Service" if kind == "terms" else "Privacy Policy"
         return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
 
@@ -551,7 +563,7 @@ class SitemapBuilder:
 
     def _collect(self) -> List[Tuple[str, Optional[str]]]:
         repo = self._state.repository
-        urls: List[Tuple[str, Optional[str]]] = [("/", None), ("/top", None)]
+        urls: List[Tuple[str, Optional[str]]] = [("/", None), ("/top", None), ("/claude", None)]
         podcasts: Dict[str, Optional[str]] = {}
         podcast_ids: Set[str] = set()
         guest_ids: Set[str] = set()

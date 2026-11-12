@@ -31,9 +31,13 @@ if TYPE_CHECKING:
     from ..utils.config import Config
 
 TRANSCRIPT_EDIT = "transcript.edit"
+#: Spec #116 Phase 2 — the reader may align the transcript with the
+#: listener's copy of the audio. Also the kill switch: nobody holds it when
+#: ``DRIFT_ALIGNMENT_ENABLED`` is set to false (it is on by default).
+DRIFT_ALIGN = "drift.align"
 
 #: Every named permission, in the order ``/api/auth/status`` lists them.
-PERMISSIONS = (TRANSCRIPT_EDIT,)
+PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN)
 
 
 def has_permission(user: "User", permission: str, config: "Config", *, episode_id: Optional[str] = None) -> bool:
@@ -43,6 +47,8 @@ def has_permission(user: "User", permission: str, config: "Config", *, episode_i
     changes no call sites. Unknown permissions are never granted.
     """
     if permission not in PERMISSIONS:
+        return False
+    if permission == DRIFT_ALIGN and getattr(config, "drift_alignment_enabled", False) is not True:
         return False
     # Spec #110: every permission is admin-only for now.
     return is_effective_admin(user, config)

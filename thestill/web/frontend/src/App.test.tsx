@@ -8,7 +8,8 @@ import App from './App'
 // assert *which* trees render, not what's inside them.
 
 // Spec #94 — App branches on ``isAnonymous``; these tests drive both sides.
-const auth = vi.hoisted(() => ({ isAnonymous: false }))
+// ``can`` and ``isLoading`` are read by useDriftSession (spec #116).
+const auth = vi.hoisted(() => ({ isAnonymous: false, isLoading: false, can: () => false }))
 vi.mock('./contexts/AuthContext', () => ({
   useAuth: () => auth,
   // The player's restore waits on auth; null = no AuthProvider to wait for.

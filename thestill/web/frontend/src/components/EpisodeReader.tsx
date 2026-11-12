@@ -10,6 +10,9 @@ import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
 import { useIsSmUp } from '../hooks/useMediaQuery'
+import { useDriftAlignment } from '../drift/useDriftAlignment'
+import { driftAlignmentSupported } from '../drift/support'
+import DriftDebugStrip from '../drift/DriftDebugStrip'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
@@ -457,7 +460,8 @@ export default function EpisodeReader({
     (seconds: number) => {
       if (!episode || !playerTrack) return
       if (player.isCurrent(episode.id)) {
-        player.seek(seconds)
+        // A transcript time: the player corrects it for this copy (spec #116).
+        player.seek(seconds, { transcript: true })
         if (!player.isPlaying) player.resume()
         return
       }
@@ -517,6 +521,26 @@ export default function EpisodeReader({
   useEffect(() => () => onCollapsedHeaderChange?.(null), [onCollapsedHeaderChange])
 
   const transcriptSegments = transcriptData?.segments?.segments ?? null
+
+  // Spec #116 Phase 2 — align the transcript with this browser's copy of
+  // the audio once playback starts, and report the outcome. Nothing is
+  // corrected yet; `?driftdebug=1` shows the result.
+  const canAlignDrift = can('drift.align') && driftAlignmentSupported()
+  const driftAlignment = useDriftAlignment({
+    enabled: canAlignDrift,
+    podcastSlug,
+    episodeSlug,
+    episodeId: episode?.id,
+    transcript: transcriptData?.segments,
+  })
+  const showDriftDebug = canAlignDrift && searchParams.get('driftdebug') === '1'
+  // Spec #116 §6 — while a map is being built or checked, the drift banner
+  // says so. Once a map is applied the banner goes by itself: the player
+  // then reports the transcribed copy's duration.
+  const driftAligning =
+    canAlignDrift &&
+    (driftAlignment.status === 'running' ||
+      (driftAlignment.status === 'done' && driftAlignment.report?.outcome === 'aligned' && !driftAlignment.check))
 
   // Spec #72 §Deep link — `?t=` lands the reader on that segment regardless
   // of the follow toggle: once per history entry, fresh entries only. A POP
@@ -810,12 +834,21 @@ export default function EpisodeReader({
                   onShowInTranscript={jumpToTranscriptSegment}
                 />
               ) : (
+                <>
+                {showDriftDebug && (
+                  <DriftDebugStrip
+                    state={driftAlignment}
+                    hasTrack={Boolean(transcriptData?.segments?.sync_track_generation)}
+                    onPlayAt={handleSegmentSeek}
+                  />
+                )}
                 <TranscriptPanel
                   transcriptData={transcriptData}
                   transcriptLoading={transcriptLoading}
                   episodeState={episode?.state}
                   episodeId={episode?.id ?? null}
                   audioUrl={episode?.audio_url ?? null}
+                  driftAligning={driftAligning}
                   onSegmentSeek={handleSegmentSeek}
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
@@ -839,6 +872,7 @@ export default function EpisodeReader({
                   karaokeChipDisabled={karaokeUnavailable}
                   onKaraokeToggle={handleKaraokeToggle}
                 />
+                </>
               )}
             </Suspense>
           </div>
@@ -895,6 +929,8 @@ interface TranscriptPanelProps {
   episodeState: string | undefined
   episodeId: string | null
   audioUrl: string | null
+  // Spec #116 — a timeline map for this copy is being built or checked.
+  driftAligning?: boolean
   onSegmentSeek: (seconds: number) => void
   // Spec #28 §5.2 — episode-page entity UX. All optional so a viewer
   // mounted without entity data (legacy episodes, tests) keeps working.
@@ -985,6 +1021,7 @@ function TranscriptPanel({
   episodeState,
   episodeId,
   audioUrl,
+  driftAligning,
   onSegmentSeek,
   entitiesById,
   mentionsBySegmentId,
@@ -1041,6 +1078,7 @@ function TranscriptPanel({
               (likely dynamic ads inserted by the host). Clicking a segment will seek
               to the displayed time, but the audio at that position may not match.
             </p>
+            {driftAligning && <p className="mt-1 text-amber-800/90">Aligning…</p>}
           </div>
         </div>
       )}

@@ -673,6 +673,20 @@ Get the transcript for an episode. Returns cleaned transcript if available, othe
 }
 ```
 
+When a segmented transcript exists the response also carries `segments`
+(the annotated transcript) and `content` is empty. `segments.sync_track_generation`
+names the sync track the reader may use for this transcript
+([spec #116](116-timestamp-drift-alignment.md)), or is `null`.
+
+### GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}
+
+The episode's sync track as a binary file (`application/octet-stream`,
+`Cache-Control: private, max-age=31536000, immutable`). `generation` is
+`segments.sync_track_generation` from the transcript response. Returns
+404 when the episode has no track or `generation` is not its current
+one. The layout is defined by `SyncTrack.to_bytes` in
+[sync_track.py](../thestill/core/sync_track.py).
+
 ### GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary
 
 Get the summary for an episode.

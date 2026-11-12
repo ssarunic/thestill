@@ -30,6 +30,9 @@ export interface EngineEvents {
   // null for "no restriction" (native media plays any sane rate). Only the
   // YouTube engine emits; it re-emits per video since the list can change.
   onAvailableRatesChange: (rates: number[] | null) => void
+  // Spec #116 — native only: the engine is silently waiting for a timeline
+  // map before letting a transcript-time start be heard (see LoadOptions).
+  onTimelineHoldChange?: (holding: boolean) => void
 }
 
 // Native: `url` (the enclosure/asset URL) plus its manifest `mimeType`,
@@ -39,6 +42,10 @@ export interface EngineSource {
   url?: string
   mimeType?: string | null
   videoId?: string
+  // Spec #116 — native only: load with `crossorigin="anonymous"` so a
+  // service worker can read what the element is served. Only ever set for
+  // a host known to allow it; the engine reloads without it on failure.
+  crossOrigin?: boolean
 }
 
 export interface LoadOptions {
@@ -51,6 +58,13 @@ export interface LoadOptions {
   // Request playback as soon as the source is ready (YouTube constructs
   // its player asynchronously, so the play intent must ride along).
   autoplay?: boolean
+  // Spec #116 — native only. `seekTo` is a transcript time the listener
+  // asked for (a click on a paragraph), and a timeline map is expected for
+  // this source. The engine then plays muted until the map is in force,
+  // moves to the corrected position and only then lets the audio be heard,
+  // so the click never plays the wrong audio. If no map arrives it starts
+  // at `seekTo` as it would have without this option.
+  holdForTimeline?: boolean
 }
 
 export interface PlaybackEngine {

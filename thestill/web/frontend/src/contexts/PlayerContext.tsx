@@ -19,8 +19,10 @@ import {
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
-import { NativeEngine, type NativeEngineState } from './playback-engine/native-engine'
+import { NativeEngine, type AppliedTimeline, type NativeEngineState } from './playback-engine/native-engine'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
+import { beginAudioLoad } from '../drift/corsVerdict'
+import { isTimelineExpected } from '../drift/expectation'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
 
 // ---------------------------------------------------------------------------
@@ -98,7 +100,11 @@ export interface PlayerContextValue {
   pause: () => void
   resume: () => void
   toggle: () => void
-  seek: (seconds: number) => void
+  // `transcript` (spec #116): the time is a transcript time the listener
+  // picked (a paragraph, a citation, a chapter). If a timeline map is
+  // expected for this audio but not yet in force, the player goes silent
+  // and lands on the corrected position once the map arrives.
+  seek: (seconds: number, options?: { transcript?: boolean }) => void
   skip: (deltaSeconds: number) => void
   setRate: (rate: number) => void
   stop: () => void
@@ -162,6 +168,26 @@ export interface PlayerContextValue {
   pipSupported: boolean
   pipActive: boolean
   requestPip: () => void
+  // Spec #116 — put a verified timeline map in force for the audio now
+  // playing (or lift it with null). While one is set, every time this
+  // context takes or reports for that source is transcript time: `seek`
+  // lands on the words asked for, `usePlayerTime`/`getCurrentTime` follow
+  // the words being spoken, and saved positions mean the same sentence in
+  // any copy. Refused (false) unless `episodeId` and `audioUrl` are what
+  // the native engine is playing as the audio rendition.
+  applyTimeline: (episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => boolean
+  // True while a map is in force. Any change of source lifts it.
+  timelineApplied: boolean
+  // True while a transcript-time start is being held, silent, for its map.
+  timelineHold: boolean
+  // The reader's word that no map is coming for the held start: play from
+  // the asked-for time as it is.
+  releaseTimelineHold: (episodeId: string, audioUrl: string) => void
+  // Reload the held audio so that it can be checked (with `crossorigin`,
+  // now that its host is known to allow it, and under the service worker).
+  // The listener hears nothing of it: the start is still held. False when
+  // there is no held start for this audio.
+  reloadHeldForCheck: (episodeId: string, audioUrl: string) => boolean
   // Media error surface (§8). Cleared on the next successful source.
   mediaError: string | null
   // Volume / mute (§8).
@@ -249,6 +275,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [videoPreference, setVideoPreference] = useState<VideoPreference>('shown')
   const [pipActive, setPipActive] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
+  const [timelineApplied, setTimelineApplied] = useState(false)
+  const [timelineHold, setTimelineHold] = useState(false)
   const [volume, setVolumeState] = useState(1)
   const [muted, setMuted] = useState(false)
   const [theaterSlot, setTheaterSlot] = useState<{ episodeId: string; el: HTMLElement } | null>(null)
@@ -365,6 +393,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onError: (message) => active() && base.onError(message),
         onEnded: () => active() && base.onEnded(),
         onAvailableRatesChange: (rates) => active() && base.onAvailableRatesChange(rates),
+        onTimelineHoldChange: (holding) => kind === 'native' && setTimelineHold(holding),
       }
     },
     [engineEventBodies]
@@ -401,11 +430,69 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Assign a new native source and (optionally) carry seek/rate across
   // the transition (the engine defers the seek to loadedmetadata).
-  const beginSource = useCallback((source: ActiveSource, seekTo: number | null, rate: number | null) => {
-    nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType }, { seekTo, rate })
+  const beginSource = useCallback(
+    (source: ActiveSource, seekTo: number | null, rate: number | null, holdForTimeline = false) => {
+    // Spec #116 — only the audio rendition of a plain file is ever aligned,
+    // so only that may load with `crossorigin` (and only for a host already
+    // known to allow it).
+    const eligible = source.rendition === 'audio' && !/mpegurl/i.test(source.mimeType ?? '')
+    const crossOrigin = beginAudioLoad(source.url, eligible)
+    nativeEngineRef.current?.load(
+      { url: source.url, mimeType: source.mimeType, crossOrigin },
+      { seekTo, rate, holdForTimeline: holdForTimeline && eligible },
+    )
     srcRef.current = source.url
     setNativeDuration(null)
     setMediaError(null)
+    // The engine drops its map with the old source.
+    setTimelineApplied(false)
+    },
+    [],
+  )
+
+  // Spec #116 — a start or seek to a transcript time waits, silent, for the
+  // map when one is expected for this episode's audio and not yet in force.
+  const shouldHoldFor = useCallback((episodeId: string | undefined, rendition: RenditionKind) => {
+    return rendition === 'audio' && isTimelineExpected(episodeId) && !nativeEngineRef.current?.hasTimeline()
+  }, [])
+
+  const releaseTimelineHold = useCallback((episodeId: string, audioUrl: string) => {
+    if (trackRef.current?.episodeId !== episodeId) return
+    nativeEngineRef.current?.releaseTimelineHold(audioUrl)
+  }, [])
+
+  const reloadHeldForCheck = useCallback(
+    (episodeId: string, audioUrl: string) => {
+      const native = nativeEngineRef.current
+      const current = trackRef.current
+      if (!native || !current || current.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+      if (engineKindRef.current !== 'native' || renditionRef.current !== 'audio') return false
+      const asked = native.heldTranscriptTime()
+      if (asked === null) return false
+      const source = selectSource(current, 'audio')
+      if (source.url !== audioUrl) return false
+      // A held seek made while paused stays paused: the reload must not
+      // turn it into a start.
+      const wantsPlay = native.isPlaying()
+      beginSource(source, asked, native.getRate(), true)
+      if (wantsPlay) native.play().catch(() => setIsPlaying(false))
+      return true
+    },
+    [beginSource],
+  )
+
+  const applyTimeline = useCallback((episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => {
+    const native = nativeEngineRef.current
+    if (!native) return false
+    if (trackRef.current?.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+    // Lifting must always reach the source the map was set on, even while
+    // it is parked: after a switch to the YouTube player the native engine
+    // keeps its source, and a switch back reuses it. A map found invalid in
+    // the meantime must not come back with it.
+    if (timeline !== null && (engineKindRef.current !== 'native' || renditionRef.current !== 'audio')) return false
+    if (!native.setTimeline(audioUrl, timeline)) return false
+    setTimelineApplied(timeline !== null)
+    return true
   }, [])
 
   // Spec #90 — the persistence layer reads and drives the player through
@@ -413,12 +500,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const port = useMemo<PlayerPort>(
     () => ({
       getTrack: () => trackRef.current,
+      // Spec #116 — the saved position is where the AUDIO is, also while a
+      // timeline map is in force (getElementTime): a resume seeks before
+      // any map exists, so only a position in the audio itself comes back
+      // to the same place when the copy is unchanged.
       getLogicalPosition: () => {
         if (engineKindRef.current === 'youtube') return Math.max(0, youtubeEngineRef.current?.getCurrentTime() ?? 0)
-        return Math.max(0, (nativeEngineRef.current?.getCurrentTime() ?? 0) - activeOffsetRef.current)
+        return Math.max(0, (nativeEngineRef.current?.getElementTime() ?? 0) - activeOffsetRef.current)
       },
       getLogicalDuration: () => {
-        const engineDuration = currentEngine()?.getDuration() ?? 0
+        const engineDuration =
+          (engineKindRef.current === 'youtube'
+            ? youtubeEngineRef.current?.getDuration()
+            : nativeEngineRef.current?.getElementDuration()) ?? 0
         if (!Number.isFinite(engineDuration) || engineDuration <= 0) return null
         const logical = engineKindRef.current === 'youtube' ? engineDuration : engineDuration - activeOffsetRef.current
         return logical > 0 ? logical : null
@@ -516,7 +610,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return
       }
       if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
-        native.seekTo(Math.max(0, options.startAt))
+        native.seekTo(Math.max(0, options.startAt), {
+          holdForTimeline: shouldHoldFor(next.episodeId, desired.rendition),
+        })
       } else if (options?.restart) {
         native.seekTo(0)
       }
@@ -535,6 +631,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // it, then resolves where this one starts: an explicit startAt, else the
     // stored position (logical → this asset's timeline), else the top.
     const seekTo = persistence.startTrack(next, options, desired.offset)
+    // Spec #116 — an explicit startAt is a transcript time the listener
+    // picked. When a map is expected, hold the start for it.
+    const asked = options?.startAt !== undefined && Number.isFinite(options.startAt) ? Math.max(0, options.startAt) : null
+    // The engine may still hold the previous episode's map at this point;
+    // it says nothing about this one, whose source is about to replace it.
+    const holdStart = asked !== null && desired.rendition === 'audio' && isTimelineExpected(next.episodeId)
     if (engineKindRef.current === 'youtube') {
       youtubeEngineRef.current?.pause()
       setEngineKind('native')
@@ -547,9 +649,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrentTime(seekTo ?? 0)
     setDuration(next.durationHint ?? 0)
     // Spec #72 §5 — a fresh source starts at the persisted preference.
-    beginSource(desired, seekTo, preferredRateRef.current)
+    beginSource(desired, holdStart ? (seekTo ?? asked) : seekTo, preferredRateRef.current, holdStart)
     native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition])
+  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition, shouldHoldFor])
 
   const pause = useCallback(() => {
     currentEngine()?.pause()
@@ -572,10 +674,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [currentEngine])
 
   const seek = useCallback(
-    (seconds: number) => {
+    (seconds: number, options?: { transcript?: boolean }) => {
+      if (
+        options?.transcript &&
+        engineKindRef.current === 'native' &&
+        shouldHoldFor(trackRef.current?.episodeId, renditionRef.current)
+      ) {
+        nativeEngineRef.current?.seekTo(seconds, { holdForTimeline: true })
+        return
+      }
       currentEngine()?.seekTo(seconds)
     },
-    [currentEngine]
+    [currentEngine, shouldHoldFor]
   )
 
   const skip = useCallback(
@@ -622,6 +732,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setNativeDuration(null)
     setMediaError(null)
+    setTimelineApplied(false)
+    setTimelineHold(false)
     setAvailableRates(null)
   }, [persistence, setEngineKind, setRendition])
 
@@ -963,7 +1075,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     () => ({
       track,
       isPlaying,
-      isLoading,
+      // A held start (spec #116) is a wait like buffering: same spinner.
+      isLoading: isLoading || timelineHold,
       duration,
       nativeDuration,
       playbackRate,
@@ -997,6 +1110,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported: pipSupported && activeEngine !== 'youtube',
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
+      timelineHold,
+      releaseTimelineHold,
+      reloadHeldForCheck,
       mediaError,
       volume,
       muted,
@@ -1036,6 +1154,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported,
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
+      timelineHold,
+      releaseTimelineHold,
+      reloadHeldForCheck,
       mediaError,
       volume,
       muted,

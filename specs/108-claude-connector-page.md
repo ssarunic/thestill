@@ -293,8 +293,18 @@ personal URL from Settings". Do that only where a directory allows it.
   `mcp_connector_revoked`.
 - [ ] `client` on `mcp_tool_call`.
 - [ ] `claude` page kind: page_kind, analytics kinds, signup source,
-  head tags, sitemap, prerender fallback.
+  head tags, sitemap, prerender fallback. **Partly done:** page_kind,
+  analytics kinds, head tags and sitemap. Still open: the signup
+  source (a sign-in from the page is filed as `direct`) and the
+  prerender fallback (crawlers get the page through JavaScript).
 - [ ] `/claude` page with the five sections and the real exchange.
+  **Partly done**, as the documentation page the directory listing
+  needs (spec #109 Phase 3). It is written for OAuth, not the personal
+  URL this spec assumed: the address, what to ask, setup, permissions,
+  the tool list, disconnecting and privacy. The copy lives in
+  `public/help/claude.md`, with one real exchange from a prod session
+  (2026-11-12, quotes checked against the transcripts). The "Create your connector" button is dropped: with OAuth
+  there is nothing to create, the reader pastes the address into Claude.
 - [ ] Landing "See how" link. Settings card anchor and `source`
   passthrough.
 - [ ] `docs/analytics.md`: event table, dashboard insights.

@@ -105,7 +105,11 @@ UI_STRINGS = frozenset(
         "Apple Podcasts",
         "Spotify",
         "YouTube",
-        "People in this episode",
+        "In this episode",
+        "People mentioned",
+        "Guest",
+        "Host",
+        "Recurring",
         "Companies mentioned",
         "Products",
         "Topics",
@@ -192,11 +196,13 @@ UI_PATTERNS: Tuple[re.Pattern, ...] = (
 )
 
 _MENTIONED_TITLES = {
-    "person": "People in this episode",
+    "person": "People mentioned",
     "company": "Companies mentioned",
     "product": "Products",
     "topic": "Topics",
 }
+_TAKING_PART_TITLE = "In this episode"
+_ROLE_LABEL = {"guest": "Guest", "host": "Host", "recurring": "Recurring"}
 _RELATED_TITLES = {
     "person": "Often discussed with: people",
     "company": "Often discussed with: companies",
@@ -537,6 +543,28 @@ def _entity_groups(items: List[Dict[str, Any]], titles: Dict[str, str], count: C
     return _join(out)
 
 
+def _taking_part(items: List[Dict[str, Any]]) -> str:
+    """The people who speak in the episode, each with their role and never
+    folded (the page's TakingPart)."""
+    rows = [
+        el(
+            "li",
+            el("a", text(item["name"]), href=entity_path(item)),
+            " ",
+            el("span", text(_ROLE_LABEL[item["role"]]), class_="ts-related-count"),
+        )
+        for item in items
+    ]
+    if not rows:
+        return ""
+    return el(
+        "section",
+        el("h3", text(_TAKING_PART_TITLE), class_="ts-rail-label"),
+        el("ul", *rows, class_="ts-related"),
+        class_="ts-rail-module",
+    )
+
+
 def _section(heading: str, body: str, level: str = "h2", **attrs: Any) -> str:
     cls = "ts-h2" if level == "h2" else "ts-rail-label"
     return el("section", el(level, text(heading), class_=cls), body, **attrs)
@@ -636,7 +664,10 @@ def episode_fallback(state: "AppState", podcast_slug: str, episode_slug: str, he
                     class_="ts-section",
                 )
             )
-        rail.append(_entity_groups(quotes["mentioned"], _MENTIONED_TITLES, lambda item: f"{item['count']}×"))
+        taking_part = [item for item in quotes["mentioned"] if item.get("role") in _ROLE_LABEL]
+        only_mentioned = [item for item in quotes["mentioned"] if item.get("role") not in _ROLE_LABEL]
+        rail.append(_taking_part(taking_part))
+        rail.append(_entity_groups(only_mentioned, _MENTIONED_TITLES, lambda item: f"{item['count']}×"))
 
     if episode["description"]:
         rail.append(

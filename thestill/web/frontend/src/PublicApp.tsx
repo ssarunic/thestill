@@ -9,6 +9,7 @@ import PublicPageViews from './analytics/PublicPageViews'
 import { EntityPage, Episode, Landing, Show, TopChart } from './pages/public/registry'
 
 const Legal = lazy(() => import('./pages/public/Legal'))
+const Help = lazy(() => import('./pages/public/Help'))
 const NotFound = lazy(() => import('./pages/public/NotFound'))
 const Login = lazy(() => import('./pages/Login'))
 
@@ -39,6 +40,7 @@ export default function PublicApp() {
           ['/entities/:entityType/:slug', <EntityPage />],
           ['/terms', <Legal doc="terms" />],
           ['/privacy', <Legal doc="privacy" />],
+          ['/claude', <Help doc="claude" />],
         ].map(([path, element]) => (
           <Route key={path as string} path={path as string} element={<Suspense fallback={null}>{element}</Suspense>} />
         ))}

@@ -67,6 +67,7 @@ from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
 from ..services.platform_link_service import PlatformLinkService
 from ..services.refresh_on_open import RefreshOnOpenService
+from ..services.sync_track_service import SyncTrackService
 from ..services.transcript_edit_service import TranscriptEditService
 from ..utils.config import (
     Config,
@@ -139,6 +140,10 @@ from .services import HealthService
 from .task_manager import get_task_manager
 
 logger = structlog.get_logger(__name__)
+
+
+#: Spec #116 — the reader's service worker, at the root so its scope is the site.
+SERVICE_WORKER_FILE = "sw.js"
 
 
 class CachedStaticFiles(StaticFiles):
@@ -448,6 +453,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_delivery_repository=briefing_delivery_repository,
         briefing_delivery_service=briefing_delivery_service,
         pending_ops_repository=pending_ops_repository,
+        sync_track_service=SyncTrackService(config, repos.sync_track),
         platform_link_service=platform_link_service,
         entity_repository=entity_repository,
         link_decision_repository=repos.link_decision,
@@ -802,6 +808,9 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         BodySizeLimitMiddleware,
         default_limit=config.max_webhook_body_bytes,
         route_limits=[("/webhook/", config.max_webhook_body_bytes)],
+        # Spec #116: a drift report is a handful of spans. The cap has to
+        # sit here, before FastAPI reads and parses the body.
+        suffix_limits=[("/drift-outcome", api_podcasts.DRIFT_OUTCOME_MAX_BYTES)],
     )
 
     # CORS: origins come from ALLOWED_ORIGINS env,
@@ -1023,7 +1032,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             if full_path and full_path != "index.html":
                 candidate = (static_dir / full_path).resolve()
                 if candidate.is_file() and static_root in candidate.parents:
-                    return FileResponse(str(candidate), headers={"Cache-Control": "public, max-age=86400"})
+                    # Spec #116: the service worker must be re-checked on
+                    # every load, or a broken one stays in browsers for as
+                    # long as it is cached. Everything else here is static.
+                    cache = "no-cache" if full_path == SERVICE_WORKER_FILE else "public, max-age=86400"
+                    return FileResponse(str(candidate), headers={"Cache-Control": cache})
+                if full_path == SERVICE_WORKER_FILE:
+                    # Never answer the worker's URL with the HTML shell.
+                    return PlainTextResponse("Not found", status_code=404, headers={"Cache-Control": "no-cache"})
             no_cache = {"Cache-Control": "no-cache, must-revalidate"}
             state = request.app.state.app_state
             renderer = get_shell_renderer(state)

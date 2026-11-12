@@ -124,6 +124,8 @@ are optional.
 |----------|-------------|---------|
 | `MAX_EPISODES_PER_PODCAST` | Limit episodes tracked per podcast | - (no limit) |
 | `DELETE_AUDIO_AFTER_PROCESSING` | Delete audio after each stage | `false` |
+| `SYNC_TRACKS_ENABLED` | Write a sync track for each transcribed episode (see [spec #116](../specs/116-timestamp-drift-alignment.md)) | `true` |
+| `DRIFT_ALIGNMENT_ENABLED` | Admins' browsers align a transcript with the copy of the audio they are served and report the result (see [spec #116](../specs/116-timestamp-drift-alignment.md), Phase 2). On by default; set to `false` to turn it off. Changes no playback yet | `true` |
 | `REFRESH_MAX_WORKERS` | Parallel workers for `thestill refresh` (see [spec #19](../specs/19-refresh-performance.md)) | `1` |
 | `REFRESH_MAX_PER_HOST` | Cap on concurrent HTTP fetches per host during refresh | `2` |
 | `REFRESH_QUARANTINE_PROBE_INTERVAL_SECONDS` | Spec #60: how long a `feed_gone`/`invalid_content` quarantine sits before one automatic re-probe (`auth_required`/`blocked_unsafe` are never auto-probed) | `604800` (weekly) |
@@ -143,6 +145,21 @@ Prevents database from becoming unmanageable for podcasts with hundreds of episo
 - First refresh: Discovers 50 most recent episodes
 - After processing 10: Next refresh keeps those 10 processed + 40 most recent unprocessed
 - Result: Always stays at ≤50 total episodes per podcast
+
+### SYNC_TRACKS_ENABLED
+
+A sync track is a small file (about 36 KB per hour of audio) of landmarks
+taken from the exact audio an episode was transcribed from. It lets the
+reader correct transcript timestamps when a listener's copy carries
+different ads. It is written when an episode is transcribed:
+
+- With local transcription, from the downloaded file.
+- With Dalston's URL fetch, from the original audio Dalston stores for the
+  job. This reads the audio once more from Dalston after each job.
+
+Only MP3 audio gets a track. A failure to write one is logged as
+`sync_track_failed` and never fails the episode. Set to `false` to stop
+writing new tracks; existing ones are kept.
 
 ### DELETE_AUDIO_AFTER_PROCESSING
 

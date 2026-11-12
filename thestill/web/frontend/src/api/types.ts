@@ -541,6 +541,10 @@ export interface AnnotatedTranscriptDump {
   // the live audio element's duration to detect DAI-induced drift.
   // `null` for legacy transcripts cleaned before we recorded this.
   transcript_source_duration_s: number | null
+  // Spec #116 — the sync track the reader may use to correct drifted
+  // timestamps: fetch `.../sync-track/{generation}`. `null` (or absent on
+  // older payloads) when the episode has none that matches this transcript.
+  sync_track_generation?: string | null
   // Provenance of the LLM cleaning run (provider, model, prompt
   // revision). `null` for sidecars written before provenance recording.
   cleaning: CleaningProvenance | null
@@ -1263,6 +1267,10 @@ export interface EpisodeEntity {
   mention_count: number
   first_mention_ms: number
   speaker_kind: SpeakerKind
+  // On this episode (a guest, or a host / recurring voice with a segment
+  // of their own), not merely the show's host being talked about. Absent
+  // from a payload cached before the field existed.
+  takes_part?: boolean
   // Spec #28 §5.2 — composite relevance score; see backend
   // ``_compute_salience``. Used to sort the rail; the frontend can
   // also use it to filter very-low-salience entries.

@@ -18,14 +18,14 @@ Podcast API endpoints for Thestill web UI.
 Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
 from ...models.user import User
-from ...services.analytics_sink import Follow, Unfollow, follow_source
+from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
@@ -458,6 +458,16 @@ def get_episode_transcript_by_slugs(
     segmented = state.podcast_service.get_segmented_transcript_for_episode(episode)
     if segmented is not None:
         response_payload["segments"] = segmented.annotated.model_dump()
+        # Spec #116 — only name a sync track the reader may use: the one
+        # this cleaned transcript was stamped with, while it is still the
+        # episode's current track. Otherwise null, so the client does not
+        # fetch one.
+        sync_tracks = getattr(state, "sync_track_service", None)
+        response_payload["segments"]["sync_track_generation"] = (
+            sync_tracks.usable_generation(episode.id, segmented.annotated.sync_track_generation)
+            if sync_tracks is not None
+            else None
+        )
         # Spec #69 Phase 6.3 — don't double-ship the transcript: when the
         # segmented structure is present the reader renders from it and
         # never reads ``content`` (the markdown is the segments' text again,
@@ -468,6 +478,170 @@ def get_episode_transcript_by_slugs(
 
     # Write-once resource: content-hash ETag + revalidation (Phase 6.2).
     return etag_json_response(request, response_payload)
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}")
+def get_episode_sync_track(
+    podcast_slug: str,
+    episode_slug: str,
+    generation: str,
+    state: AppState = Depends(get_app_state),
+) -> Response:
+    """The episode's sync track (spec #116), as the binary file.
+
+    ``generation`` comes from ``segments.sync_track_generation`` of the
+    transcript payload. A generation that is not the episode's current one
+    is a 404, so a track can never be paired with a transcript it does not
+    describe; and because the generation is in the URL, the response is
+    immutable and cached for a year.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    _, episode = result
+
+    sync_tracks = getattr(state, "sync_track_service", None)
+    payload = sync_tracks.read_current(episode.id, generation) if sync_tracks is not None else None
+    if payload is None:
+        not_found("Sync track", f"{podcast_slug}/{episode_slug}/{generation}")
+    return Response(
+        content=payload,
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
+
+
+#: A drift report is a handful of spans; anything larger is not one. Enforced
+#: by ``BodySizeLimitMiddleware`` (see ``app.py``), before the body is read.
+DRIFT_OUTCOME_MAX_BYTES = 4096
+
+
+class DriftSpan(BaseModel):
+    """Transcript time ``[src_start, src_end]`` plays ``offset`` seconds
+    later in the listener's copy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    src_start: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+    src_end: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+    offset: float = Field(ge=-86400, le=86400, allow_inf_nan=False)
+
+
+class DriftOutcomeRequest(BaseModel):
+    """What the browser made of one attempt to align an episode (spec #116
+    section 7.2). Nothing here identifies the listener."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    generation: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    outcome: DriftOutcome
+    spans: List[DriftSpan] = Field(default_factory=list, max_length=64)
+    gaps_confirmed_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    unresolved_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    listener_ads_s: Optional[float] = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    coverage: Optional[float] = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    anchors_total: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_hit: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_inlier: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    anchors_outlier: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    verify_length_ok: Optional[bool] = None
+    verify_ranges_checked: Optional[int] = Field(default=None, ge=0, le=100_000)
+    verify_ranges_matched: Optional[int] = Field(default=None, ge=0, le=100_000)
+    # How the service worker stood for this play; says why a check is missing.
+    sw_state: Optional[DriftSwState] = None
+    # 0 for a play's first report; higher when a later range of the same play
+    # changed its verdict.
+    revision: int = Field(default=0, ge=0, le=10)
+    # Whether the browser put the map in force in its player for this play.
+    applied: bool = False
+    # A host name only, never a URL: no scheme, path, query or port.
+    audio_host: Optional[str] = Field(default=None, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
+    audio_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
+    fetched_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
+    fetch_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    fit_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    # Family and major version, for example "Safari 27".
+    browser: Optional[str] = Field(default=None, max_length=40, pattern=r"^[A-Za-z][A-Za-z ]{0,30} \d{1,4}$")
+    error: Optional[str] = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_ .:-]+$")
+
+
+@router.post("/{podcast_slug}/episodes/{episode_slug}/drift-outcome")
+def report_drift_outcome(
+    podcast_slug: str,
+    episode_slug: str,
+    body: DriftOutcomeRequest,
+    request: Request,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+) -> dict:
+    """Record what a browser made of aligning this episode (spec #116).
+
+    The report is logged as ``drift_map_reported`` and its summary goes to
+    usage analytics as ``drift_alignment_result``. It changes nothing: the
+    map itself lives in the browser. A report for a generation that is not
+    the episode's current track is still logged, marked as stale, because a
+    reader can hold an older transcript open across a re-transcription.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    podcast, episode = result
+
+    sync_tracks = getattr(state, "sync_track_service", None)
+    current = sync_tracks.usable_generation(episode.id, body.generation) if sync_tracks is not None else None
+
+    fields = body.model_dump(exclude={"generation", "spans"})
+    spans = [span.model_dump() for span in body.spans]
+    max_offset_s = max((abs(span.offset) for span in body.spans), default=0.0)
+    # An applied map whose ranges did not all match the fetched copy means
+    # the checks of section 4 step 6 let a wrong map through.
+    unmatched = (
+        body.verify_ranges_checked is not None
+        and body.verify_ranges_matched is not None
+        and body.verify_ranges_matched < body.verify_ranges_checked
+    )
+    # A map may only be in force when both checks passed. Reported otherwise,
+    # the browser moved seeks on a map it could not tie to the audio playing.
+    applied_unverified = body.applied and (
+        body.outcome != "aligned" or body.verify_length_ok is not True or not body.verify_ranges_checked or unmatched
+    )
+    verification_bug = (body.outcome == "aligned" and unmatched) or applied_unverified
+    log = logger.error if verification_bug else logger.info
+    log(
+        "drift_map_reported",
+        episode_id=episode.id,
+        podcast_id=podcast.id,
+        generation=body.generation,
+        generation_current=current is not None,
+        spans=spans,
+        span_count=len(spans),
+        max_offset_s=round(max_offset_s, 3),
+        **fields,
+    )
+    capture_event(
+        state,
+        request,
+        DriftAlignmentResult(
+            outcome=body.outcome,
+            audio_host=body.audio_host,
+            browser=body.browser,
+            span_count=len(spans),
+            max_offset_s=round(max_offset_s, 1),
+            coverage=body.coverage,
+            anchors_total=body.anchors_total,
+            anchors_hit=body.anchors_hit,
+            verify_length_ok=body.verify_length_ok,
+            verify_ranges_checked=body.verify_ranges_checked,
+            verify_ranges_matched=body.verify_ranges_matched,
+            sw_state=body.sw_state,
+            revision=body.revision,
+            applied=body.applied,
+            fetch_ms=body.fetch_ms,
+            fit_ms=body.fit_ms,
+        ),
+        user=user,
+    )
+    return api_response({"accepted": True})
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/summary")
