@@ -9,6 +9,9 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /** Pill radius — the primary action of a detail page (spec #76 §3.2). */
   pill?: boolean
   isLoading?: boolean
+  /** Shows the spinner in place of the icon but stays pressable: a play
+   * button waiting for audio, where a second press cancels the wait. */
+  busy?: boolean
   icon?: React.ReactNode
   /** Hide label on mobile, show only icon */
   iconOnlyMobile?: boolean
@@ -61,6 +64,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       size = 'md',
       pill = false,
       isLoading = false,
+      busy = false,
       icon,
       iconOnlyMobile = false,
       disabled,
@@ -76,10 +80,11 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         disabled={isDisabled}
+        aria-busy={busy || isLoading || undefined}
         className={buttonClassName({ variant, size, pill, disabled: isDisabled, className })}
         {...props}
       >
-        {isLoading ? (
+        {isLoading || busy ? (
           <LoadingSpinner size={size} />
         ) : icon ? (
           <span className={iconSizes[size]}>{icon}</span>

@@ -31,6 +31,9 @@ function describeMediaError(code: number | undefined): string {
   }
 }
 
+/** Said when a source never loaded at all: refused, unreachable, or silent. */
+export const AUDIO_NOT_LOADED_MESSAGE = "Couldn't load the audio. Try again in a moment."
+
 // A late resume seek only moves a source that has barely started.
 const LATE_SEEK_WINDOW_SECONDS = 5
 
@@ -48,6 +51,7 @@ const HLS_MEDIA_ERROR = 'mediaError'
 // element keeps its source across the swap, the engine's own state would not.
 export interface NativeEngineState {
   url: string | null
+  elementUrl?: string | null
   pendingSeek: number | null
   userSeeked: boolean
   // Spec #113 — the hls.js instance feeding the element, or true when an
@@ -95,6 +99,12 @@ export class NativeEngine implements PlaybackEngine {
   // Last URL assigned. Also the error-suppression guard: clearing src
   // during unload() fires a spurious error event in some browsers.
   private url: string | null = null
+  // What the element loads for `url`, when it is not `url` itself.
+  private elementUrl: string | null = null
+  // Counts every change of what the listener asked for (a load, a play, a
+  // pause, an unload). A restart the engine makes by itself belongs to the
+  // request it was made under and to no later one.
+  private request = 0
   // Spec #116 — the URL currently loaded with `crossorigin`, and whether a
   // play was asked for on it (to resume after the fallback reload).
   private crossOriginUrl: string | null = null
@@ -139,6 +149,7 @@ export class NativeEngine implements PlaybackEngine {
     this.events = events
     if (carried) {
       this.url = carried.url
+      this.elementUrl = carried.elementUrl ?? null
       this.pendingSeek = carried.pendingSeek
       this.userSeeked = carried.userSeeked
       this.timeline = carried.timeline ?? null
@@ -206,7 +217,14 @@ export class NativeEngine implements PlaybackEngine {
             this.reloadWithoutCrossOrigin()
             return
           }
-          this.events.onError(describeMediaError(this.el.error?.code))
+          // Before any of the file arrived, the code says little: a refused
+          // or unreachable address is reported as an unsupported format.
+          const neverLoaded = this.el.readyState === 0 && this.longestDuration === 0
+          // A source that was only being preloaded (a session restored on
+          // page load): nobody asked for audio yet, so nobody is told. The
+          // next press on Play loads it afresh (see play()).
+          if (neverLoaded && !this.wantsPlay) return
+          this.events.onError(neverLoaded ? AUDIO_NOT_LOADED_MESSAGE : describeMediaError(this.el.error?.code))
         },
       ],
       [
@@ -247,6 +265,8 @@ export class NativeEngine implements PlaybackEngine {
     this.pendingSeek = opts?.seekTo ?? null
     this.userSeeked = false
     this.url = source.url
+    this.elementUrl = source.elementUrl ?? null
+    this.request++
     this.wantsPlay = false
     this.longestDuration = 0
     this.lastSeekTarget = null
@@ -277,7 +297,7 @@ export class NativeEngine implements PlaybackEngine {
       if (this.el.hasAttribute('src')) this.clearSrc()
       this.attachHls(source.url)
     } else {
-      this.el.src = source.url
+      this.el.src = this.elementUrl ?? source.url
     }
     const rate = opts?.rate
     if (rate != null && Number.isFinite(rate) && rate > 0) {
@@ -300,9 +320,22 @@ export class NativeEngine implements PlaybackEngine {
     const position = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
     this.el.removeAttribute('crossorigin')
     this.pendingSeek = position
-    this.el.src = url
+    this.el.src = this.elementUrl ?? url
     // A held start stays paused; it is started when the hold ends.
-    if (this.wantsPlay && !this.hold) void this.el.play().catch(() => {})
+    if (this.wantsPlay && !this.hold) this.restart()
+  }
+
+  // Start again by itself after a reload. If that start is refused, the
+  // app must not go on showing playback that is not happening; unless the
+  // listener has asked for something else meanwhile (a new source aborts
+  // this start, and its rejection is no news about the new one).
+  private restart(): void {
+    const request = this.request
+    void this.el.play().catch(() => {
+      if (this.request !== request) return
+      this.wantsPlay = false
+      this.events.onPause()
+    })
   }
 
   /**
@@ -331,8 +364,8 @@ export class NativeEngine implements PlaybackEngine {
     this.recoveredAt = at
     this.lastSeekTarget = null
     this.pendingSeek = at
-    this.el.src = url
-    if (this.wantsPlay) void this.el.play().catch(() => {})
+    this.el.src = this.elementUrl ?? url
+    if (this.wantsPlay) this.restart()
     else this.events.onPause()
   }
 
@@ -340,6 +373,8 @@ export class NativeEngine implements PlaybackEngine {
   // it is the one stable media node (spec #61 invariant 2).
   unload(): void {
     this.detachHls()
+    this.elementUrl = null
+    this.request++
     this.el.pause()
     this.clearSrc()
     this.el.removeAttribute('crossorigin')
@@ -354,6 +389,7 @@ export class NativeEngine implements PlaybackEngine {
   }
 
   play(): Promise<void> {
+    this.request++
     this.wantsPlay = true
     // A held start that was paused before its map arrived is held again on
     // resume: still silent, with a fresh cap on the wait. (A hold that was
@@ -401,6 +437,12 @@ export class NativeEngine implements PlaybackEngine {
         )
       })
     }
+    // A source that failed to load stays failed: play() on it is refused
+    // without another request. Load it afresh, so that "try again" does.
+    if (this.el.error && this.url !== null && this.hls === null) {
+      this.pendingSeek = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
+      this.el.src = this.elementUrl ?? this.url
+    }
     return this.el.play()
   }
 
@@ -408,6 +450,7 @@ export class NativeEngine implements PlaybackEngine {
     // Also cancels a play() still waiting on an hls.js attach — e.g.
     // playYouTube() pausing this engine must not have it start later.
     this.deferredPlay++
+    this.request++
     this.wantsPlay = false
     // The asked-for time of a held start is kept, so a map that arrives
     // meanwhile still moves to it.
@@ -578,6 +621,18 @@ export class NativeEngine implements PlaybackEngine {
     return this.timeline !== null
   }
 
+  /** Whether the element has audio to play right now (it is not waiting
+   * on the network): a start accepted in this state is already under way. */
+  canPlayNow(): boolean {
+    return this.el.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+  }
+
+  /** Whether any of the source has arrived: metadata or more, or a clock
+   * that has moved off zero. */
+  hasLoadedAnything(): boolean {
+    return this.el.readyState > 0 || this.el.currentTime > 0
+  }
+
   // Spec #90 — apply a resume position learned after the source was
   // assigned (a parallel fetch for surfaces whose payload had none). Never
   // after a user seek on this source. Otherwise, before metadata it replaces
@@ -672,6 +727,7 @@ export class NativeEngine implements PlaybackEngine {
     this.deferredPlay++ // a destroyed engine never starts playback
     return {
       url: this.url,
+      elementUrl: this.elementUrl,
       pendingSeek: this.pendingSeek,
       userSeeked: this.userSeeked,
       hls,

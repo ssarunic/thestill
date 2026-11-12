@@ -254,4 +254,20 @@ describe('MiniPlayer (spec #71)', () => {
     await userEvent.click(screen.getByRole('link', { name: 'Show video' }))
     expect(screen.getByTestId('location')).toHaveTextContent(`${episodePath}|/inbox`)
   })
+
+  it('says so in the bar when the audio fails to load, and shows the wait in the play button', async () => {
+    renderPlayer()
+    act(() => ctx.play(track))
+    const video = document.querySelector('video') as HTMLVideoElement
+    // Pressed, no audio yet: the button shows it is waiting and can still be pressed.
+    expect(screen.getByRole('button', { name: 'Pause' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeEnabled()
+    expect(screen.queryByTestId('mini-player-error')).toBeNull()
+
+    act(() => {
+      video.dispatchEvent(new Event('error'))
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load the audio. Try again in a moment.")
+    expect(screen.getByRole('button', { name: 'Play' })).not.toHaveAttribute('aria-busy')
+  })
 })

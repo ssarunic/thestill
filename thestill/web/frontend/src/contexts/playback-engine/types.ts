@@ -46,6 +46,10 @@ export interface EngineSource {
   // service worker can read what the element is served. Only ever set for
   // a host known to allow it; the engine reloads without it on failure.
   crossOrigin?: boolean
+  // Native only: the address the element itself loads, when that is not
+  // `url` (an `http` enclosure played through our `https` redirect, see
+  // `elementAudioUrl`). `url` stays the source's identity everywhere else.
+  elementUrl?: string
 }
 
 export interface LoadOptions {

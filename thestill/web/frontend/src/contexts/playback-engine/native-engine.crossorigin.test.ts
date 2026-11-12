@@ -94,11 +94,19 @@ describe('NativeEngine crossorigin', () => {
     expect(t.onError).not.toHaveBeenCalled()
   })
 
-  it('reports a failure of a plain load as before', () => {
+  it('reports a failure of a plain load once playback was asked for', () => {
+    const t = makeEngine()
+    t.engine.load({ url: URL_A })
+    void t.engine.play()
+    t.fail()
+    expect(t.onError).toHaveBeenCalledTimes(1)
+  })
+
+  it('says nothing when a source that was only preloaded fails', () => {
     const t = makeEngine()
     t.engine.load({ url: URL_A })
     t.fail()
-    expect(t.onError).toHaveBeenCalledTimes(1)
+    expect(t.onError).not.toHaveBeenCalled()
   })
 
   it('drops the attribute when the source is unloaded', () => {

@@ -21,11 +21,13 @@ Provides access to podcasts, episodes, and follow/unfollow functionality.
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
 from ...models.user import User
 from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
+from ...services.audio_address import resolver as audio_address_resolver
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
@@ -509,6 +511,38 @@ def get_episode_sync_track(
         media_type="application/octet-stream",
         headers={"Cache-Control": "private, max-age=31536000, immutable"},
     )
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/audio")
+def get_episode_audio(
+    podcast_slug: str,
+    episode_slug: str,
+    state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
+) -> Response:
+    """Redirect to an ``https`` address of the episode's audio.
+
+    The reader plays an ``http`` enclosure through this address, because a
+    browser will not load ``http`` media into an ``https`` page and not
+    every host survives the browser's own retry over ``https`` (see
+    ``services/audio_address``). Used by Safari, where that retry fails. The audio itself is still fetched by the
+    listener from the publisher's host: this only answers where it is.
+
+    502 when no ``https`` address of the audio can be reached; the player
+    then says that the audio could not be loaded.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    _, episode = result
+
+    # Per listener: one listener keeps one copy of the episode for a whole
+    # play, and the publisher still sees one request per listener.
+    target = audio_address_resolver.playable_url(str(episode.audio_url), listener=str(user.id))
+    if target is None:
+        raise HTTPException(status_code=502, detail="The audio for this episode could not be reached over https.")
+    # Never cached: the address is usually signed and expires.
+    return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
 #: A drift report is a handful of spans; anything larger is not one. Enforced

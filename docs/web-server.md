@@ -55,6 +55,7 @@ Commands below).
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/audio` | GET | 302 to an `https` address of the episode's audio. The reader plays an `http` enclosure through this, since a browser will not load `http` media into an `https` page; the server follows the enclosure's redirects over `https` and answers with the file's address (remembered per listener until shortly before it expires, never stored). Used by Safari, where the browser's own retry over `https` fails. 502 when none can be reached |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}` | GET | Sync track binary for the transcript's `sync_track_generation` (spec #116) |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/drift-outcome` | POST | The browser's report of one attempt to align the transcript with the listener's copy of the audio (spec #116); logged as `drift_map_reported`, at most 4 KB |
 | `/api/episodes/{id}/failure` | GET | Get failure details |
