@@ -19,6 +19,10 @@ The connector address is:
 
 Answers link back to the episode page on thestill.
 
+![Claude answering "What have people on thestill said about AI agents this month? Quote them with timestamps." It used the thestill connector and quoted Nilay Patel on The Vergecast, Harry Stebbings on 20VC and Rory Stewart on The Rest Is Politics, each with the episode date and a linked timestamp.](/help/claude-example.png)
+
+A real answer from Claude, using the connector. Each timestamp opens the episode at that moment.
+
 ## Set it up
 
 You need a thestill account and a Claude plan that supports custom connectors.

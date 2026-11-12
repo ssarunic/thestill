@@ -14,6 +14,8 @@ const MARKDOWN = [
   'See the [Privacy Policy](/privacy) or [Anthropic](https://support.claude.com/x).',
   '',
   'Write to {{contact_email}}. Logs are kept for {{log_retention}}.',
+  '',
+  '![Claude quoting three speakers](/help/claude-example.png)',
 ].join('\n')
 
 function stubFetch(files: Record<string, { ok: boolean; body: string }>) {
@@ -52,6 +54,7 @@ describe('Help (spec #108)', () => {
     expect(await screen.findByRole('heading', { name: 'Use thestill in Claude' })).toBeInTheDocument()
     expect(screen.getByText(`${window.location.origin}/mcp`)).toBeInTheDocument()
     expect(document.querySelector('article')?.textContent).toContain('Write to help@example.test. Logs are kept for 30 days.')
+    expect(screen.getByRole('img', { name: 'Claude quoting three speakers' })).toHaveAttribute('src', '/help/claude-example.png')
     // A draft legal text does not mark the guide as a draft.
     expect(screen.queryByText(/Draft/)).not.toBeInTheDocument()
   })

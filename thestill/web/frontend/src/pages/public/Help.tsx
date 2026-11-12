@@ -46,6 +46,15 @@ export default function Help({ doc }: { doc: HelpDoc }) {
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
+              // Screenshots are wider than the column: scale them to it.
+              img: ({ src, alt }) => (
+                <img
+                  src={src}
+                  alt={alt ?? ''}
+                  loading="lazy"
+                  style={{ maxWidth: '100%', height: 'auto', border: '1px solid var(--outline-variant)', borderRadius: 8 }}
+                />
+              ),
               // Same-site links stay in the app instead of reloading it.
               a: ({ href, children }) =>
                 href?.startsWith('/') ? (

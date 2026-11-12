@@ -302,8 +302,9 @@ personal URL from Settings". Do that only where a directory allows it.
   needs (spec #109 Phase 3). It is written for OAuth, not the personal
   URL this spec assumed: the address, what to ask, setup, permissions,
   the tool list, disconnecting and privacy. The copy lives in
-  `public/help/claude.md`. Still open: the real exchange (a screenshot
-  from a prod session) and the "Create your connector" button.
+  `public/help/claude.md`, with one real exchange from a prod session
+  (2026-11-12, quotes checked against the transcripts). Still open: the
+  "Create your connector" button.
 - [ ] Landing "See how" link. Settings card anchor and `source`
   passthrough.
 - [ ] `docs/analytics.md`: event table, dashboard insights.
