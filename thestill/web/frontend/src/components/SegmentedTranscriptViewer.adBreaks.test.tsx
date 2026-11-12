@@ -140,7 +140,7 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
       await user.click(screen.getByRole('button', { name: /^Show ad text\. Ad break, Navan, Shopify · 0:06/ }))
       const row = screen.getByTestId('ad-break-2')
       expect(row).toHaveAttribute('data-open', 'true')
-      expect(row).toHaveTextContent('From the copy we transcribed.')
+      expect(row).toHaveTextContent('From the copy we transcribed (Navan, Shopify).')
       expect(row).toHaveTextContent('Navan makes travel easy')
       expect(row).toHaveTextContent('Shopify powers your store')
       // The other break stays closed.
@@ -180,6 +180,43 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
       await user.clear(search)
       await screen.findByTestId('ad-break-6')
       expect(screen.getByTestId('ad-break-2')).toHaveAttribute('data-open', 'false')
+    })
+
+    it('has no toggle on a row a search opened, and keeps the reader’s own choice for when the search is cleared', async () => {
+      const user = userEvent.setup()
+      render(ui())
+      // The reader opens the second break themselves, then searches.
+      await user.click(screen.getByRole('button', { name: /^Show ad text\. Ad break, Navan · 0:04/ }))
+      const search = screen.getByRole('searchbox', { name: 'Search transcript' })
+      await user.type(search, 'Navan')
+      await screen.findByText(/makes travel easy/)
+      for (const id of [2, 6]) {
+        const row = screen.getByTestId(`ad-break-${id}`)
+        expect(row).toHaveAttribute('data-open', 'true')
+        expect(row.querySelector('button[aria-expanded]')).toBeNull()
+      }
+      await user.clear(search)
+      await screen.findByRole('button', { name: /^Show ad text\. Ad break, Navan, Shopify/ })
+      expect(screen.getByTestId('ad-break-2')).toHaveAttribute('data-open', 'false')
+      expect(screen.getByTestId('ad-break-6')).toHaveAttribute('data-open', 'true')
+    })
+
+    it('names every sponsor once open, also those the one line leaves out, and in the seek label', async () => {
+      const user = userEvent.setup()
+      const data = transcript()
+      data.segments = [
+        seg({ id: 1, start: 0, end: 10 }),
+        ...['Navan', 'Shopify', 'Acme', 'Globex', 'Initech'].map((sponsor, i) =>
+          seg({ id: 10 + i, start: 10 + i * 10, end: 20 + i * 10, kind: 'ad_break', sponsor, text: `ad ${i}` }),
+        ),
+      ]
+      render(ui({ transcript: data, onSeekRequest: vi.fn() }))
+      expect(text(10)).toBe('Ad break · Navan, Shopify, Acme +2 · 0:50')
+      expect(screen.getByRole('button', { name: 'Seek to 00:10 — Ad break, Navan, Shopify, Acme +2 · 0:50' })).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: /^Show ad text/ }))
+      expect(screen.getByTestId('ad-break-10')).toHaveTextContent(
+        'From the copy we transcribed (Navan, Shopify, Acme, Globex, Initech).',
+      )
     })
 
     it('opens the row for a jump to something inside it, and leaves it closed for a link to a moment', () => {
@@ -287,7 +324,7 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
 
       await user.click(screen.getByRole('button', { name: /^Show ad text\. Ad break, different in your copy · 0:15/ }))
       const row = screen.getByTestId('ad-break-2')
-      expect(row).toHaveTextContent('From the copy we transcribed. Your copy plays other ads here.')
+      expect(row).toHaveTextContent('From the copy we transcribed (Navan, Shopify). Your copy plays other ads here.')
       expect(track).toHaveBeenCalledWith('ad_break_expanded', { state: 'different' })
       fireEvent.click(screen.getByText(/Navan makes travel easy/))
       expect(onSeek).not.toHaveBeenCalled()
@@ -340,6 +377,58 @@ describe('ad breaks as one row (spec #116 §6.1)', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    it('keeps the passage before an ad that sits exactly on a segment boundary, not the one after', () => {
+      // 30 s of the listener's own between the first part (0–20 s) and the
+      // break that follows it, which itself plays as transcribed.
+      const map = new TimelineMap([
+        { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+        { srcStartS: 20, srcEndS: 60, offsetS: 30 },
+      ])
+      player.timelineMap = map
+      player.isPlaying = true
+      player.time = 20 // held on the boundary; a lead would step into the break
+      player.assetTime = 35
+      player.listenerAd = map.listenerAdAt(35)
+      expect(player.listenerAd).toEqual({ startS: 20, endS: 50, srcFromS: 20, srcToS: 20 })
+      render(ui())
+      expect(screen.getByTestId('segment-content-1')).toHaveAttribute('data-active', 'true')
+      const row = screen.getByTestId('ad-break-2')
+      expect(row).toHaveAttribute('data-state', 'same')
+      expect(row).toHaveAttribute('data-active', 'false')
+    })
+
+    it('never makes a break that is absent from the copy the active row', () => {
+      player.isPlaying = true
+      player.time = 45.95 // the lead reaches into the break (46–50 s) that this copy lacks
+      render(ui())
+      expect(screen.getByTestId('ad-break-6')).toHaveAttribute('data-state', 'absent')
+      expect(screen.getByTestId('ad-break-6')).toHaveAttribute('data-active', 'false')
+      expect(screen.getByTestId('segment-content-5')).toHaveAttribute('data-active', 'true')
+    })
+
+    it('counts a post-roll of the listener’s own down to the end of the copy', () => {
+      // Nothing of the transcript after 46 s; the copy runs to 70 s.
+      const map = new TimelineMap(
+        [
+          { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+          { srcStartS: 26, srcEndS: 46, offsetS: 9 },
+        ],
+        [
+          { srcStartS: 20, srcEndS: 26, kind: 'confirmed' },
+          { srcStartS: 46, srcEndS: 60, kind: 'confirmed' },
+        ],
+      )
+      player.timelineMap = map
+      player.assetDuration = 70
+      player.isPlaying = true
+      player.time = 46
+      player.assetTime = 60
+      player.listenerAd = map.listenerAdAt(60)
+      expect(player.listenerAd?.endS).toBe(Infinity)
+      render(ui())
+      expect(text(6)).toBe('Ad playing · 0:10 left')
     })
 
     it('adds no row for an ad that only the listener’s copy has; the passage stays active', () => {

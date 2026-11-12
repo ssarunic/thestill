@@ -68,6 +68,8 @@ export type BreakState =
 // Audio of the listener's own shorter than this is a seam between two
 // spans, not an ad.
 const MIN_LISTENER_AD_S = 1
+// Two spans that meet may leave this much of a break uncovered.
+const SEAM_S = 0.5
 
 export class TimelineMap {
   readonly spans: readonly MapSpan[]
@@ -230,28 +232,42 @@ export class TimelineMap {
 
   /**
    * What became of the transcribed copy's ad break `[startS, endS]`
-   * (transcript time) in this copy. Any overlap with a stretch confirmed
-   * absent makes the whole break different or absent: the row does not say
-   * which part. `assetDurationS` is the copy's length when known; it gives
-   * a post-roll of the listener's own a length.
+   * (transcript time) in this copy. Any part confirmed absent, or any audio
+   * of the copy's own inside the break, makes the whole break different;
+   * the row does not say which part. Its length is then what this copy
+   * plays there: the parts it kept plus its own audio. `assetDurationS` is
+   * the copy's length when known; it gives a post-roll of the listener's
+   * own a length.
    */
   classifyBreak(startS: number, endS: number, assetDurationS?: number | null): BreakState {
-    if (this.spans.some((span) => span.srcStartS <= startS && endS <= span.srcEndS)) return { kind: 'same' }
-    const gap = this.gaps.find((g) => g.kind === 'confirmed' && g.srcStartS < endS && g.srcEndS > startS)
-    if (!gap) return { kind: 'unresolved' }
-    const mid = (gap.srcStartS + gap.srcEndS) / 2
-    let before: MapSpan | undefined
-    let after: MapSpan | undefined
-    for (const span of this.spans) {
-      if (span.srcEndS <= mid) before = span
-      else if (after === undefined && span.srcStartS >= mid) after = span
+    const spans = this.spans
+    let keptS = 0
+    for (const span of spans) keptS += Math.max(0, Math.min(endS, span.srcEndS) - Math.max(startS, span.srcStartS))
+    // The copy's own audio at every seam between spans that lies inside the
+    // break (before the first span and after the last count as seams).
+    let ownS: number | null = 0
+    for (let i = 0; i <= spans.length; i += 1) {
+      const before = i > 0 ? spans[i - 1] : undefined
+      const after = i < spans.length ? spans[i] : undefined
+      const seamFromS = before ? before.srcEndS : 0
+      const seamToS = after ? after.srcStartS : Infinity
+      if (!(seamFromS < endS && seamToS > startS)) continue
+      const own = this.ownAudioBetween(before, after)
+      if (own === null) continue
+      const ownEndS = Number.isFinite(own.endS) ? own.endS : assetDurationS
+      if (ownEndS == null || !Number.isFinite(ownEndS)) ownS = null
+      else if (ownS !== null && ownEndS - own.startS >= MIN_LISTENER_AD_S) ownS += ownEndS - own.startS
     }
-    const own = this.ownAudioBetween(before, after)
-    if (own === null) return { kind: 'absent' }
-    if (Number.isFinite(own.endS)) return { kind: 'different', listenerAdS: own.endS - own.startS }
-    if (assetDurationS == null || !Number.isFinite(assetDurationS)) return { kind: 'different', listenerAdS: null }
-    return assetDurationS - own.startS >= MIN_LISTENER_AD_S
-      ? { kind: 'different', listenerAdS: assetDurationS - own.startS }
-      : { kind: 'absent' }
+    const cut = this.gaps.some((g) => g.kind === 'confirmed' && g.srcStartS < endS && g.srcEndS > startS)
+    if (!cut) {
+      // Part of the break lies outside every span and nothing says it is
+      // absent: the aligner could not tell.
+      if (keptS < endS - startS - SEAM_S) return { kind: 'unresolved' }
+      // Covered, as one span or several that meet, with nothing added.
+      if (ownS === 0) return { kind: 'same' }
+    }
+    if (ownS === null) return { kind: 'different', listenerAdS: null }
+    const playsS = keptS + ownS
+    return playsS >= MIN_LISTENER_AD_S ? { kind: 'different', listenerAdS: playsS } : { kind: 'absent' }
   }
 }

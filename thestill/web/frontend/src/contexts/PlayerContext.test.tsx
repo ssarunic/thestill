@@ -456,6 +456,20 @@ describe('spec #116 §6.1 — the map and the listener’s own ads, for the read
     expect(ctx.timelineMap).toBeNull()
     expect(ctx.listenerAd).toBeNull()
   })
+
+  it('does not leave an ad "playing" when the audio ends inside one', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    tick(video, 25)
+    expect(ctx.listenerAd).not.toBeNull()
+    act(() => {
+      video.dispatchEvent(new Event('ended'))
+    })
+    expect(ctx.listenerAd).toBeNull()
+  })
 })
 
 describe('spec #116 — a start from a transcript time waits for its map', () => {

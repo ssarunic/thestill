@@ -167,9 +167,37 @@ describe('TimelineMap: ads (spec §6.1)', () => {
     expect(noGap.classifyBreak(20, 26)).toEqual({ kind: 'unresolved' })
   })
 
-  it('treats a break that is only partly the same as different', () => {
-    // Two ads, 16–20 kept and 20–26 replaced: any overlap decides.
-    expect(withGap.classifyBreak(16, 26)).toEqual({ kind: 'different', listenerAdS: 15 })
+  it('treats a break that is only partly the same as different, counting what the copy plays there', () => {
+    // Two ads, 16–20 kept and 20–26 replaced by 15 s: 4 s + 15 s.
+    expect(withGap.classifyBreak(16, 26)).toEqual({ kind: 'different', listenerAdS: 19 })
+    // 16–20 kept and 20–26 cut: the kept ad still plays, so not "absent".
+    expect(cut.classifyBreak(16, 26)).toEqual({ kind: 'different', listenerAdS: 4 })
+  })
+
+  it('is the same across two spans that meet, and different when the copy adds an ad between them', () => {
+    const meet = new TimelineMap([
+      { srcStartS: 0, srcEndS: 23, offsetS: 2 },
+      { srcStartS: 23, srcEndS: 60, offsetS: 2 },
+    ])
+    expect(meet.classifyBreak(20, 26)).toEqual({ kind: 'same' })
+    const inserted = new TimelineMap([
+      { srcStartS: 0, srcEndS: 23, offsetS: 0 },
+      { srcStartS: 23, srcEndS: 60, offsetS: 12 },
+    ])
+    expect(inserted.classifyBreak(20, 26)).toEqual({ kind: 'different', listenerAdS: 18 })
+    // An ad of the listener's own just past the break does not touch it.
+    expect(inserted.classifyBreak(10, 23)).toEqual({ kind: 'same' })
+  })
+
+  it('takes a break split by filler (confirmed, unresolved, confirmed) as one replaced break', () => {
+    // What the aligner reports for ad, filler, ad: the filler is not an ad.
+    const split = new TimelineMap(spans, [
+      { srcStartS: 20, srcEndS: 23, kind: 'confirmed' },
+      { srcStartS: 23, srcEndS: 24, kind: 'unresolved' },
+      { srcStartS: 24, srcEndS: 26, kind: 'confirmed' },
+    ])
+    expect(split.classifyBreak(20, 26)).toEqual({ kind: 'different', listenerAdS: 15 })
+    for (let a = 28.5; a < 43; a += 0.5) expect(split.toLogical(a), `a=${a}`).toBeNull()
   })
 
   it('handles a pre-roll and a post-roll, where there is one neighbouring span', () => {

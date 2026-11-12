@@ -626,7 +626,12 @@ first segment's start to the last segment's end.
   every state.
 - A row that is open stays open when its state changes. In Different
   and Absent the line above the text becomes "From the copy we
-  transcribed. Your copy plays other ads here."
+  transcribed. Your copy plays other ads here." The line names every
+  sponsor of the transcribed copy in brackets, so a search for one the
+  row's single line leaves out still shows its match.
+- A row that a search or an entity filter opened has no toggle until
+  that is cleared: there is nothing to hide, and the reader's own
+  choice for the row is kept for afterwards.
 - The state is part of the control's accessible name. It is not
   announced as a live region; a change during playback is not urgent.
 
@@ -841,9 +846,14 @@ from the track header runs the full pass regardless of the profile.
 - **Metered connections.** The full pass downloads the file a second
   time. It is skipped when `navigator.connection.saveData` is set.
 - **A break that is partly the same** (section 6.1): two ads in the
-  transcribed copy, one replaced in the listener's. Any overlap with a
-  confirmed gap makes the whole row Different. The row does not say
-  which part.
+  transcribed copy, one replaced or cut in the listener's. Any overlap
+  with a confirmed gap, or any audio of the copy's own inside the
+  break, makes the whole row Different, and its length is what the copy
+  plays there: the part it kept plus its own audio. The row does not
+  say which part. It is Absent only when the copy plays under 1 s
+  there.
+- **A break across two spans that meet.** Covered by spans with nothing
+  missing and nothing added, it is Same, however many spans cover it.
 - **A break at the very start or end** (pre-roll, post-roll). There is
   only one neighbouring span. A listener-side ad before the first span
   or after the last one counts as the ad "between".

@@ -5,6 +5,7 @@ import { act, render, screen } from '@testing-library/react'
 import { PlayerProvider, usePlayer, type PlayerContextValue, type PlayerTrack } from '../contexts/PlayerContext'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
 import type { AnnotatedSegment } from '../api/types'
+import { TimelineMap } from '../contexts/playback-engine/timeline-map'
 
 const seg = (id: number, start: number, end: number, text: string): AnnotatedSegment =>
   ({ id, start, end, speaker: null, text, kind: 'content', sponsor: null, source_segment_ids: [], source_word_span: null, user_segment_id: null }) as AnnotatedSegment
@@ -113,5 +114,23 @@ describe('NowPlayingKaraokeLine (spec #72 §3)', () => {
     expect(words[1]).toHaveClass('text-gray-900')
     expect(words[2]).toHaveClass('text-gray-400')
     expect(words[1]).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('holds the line an ad of the listener’s own interrupted, without leading into what follows (spec #116 §6.1)', () => {
+    const { video } = renderLine()
+    act(() => ctx.play(track))
+    // This copy plays 30 s of its own between the first and second line.
+    const map = new TimelineMap([
+      { srcStartS: 0, srcEndS: 10, offsetS: 0 },
+      { srcStartS: 10, srcEndS: 40, offsetS: 30 },
+    ])
+    act(() => {
+      ctx.applyTimeline(track.episodeId, track.audioUrl, { map, durationS: 40 })
+    })
+    tickTo(video, 20) // inside the ad: the clock is held at 10 s
+    expect(ctx.listenerAd).not.toBeNull()
+    expect(screen.getByTestId('now-playing-karaoke-line')).toHaveAttribute('data-segment-id', '1')
+    tickTo(video, 41) // back in the episode: 11 s of the transcript
+    expect(screen.getByTestId('now-playing-karaoke-line')).toHaveAttribute('data-segment-id', '2')
   })
 })

@@ -399,6 +399,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         persistenceRef.current?.onEngineEvent('ended')
         setIsPlaying(false)
         setCurrentTime(0)
+        // The audio may end inside a post-roll of the listener's own.
+        setListenerAd(null)
       },
       onAvailableRatesChange: (rates: number[] | null) => setAvailableRates(rates),
     }),
