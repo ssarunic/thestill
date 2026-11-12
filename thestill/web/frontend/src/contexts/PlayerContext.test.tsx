@@ -518,6 +518,35 @@ describe('spec #116 — a start from a transcript time waits for its map', () =>
       expect(ctx.reloadHeldForCheck('ep-audio', audioTrack.audioUrl)).toBe(false)
     })
   })
+
+  it('reloading a paused seek for its check leaves playback paused', () => {
+    const { video } = renderPlayer()
+    setCrossOriginLoadingEnabled(true)
+    act(() => ctx.play(audioTrack))
+    loaded(video)
+    act(() => ctx.pause())
+    act(() => ctx.seek(30, { transcript: true })) // an entity tick, no Play
+    expect(ctx.timelineHold).toBe(true)
+    expect(ctx.isPlaying).toBe(false)
+    playSpy.mockClear()
+
+    setCorsVerdict(audioTrack.audioUrl, 'cors_ok')
+    let reloaded = false
+    act(() => {
+      reloaded = ctx.reloadHeldForCheck('ep-audio', audioTrack.audioUrl)
+    })
+    expect(reloaded).toBe(true)
+    expect(playSpy).not.toHaveBeenCalled()
+    expect(ctx.isPlaying).toBe(false)
+
+    loaded(video)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(stateFor(video).currentTime).toBe(39)
+    expect(stateFor(video).paused).toBe(true)
+    expect(ctx.isPlaying).toBe(false)
+  })
 })
 
 describe('spec #61 §5 — source URL comparison on same-episode play', () => {

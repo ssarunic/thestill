@@ -3,7 +3,7 @@
 // for the admin debug strip. It changes nothing about playback: the map is
 // not verified against the audio element yet (§4 step 6), so it is not
 // applied.
-import { useCallback, useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
 import { reportDriftOutcome } from '../api/client'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer } from '../contexts/PlayerContext'
@@ -32,9 +32,23 @@ export interface DriftAlignmentState {
   check: PlayCheck | null
   /** True while the map is in force in the player (spec §5). */
   applied: boolean
+  /**
+   * A map was made, but this load of the audio cannot be checked against
+   * it (loaded without `crossorigin`, or before the service worker had the
+   * page) and nothing was being held to reload. The next start from a
+   * transcript time is held, and the audio reloaded then and checked.
+   */
+  recheckable: boolean
 }
 
-const IDLE: DriftAlignmentState = { status: 'idle', progress: null, report: null, check: null, applied: false }
+const IDLE: DriftAlignmentState = {
+  status: 'idle',
+  progress: null,
+  report: null,
+  check: null,
+  applied: false,
+  recheckable: false,
+}
 
 // The worker's reports of the element's first responses can trail the
 // alignment by a moment; wait this long before judging the play.
@@ -178,7 +192,8 @@ function keepChecking(
       if (verdict !== reported) applied = settleTimeline(result, check, apply)
       if (signature !== shown) {
         shown = signature
-        publish(key, { ...IDLE, status: 'done', report: result, check, applied })
+        const recheckable = !applied && verdict === 'unverified' && (attempts.get(key)?.recheckable ?? false)
+        publish(key, { ...IDLE, status: 'done', report: result, check, applied, recheckable })
       }
       // A mismatch is final. A verified play can still be found out.
       if (verdict === reported || verdict === 'unverified') return
@@ -220,6 +235,7 @@ function checkThisLoad(
   }
   const conclude = (check: PlayCheck) => {
     const applied = settleTimeline(result, check, hooks.apply)
+    let recheckable = false
     if (!applied) {
       // A start held for this map (spec §4 step 7) gets one more chance to
       // be checkable: the first play on a host loads without crossorigin,
@@ -227,13 +243,18 @@ function checkThisLoad(
       // controls the page. Reloading the held audio fixes both, and the
       // listener hears nothing of it.
       const unverifiable = check.verification === null || check.verification.verdict === 'unverified'
-      if (!reloaded && result.outcome === 'aligned' && unverifiable && hooks.reloadForCheck()) {
-        checkThisLoad(key, audioUrl, result, hooks, firstReport, true)
-        return
+      if (!reloaded && result.outcome === 'aligned' && unverifiable) {
+        if (hooks.reloadForCheck()) {
+          checkThisLoad(key, audioUrl, result, hooks, firstReport, true)
+          return
+        }
+        // Nothing is held (the listener pressed Play, or resumed): a
+        // reload now would be heard. The next held start does it.
+        recheckable = true
       }
       hooks.release()
     }
-    publish(key, { ...IDLE, status: 'done', report: result, check, applied })
+    publish(key, { ...IDLE, status: 'done', report: result, check, applied, recheckable })
     report(result, check, 0, applied)
     keepChecking(key, audioUrl, result, check, hooks)
   }
@@ -343,12 +364,9 @@ export function useDriftAlignment({
   const applyTimeline = player.applyTimeline
   const releaseTimelineHold = player.releaseTimelineHold
   const reloadHeldForCheck = player.reloadHeldForCheck
-  useEffect(() => {
-    if (!key || !isPlaying) return
-    // A refetched transcript is a new object, but the attempt is keyed on
-    // its generation, so it never restarts.
-    if (!transcript || !generation || !audioUrl || !podcastSlug || !episodeSlug) return
-    const hooks: PlayHooks = {
+  const hooks = useMemo<PlayHooks | null>(() => {
+    if (!generation || !audioUrl || !podcastSlug || !episodeSlug) return null
+    return {
       report: (result, check, revision, applied) => {
         // Best effort: a lost report costs one data point.
         void reportDriftOutcome(
@@ -365,6 +383,25 @@ export function useDriftAlignment({
       },
       reloadForCheck: () => (episodeId ? reloadHeldForCheck(episodeId, audioUrl) : false),
     }
+  }, [generation, audioUrl, podcastSlug, episodeSlug, episodeId, applyTimeline, releaseTimelineHold, reloadHeldForCheck])
+
+  // A start is being held on a load that could not be checked when its map
+  // was made: reload it now, checkable, and check it. Once per load.
+  const timelineHold = player.timelineHold
+  useEffect(() => {
+    if (!key || !timelineHold || !hooks || !audioUrl) return
+    const current = attempts.get(key)
+    if (!current || current.status !== 'done' || !current.recheckable || !current.report) return
+    publish(key, { ...current, recheckable: false })
+    if (hooks.reloadForCheck()) checkThisLoad(key, audioUrl, current.report, hooks, false, true)
+    else hooks.release()
+  }, [key, timelineHold, hooks, audioUrl, state])
+
+  useEffect(() => {
+    if (!key || !isPlaying || !hooks) return
+    // A refetched transcript is a new object, but the attempt is keyed on
+    // its generation, so it never restarts.
+    if (!transcript || !generation || !audioUrl || !podcastSlug || !episodeSlug) return
     const earlier = attempts.get(key)
     if (earlier) {
       // Aligned before on this page. If the element has since loaded this
@@ -412,21 +449,22 @@ export function useDriftAlignment({
     audioUrl,
     podcastSlug,
     episodeSlug,
-    episodeId,
-    applyTimeline,
-    releaseTimelineHold,
-    reloadHeldForCheck,
+    hooks,
   ])
 
   // Spec #116 — tell the player whether a start from a transcript time
   // should wait for a map. Yes while one may still come: the episode has a
   // track and this browser can align, and no check of the current load has
-  // ended without a map. A new load of the audio clears that verdict.
+  // ended without a map. A new load of the audio clears that verdict. A
+  // load that could not be checked yet (`recheckable`) still expects one.
   // Not for an HLS stream (once this episode is the one playing and its
   // asset is known): the alignment never runs for one.
   const canAlign = enabled && Boolean(generation) && typeof Worker !== 'undefined' && !(playingThis && isHls)
   const concludedWithoutMap =
-    state.status === 'done' && !state.applied && (state.report?.outcome !== 'aligned' || state.check !== null)
+    state.status === 'done' &&
+    !state.applied &&
+    !state.recheckable &&
+    (state.report?.outcome !== 'aligned' || state.check !== null)
   const expectMap = canAlign && !concludedWithoutMap
   useEffect(() => {
     if (!episodeId) return

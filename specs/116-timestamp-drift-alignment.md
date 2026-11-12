@@ -1038,6 +1038,15 @@ the alignment comes back for a held start that cannot be checked, the
 audio is reloaded once (now with `crossorigin`, under the worker) and
 checked again. The listener hears none of it.
 
+A play that was not held has the same two gaps and nothing to reload
+unheard: the listener pressed Play, or resumed, and is listening. Its map
+is kept and the load is marked as one that can still be checked. The next
+start or seek from a transcript time is held as if no map had been tried,
+and that hold does the reload and the check. Until v1.42.1 such a load
+was given up on ("not applied: could not be checked", seen on production
+for a first play on Flightcast), and every click on it stayed
+uncorrected.
+
 The acceptance test is `tests/drift-alignment.spec.ts`: two real MP3
 copies of one episode with different ads, served from a second origin
 with CORS and Range, in Chromium. With the listener's copy, a click on

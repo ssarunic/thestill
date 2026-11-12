@@ -44,6 +44,9 @@ function appliedText(state: DriftAlignmentState): string {
   if (report.outcome !== 'aligned') return 'Not applied: there is no usable map for this copy.'
   if (!state.check) return 'Not applied yet: checking the playing audio.'
   if (state.check.verification?.verdict === 'mismatch') return 'Not applied: the audio playing is a different copy.'
+  if (state.recheckable) {
+    return 'Not applied yet: this load of the audio cannot be checked. The next click on a paragraph reloads it and checks.'
+  }
   return 'Not applied: the playing audio could not be checked against this map.'
 }
 

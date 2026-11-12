@@ -471,8 +471,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (asked === null) return false
       const source = selectSource(current, 'audio')
       if (source.url !== audioUrl) return false
+      // A held seek made while paused stays paused: the reload must not
+      // turn it into a start.
+      const wantsPlay = native.isPlaying()
       beginSource(source, asked, native.getRate(), true)
-      native.play().catch(() => setIsPlaying(false))
+      if (wantsPlay) native.play().catch(() => setIsPlaying(false))
       return true
     },
     [beginSource],

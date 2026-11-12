@@ -259,6 +259,32 @@ test.describe('the first click on a paragraph', () => {
     expect(outcomes.find((o) => o.applied)).toMatchObject({ outcome: 'aligned', sw_state: 'ok' })
   })
 
+  test('corrects the first paragraph click after a plain Play on a host not seen before', async ({ page }) => {
+    // The listener presses Play: nothing is held, the audio loads without
+    // crossorigin, and the map that is made cannot be checked against it.
+    // The click on a paragraph that follows must still be corrected.
+    const outcomes = await stubEpisode(page, 'listener.mp3')
+    await page.goto(`${EPISODE_PATH}?view=transcript&driftdebug=1`)
+    await page.getByRole('button', { name: /^Play episode/ }).click()
+    const strip = page.getByTestId('drift-debug-strip')
+    await expect(strip).toContainText('The next click on a paragraph reloads it and checks', { timeout: 20_000 })
+
+    await page.evaluate(() => {
+      ;(window as unknown as { __heard: number[] }).__heard = []
+    })
+    await recordWhatIsHeard(page)
+    await page.getByTestId('segment-content-5').click()
+
+    await expect(strip).toContainText('Applied: seeks, the clock and the highlighting follow this map', {
+      timeout: 20_000,
+    })
+    await expect.poll(async () => (await heard(page)).length, { timeout: 10_000 }).toBeGreaterThan(5)
+    // Nothing heard after the click but the clicked paragraph onwards.
+    expect(Math.min(...(await heard(page)))).toBeGreaterThan(38.5)
+    await expect(page.getByTestId('segment-content-5')).toHaveAttribute('data-active', 'true')
+    await expect.poll(() => outcomes.some((o) => o.applied)).toBe(true)
+  })
+
   test('starts where it always did when the copy is the transcribed one', async ({ page }) => {
     const outcomes = await stubEpisode(page, 'transcribed.mp3')
     await page.goto(`${EPISODE_PATH}?view=transcript&driftdebug=1`)
