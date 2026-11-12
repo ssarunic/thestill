@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import AdTag from './AdTag'
 import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
@@ -60,6 +61,7 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
     mediaKind,
     youtubeAvailable,
     setVideoPreference,
+    listenerAd,
   } = usePlayer()
   const currentTime = usePlayerTime()
   const barRef = useRef<HTMLDivElement>(null)
@@ -200,8 +202,12 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
           <Artwork role="rowSm" sources={[track.artworkUrl]} />
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-medium text-ink truncate">{track.title}</span>
-            {track.podcastTitle ? (
-              <span className="block text-xs text-muted truncate">{track.podcastTitle}</span>
+            {track.podcastTitle || listenerAd ? (
+              <span className="flex items-center gap-1.5 text-xs text-muted">
+                {/* Spec #116 §6.1 — an ad of the listener's own copy. */}
+                {listenerAd && <AdTag />}
+                {track.podcastTitle ? <span className="truncate">{track.podcastTitle}</span> : null}
+              </span>
             ) : null}
           </span>
           <span

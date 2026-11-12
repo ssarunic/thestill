@@ -1,4 +1,5 @@
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
+import AdTag from './AdTag'
 import { formatClock } from '../utils/formatClock'
 
 export interface ScrubberTick {
@@ -16,6 +17,8 @@ interface NowPlayingScrubberProps {
   onSeek: (seconds: number) => void
   /** Spec #72 §2 entity ticks (phase 2b); omitted = no tick row. */
   ticks?: ScrubberTick[]
+  /** Spec #116 §6.1 — an ad of the listener's own copy is playing. */
+  adPlaying?: boolean
 }
 
 const REMAINING_KEY = 'thestill:player:remaining'
@@ -26,7 +29,7 @@ const REMAINING_KEY = 'thestill:player:remaining'
  * persisted), and an optional tick row beneath the track. Disabled with
  * `--:--` while the duration is unknown.
  */
-export default function NowPlayingScrubber({ currentTime, duration, onSeek, ticks }: NowPlayingScrubberProps) {
+export default function NowPlayingScrubber({ currentTime, duration, onSeek, ticks, adPlaying = false }: NowPlayingScrubberProps) {
   const [showRemaining, setShowRemaining] = usePersistedBoolean(REMAINING_KEY, false)
   const hasDuration = duration > 0 && Number.isFinite(duration)
   const progress = hasDuration ? Math.min(1, Math.max(0, currentTime / duration)) : 0
@@ -76,7 +79,10 @@ export default function NowPlayingScrubber({ currentTime, duration, onSeek, tick
       )}
 
       <div className="-mt-1 flex items-center justify-between text-xs tabular-nums text-muted">
-        <span>{formatClock(currentTime)}</span>
+        <span className="inline-flex items-center gap-1.5">
+          {formatClock(currentTime)}
+          {adPlaying && <AdTag />}
+        </span>
         <button
           type="button"
           onClick={() => setShowRemaining(!showRemaining)}

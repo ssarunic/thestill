@@ -73,6 +73,7 @@ else.
 | `entity_open` | signed-in app, entity page | `entity_type` |
 | `reader_tab` | signed-in app, episode reader: once per tab shown per episode, the landing tab included | `tab`: `summary` or `transcript` |
 | `read_depth` | signed-in app, episode reader: once per tab and milestone per episode, on scroll, once the tab's content has loaded | `tab`, `percent`: 25, 50, 75 or 100 (the bottom of the viewport within 2% of the end) |
+| `ad_break_expanded` | signed-in app, episode reader: a reader opens an ad break's text with "Show ad text" (spec #116 §6.1); not sent when a search or a jump opens the row | `state`: what the row said: `plain` (no map for this audio), `same`, `different`, `absent` or `unresolved` |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |

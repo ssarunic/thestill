@@ -20,6 +20,7 @@ import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
 import { NativeEngine, type AppliedTimeline, type NativeEngineState } from './playback-engine/native-engine'
+import type { ListenerAd, TimelineMap } from './playback-engine/timeline-map'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { beginAudioLoad } from '../drift/corsVerdict'
 import { isTimelineExpected } from '../drift/expectation'
@@ -178,6 +179,21 @@ export interface PlayerContextValue {
   applyTimeline: (episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => boolean
   // True while a map is in force. Any change of source lifts it.
   timelineApplied: boolean
+  // Spec #116 §6.1 — the map in force for the audio the native engine is
+  // playing (null without one, and on the YouTube engine): the reader asks
+  // it what became of each ad break in this copy.
+  timelineMap: TimelineMap | null
+  // The ad of the listener's own copy that is playing now, if any. The
+  // transcript has no words for it, so the clock stands still meanwhile.
+  // Changes only when an ad starts or ends.
+  listenerAd: ListenerAd | null
+  // Where the audio element itself is (seconds on the listener's copy),
+  // whatever map is in force. Stable; for counting down a `listenerAd`.
+  getAssetTime: () => number
+  // How long the listener's copy itself is, or null until the element
+  // says. Stable. Not `duration` / `nativeDuration`: while a map is in
+  // force those are the transcribed copy's length.
+  getAssetDuration: () => number | null
   // True while a transcript-time start is being held, silent, for its map.
   timelineHold: boolean
   // The reader's word that no map is coming for the held start: play from
@@ -276,6 +292,16 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [pipActive, setPipActive] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [timelineApplied, setTimelineApplied] = useState(false)
+  // Spec #116 §6.1 — the map itself, for the reader's ad rows, and the ad
+  // of the listener's own that is playing. The ref serves the time handler.
+  const [timelineMap, setTimelineMapState] = useState<TimelineMap | null>(null)
+  const timelineMapRef = useRef<TimelineMap | null>(null)
+  const [listenerAd, setListenerAd] = useState<ListenerAd | null>(null)
+  const setTimelineMap = useCallback((map: TimelineMap | null) => {
+    timelineMapRef.current = map
+    setTimelineMapState(map)
+    if (map === null) setListenerAd(null)
+  }, [])
   const [timelineHold, setTimelineHold] = useState(false)
   const [volume, setVolumeState] = useState(1)
   const [muted, setMuted] = useState(false)
@@ -340,6 +366,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onCanPlay: () => setIsLoading(false),
       onTimeUpdate: (seconds: number) => {
         setCurrentTime(seconds)
+        const map = timelineMapRef.current
+        if (map !== null) {
+          const ad =
+            engineKindRef.current === 'native' ? map.listenerAdAt(nativeEngineRef.current?.getElementTime() ?? 0) : null
+          // The same ad on every tick while it plays: keep the identity.
+          setListenerAd((prev) => (prev?.startS === ad?.startS && prev?.endS === ad?.endS ? prev : ad))
+        }
         persistenceRef.current?.onEngineEvent('timeupdate')
       },
       onDurationChange: (seconds: number) => {
@@ -366,6 +399,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         persistenceRef.current?.onEngineEvent('ended')
         setIsPlaying(false)
         setCurrentTime(0)
+        // The audio may end inside a post-roll of the listener's own.
+        setListenerAd(null)
       },
       onAvailableRatesChange: (rates: number[] | null) => setAvailableRates(rates),
     }),
@@ -446,8 +481,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setMediaError(null)
     // The engine drops its map with the old source.
     setTimelineApplied(false)
+    setTimelineMap(null)
     },
-    [],
+    [setTimelineMap],
   )
 
   // Spec #116 — a start or seek to a transcript time waits, silent, for the
@@ -492,8 +528,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (timeline !== null && (engineKindRef.current !== 'native' || renditionRef.current !== 'audio')) return false
     if (!native.setTimeline(audioUrl, timeline)) return false
     setTimelineApplied(timeline !== null)
+    const map = timeline?.map ?? null
+    setTimelineMap(map)
+    // The map may arrive in the middle of an ad; do not wait for a tick.
+    if (map !== null) setListenerAd(map.listenerAdAt(native.getElementTime()))
     return true
-  }, [])
+  }, [setTimelineMap])
 
   // Spec #90 — the persistence layer reads and drives the player through
   // this port. Built over refs and stable callbacks, so it is created once.
@@ -733,9 +773,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setNativeDuration(null)
     setMediaError(null)
     setTimelineApplied(false)
+    setTimelineMap(null)
     setTimelineHold(false)
     setAvailableRates(null)
-  }, [persistence, setEngineKind, setRendition])
+  }, [persistence, setEngineKind, setRendition, setTimelineMap])
 
   const isCurrent = useCallback(
     (episodeId: string) => track?.episodeId === episodeId,
@@ -750,6 +791,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const getCurrentTime = useCallback(() => {
     return currentEngine()?.getCurrentTime() ?? 0
   }, [currentEngine])
+
+  const getAssetTime = useCallback(() => {
+    return engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementTime() ?? 0) : 0
+  }, [])
+
+  const getAssetDuration = useCallback(() => {
+    const seconds = engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementDuration() ?? 0) : 0
+    return seconds > 0 ? seconds : null
+  }, [])
 
   // Spec #61 §5 — "Use audio rendition": a controlled source transition to
   // the other rendition preserving logical position/rate/play state
@@ -1112,6 +1162,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       requestPip,
       applyTimeline,
       timelineApplied,
+      timelineMap: activeEngine === 'native' ? timelineMap : null,
+      listenerAd: activeEngine === 'native' ? listenerAd : null,
+      getAssetTime,
+      getAssetDuration,
       timelineHold,
       releaseTimelineHold,
       reloadHeldForCheck,
@@ -1156,6 +1210,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       requestPip,
       applyTimeline,
       timelineApplied,
+      timelineMap,
+      listenerAd,
+      getAssetTime,
+      getAssetDuration,
       timelineHold,
       releaseTimelineHold,
       reloadHeldForCheck,

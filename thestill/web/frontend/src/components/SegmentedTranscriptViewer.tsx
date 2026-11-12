@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { abovePlayer } from '../constants/layers'
 import { useFollowPlayback } from '../hooks/useFollowPlayback'
@@ -22,6 +23,7 @@ import type {
   WordTimestamp,
 } from '../api/types'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
+import type { BreakState } from '../contexts/playback-engine/timeline-map'
 import {
   useAutoScrollFollow,
   usePersistedBoolean,
@@ -52,12 +54,20 @@ const HIDDEN_KINDS_STORAGE_KEY = 'thestill:transcriptViewer:hiddenKinds'
 type TogglableKind = Exclude<SegmentKind, 'filler' | 'content'>
 
 const TOGGLE_ORDER: TogglableKind[] = ['ad_break', 'music', 'intro', 'outro']
+// Kinds with a pill in the toggle bar. Ads have none (spec #116 §6.1): an
+// ad break is always one collapsed row, opened per row, so a stored
+// `ad_break` entry is read and ignored.
+const PILL_ORDER: TogglableKind[] = ['music', 'intro', 'outro']
 
 // Sentinel for ContentSegment's karaoke rAF hook when karaoke is off
 // for this segment. The hook short-circuits on null words, so this is
 // never read — it's just a stable identity so the effect's deps array
 // doesn't churn between renders.
 const KARAOKE_NOOP_TIME = (): number => 0
+const NOOP_REF = (): void => {}
+// A break and the seam an ad of the listener's own sits in may miss each
+// other by this much (segment times against span times).
+const AD_SEAM_SECONDS = 0.5
 
 const KIND_LABELS: Record<TogglableKind, string> = {
   ad_break: 'Ads',
@@ -162,7 +172,10 @@ interface SegmentedTranscriptViewerProps {
   // When non-null, only segments whose id appears in the set are
   // rendered. Spec §5.2 inline filter bar — pure client-side filter.
   visibleSegmentIds?: Set<number> | null
-  scrollToSegmentId?: { segmentId: number; nonce: number } | null
+  // `reveal`: the jump is to something inside the segment (a mention, a
+  // citation), so an ad break holding it opens. A link to a moment does not
+  // set it and lands on the collapsed row.
+  scrollToSegmentId?: { segmentId: number; nonce: number; reveal?: boolean } | null
   // The router's `location.key`: a link to a moment (`?t=` / `#t=`) acts
   // once per history entry, so Back to the entry does not seek again.
   locationKey?: string
@@ -601,11 +614,222 @@ function ToggleBar({ presentKinds, hiddenKinds, onToggle }: ToggleBarProps) {
   )
 }
 
-// Rows are either a normal segment render or a placeholder for a run of
-// non-matching segments collapsed under a single "N hidden" pill.
+// Spec #116 §6.1 — an ad break: a maximal run of consecutive `ad_break`
+// segments (filler inside a run does not split it). It is one row at all
+// times; a timeline map changes the row's text, never its height.
+interface AdRun {
+  /** The first segment's id: the row's key and scroll target. */
+  id: number
+  memberIds: ReadonlySet<number>
+  /** Playback seconds (segment time + the transcript's offset). */
+  startS: number
+  endS: number
+  /** Distinct sponsors, in order. */
+  sponsors: string[]
+}
+
+function buildAdRuns(segments: ReadonlyArray<AnnotatedSegment>, offset: number): AdRun[] {
+  const runs: AdRun[] = []
+  let i = 0
+  while (i < segments.length) {
+    if (segments[i].kind !== 'ad_break') {
+      i += 1
+      continue
+    }
+    let last = i
+    for (let j = i + 1; j < segments.length; j += 1) {
+      if (segments[j].kind === 'ad_break') last = j
+      else if (segments[j].kind !== 'filler') break
+    }
+    const members = segments.slice(i, last + 1)
+    const sponsors: string[] = []
+    for (const seg of members) {
+      if (seg.sponsor && !sponsors.includes(seg.sponsor)) sponsors.push(seg.sponsor)
+    }
+    runs.push({
+      id: members[0].id,
+      memberIds: new Set(members.map((seg) => seg.id)),
+      startS: members[0].start + offset,
+      endS: members[members.length - 1].end + offset,
+      sponsors,
+    })
+    i = last + 1
+  }
+  return runs
+}
+
+type AdRowState = 'plain' | BreakState['kind']
+
+function formatLength(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  return `${Math.floor(total / 60)}:${(total % 60).toString().padStart(2, '0')}`
+}
+
+const MAX_SPONSORS_SHOWN = 3
+
+/** The row's text after "Ad break": what the listener's copy has there. */
+function adRowDetail(state: AdRowState, run: AdRun, listenerAdS: number | null): string {
+  if (state === 'absent') return 'not in your copy'
+  if (state === 'different') {
+    return listenerAdS === null ? 'different in your copy' : `different in your copy · ${formatLength(listenerAdS)}`
+  }
+  // The sponsors named in the transcribed copy still hold.
+  const shown = run.sponsors.slice(0, MAX_SPONSORS_SHOWN).join(', ')
+  const more = run.sponsors.length > MAX_SPONSORS_SHOWN ? ` +${run.sponsors.length - MAX_SPONSORS_SHOWN}` : ''
+  const parts = [shown + more, formatLength(run.endS - run.startS)].filter(Boolean)
+  if (state === 'unresolved') parts.push('timing approximate')
+  return parts.join(' · ')
+}
+
+/** "0:23 left" for the ad of the listener's own that is playing. The
+ * player clock stands still during it, so this reads the element. */
+function AdCountdown({ endS, getAssetTime }: { endS: number; getAssetTime: () => number }) {
+  const [left, setLeft] = useState(() => Math.max(0, Math.ceil(endS - getAssetTime())))
+  useEffect(() => {
+    const timer = window.setInterval(() => setLeft(Math.max(0, Math.ceil(endS - getAssetTime()))), 500)
+    return () => window.clearInterval(timer)
+  }, [endS, getAssetTime])
+  return <> · {formatLength(left)} left</>
+}
+
+interface AdBreakRowProps {
+  run: AdRun
+  state: AdRowState
+  /** Length of the listener's own ad there (state `different`). */
+  listenerAdS: number | null
+  /** An ad of the listener's own is playing at this break; when it ends
+   * (seconds on the listener's copy), or null if that is not known. */
+  adPlaying: boolean
+  adEndS: number | null
+  getAssetTime: () => number
+  isActive: boolean
+  open: boolean
+  // Open because of a search match or an entity filter, not by the reader:
+  // there is nothing to toggle until that is cleared.
+  forcedOpen: boolean
+  onToggle: (run: AdRun, state: AdRowState, wasOpen: boolean) => void
+  onSeek?: (seconds: number) => void
+  registerRef: (el: HTMLElement | null) => void
+  onCopyTimestamp: (seconds: number) => void
+  searchQuery: string
+  dimmed: boolean
+  /** The break's segments, when open. */
+  children?: ReactNode
+}
+
+const AdBreakRow = memo(function AdBreakRow({
+  run,
+  state,
+  listenerAdS,
+  adPlaying,
+  adEndS,
+  getAssetTime,
+  isActive,
+  open,
+  forcedOpen,
+  onToggle,
+  onSeek,
+  registerRef,
+  onCopyTimestamp,
+  searchQuery,
+  dimmed,
+  children,
+}: AdBreakRowProps) {
+  const style = BLOCK_STYLES.ad_break
+  const panelId = useId()
+  const detail = adRowDetail(state, run, listenerAdS)
+  const title = adPlaying ? 'Ad playing' : 'Ad break'
+  const replaced = state === 'different' || state === 'absent'
+  // A break that is gone from this copy has nothing to seek to.
+  const interactive = seekableProps(
+    `Seek to ${formatTimestamp(run.startS)} — Ad break, ${detail}`,
+    replaced ? undefined : onSeek,
+    run.startS,
+  )
+  const seekableClasses = interactive.onClick ? `cursor-pointer ${style.hoverRing}` : ''
+  return (
+    <div
+      {...interactive}
+      ref={registerRef}
+      data-testid={`ad-break-${run.id}`}
+      data-state={adPlaying ? 'playing' : state}
+      data-active={isActive ? 'true' : 'false'}
+      data-open={open ? 'true' : 'false'}
+      className={`my-3 border-l-4 ${style.border} ${isActive ? style.bgActive : style.bg} rounded-r-md transition-shadow ${dimmed ? 'opacity-70' : ''} ${seekableClasses}`}
+    >
+      {/* One line, fixed height: the text is cut, never wrapped, so the
+          row is the same height in every state and at every width. */}
+      <div className={`flex h-9 items-center gap-3 px-4 ${style.text}`}>
+        <TimestampLink
+          seconds={run.startS}
+          onCopy={onCopyTimestamp}
+          className={`shrink-0 font-mono text-[11px] tabular-nums ${style.accent}`}
+        />
+        <span data-testid={`ad-break-text-${run.id}`} className="min-w-0 flex-1 truncate text-xs">
+          <span className="font-semibold uppercase tracking-wider">{title}</span>
+          {adPlaying ? (
+            adEndS !== null && <AdCountdown endS={adEndS} getAssetTime={getAssetTime} />
+          ) : (
+            <> · {highlightMatches(detail, searchQuery)}</>
+          )}
+        </span>
+        {!forcedOpen && (
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={panelId}
+            aria-label={`${open ? 'Hide' : 'Show'} ad text. ${title}, ${detail}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggle(run, state, open)
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className={`inline-flex min-h-9 min-w-9 shrink-0 items-center justify-center gap-1 rounded px-1.5 text-xs font-medium ${style.accent} hover:text-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400`}
+          >
+            <span className="hidden sm:inline">{open ? 'Hide ad text' : 'Show ad text'}</span>
+            <svg
+              className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
+      {open && (
+        // The segments seek for themselves; a click on one must not also
+        // reach the row and seek to the break's start.
+        <div id={panelId} className="px-4 pb-3" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+          <p className={`mb-1 text-xs ${style.accent}`}>
+            From the copy we transcribed
+            {/* Every sponsor, also those the row's one line leaves out. */}
+            {run.sponsors.length > 0 && <> ({highlightMatches(run.sponsors.join(', '), searchQuery)})</>}.
+            {replaced ? ' Your copy plays other ads here.' : ''}
+          </p>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+})
+
+// Rows are a normal segment render, an ad break (one row for its whole run
+// of segments), or a placeholder for a run of non-matching segments
+// collapsed under a single "N hidden" pill.
 type RenderRow =
   | { type: 'segment'; segment: AnnotatedSegment; expandedFromHidden: boolean }
+  | { type: 'adBreak'; run: AdRun; members: AnnotatedSegment[]; expandedFromHidden: boolean; matched: boolean }
   | { type: 'hidden'; firstId: number; count: number }
+
+/** The id a row scrolls and is cued by, and where it starts. */
+function rowAnchor(row: Exclude<RenderRow, { type: 'hidden' }>): { id: number; start: number } {
+  return row.type === 'adBreak'
+    ? { id: row.run.id, start: row.members[0].start }
+    : { id: row.segment.id, start: row.segment.start }
+}
 
 // Spec #28 §5.2 affordance #2 — `E` toggle persistence key.
 const SHOW_ENTITY_HIGHLIGHTS_STORAGE_KEY = 'thestill:transcript:showEntityHighlights'
@@ -615,7 +839,17 @@ interface ActiveSegmentTrackerProps {
   offset: number
   renderedIdSet: Set<number>
   onActiveChange: (id: number | null) => void
+  // Spec #116 §6.1 — an ad of the listener's own is playing: the clock
+  // stands still at the point it interrupted, and the passage before that
+  // point stays the active one.
+  adPlaying?: boolean
+  // Segments of breaks that are absent from the listener's copy: they
+  // never play, so they are never the active segment.
+  skipIds?: ReadonlySet<number> | null
 }
+
+// How far back from a held clock to look for the passage an ad interrupted.
+const HELD_CLOCK_BACKSTEP_SECONDS = 0.05
 
 /**
  * Spec #69 Phase 7.2 — the only subscriber to the 4Hz player clock.
@@ -633,25 +867,29 @@ export function ActiveSegmentTracker({
   offset,
   renderedIdSet,
   onActiveChange,
+  adPlaying = false,
+  skipIds = null,
 }: ActiveSegmentTrackerProps) {
   const currentTime = usePlayerTime()
   const activeId = useMemo(() => {
     // The lead keeps the segment highlight in step with the karaoke
     // read-word colouring, and lets a new segment's first word lead too
-    // (words only render once their segment is active).
+    // (words only render once their segment is active). Not during an ad
+    // of the listener's own: the clock is held exactly on the boundary the
+    // ad interrupted, and a lead would step over it into what comes after.
     const idx = findActiveSegmentIndex(
       segments,
-      currentTime + HIGHLIGHT_LEAD_SECONDS,
+      adPlaying ? currentTime - HELD_CLOCK_BACKSTEP_SECONDS : currentTime + HIGHLIGHT_LEAD_SECONDS,
       offset,
     )
     if (idx < 0) return null
     for (let i = idx; i >= 0; i -= 1) {
-      if (renderedIdSet.has(segments[i].id)) {
+      if (renderedIdSet.has(segments[i].id) && !skipIds?.has(segments[i].id)) {
         return segments[i].id
       }
     }
     return null
-  }, [segments, currentTime, offset, renderedIdSet])
+  }, [segments, currentTime, offset, renderedIdSet, adPlaying, skipIds])
   useEffect(() => {
     onActiveChange(activeId)
   }, [activeId, onActiveChange])
@@ -768,13 +1006,85 @@ export default function SegmentedTranscriptViewer({
       ? visible.filter((s) => visibleSegmentIds.has(s.id))
       : visible
     return {
-      presentKinds: TOGGLE_ORDER.filter((kind) => present.has(kind)),
+      presentKinds: PILL_ORDER.filter((kind) => present.has(kind)),
       renderedSegments: filtered,
     }
   }, [transcript.segments, showFiller, visibleSegmentIds])
 
-  const { track, getCurrentTime, isPlaying, isLoading } = usePlayer()
+  const { track, getCurrentTime, isPlaying, isLoading, timelineMap, listenerAd, getAssetTime, getAssetDuration } =
+    usePlayer()
   const isCurrentEpisode = !!episodeId && track?.episodeId === episodeId
+
+  // Spec #116 §6.1 — ad breaks, each one row. Built from every segment,
+  // not the rendered ones, so a break is the same row whatever is hidden.
+  const adRuns = useMemo(() => buildAdRuns(transcript.segments, offset), [transcript.segments, offset])
+  const adRunBySegmentId = useMemo(() => {
+    const out = new Map<number, AdRun>()
+    for (const run of adRuns) for (const id of run.memberIds) out.set(id, run)
+    return out
+  }, [adRuns])
+  // What the listener's copy has at each break, once a map is in force for
+  // this episode's audio. Without one every row is plain.
+  const breakMap = isCurrentEpisode ? timelineMap : null
+  const breakStates = useMemo(() => {
+    if (!breakMap) return null
+    // The length of the listener's copy, read when the map arrives: the
+    // player's own duration is the transcribed copy's while a map is set.
+    const assetDurationS = getAssetDuration()
+    const out = new Map<number, BreakState>()
+    for (const run of adRuns) out.set(run.id, breakMap.classifyBreak(run.startS, run.endS, assetDurationS))
+    return out
+  }, [breakMap, adRuns, getAssetDuration])
+  // The break an ad of the listener's own is playing at: the one between
+  // the same two spans. None when the ad is only in the listener's copy.
+  const playingAd = isCurrentEpisode ? listenerAd : null
+  const playingAdRunId = useMemo(() => {
+    if (!playingAd || !breakStates) return null
+    // Only a break this copy replaced: one that plays as transcribed next
+    // to an ad of the listener's own has already had its turn.
+    const run = adRuns.find(
+      (r) =>
+        breakStates.get(r.id)?.kind === 'different' &&
+        r.startS < playingAd.srcToS + AD_SEAM_SECONDS &&
+        r.endS > playingAd.srcFromS - AD_SEAM_SECONDS,
+    )
+    return run?.id ?? null
+  }, [playingAd, adRuns, breakStates])
+  const absentSegmentIds = useMemo(() => {
+    if (!breakStates) return null
+    const out = new Set<number>()
+    for (const run of adRuns) {
+      if (breakStates.get(run.id)?.kind === 'absent') for (const id of run.memberIds) out.add(id)
+    }
+    return out.size > 0 ? out : null
+  }, [breakStates, adRuns])
+  // Rows the reader opened. Search, an entity filter and a jump to
+  // something inside a break open a row too, without being recorded here.
+  const [openAdRuns, setOpenAdRuns] = useState<Set<number>>(() => new Set())
+  const toggleAdRun = useCallback((run: AdRun, state: AdRowState, wasOpen: boolean) => {
+    setOpenAdRuns((prev) => {
+      const next = new Set(prev)
+      if (wasOpen) next.delete(run.id)
+      else next.add(run.id)
+      return next
+    })
+    // Whether anyone reads ad text decides if it stays (spec §6.1).
+    if (!wasOpen) trackEvent('ad_break_expanded', { state })
+  }, [])
+  const revealAdRun = useCallback(
+    (segmentId: number) => {
+      const run = adRunBySegmentId.get(segmentId)
+      if (run) setOpenAdRuns((prev) => (prev.has(run.id) ? prev : new Set(prev).add(run.id)))
+    },
+    [adRunBySegmentId],
+  )
+  // A jump to something inside a segment opens the break that holds it.
+  // Adjusted during render, once per jump (no extra commit).
+  const [revealedNonce, setRevealedNonce] = useState<number | null>(null)
+  if (scrollToSegmentId?.reveal && scrollToSegmentId.nonce !== revealedNonce) {
+    setRevealedNonce(scrollToSegmentId.nonce)
+    revealAdRun(scrollToSegmentId.segmentId)
+  }
 
   // Spec #69 Phase 7.2 — the 4Hz player clock is confined to the
   // ActiveSegmentTracker leaf below. The viewer itself re-renders only
@@ -813,7 +1123,8 @@ export default function SegmentedTranscriptViewer({
   }, [karaokeEnabled, karaokeWords, activeSegmentId])
 
   const follow = useAutoScrollFollow({
-    activeKey: activeSegmentId,
+    // During an ad of the listener's own, the break's row is what plays.
+    activeKey: playingAdRunId ?? activeSegmentId,
     enabled: followPlayback && isCurrentEpisode,
   })
 
@@ -1024,6 +1335,7 @@ export default function SegmentedTranscriptViewer({
         e.preventDefault()
         const target = targetMentions[nextIdx]
         if (onSeekRequest) onSeekRequest(target.startMs / 1000 + offset)
+        revealAdRun(target.segmentId)
         follow.scrollToKey(target.segmentId)
       }
     }
@@ -1038,41 +1350,63 @@ export default function SegmentedTranscriptViewer({
     follow,
     entityHighlightsEnabledProp,
     setEntityHighlightsLocal,
+    revealAdRun,
   ])
 
   const renderRows = useMemo<RenderRow[]>(() => {
-    if (!matchingIds) {
-      return renderedSegments.map((segment) => ({
-        type: 'segment',
-        segment,
-        expandedFromHidden: false,
-      }))
+    // Units first: a segment by itself, or the rendered segments of one ad
+    // break together.
+    const units: { segments: AnnotatedSegment[]; run: AdRun | null }[] = []
+    for (const segment of renderedSegments) {
+      const run = adRunBySegmentId.get(segment.id) ?? null
+      const last = units[units.length - 1]
+      if (run && last && last.run === run) last.segments.push(segment)
+      else units.push({ segments: [segment], run })
     }
+    const toRow = (unit: (typeof units)[number], expandedFromHidden: boolean, matched: boolean): RenderRow =>
+      unit.run
+        ? { type: 'adBreak', run: unit.run, members: unit.segments, expandedFromHidden, matched }
+        : { type: 'segment', segment: unit.segments[0], expandedFromHidden }
+    if (!matchingIds) return units.map((unit) => toRow(unit, false, false))
     const rows: RenderRow[] = []
-    let hidden: AnnotatedSegment[] = []
+    let hidden: typeof units = []
     const flushHidden = () => {
       if (hidden.length === 0) return
-      const firstId = hidden[0].id
+      const firstId = hidden[0].segments[0].id
       if (expandedHiddenGroups.has(firstId)) {
-        for (const seg of hidden) {
-          rows.push({ type: 'segment', segment: seg, expandedFromHidden: true })
-        }
+        for (const unit of hidden) rows.push(toRow(unit, true, false))
       } else {
-        rows.push({ type: 'hidden', firstId, count: hidden.length })
+        rows.push({ type: 'hidden', firstId, count: hidden.reduce((n, unit) => n + unit.segments.length, 0) })
       }
       hidden = []
     }
-    for (const seg of renderedSegments) {
-      if (matchingIds.has(seg.id)) {
+    for (const unit of units) {
+      // A break with a match anywhere in it is shown, open.
+      if (unit.segments.some((segment) => matchingIds.has(segment.id))) {
         flushHidden()
-        rows.push({ type: 'segment', segment: seg, expandedFromHidden: false })
+        rows.push(toRow(unit, false, true))
       } else {
-        hidden.push(seg)
+        hidden.push(unit)
       }
     }
     flushHidden()
     return rows
-  }, [matchingIds, renderedSegments, expandedHiddenGroups])
+  }, [matchingIds, renderedSegments, expandedHiddenGroups, adRunBySegmentId])
+
+  // One ref callback per break, registering its row under every one of
+  // its segments' ids, rendered or not (hidden filler, a filtered-out
+  // segment): a scroll, the active segment, a search match or a mention on
+  // any of them lands on the row. Stable while the transcript is.
+  const adRowRefs = useMemo(() => {
+    const out = new Map<number, (el: HTMLElement | null) => void>()
+    for (const run of adRuns) {
+      const registers = Array.from(run.memberIds, (id) => follow.registerRef(id))
+      out.set(run.id, (el) => registers.forEach((register) => register(el)))
+    }
+    return out
+    // follow is stable from useAutoScrollFollow; intentionally exclude.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adRuns])
 
   // The row the cued moment sits on. When its own segment is not on screen
   // (filler hidden, a search or entity filter), the next row that is. A
@@ -1087,9 +1421,11 @@ export default function SegmentedTranscriptViewer({
     const target = transcript.segments[Math.max(idx, 0)]
     let last: number | null = null
     for (const row of renderRows) {
-      if (row.type !== 'segment') continue
-      if (row.segment.id === target.id || row.segment.start >= target.start) return row.segment.id
-      last = row.segment.id
+      if (row.type === 'hidden') continue
+      const anchor = rowAnchor(row)
+      const holdsTarget = row.type === 'adBreak' ? row.run.memberIds.has(target.id) : row.segment.id === target.id
+      if (holdsTarget || anchor.start >= target.start) return anchor.id
+      last = anchor.id
     }
     return filtered ? null : last
   }, [cuedSeconds, transcript.segments, offset, renderRows, filtered])
@@ -1113,6 +1449,8 @@ export default function SegmentedTranscriptViewer({
           offset={offset}
           renderedIdSet={renderedIdSet}
           onActiveChange={setTrackedSegmentId}
+          adPlaying={playingAd !== null}
+          skipIds={absentSegmentIds}
         />
       )}
       <div className="sticky top-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 py-2 mb-3 bg-white border-b border-gray-100 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1244,8 +1582,96 @@ export default function SegmentedTranscriptViewer({
                 </button>
               )
             }
+            if (row.type === 'adBreak') {
+              const { run, members } = row
+              const adPlaying = playingAdRunId === run.id
+              const breakState = breakStates?.get(run.id)
+              const state: AdRowState = breakState?.kind ?? 'plain'
+              // Open by the reader, by a search match inside it, or by an
+              // entity filter that selected one of its segments.
+              const forcedOpen = row.matched || visibleSegmentIds != null
+              const open = forcedOpen || openAdRuns.has(run.id)
+              const replaced = state === 'different' || state === 'absent'
+              const memberSeek = replaced ? undefined : onSeekRequest
+              const isCuedRow = cuedSeconds !== null && run.id === cuedSegmentId
+              return (
+                <Fragment key={`ad-${run.id}`}>
+                  {isCuedRow && (
+                    <LinkedMomentBar
+                      seconds={cuedSeconds}
+                      onPlay={playCuedMoment}
+                      focusOnArrival={cueNeedsFocus}
+                      onFocused={markCueFocused}
+                    />
+                  )}
+                  <AdBreakRow
+                    run={run}
+                    state={state}
+                    listenerAdS={breakState?.kind === 'different' ? breakState.listenerAdS : null}
+                    adPlaying={adPlaying}
+                    adEndS={
+                      // An ad after the last span ends with the copy.
+                      adPlaying && playingAd ? (Number.isFinite(playingAd.endS) ? playingAd.endS : getAssetDuration()) : null
+                    }
+                    getAssetTime={getAssetTime}
+                    isActive={
+                      adPlaying ||
+                      (playingAdRunId === null && activeSegmentId !== null && run.memberIds.has(activeSegmentId))
+                    }
+                    open={open}
+                    forcedOpen={forcedOpen}
+                    onToggle={toggleAdRun}
+                    onSeek={onSeekRequest}
+                    registerRef={adRowRefs.get(run.id) ?? NOOP_REF}
+                    onCopyTimestamp={handleCopyTimestamp}
+                    searchQuery={searchQuery}
+                    dimmed={row.expandedFromHidden}
+                  >
+                    {open
+                      ? members.map((member) =>
+                          member.kind === 'ad_break' ? (
+                            <BlockSegment
+                              key={member.id}
+                              segment={member}
+                              kind="ad_break"
+                              offset={offset}
+                              isActive={false}
+                              onSeek={memberSeek}
+                              onCopyTimestamp={handleCopyTimestamp}
+                              searchQuery={searchQuery}
+                              dimmed={false}
+                              collapsed={false}
+                              segmentMentions={segmentMentionSets.get(member.id) ?? null}
+                              entityHighlightsEnabled={entityHighlightsEnabled}
+                              onFocusEntity={onFocusEntity}
+                            />
+                          ) : (
+                            <ContentSegment
+                              key={member.id}
+                              segment={member}
+                              offset={offset}
+                              isActive={false}
+                              speakerColor={resolveSpeakerColor(member.speaker, speakerColorMap)}
+                              onSeek={memberSeek}
+                              onCopyTimestamp={handleCopyTimestamp}
+                              searchQuery={searchQuery}
+                              dimmed={false}
+                              isFiller={member.kind === 'filler'}
+                              segmentMentions={segmentMentionSets.get(member.id) ?? null}
+                              entityHighlightsEnabled={entityHighlightsEnabled}
+                              onFocusEntity={onFocusEntity}
+                            />
+                          ),
+                        )
+                      : undefined}
+                  </AdBreakRow>
+                </Fragment>
+              )
+            }
             const { segment, expandedFromHidden } = row
-            const isActive = segment.id === activeSegmentId
+            // During an ad of the listener's own that has a row, that row
+            // is the active one, not the passage the clock is held on.
+            const isActive = playingAdRunId === null && segment.id === activeSegmentId
             const isCued = cuedSeconds !== null && segment.id === cuedSegmentId
             const cueBar = isCued ? (
               <LinkedMomentBar

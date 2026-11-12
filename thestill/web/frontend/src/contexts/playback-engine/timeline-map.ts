@@ -36,6 +36,41 @@ export interface AssetTime {
   approximate: boolean
 }
 
+/**
+ * A stretch of the listener's copy that the transcript has no words for: an
+ * ad only this copy carries (spec §6.1). Times are on the listener's copy.
+ */
+export interface ListenerAd {
+  startS: number
+  /** `Infinity` when it runs past the last span (a post-roll). */
+  endS: number
+  /** The transcript interval it interrupts: between the end of the span
+   * before it and the start of the span after it. */
+  srcFromS: number
+  srcToS: number
+}
+
+/**
+ * What became of an ad break of the transcribed copy in the listener's
+ * (spec §6.1):
+ * - `same`: it plays as transcribed;
+ * - `different`: it is gone and the copy has audio of its own there,
+ *   `listenerAdS` long (null when the length is not known);
+ * - `absent`: it is gone and nothing took its place;
+ * - `unresolved`: the aligner could not tell.
+ */
+export type BreakState =
+  | { kind: 'same' }
+  | { kind: 'different'; listenerAdS: number | null }
+  | { kind: 'absent' }
+  | { kind: 'unresolved' }
+
+// Audio of the listener's own shorter than this is a seam between two
+// spans, not an ad.
+const MIN_LISTENER_AD_S = 1
+// Two spans that meet may leave this much of a break uncovered.
+const SEAM_S = 0.5
+
 export class TimelineMap {
   readonly spans: readonly MapSpan[]
   readonly gaps: readonly SourceGap[]
@@ -142,5 +177,97 @@ export class TimelineMap {
     }
     // Before the first span (a pre-roll): wait at its start.
     return held ?? this.spans[0]?.srcStartS ?? a
+  }
+
+  /**
+   * The copy's own audio between two neighbouring spans (either may be
+   * missing: before the first span, after the last), on the copy's clock.
+   * It is what `toLogical` answers null for: past the transcript audio
+   * joined to `before`, short of the transcript audio joined to `after`.
+   */
+  private ownAudioBetween(before: MapSpan | undefined, after: MapSpan | undefined): ListenerAd | null {
+    const fromS = before ? before.srcEndS : 0
+    const toS = after ? after.srcStartS : Infinity
+    // Transcript audio joined to `before` runs until the next span or the
+    // first stretch that is absent from this copy.
+    let startS = 0
+    if (before) {
+      let reach = toS
+      for (const gap of this.gaps) {
+        if (gap.kind === 'confirmed' && gap.srcEndS > before.srcEndS) reach = Math.min(reach, Math.max(gap.srcStartS, before.srcEndS))
+      }
+      startS = reach + before.offsetS
+    }
+    // Transcript audio joined to `after` starts at the previous span or
+    // past the last absent stretch.
+    let endS = Infinity
+    if (after) {
+      let reach = fromS
+      for (const gap of this.gaps) {
+        if (gap.kind === 'confirmed' && gap.srcStartS < after.srcStartS && gap.srcEndS > fromS) {
+          reach = Math.max(reach, Math.min(gap.srcEndS, after.srcStartS))
+        }
+      }
+      endS = reach + after.offsetS
+    }
+    if (endS - startS < MIN_LISTENER_AD_S) return null
+    return { startS, endS, srcFromS: fromS, srcToS: toS }
+  }
+
+  /** The ad of the listener's own that is playing at audio time `a`, if any. */
+  listenerAdAt(a: number): ListenerAd | null {
+    if (this.spans.length === 0) return null
+    let before: MapSpan | undefined
+    let after: MapSpan | undefined
+    for (const span of this.spans) {
+      const start = span.srcStartS + span.offsetS
+      const end = span.srcEndS + span.offsetS
+      if (start <= a && a <= end) return null
+      if (end < a) before = span
+      else if (after === undefined) after = span
+    }
+    const own = this.ownAudioBetween(before, after)
+    return own !== null && own.startS <= a && a < own.endS ? own : null
+  }
+
+  /**
+   * What became of the transcribed copy's ad break `[startS, endS]`
+   * (transcript time) in this copy. Any part confirmed absent, or any audio
+   * of the copy's own inside the break, makes the whole break different;
+   * the row does not say which part. Its length is then what this copy
+   * plays there: the parts it kept plus its own audio. `assetDurationS` is
+   * the copy's length when known; it gives a post-roll of the listener's
+   * own a length.
+   */
+  classifyBreak(startS: number, endS: number, assetDurationS?: number | null): BreakState {
+    const spans = this.spans
+    let keptS = 0
+    for (const span of spans) keptS += Math.max(0, Math.min(endS, span.srcEndS) - Math.max(startS, span.srcStartS))
+    // The copy's own audio at every seam between spans that lies inside the
+    // break (before the first span and after the last count as seams).
+    let ownS: number | null = 0
+    for (let i = 0; i <= spans.length; i += 1) {
+      const before = i > 0 ? spans[i - 1] : undefined
+      const after = i < spans.length ? spans[i] : undefined
+      const seamFromS = before ? before.srcEndS : 0
+      const seamToS = after ? after.srcStartS : Infinity
+      if (!(seamFromS < endS && seamToS > startS)) continue
+      const own = this.ownAudioBetween(before, after)
+      if (own === null) continue
+      const ownEndS = Number.isFinite(own.endS) ? own.endS : assetDurationS
+      if (ownEndS == null || !Number.isFinite(ownEndS)) ownS = null
+      else if (ownS !== null && ownEndS - own.startS >= MIN_LISTENER_AD_S) ownS += ownEndS - own.startS
+    }
+    const cut = this.gaps.some((g) => g.kind === 'confirmed' && g.srcStartS < endS && g.srcEndS > startS)
+    if (!cut) {
+      // Part of the break lies outside every span and nothing says it is
+      // absent: the aligner could not tell.
+      if (keptS < endS - startS - SEAM_S) return { kind: 'unresolved' }
+      // Covered, as one span or several that meet, with nothing added.
+      if (ownS === 0) return { kind: 'same' }
+    }
+    if (ownS === null) return { kind: 'different', listenerAdS: null }
+    const playsS = keptS + ownS
+    return playsS >= MIN_LISTENER_AD_S ? { kind: 'different', listenerAdS: playsS } : { kind: 'absent' }
   }
 }

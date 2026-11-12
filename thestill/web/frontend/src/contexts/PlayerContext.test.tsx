@@ -383,6 +383,95 @@ describe('spec #116 §5 — a verified timeline map', () => {
   })
 })
 
+describe('spec #116 §6.1 — the map and the listener’s own ads, for the reader', () => {
+  // The transcribed copy: 0–20 s, a 6 s ad, 26–46 s. The listener's copy
+  // carries a 15 s ad there instead (20–35 s on its own clock).
+  const timeline = () => ({
+    map: new TimelineMap(
+      [
+        { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+        { srcStartS: 26, srcEndS: 46, offsetS: 9 },
+      ],
+      [{ srcStartS: 20, srcEndS: 26, kind: 'confirmed' as const }],
+    ),
+    durationS: 46,
+  })
+  const tick = (video: HTMLVideoElement, seconds: number) =>
+    act(() => {
+      stateFor(video).currentTime = seconds
+      video.dispatchEvent(new Event('timeupdate'))
+    })
+
+  it('exposes the applied map and says when an ad of the listener’s own is playing', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    expect(ctx.timelineMap).toBeNull()
+    expect(ctx.listenerAd).toBeNull()
+
+    const applied = timeline()
+    tick(video, 10)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, applied)
+    })
+    expect(ctx.timelineMap).toBe(applied.map)
+    expect(ctx.listenerAd).toBeNull()
+
+    tick(video, 22)
+    expect(ctx.listenerAd).toEqual({ startS: 20, endS: 35, srcFromS: 20, srcToS: 26 })
+    expect(ctx.getAssetTime()).toBe(22)
+    // The copy's own length, where `duration` is now the transcribed copy's.
+    Object.defineProperty(video, 'duration', { configurable: true, get: () => 55 })
+    expect(ctx.getAssetDuration()).toBe(55)
+    // The transcript clock stands still at the point the ad interrupted.
+    expect(ctx.getCurrentTime()).toBe(20)
+    // The same ad on the next tick is the same object: consumers re-render
+    // when an ad starts or ends, not four times a second.
+    const playing = ctx.listenerAd
+    tick(video, 30)
+    expect(ctx.listenerAd).toBe(playing)
+
+    tick(video, 36)
+    expect(ctx.listenerAd).toBeNull()
+  })
+
+  it('knows at once when the map arrives in the middle of an ad, and forgets it with the map', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    tick(video, 25)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    expect(ctx.listenerAd).not.toBeNull()
+
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, null)
+    })
+    expect(ctx.timelineMap).toBeNull()
+    expect(ctx.listenerAd).toBeNull()
+
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    act(() => ctx.stop())
+    expect(ctx.timelineMap).toBeNull()
+    expect(ctx.listenerAd).toBeNull()
+  })
+
+  it('does not leave an ad "playing" when the audio ends inside one', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, timeline())
+    })
+    tick(video, 25)
+    expect(ctx.listenerAd).not.toBeNull()
+    act(() => {
+      video.dispatchEvent(new Event('ended'))
+    })
+    expect(ctx.listenerAd).toBeNull()
+  })
+})
+
 describe('spec #116 — a start from a transcript time waits for its map', () => {
   const timeline = () => ({
     map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: 9 }]),

@@ -250,7 +250,13 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
         {/* Scrubber */}
         <div className="mt-5">
-          <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
+          <NowPlayingScrubber
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={player.seek}
+            ticks={ticks}
+            adPlaying={player.listenerAd !== null}
+          />
         </div>
 
         {/* Current line (spec #72 §3) — what is being said right now, with the
