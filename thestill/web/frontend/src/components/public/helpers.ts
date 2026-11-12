@@ -19,9 +19,8 @@ export function useSignIn(intent?: SignInIntent, next?: string): string {
 const EPISODE_PATH_RE = /^\/podcasts\/[^/]+\/episodes\/[^/]+\/?$/
 
 /** Where sign-in brings a visitor back to. An episode opened from a quote
- * (``#t=``) comes back as ``?view=transcript&t=``: the signed-in reader
- * opens the summary unless ``view=transcript`` is set, and scrolls only the
- * transcript to ``t``. */
+ * (``#t=``) comes back as ``?view=transcript&t=``, the signed-in reader's
+ * own form of the same link (it opens the transcript for either). */
 export function returnPath(pathname: string, search: string, hash: string): string {
   const seconds = deepLinkParam('', hash, 't')
   if (seconds == null || !EPISODE_PATH_RE.test(pathname)) return pathname + search + hash

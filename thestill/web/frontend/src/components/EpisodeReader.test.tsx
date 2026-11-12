@@ -542,6 +542,24 @@ describe('EpisodeReader drift banner (spec #113)', () => {
     expect(screen.getByText(/5m 27s\s+longer/)).toBeInTheDocument()
   })
 
+  it('opens the transcript for a link to a moment, with or without view=transcript', async () => {
+    const user = userEvent.setup()
+    renderAtEpisodeRoute(<EpisodeReader />, '/podcasts/sample-pod/episodes/sample-episode#t=3')
+    expect(await screen.findByRole('searchbox', { name: 'Search transcript' })).toBeInTheDocument()
+
+    // Summary drops the moment, so the reader is not sent straight back.
+    await user.click(screen.getByRole('button', { name: 'Summary' }))
+    expect(screen.queryByRole('searchbox', { name: 'Search transcript' })).toBeNull()
+  })
+
+  it('leaves the summary for a query-string moment too, and returns to it on Summary', async () => {
+    const user = userEvent.setup()
+    renderAtEpisodeRoute(<EpisodeReader />, '/podcasts/sample-pod/episodes/sample-episode?t=3')
+    expect(await screen.findByRole('searchbox', { name: 'Search transcript' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Summary' }))
+    expect(screen.queryByRole('searchbox', { name: 'Search transcript' })).toBeNull()
+  })
+
   it('compares against the rendition the player actually loaded', async () => {
     probedDuration = 6673 // the MP3 matches the transcript…
     const user = userEvent.setup()

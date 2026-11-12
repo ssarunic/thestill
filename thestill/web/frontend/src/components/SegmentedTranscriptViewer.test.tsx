@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
@@ -105,6 +105,64 @@ describe('SegmentedTranscriptViewer', () => {
       renderViewer({ transcript: data, onSeekRequest: onSeek })
       fireEvent.click(screen.getByRole('button', { name: /Seek to 01:50 — Bob/ }))
       expect(onSeek).toHaveBeenCalledWith(110)
+    })
+
+    describe('a link to a moment (#t=)', () => {
+      const setActivation = (hasBeenActive: boolean | null) =>
+        Object.defineProperty(window.navigator, 'userActivation', {
+          configurable: true,
+          value: hasBeenActive === null ? undefined : { hasBeenActive, isActive: hasBeenActive },
+        })
+      const openAt = (url: string) => window.history.replaceState(null, '', url)
+
+      afterEach(() => {
+        setActivation(null)
+        openAt('/')
+      })
+
+      it('opened cold: marks the passage and offers Play from, without starting audio', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12')
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+
+        expect(onSeek).not.toHaveBeenCalled()
+        expect(screen.getByTestId('segment-content-2')).toHaveAttribute('data-linked', 'true')
+        expect(screen.getByTestId('segment-content-1')).not.toHaveAttribute('data-linked')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:12' }))
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        expect(onSeek).toHaveBeenCalledWith(12)
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+        expect(screen.getByTestId('segment-content-2')).not.toHaveAttribute('data-linked')
+      })
+
+      it('followed inside the app: plays the moment, no extra button', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(onSeek).toHaveBeenCalledWith(12)
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+
+      it('puts the button on the next visible passage when the linked one is hidden', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=22') // inside the hidden filler segment
+        const data = defaultTranscript()
+        data.segments.push(seg({ id: 4, start: 25, end: 30, speaker: 'Bob', text: 'After the filler' }))
+        renderViewer({ transcript: data, episodeId: 'ep1', onSeekRequest: vi.fn() })
+        expect(screen.getByRole('button', { name: 'Play from 00:22' })).toBeInTheDocument()
+        expect(screen.getByTestId('segment-content-4')).toHaveAttribute('data-linked', 'true')
+      })
+
+      it('shows nothing without a moment in the URL', () => {
+        setActivation(false)
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(onSeek).not.toHaveBeenCalled()
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
     })
 
     it('fires onSeekRequest when Enter is pressed on a focused segment', () => {

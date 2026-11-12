@@ -20,10 +20,70 @@ function now() {
   return typeof performance !== 'undefined' ? performance.now() : Date.now()
 }
 
+// Beyond this many screens a glide is a long blur of unrendered rows.
+const FAR_JUMP_VIEWPORTS = 3
+
 function scrollNodeIntoCenter(node: HTMLElement) {
   const reduceMotion = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-  node.scrollIntoView?.({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' })
+  const far = typeof window !== 'undefined'
+    && Math.abs(node.getBoundingClientRect().top) > window.innerHeight * FAR_JUMP_VIEWPORTS
+  // 'instant', not 'auto': the document sets `scroll-behavior: smooth`, which
+  // 'auto' defers to.
+  node.scrollIntoView?.({ block: 'center', behavior: reduceMotion || far ? 'instant' : 'smooth' })
+}
+
+const SETTLE_POLL_MS = 60
+const SETTLE_MAX_POLLS = 50
+const SETTLE_MAX_CORRECTIONS = 10
+
+/**
+ * Keeps a jump honest. Rows off screen are laid out at a placeholder height
+ * (`content-visibility: auto`, see index.css), so a far jump is aimed at an
+ * estimate: the rows in between take their real height as they come near and
+ * the scroll comes to rest short of the target, by thousands of pixels in a
+ * long transcript. Once the scroll has stopped, re-aim until the row really
+ * is on screen. Returns a cancel function; the visitor scrolling cancels too.
+ */
+function settleOnNode(node: HTMLElement, onCorrect: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  let timer: number | undefined
+  let polls = 0
+  let corrections = 0
+  let lastTop = Number.NaN
+  const cancel = () => {
+    window.clearTimeout(timer)
+    window.removeEventListener('wheel', cancel)
+    window.removeEventListener('touchmove', cancel)
+    window.removeEventListener('keydown', onKeyDown)
+  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (SCROLL_KEYS.has(e.key)) cancel()
+  }
+  const poll = () => {
+    polls += 1
+    if (!node.isConnected || polls > SETTLE_MAX_POLLS) return cancel()
+    const { top, height } = node.getBoundingClientRect()
+    const moving = top !== lastTop
+    lastTop = top
+    if (!moving) {
+      // At rest. On screen means the row's first lines are: its top inside
+      // the viewport with room below (a row taller than the screen counts).
+      const viewport = window.innerHeight
+      const onScreen = top >= 0 && top <= viewport - Math.min(height, viewport / 3)
+      if (onScreen || corrections >= SETTLE_MAX_CORRECTIONS) return cancel()
+      corrections += 1
+      onCorrect()
+      // Instant: a second glide would be aimed at an estimate again.
+      node.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+    }
+    timer = window.setTimeout(poll, SETTLE_POLL_MS)
+  }
+  window.addEventListener('wheel', cancel, { passive: true })
+  window.addEventListener('touchmove', cancel, { passive: true })
+  window.addEventListener('keydown', onKeyDown)
+  timer = window.setTimeout(poll, SETTLE_POLL_MS)
+  return cancel
 }
 
 export function useAutoScrollFollow({
@@ -86,12 +146,20 @@ export function useAutoScrollFollow({
     }
   }, [enabled, pauseAfterUserScrollMs])
 
+  // A jump (deep link, citation, mention) can cross the whole transcript, so
+  // unlike the follow's small steps it is checked after it lands.
+  const cancelSettle = useRef<(() => void) | null>(null)
   const scrollToKey = useCallback((key: string | number) => {
     const node = refs.current.get(key)
     if (!node) return
     programmaticScrollAt.current = now()
     scrollNodeIntoCenter(node)
+    cancelSettle.current?.()
+    cancelSettle.current = settleOnNode(node, () => {
+      programmaticScrollAt.current = now()
+    })
   }, [])
+  useEffect(() => () => cancelSettle.current?.(), [])
 
   const userScrolledAway = pausedUntil > now()
 

@@ -9,6 +9,7 @@ import { usePlayer } from '../contexts/PlayerContext'
 import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
+import { deepLinkSeconds } from '../hooks/useDeepLinkSeek'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useDriftAlignment } from '../drift/useDriftAlignment'
 import { driftAlignmentSupported } from '../drift/support'
@@ -112,7 +113,12 @@ export default function EpisodeReader({
   // returns to the summary the reader was on. Manual tab clicks replace (no
   // history spam); `location.state` is threaded through every navigation so
   // the spec #52 overlay's `backgroundLocation` survives the change.
-  const activeTab: Tab = searchParams.get('view') === 'transcript' ? 'transcript' : 'summary'
+  //
+  // A link to a moment (`?t=` / `#t=`) is a link into the transcript: it
+  // opens there without needing `view=transcript` beside it, so a shared
+  // quote link lands on its passage for a signed-in reader too.
+  const hasDeepLinkedMoment = deepLinkSeconds(location.search, location.hash) !== null
+  const activeTab: Tab = searchParams.get('view') === 'transcript' || hasDeepLinkedMoment ? 'transcript' : 'summary'
   const requestedSummaryLanguage = normalizeLanguageCode(searchParams.get('lang'))
   const defaultSummaryLanguage = getBrowserLanguage()
 
@@ -139,7 +145,13 @@ export default function EpisodeReader({
       if (activeTab === 'summary' && tab !== 'summary') summaryScrollRef.current = getScrollTop()
       const params = new URLSearchParams(searchParams)
       if (tab === 'transcript') params.set('view', 'transcript')
-      else params.delete('view')
+      else {
+        params.delete('view')
+        // The moment belongs to the transcript; left in the URL it would
+        // bring the reader straight back there. (A `#t=` goes with the
+        // fragment, which this navigation does not carry.)
+        params.delete('t')
+      }
       const search = params.toString()
       navigate(
         { pathname: location.pathname, search: search ? `?${search}` : '' },

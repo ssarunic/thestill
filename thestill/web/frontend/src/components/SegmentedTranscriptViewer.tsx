@@ -26,6 +26,7 @@ import {
   usePersistedBoolean,
 } from '../hooks/useAutoScrollFollow'
 import { buildTimestampDeepLink, useDeepLinkSeek } from '../hooks/useDeepLinkSeek'
+import { deepLinkSegmentIndex } from '../hooks/useDeepLinkScrollTarget'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import EntityHighlight from './episode-entities/EntityHighlight'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
@@ -368,6 +369,8 @@ interface ContentSegmentProps {
   searchQuery: string
   dimmed: boolean
   isFiller: boolean
+  // The passage a link to a moment landed on, until it is played.
+  linked?: boolean
   segmentMentions: SegmentMentionSet | null
   entityHighlightsEnabled: boolean
   onFocusEntity?: (entityId: string) => void
@@ -396,6 +399,7 @@ const ContentSegment = memo(function ContentSegment({
   searchQuery,
   dimmed,
   isFiller,
+  linked = false,
   segmentMentions,
   entityHighlightsEnabled,
   onFocusEntity,
@@ -421,7 +425,11 @@ const ContentSegment = memo(function ContentSegment({
   // the transcript gets one.
   const speakerMention = entityHighlightsEnabled ? findSpeakerMention(segmentMentions) : null
   const absoluteSeconds = segment.start + offset
-  const containerActive = isActive ? 'bg-primary-50/70' : 'hover:bg-gray-50/70'
+  const containerActive = isActive
+    ? 'bg-primary-50/70'
+    : linked
+      ? 'bg-primary-50/50 ring-1 ring-inset ring-primary-200'
+      : 'hover:bg-gray-50/70'
   const paragraphAccent = 'border-l-2'
   const timestampColor = isActive ? 'text-primary-700' : 'text-gray-400'
   const dimClass = dimmed ? 'opacity-70' : ''
@@ -441,6 +449,7 @@ const ContentSegment = memo(function ContentSegment({
       data-testid={`segment-content-${segment.id}`}
       data-active={isActive ? 'true' : 'false'}
       data-filler={isFiller ? 'true' : 'false'}
+      data-linked={linked ? 'true' : undefined}
       className={`group -mx-2 px-2 py-2.5 rounded-lg transition-colors sm:-mx-3 sm:px-3 ${containerActive} ${dimClass} ${seekableClasses}`}
     >
       <p
@@ -501,6 +510,34 @@ const ContentSegment = memo(function ContentSegment({
     </div>
   )
 })
+
+interface LinkedMomentBarProps {
+  seconds: number
+  onPlay: () => void
+}
+
+/**
+ * Sits on the passage a shared link (`#t=` / `?t=`) landed on. The link was
+ * opened cold, so nothing is playing: this button is the visitor's own tap,
+ * which is what lets the audio start in every browser.
+ */
+function LinkedMomentBar({ seconds, onPlay }: LinkedMomentBarProps) {
+  return (
+    <div data-testid="linked-moment" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-3 pb-1">
+      <button
+        type="button"
+        onClick={onPlay}
+        className="inline-flex items-center gap-1.5 rounded-full bg-primary-900 px-3.5 py-1.5 text-sm font-medium text-white hover:bg-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2"
+      >
+        <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        Play from {formatTimestamp(seconds)}
+      </button>
+      <span className="text-xs text-gray-500">The moment this link points to</span>
+    </div>
+  )
+}
 
 interface ToggleBarProps {
   presentKinds: TogglableKind[]
@@ -776,6 +813,9 @@ export default function SegmentedTranscriptViewer({
     [showToast],
   )
 
+  // A moment clicked inside the app plays; a link opened cold is cued — the
+  // passage is marked and offers "Play from", and nothing sounds until asked.
+  const [cuedSeconds, setCuedSeconds] = useState<number | null>(null)
   useDeepLinkSeek(
     episodeId ?? null,
     useCallback(
@@ -783,7 +823,13 @@ export default function SegmentedTranscriptViewer({
       [onSeekRequest],
     ),
     !!onSeekRequest && transcript.segments.length > 0,
+    setCuedSeconds,
   )
+  const playCuedMoment = useCallback(() => {
+    if (cuedSeconds === null) return
+    setCuedSeconds(null)
+    onSeekRequest?.(cuedSeconds)
+  }, [cuedSeconds, onSeekRequest])
 
   const { matchingIds, matchOrder } = useMemo(() => {
     if (!searchQuery) return { matchingIds: null as Set<number> | null, matchOrder: [] as number[] }
@@ -969,6 +1015,22 @@ export default function SegmentedTranscriptViewer({
     return rows
   }, [matchingIds, renderedSegments, expandedHiddenGroups])
 
+  // The row the cued moment sits on. When its own segment is not on screen
+  // (filler hidden, a search or entity filter), the next row that is.
+  const cuedSegmentId = useMemo(() => {
+    if (cuedSeconds === null) return null
+    const idx = deepLinkSegmentIndex(transcript.segments, cuedSeconds, offset)
+    if (idx < 0) return null
+    const target = transcript.segments[idx]
+    let last: number | null = null
+    for (const row of renderRows) {
+      if (row.type !== 'segment') continue
+      if (row.segment.id === target.id || row.segment.start >= target.start) return row.segment.id
+      last = row.segment.id
+    }
+    return last
+  }, [cuedSeconds, transcript.segments, offset, renderRows])
+
   if (transcript.segments.length === 0) {
     return (
       <div className="text-center py-16 min-h-[300px] border border-dashed border-gray-200 rounded-lg bg-gray-50/50">
@@ -1121,51 +1183,58 @@ export default function SegmentedTranscriptViewer({
             }
             const { segment, expandedFromHidden } = row
             const isActive = segment.id === activeSegmentId
+            const isCued = cuedSeconds !== null && segment.id === cuedSegmentId
+            const cueBar = isCued ? <LinkedMomentBar seconds={cuedSeconds} onPlay={playCuedMoment} /> : null
             const segmentMentions = segmentMentionSets.get(segment.id) ?? null
             if (segment.kind === 'content' || segment.kind === 'filler') {
               const isKaraokeSegment =
                 activeKaraoke !== null && activeKaraoke.segmentId === segment.id
               return (
-                <ContentSegment
-                  key={segment.id}
+                <Fragment key={segment.id}>
+                  {cueBar}
+                  <ContentSegment
+                    segment={segment}
+                    offset={offset}
+                    isActive={isActive}
+                    speakerColor={resolveSpeakerColor(segment.speaker, speakerColorMap)}
+                    onSeek={onSeekRequest}
+                    registerRef={follow.registerRef(segment.id)}
+                    onCopyTimestamp={handleCopyTimestamp}
+                    searchQuery={searchQuery}
+                    dimmed={expandedFromHidden}
+                    isFiller={segment.kind === 'filler'}
+                    segmentMentions={segmentMentions}
+                    entityHighlightsEnabled={entityHighlightsEnabled}
+                    onFocusEntity={onFocusEntity}
+                    karaokeWords={isKaraokeSegment ? activeKaraoke.words : undefined}
+                    karaokeGetCurrentTime={
+                      isKaraokeSegment ? getCurrentTime : undefined
+                    }
+                    linked={isCued}
+                  />
+                </Fragment>
+              )
+            }
+            const togglableKind = segment.kind as TogglableKind
+            return (
+              <Fragment key={segment.id}>
+                {cueBar}
+                <BlockSegment
                   segment={segment}
+                  kind={togglableKind}
                   offset={offset}
                   isActive={isActive}
-                  speakerColor={resolveSpeakerColor(segment.speaker, speakerColorMap)}
                   onSeek={onSeekRequest}
                   registerRef={follow.registerRef(segment.id)}
                   onCopyTimestamp={handleCopyTimestamp}
                   searchQuery={searchQuery}
                   dimmed={expandedFromHidden}
-                  isFiller={segment.kind === 'filler'}
+                  collapsed={hiddenKinds.has(togglableKind)}
                   segmentMentions={segmentMentions}
                   entityHighlightsEnabled={entityHighlightsEnabled}
                   onFocusEntity={onFocusEntity}
-                  karaokeWords={isKaraokeSegment ? activeKaraoke.words : undefined}
-                  karaokeGetCurrentTime={
-                    isKaraokeSegment ? getCurrentTime : undefined
-                  }
                 />
-              )
-            }
-            const togglableKind = segment.kind as TogglableKind
-            return (
-              <BlockSegment
-                key={segment.id}
-                segment={segment}
-                kind={togglableKind}
-                offset={offset}
-                isActive={isActive}
-                onSeek={onSeekRequest}
-                registerRef={follow.registerRef(segment.id)}
-                onCopyTimestamp={handleCopyTimestamp}
-                searchQuery={searchQuery}
-                dimmed={expandedFromHidden}
-                collapsed={hiddenKinds.has(togglableKind)}
-                segmentMentions={segmentMentions}
-                entityHighlightsEnabled={entityHighlightsEnabled}
-                onFocusEntity={onFocusEntity}
-              />
+              </Fragment>
             )
           })}
         </div>
