@@ -63,7 +63,9 @@ import { buildPlayerTrack } from '../utils/playerTrack'
 import { needsHlsJs, preloadHls } from '../contexts/playback-engine/hls'
 
 type Tab = 'transcript' | 'summary'
-type SegmentScrollTarget = { segmentId: number; nonce: number }
+// `reveal`: a jump to something inside the segment opens an ad break that
+// holds it (spec #116 §6.1); a link to a moment leaves the row collapsed.
+type SegmentScrollTarget = { segmentId: number; nonce: number; reveal?: boolean }
 
 function normalizeLanguageCode(language: string | null | undefined): string | undefined {
   const primary = language?.trim().toLowerCase().split(/[-_]/, 1)[0]
@@ -590,7 +592,7 @@ export default function EpisodeReader({
     (segmentId: number) => {
       clearEntityFilter()
       if (activeTab !== 'transcript') setTab('transcript', { push: true })
-      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
+      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1, reveal: true }))
     },
     [clearEntityFilter, activeTab, setTab],
   )
@@ -611,6 +613,7 @@ export default function EpisodeReader({
       setCitationScrollTarget((prev) => ({
         segmentId,
         nonce: (prev?.nonce ?? 0) + 1,
+        reveal: true,
       }))
     },
     [activeTab, setTab, clearEntityFilter, handleSegmentSeek],

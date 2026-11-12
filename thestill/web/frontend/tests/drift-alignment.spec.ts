@@ -144,7 +144,7 @@ async function recordWhatIsHeard(page: Page) {
 }
 const heard = (page: Page) => page.evaluate(() => (window as unknown as { __heard: number[] }).__heard)
 
-async function openEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3') {
+async function openEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3', { play = true } = {}) {
   const outcomes: Outcome[] = []
   await mockEpisodeApi(page, {
     audioUrl: `${hostOrigin}/${file}`,
@@ -172,7 +172,7 @@ async function openEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3')
     await navigator.serviceWorker.ready
     while (!navigator.serviceWorker.controller) await new Promise((resolve) => setTimeout(resolve, 50))
   })
-  await page.getByRole('button', { name: /^Play episode/ }).click()
+  if (play) await page.getByRole('button', { name: /^Play episode/ }).click()
   return outcomes
 }
 
@@ -208,6 +208,71 @@ test.describe('timeline map applied to a listener copy with other ads', () => {
     await expect.poll(() => elementTime(page), { timeout: 5_000 }).toBeGreaterThan(14.5)
     expect(await elementTime(page)).toBeLessThan(16.5)
     await expect(page.getByTestId('segment-content-2')).toHaveAttribute('data-active', 'true')
+  })
+
+  // Spec §6.1 — the ad break is one row before and after the map. The map
+  // changes what the row says; it must not move anything on the page.
+  test('the ad break row changes its text, not its place, when the map arrives', async ({ page }) => {
+    await openEpisode(page, 'listener.mp3', { play: false })
+    const row = page.getByTestId('ad-break-3')
+    const rowText = page.getByTestId('ad-break-text-3')
+    // Measured inside the transcript: the page around it has its own
+    // changes on Play (the mini player appears, the drift banner goes).
+    const layout = () =>
+      page.evaluate(() => {
+        const list = document.querySelector('.transcript-content')!
+        const top = list.getBoundingClientRect().top
+        const at = (testId: string) =>
+          Math.round(document.querySelector(`[data-testid="${testId}"]`)!.getBoundingClientRect().top - top)
+        return {
+          transcript: Math.round(list.getBoundingClientRect().height),
+          rowHeight: Math.round(document.querySelector('[data-testid="ad-break-3"]')!.getBoundingClientRect().height),
+          row: at('ad-break-3'),
+          below: at('segment-content-4'),
+          last: at('segment-content-6'),
+        }
+      })
+
+    // No map yet: the break as transcribed, collapsed, its text not shown.
+    await expect(rowText).toHaveText('Ad break · 0:06')
+    await expect(page.getByText('An ad that only the transcribed copy carries.')).toHaveCount(0)
+    const before = await layout()
+
+    await page.getByRole('button', { name: /^Play episode/ }).click()
+    await expect(page.getByTestId('drift-debug-strip')).toContainText(
+      'Applied: seeks, the clock and the highlighting follow this map',
+      { timeout: 20_000 },
+    )
+    // This copy carries a 10 s ad of its own where ours had 6 s.
+    await expect(rowText).toHaveText('Ad break · different in your copy · 0:10')
+    await expect(row).toHaveAttribute('data-state', 'different')
+    expect(await layout()).toEqual(before)
+
+    // Inside that ad (25–35 s of this copy): the row is what is playing,
+    // and the player says why its clock stands still.
+    await page.evaluate(() => {
+      document.querySelector('video')!.currentTime = 27
+    })
+    await expect(row).toHaveAttribute('data-state', 'playing')
+    await expect(row).toHaveAttribute('data-active', 'true')
+    await expect(rowText).toHaveText(/^Ad playing · 0:0\d left$/)
+    await expect(page.getByTestId('player-ad-tag').first()).toBeVisible()
+    expect(await layout()).toEqual(before)
+
+    // The break is gone from this copy, so the row is not a seek target…
+    await page.evaluate(() => {
+      document.querySelector('video')!.currentTime = 10
+    })
+    await expect(row).toHaveAttribute('data-state', 'different')
+    await page.getByTestId('player-ad-tag').first().waitFor({ state: 'detached' })
+    const at = await elementTime(page)
+    await rowText.click()
+    await page.waitForTimeout(400)
+    expect(Math.abs((await elementTime(page)) - at)).toBeLessThan(2)
+    // …but its text is still one click away, and says whose it is.
+    await row.getByRole('button', { name: /^Show ad text/ }).click()
+    await expect(row).toContainText('From the copy we transcribed. Your copy plays other ads here.')
+    await expect(row).toContainText('An ad that only the transcribed copy carries.')
   })
 
   test('the transcribed copy itself needs no map and seeks as before', async ({ page }) => {

@@ -380,65 +380,9 @@ describe('SegmentedTranscriptViewer', () => {
   })
 
   describe('kind toggles', () => {
-    it('shows ad body text without a summary label when Ads is on', () => {
-      renderViewer({
-        transcript: makeTranscript([
-          seg({
-            id: 0,
-            kind: 'ad_break',
-            sponsor: 'Acme',
-            text: 'Support for the show comes from Acme. Visit acme.com.',
-          }),
-        ]),
-      })
-
-      // Full ad copy reads like body text.
-      expect(screen.getByText(/acme\.com/)).toBeInTheDocument()
-      // No "AD BREAK — …" chip above the body when expanded.
-      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
-    })
-
-    it('collapses ads to a compact "AD BREAK — Sponsor" chip when Ads is off', async () => {
-      const user = userEvent.setup()
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, text: 'before ad', speaker: 'Alice' }),
-          seg({ id: 1, kind: 'ad_break', sponsor: 'Acme', text: 'visit acme.com' }),
-          seg({ id: 2, text: 'after ad', speaker: 'Alice' }),
-        ]),
-      })
-
-      // Ads ON: body visible, no chip label.
-      expect(screen.getByText(/visit acme\.com/)).toBeInTheDocument()
-      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      // Ads OFF: body gone, compact chip "Ad break — Acme" visible
-      // (uppercase is CSS-only, so the DOM text is "Ad break").
-      expect(screen.queryByText(/visit acme\.com/)).not.toBeInTheDocument()
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByText(/Acme/)).toBeInTheDocument()
-      // Surrounding content is unaffected.
-      expect(screen.getByText('before ad')).toBeInTheDocument()
-      expect(screen.getByText('after ad')).toBeInTheDocument()
-    })
-
-    it('only shows toggles for kinds actually present', () => {
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, text: 'pure content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'ad text' }),
-        ]),
-      })
-
-      expect(screen.getByRole('button', { name: 'Ads' })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Music' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Intro' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Outro' })).not.toBeInTheDocument()
-    })
-
-    it('renders toggles for every present non-content kind', () => {
+    // Ads have no pill (spec #116 §6.1): an ad break is always one collapsed
+    // row. Its own tests are in SegmentedTranscriptViewer.adBreaks.test.tsx.
+    it('shows a pill for music, intro and outro when present, and none for ads', () => {
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, kind: 'intro', text: 'welcome' }),
@@ -449,28 +393,33 @@ describe('SegmentedTranscriptViewer', () => {
         ]),
       })
 
-      expect(screen.getByRole('button', { name: 'Ads' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Ads' })).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Music' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Intro' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Outro' })).toBeInTheDocument()
     })
 
-    it('loads the hidden-kinds preference from localStorage and starts collapsed', () => {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(['ad_break']))
+    it('only shows pills for kinds actually present', () => {
+      renderViewer({
+        transcript: makeTranscript([
+          seg({ id: 0, text: 'pure content' }),
+          seg({ id: 1, kind: 'ad_break', text: 'ad text' }),
+        ]),
+      })
+      expect(screen.queryByRole('group', { name: 'Segment kind filters' })).not.toBeInTheDocument()
+    })
 
+    it('loads the hidden-kinds preference and collapses that kind to a chip', () => {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(['music']))
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, text: 'content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'hidden ad', sponsor: 'Acme' }),
+          seg({ id: 1, kind: 'music', text: 'theme plays' }),
         ]),
       })
-
-      expect(screen.getByText('content')).toBeInTheDocument()
-      // Ad body is collapsed to the chip, so the body text is absent.
-      expect(screen.queryByText('hidden ad')).not.toBeInTheDocument()
-      // But the compact chip is still there so the reader sees the ad position.
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Ads' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByText('theme plays')).not.toBeInTheDocument()
+      expect(screen.getByTestId('segment-music-1')).toHaveAttribute('data-collapsed', 'true')
+      expect(screen.getByRole('button', { name: 'Music' })).toHaveAttribute('aria-pressed', 'false')
     })
 
     it('persists the hidden-kinds preference to localStorage', async () => {
@@ -478,45 +427,23 @@ describe('SegmentedTranscriptViewer', () => {
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, text: 'content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'ad copy' }),
+          seg({ id: 1, kind: 'music', text: 'theme plays' }),
         ]),
       })
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      const stored = window.localStorage.getItem(STORAGE_KEY)
-      expect(stored).not.toBeNull()
-      expect(JSON.parse(stored!)).toEqual(['ad_break'])
+      await user.click(screen.getByRole('button', { name: 'Music' }))
+      expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual(['music'])
     })
 
-    it('falls back to defaults when localStorage has bogus values', () => {
-      window.localStorage.setItem(STORAGE_KEY, '{"not": "an array"}')
-
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, kind: 'ad_break', text: 'ad visible' }),
-        ]),
-      })
-
-      expect(screen.getByText('ad visible')).toBeInTheDocument()
-    })
-
-    it('keeps the chip visible even when every togglable kind is collapsed', async () => {
-      const user = userEvent.setup()
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, kind: 'ad_break', text: 'ad copy', sponsor: 'Acme' }),
-        ]),
-      })
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      // Body hidden, but the reader still sees the ad marker.
-      expect(screen.queryByText('ad copy')).not.toBeInTheDocument()
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByText(/Acme/)).toBeInTheDocument()
-      const block = screen.getByTestId('segment-ad_break-0')
-      expect(block).toHaveAttribute('data-collapsed', 'true')
+    it('ignores a stored ad_break entry and bogus values: an ad break is its one row either way', () => {
+      for (const stored of [JSON.stringify(['ad_break']), '{"not": "an array"}']) {
+        window.localStorage.setItem(STORAGE_KEY, stored)
+        const view = renderViewer({
+          transcript: makeTranscript([seg({ id: 0, kind: 'ad_break', text: 'ad copy', sponsor: 'Acme' })]),
+        })
+        expect(screen.getByTestId('ad-break-0')).toHaveAttribute('data-open', 'false')
+        expect(screen.queryByText('ad copy')).not.toBeInTheDocument()
+        view.unmount()
+      }
     })
 
     it('renders music, intro and outro with their own block style', () => {

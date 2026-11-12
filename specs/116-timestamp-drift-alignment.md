@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Designed, not built: ad breaks as one row in the reader (section 6.1, Phase 2b). Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-12
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -573,7 +573,7 @@ same word.
 
 #### 6.1 Ad breaks as one row
 
-Added 2026-11-12. Proposed; not built.
+Added 2026-11-12. Built the same day (Phase 2b); not released.
 
 **Problem.** The transcript shows the ads of the copy that was
 transcribed. A listener whose copy carries other ads hears something
@@ -615,7 +615,7 @@ first segment's start to the last segment's end.
 | Same | map applied, `break` lies inside a matched span | as Plain | seeks through the map |
 | Different | map applied, `break` overlaps a confirmed source-side gap, and the listener's copy has an ad between the two neighbouring spans | `Ad break · different in your copy · 1:05` | none |
 | Absent | as Different, with no listener-side ad between those spans | `Ad break · not in your copy` | none |
-| Unresolved | map applied, `break` overlaps only an `unresolved` interval | as Plain, with the drift note of section 5 | seeks, flagged approximate |
+| Unresolved | map applied, `break` overlaps only an `unresolved` interval | as Plain, followed by `· timing approximate` | seeks, flagged approximate |
 
 - Sponsors are the distinct `sponsor` values of the run in order, at
   most three, then `+N`. They are dropped in Different and Absent: they
@@ -640,8 +640,9 @@ first segment's start to the last segment's end.
   (section 5). Follow-playback keeps that row in view.
 - A listener-side ad where the transcript has no break (an ad only in
   the listener's copy): no row is added, because that would move the
-  page. The highlight stays on the last passage, and the mini player
-  and the Now Playing sheet show an "Ad" tag beside the time. The tag
+  page. The highlight stays on the last passage, and the player shows
+  an "Ad" tag: beside the time in the Now Playing sheet, beside the
+  show's name in the mini player (which shows no time on a phone). The tag
   is shown for every listener-side ad, so the two cases read the same
   in the player.
 
@@ -849,6 +850,10 @@ from the track header runs the full pass regardless of the profile.
 - **A map that is replaced or dropped mid-session** (a rendition switch,
   a failed check on a later load). Rows return to Plain. Heights do not
   change, so nothing moves.
+- **The drift banner still moves the transcript.** Section 6.1 keeps the
+  rows still. The banner above the transcript (section 6) appears when
+  drift is detected and goes when a map is applied, which shifts
+  everything below it by its height. Not addressed in Phase 2b.
 
 ## Execution plan
 
@@ -1194,23 +1199,31 @@ rest only shows for sessions in which a map is applied.
 
 | # | Where | What |
 |---|---|---|
-| 2b.1 | `SegmentedTranscriptViewer.tsx` (new `AdBreakRow`) | group each run of `ad_break` segments into one row, collapsed by default, with a per-row "Show ad text"; remove the "Ads" pill; open the row for a search match, a mention jump or an entity filter; the row is the scroll and active-segment target for every segment in its run |
-| 2b.2 | `src/contexts/playback-engine/timeline-map.ts` | `classifyBreak(startS, endS)` returns Same, Different, Absent or Unresolved, with the listener-side ad's length; `listenerAdAt(assetTime)` returns the ad's interval or `null` |
-| 2b.3 | `PlayerContext.tsx`, `SegmentedTranscriptViewer.tsx` | expose the applied map's break classification and "in a listener-side ad" to the reader; row text per state; `Ad playing · m:ss left` |
-| 2b.4 | mini player, `NowPlayingSheet.tsx` | the "Ad" tag while a listener-side ad plays |
-| 2b.5 | analytics | `ad_break_expanded` with the row's state, on the #95 allowlist |
+| 2b.1 ✅ | `SegmentedTranscriptViewer.tsx` (new `AdBreakRow`) | group each run of `ad_break` segments into one row, collapsed by default, with a per-row "Show ad text"; remove the "Ads" pill; open the row for a search match, a mention jump or an entity filter; the row is the scroll and active-segment target for every segment in its run |
+| 2b.2 ✅ | `src/contexts/playback-engine/timeline-map.ts` | `classifyBreak(startS, endS, assetDurationS?)` returns Same, Different, Absent or Unresolved, with the listener-side ad's length; `listenerAdAt(assetTime)` returns the ad's interval or `null`. Audio of the listener's own shorter than 1 s is a seam, not an ad |
+| 2b.3 ✅ | `PlayerContext.tsx`, `SegmentedTranscriptViewer.tsx` | expose the applied map's break classification and "in a listener-side ad" to the reader; row text per state; `Ad playing · m:ss left` |
+| 2b.4 ✅ | mini player, `NowPlayingSheet.tsx` | the "Ad" tag while a listener-side ad plays |
+| 2b.5 ✅ | analytics | `ad_break_expanded` with the row's state, on the #95 allowlist |
 
-Acceptance:
+Acceptance (all in the repository):
 
-- Unit tests for `classifyBreak` on the fixture maps of Phase 2,
-  including a break that is partly the same and a pre-roll.
-- A Playwright test loads an episode with three ad breaks, records the
-  document height and the top of a content row below the second break,
-  applies a map that makes one break Different and one Absent, and
-  asserts that both numbers are unchanged and that the rows read as in
-  the table of section 6.1.
-- The same test with a search for a sponsor name: the row opens, and
-  closes when the search is cleared.
+- Unit tests for `classifyBreak` and `listenerAdAt`
+  (`timeline-map.test.ts`): each state, a break that is partly the
+  same, a pre-roll and a post-roll, and agreement with `toLogical` over
+  a grid of times.
+- Unit tests for the row (`SegmentedTranscriptViewer.adBreaks.test.tsx`)
+  with the player mocked: every state's text, what opens a row, the
+  search opening and closing it, and that a map arriving or being
+  dropped changes the text and nothing else.
+- A Playwright test in `tests/drift-alignment.spec.ts` on the two real
+  copies of Phase 2's fixture (one break, replaced by a 10 s ad in the
+  listener's copy). It records the transcript's height and the
+  positions of the row and of the passages below it, plays, waits for
+  the map, and asserts that none of them moved while the row went from
+  `Ad break · 0:06` to `Ad break · different in your copy · 0:10`,
+  and again while the listener's ad plays (`Ad playing · 0:0n left`,
+  the "Ad" tag in the player). The fixture has one break, so Absent,
+  Unresolved and several breaks are covered by the unit tests only.
 
 ### Phase 3: perceptual fallback and AAC
 

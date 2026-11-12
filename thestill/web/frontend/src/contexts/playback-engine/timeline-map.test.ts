@@ -112,3 +112,74 @@ describe('TimelineMap', () => {
     expect(new TimelineMap([]).toLogicalHeld(12)).toBe(12)
   })
 })
+
+describe('TimelineMap: ads (spec §6.1)', () => {
+  const withGap = new TimelineMap(spans, [adInOurCopy])
+  const noGap = new TimelineMap(spans)
+  // The transcribed copy has a 30 s pre-roll and a 10 s post-roll that the
+  // listener's copy lacks; the listener's has a 12 s post-roll of its own.
+  const edges = new TimelineMap(
+    [{ srcStartS: 30, srcEndS: 90, offsetS: -30 }],
+    [
+      { srcStartS: 0, srcEndS: 30, kind: 'confirmed' },
+      { srcStartS: 90, srcEndS: 100, kind: 'confirmed' },
+    ],
+  )
+  // An ad that was simply cut: nothing took its place.
+  const cut = new TimelineMap(
+    [
+      { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+      { srcStartS: 26, srcEndS: 46, offsetS: -6 },
+    ],
+    [adInOurCopy],
+  )
+
+  it('finds the ad of the listener’s own that is playing, with its bounds', () => {
+    expect(withGap.listenerAdAt(3)).toEqual({ startS: 0, endS: 8, srcFromS: 0, srcToS: 0 })
+    expect(withGap.listenerAdAt(30)).toEqual({ startS: 28, endS: 43, srcFromS: 20, srcToS: 26 })
+    expect(withGap.listenerAdAt(18)).toBeNull() // inside a span
+    expect(withGap.listenerAdAt(50)).toBeNull()
+    expect(edges.listenerAdAt(70)).toEqual({ startS: 60, endS: Infinity, srcFromS: 90, srcToS: Infinity })
+    expect(cut.listenerAdAt(20)).toBeNull()
+  })
+
+  it('agrees with toLogical: an ad is playing exactly where no transcript time answers', () => {
+    for (const map of [withGap, noGap, edges, cut]) {
+      for (let a = 0; a <= 80; a += 0.25) {
+        const ad = map.listenerAdAt(a)
+        if (ad !== null) expect(map.toLogical(a), `a=${a}`).toBeNull()
+        // The reverse holds away from a seam shorter than an ad.
+        else if (map.toLogical(a) === null) {
+          expect(map.listenerAdAt(a - 1) === null || map.listenerAdAt(a + 1) === null, `a=${a}`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it('classifies a break of the transcribed copy', () => {
+    // Replaced by a longer ad of the listener's own.
+    expect(withGap.classifyBreak(20, 26)).toEqual({ kind: 'different', listenerAdS: 15 })
+    // Lies inside one span: it plays as transcribed.
+    expect(withGap.classifyBreak(5, 9)).toEqual({ kind: 'same' })
+    // Cut, with nothing in its place.
+    expect(cut.classifyBreak(20, 26)).toEqual({ kind: 'absent' })
+    // The aligner could not tell what 20–26 is.
+    expect(noGap.classifyBreak(20, 26)).toEqual({ kind: 'unresolved' })
+  })
+
+  it('treats a break that is only partly the same as different', () => {
+    // Two ads, 16–20 kept and 20–26 replaced: any overlap decides.
+    expect(withGap.classifyBreak(16, 26)).toEqual({ kind: 'different', listenerAdS: 15 })
+  })
+
+  it('handles a pre-roll and a post-roll, where there is one neighbouring span', () => {
+    expect(edges.classifyBreak(0, 30)).toEqual({ kind: 'absent' })
+    // A post-roll of the listener's own has a length only once the copy's is known.
+    expect(edges.classifyBreak(90, 100)).toEqual({ kind: 'different', listenerAdS: null })
+    expect(edges.classifyBreak(90, 100, 72)).toEqual({ kind: 'different', listenerAdS: 12 })
+    expect(edges.classifyBreak(90, 100, 60.2)).toEqual({ kind: 'absent' })
+    // A pre-roll replaced by a shorter one.
+    const preRoll = new TimelineMap([{ srcStartS: 30, srcEndS: 90, offsetS: -20 }], [{ srcStartS: 0, srcEndS: 30, kind: 'confirmed' }])
+    expect(preRoll.classifyBreak(0, 30)).toEqual({ kind: 'different', listenerAdS: 10 })
+  })
+})
