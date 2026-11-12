@@ -716,22 +716,27 @@ export default function EpisodeReader({
           />
         )}
 
-      {/* Spec #28 §5.2 — Key entities strip, above the fold. Empty
-          state (zero entities) hides itself. */}
+      {/* Spec #28 §5.2 — Key entities strip, above the fold, below lg
+          only: it stands in for the rail, which is hidden there. From lg
+          up the rail lists the same entities beside the text, so the
+          strip would only repeat it. Empty state (zero entities) hides
+          itself. */}
       {entities.length > 0 && (
-        <KeyEntitiesStrip
-          entities={entities}
-          hiddenTypes={hiddenEntityTypes}
-          onToggleType={toggleEntityType}
-          episodeId={episode?.id ?? null}
-          onSeek={handleSegmentSeek}
-          onShowInTranscript={jumpToTranscriptSegment}
-          onFocusEntity={setFocusedEntityId}
-        />
+        <div className="lg:hidden">
+          <KeyEntitiesStrip
+            entities={entities}
+            hiddenTypes={hiddenEntityTypes}
+            onToggleType={toggleEntityType}
+            episodeId={episode?.id ?? null}
+            onSeek={handleSegmentSeek}
+            onShowInTranscript={jumpToTranscriptSegment}
+            onFocusEntity={setFocusedEntityId}
+          />
+        </div>
       )}
 
       {/* Content Tabs + right rail. lg+ becomes a 2-col grid; below lg
-          the rail wraps under the panel. */}
+          the rail is hidden and the strip above stands in for it. */}
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
         <Panel className="min-h-[400px]">
           {/* Tab Headers */}
@@ -894,7 +899,8 @@ export default function EpisodeReader({
         </Panel>
 
         {/* Right rail — only on lg+; collapses below the breakpoint
-            (the strip carries the gist on mobile). Always rendered on
+            (the strip carries the gist there, and is hidden from lg up
+            in turn; the type toggles live in whichever is shown). Always rendered on
             lg+ so the grid's rail column is never a blank gutter and the
             reading column keeps one width across episodes and across
             the related-episodes fetch; the rail supplies its own
@@ -908,6 +914,8 @@ export default function EpisodeReader({
               onSeek={handleSegmentSeek}
               onShowInTranscript={jumpToTranscriptSegment}
               onFocusEntity={setFocusedEntityId}
+              hiddenTypes={hiddenEntityTypes}
+              onToggleType={toggleEntityType}
               relatedEpisodes={relatedEpisodes}
               relatedLoading={relatedLoading}
               extractionPending={extractionPending}

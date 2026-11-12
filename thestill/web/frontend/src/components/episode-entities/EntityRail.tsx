@@ -5,6 +5,7 @@ import { entityStyle } from '../../utils/entityColors'
 import { useBackgroundLocation } from '../../hooks/useBackgroundLocation'
 import { useIsSmUp } from '../../hooks/useMediaQuery'
 import EntityHighlight from './EntityHighlight'
+import EntityTypeToggles from './EntityTypeToggles'
 import { NO_SEGMENT, synthesizeIndexMention } from './indexMention'
 
 // Spec #28 §5.2 right rail (desktop ≥ md). "In this episode" (the people
@@ -52,6 +53,11 @@ export interface EntityRailProps {
   // Peek action: switch to the transcript and scroll to a segment.
   onShowInTranscript?: (segmentId: number) => void
   onFocusEntity?: (entityId: string) => void
+  // The type toggles (which types of entity are highlighted in the text).
+  // The rail is where they live from `lg` up, where the key entities strip
+  // is not shown. The rail itself always lists every type: it is the index.
+  hiddenTypes?: Set<EntityType>
+  onToggleType?: (type: EntityType) => void
   relatedEpisodes?: RelatedEpisode[]
   relatedLoading?: boolean
   // True while the entity branch (extract → … → compute-related) has not
@@ -147,6 +153,8 @@ export default function EntityRail({
   onSeek,
   onShowInTranscript,
   onFocusEntity,
+  hiddenTypes,
+  onToggleType,
   relatedEpisodes = [],
   relatedLoading = false,
   extractionPending = false,
@@ -181,6 +189,12 @@ export default function EntityRail({
       className="space-y-4 text-sm"
       data-testid="entity-rail"
     >
+      {hasAny && hiddenTypes && onToggleType && (
+        <div className="flex items-center justify-between gap-2 px-2" data-testid="entity-rail-type-toggles">
+          <span className="text-[10px] uppercase tracking-wide text-gray-500">Highlight in text</span>
+          <EntityTypeToggles hiddenTypes={hiddenTypes} onToggleType={onToggleType} />
+        </div>
+      )}
       {takingPart.length > 0 && (
         <RailSection title="In this episode" entities={takingPart} showAll {...rowProps} />
       )}
