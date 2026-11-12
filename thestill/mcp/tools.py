@@ -52,6 +52,7 @@ from .analytics_tools import (
     dispatch_analytics_tool,
     new_analytics_cache,
 )
+from .annotations import annotate
 from .entity_tools import ENTITY_TOOL_NAMES, dispatch_entity_tool, entity_tool_definitions
 from .errors import public_error_message
 from .identity import McpIdentity, ScopeError, remote_call_limiter, require_scope, visible_tools
@@ -473,7 +474,9 @@ def setup_tools(
         # Spec #78 Phase 2 — over the remote connector only the tools the
         # token's (effective) scopes grant are listed. Advisory: the
         # call-time check below is the control.
-        return visible_tools(identity, tools)
+        # Spec #109 — every listed tool carries a title and explicit
+        # read-only / destructive hints.
+        return annotate(visible_tools(identity, tools))
 
     async def call_tool(name: str, arguments: Any, identity: McpIdentity) -> list[TextContent]:
         """

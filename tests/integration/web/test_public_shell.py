@@ -72,6 +72,17 @@ def test_landing_has_indexable_tags(site, app_state):
     assert head.count("<title>") == 1
 
 
+def test_claude_guide_is_indexable_and_in_the_sitemap(site, app_state):
+    """Spec #108 — /claude is the connector's public documentation."""
+    response = site.get("/claude")
+    assert response.status_code == 200
+    head = _head(response.text)
+    assert _title(response.text) == "Use Thestill in Claude · Thestill"
+    assert "noindex" not in head
+    assert '<link rel="canonical" href="https://thestill.test/claude" />' in head
+    assert "<loc>https://thestill.test/claude</loc>" in site.get("/sitemap.xml").text
+
+
 def test_head_request_is_allowed(site):
     assert site.head("/").status_code == 200
 

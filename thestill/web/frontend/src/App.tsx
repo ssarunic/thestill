@@ -36,6 +36,7 @@ const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 const LegalPage = lazy(() => import('./pages/public/LegalPage'))
+const HelpPage = lazy(() => import('./pages/public/HelpPage'))
 const OAuthConsent = lazy(() => import('./pages/OAuthConsent'))
 // Spec #110 — the admin transcript editor, its own screen outside the layout.
 const TranscriptEditorPage = lazy(() => import('./pages/TranscriptEditorPage'))
@@ -127,6 +128,13 @@ function App() {
           </Suspense>
         } />
       ))}
+
+      {/* Spec #108 — the Claude connector guide, readable signed in or not. */}
+      <Route path="/claude" element={
+        <Suspense fallback={<PageLoader />}>
+          <HelpPage doc="claude" />
+        </Suspense>
+      } />
 
       {/* Protected routes with layout */}
       <Route path="/" element={
