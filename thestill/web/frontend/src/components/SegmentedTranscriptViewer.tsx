@@ -809,8 +809,21 @@ export default function SegmentedTranscriptViewer({
 
   useEffect(() => {
     if (!scrollToSegmentId) return
-    follow.scrollToKey(scrollToSegmentId.segmentId)
-    // follow is stable from useAutoScrollFollow; intentionally exclude.
+    let key = scrollToSegmentId.segmentId
+    if (!renderedIdSet.has(key)) {
+      // The target has no row (hidden filler, an entity filter): go to the
+      // next passage that has one — where a linked moment's "Play from"
+      // sits too — or the last one.
+      const target = transcript.segments.find((s) => s.id === key)
+      const next = target
+        ? (renderedSegments.find((s) => s.start >= target.start) ?? renderedSegments[renderedSegments.length - 1])
+        : undefined
+      if (!next) return
+      key = next.id
+    }
+    follow.scrollToKey(key)
+    // Fires per requested jump, not when the row set changes; follow is
+    // stable from useAutoScrollFollow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollToSegmentId?.segmentId, scrollToSegmentId?.nonce])
 

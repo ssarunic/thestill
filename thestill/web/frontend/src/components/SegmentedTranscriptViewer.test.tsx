@@ -262,6 +262,29 @@ describe('SegmentedTranscriptViewer', () => {
         expect(onSeek).toHaveBeenCalledWith(0)
       })
 
+      it('scrolls to the visible passage that carries the offer when the linked one is hidden', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=22') // inside the hidden filler segment (id 3)
+        const scrolled: Element[] = []
+        const original = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = function (this: Element) {
+          scrolled.push(this)
+        }
+        try {
+          const data = defaultTranscript()
+          data.segments.push(seg({ id: 4, start: 25, end: 30, speaker: 'Bob', text: 'After the filler' }))
+          renderViewer({
+            transcript: data,
+            episodeId: 'ep1',
+            onSeekRequest: vi.fn(),
+            scrollToSegmentId: { segmentId: 3, nonce: 1 },
+          })
+          expect(scrolled).toEqual([screen.getByTestId('segment-content-4')])
+        } finally {
+          Element.prototype.scrollIntoView = original
+        }
+      })
+
       it('shows nothing without a moment in the URL', () => {
         setActivation(false)
         const onSeek = vi.fn()
