@@ -216,6 +216,10 @@ export class NativeEngine implements PlaybackEngine {
           // Before any of the file arrived, the code says little: a refused
           // or unreachable address is reported as an unsupported format.
           const neverLoaded = this.el.readyState === 0 && this.longestDuration === 0
+          // A source that was only being preloaded (a session restored on
+          // page load): nobody asked for audio yet, so nobody is told. The
+          // next press on Play loads it afresh (see play()).
+          if (neverLoaded && !this.wantsPlay) return
           this.events.onError(neverLoaded ? AUDIO_NOT_LOADED_MESSAGE : describeMediaError(this.el.error?.code))
         },
       ],
@@ -313,7 +317,14 @@ export class NativeEngine implements PlaybackEngine {
     this.pendingSeek = position
     this.el.src = this.elementUrl ?? url
     // A held start stays paused; it is started when the hold ends.
-    if (this.wantsPlay && !this.hold) void this.el.play().catch(() => {})
+    if (this.wantsPlay && !this.hold) void this.el.play().catch(() => this.startRefused())
+  }
+
+  // A start the engine made by itself (after a reload) was refused: the
+  // app must not go on showing playback that is not happening.
+  private startRefused(): void {
+    this.wantsPlay = false
+    this.events.onPause()
   }
 
   /**
@@ -343,7 +354,7 @@ export class NativeEngine implements PlaybackEngine {
     this.lastSeekTarget = null
     this.pendingSeek = at
     this.el.src = this.elementUrl ?? url
-    if (this.wantsPlay) void this.el.play().catch(() => {})
+    if (this.wantsPlay) void this.el.play().catch(() => this.startRefused())
     else this.events.onPause()
   }
 
@@ -412,6 +423,12 @@ export class NativeEngine implements PlaybackEngine {
           { once: true },
         )
       })
+    }
+    // A source that failed to load stays failed: play() on it is refused
+    // without another request. Load it afresh, so that "try again" does.
+    if (this.el.error && this.url !== null && this.hls === null) {
+      this.pendingSeek = this.pendingSeek ?? (this.el.currentTime > 0 ? this.el.currentTime : null)
+      this.el.src = this.elementUrl ?? this.url
     }
     return this.el.play()
   }
@@ -590,9 +607,10 @@ export class NativeEngine implements PlaybackEngine {
     return this.timeline !== null
   }
 
-  /** Whether any of the source has arrived (metadata or more). */
+  /** Whether any of the source has arrived: metadata or more, or a clock
+   * that has moved off zero. */
   hasLoadedAnything(): boolean {
-    return this.el.readyState > 0
+    return this.el.readyState > 0 || this.el.currentTime > 0
   }
 
   // Spec #90 — apply a resume position learned after the source was

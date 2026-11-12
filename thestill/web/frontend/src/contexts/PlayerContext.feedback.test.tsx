@@ -49,6 +49,7 @@ const track: PlayerTrack = {
 const bbcTrack: PlayerTrack = { ...track, episodeId: 'ep-2', episodeSlug: 'ep-2-slug', audioUrl: 'http://open.example.org/redir/a.mp3' }
 
 let playResult: () => Promise<void>
+let playAccepted = true
 let readyState = 0
 
 function renderPlayer() {
@@ -69,13 +70,12 @@ beforeEach(() => {
   sessionStorage.clear()
   readyState = 0
   playResult = () => Promise.resolve()
+  playAccepted = true
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
-    const result = playResult()
-    void result.then(
-      () => this.dispatchEvent(new Event('play')),
-      () => {},
-    )
-    return result
+    // As a browser does: `play` fires as soon as the start is accepted,
+    // long before any audio; a refused start fires nothing.
+    if (playAccepted) this.dispatchEvent(new Event('play'))
+    return playResult()
   })
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLMediaElement) {
     this.dispatchEvent(new Event('pause'))
@@ -114,6 +114,7 @@ describe('feedback after a press on Play', () => {
 
   it('stops waiting when the browser refuses to start', async () => {
     playResult = () => Promise.reject(new DOMException('no gesture', 'NotAllowedError'))
+    playAccepted = false
     renderPlayer()
     await act(async () => ctx.play(track))
     expect(ctx.isLoading).toBe(false)
@@ -140,6 +141,87 @@ describe('feedback after a press on Play', () => {
     expect(ctx.mediaError).toBe(AUDIO_NOT_LOADED_MESSAGE)
     expect(ctx.isLoading).toBe(false)
     expect(ctx.isPlaying).toBe(false)
+  })
+
+  it('cancels the pending start when it gives up, so the next press plays', async () => {
+    vi.useFakeTimers()
+    const pause = vi.mocked(HTMLMediaElement.prototype.pause)
+    const play = vi.mocked(HTMLMediaElement.prototype.play)
+    renderPlayer()
+    await act(async () => ctx.play(track))
+    const pausesBefore = pause.mock.calls.length
+    act(() => vi.advanceTimersByTime(LOAD_PATIENCE_MS))
+    expect(ctx.mediaError).toBe(AUDIO_NOT_LOADED_MESSAGE)
+    // Not left pending: the audio must not start later by itself.
+    expect(pause.mock.calls.length).toBe(pausesBefore + 1)
+    // The button says Play, and pressing it plays.
+    const playsBefore = play.mock.calls.length
+    await act(async () => ctx.toggle())
+    expect(play.mock.calls.length).toBe(playsBefore + 1)
+    expect(ctx.isLoading).toBe(true)
+  })
+
+  it('ignores the rejection of a start that another episode has replaced', async () => {
+    let rejectFirst: (reason: unknown) => void = () => {}
+    playResult = () =>
+      new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject
+      })
+    renderPlayer()
+    await act(async () => ctx.play(track))
+    const rejectEpisodeOne = rejectFirst
+    // The listener switches episode while the first start is still pending.
+    playResult = () => new Promise<void>(() => {})
+    await act(async () => ctx.play(bbcTrack))
+    expect(ctx.isLoading).toBe(true)
+    // Assigning the new source aborts the first start.
+    await act(async () => rejectEpisodeOne(new DOMException('aborted', 'AbortError')))
+    expect(ctx.isLoading).toBe(true)
+  })
+
+  it('loads the source afresh when Play is pressed again after a failure', async () => {
+    const video = renderPlayer()
+    await act(async () => ctx.play(track))
+    Object.defineProperty(video, 'error', { configurable: true, get: () => ({ code: 4 }) })
+    fire(video, 'error')
+    expect(ctx.mediaError).toBe(AUDIO_NOT_LOADED_MESSAGE)
+
+    // A failed element refuses play() without asking the network again;
+    // the source has to be assigned once more.
+    const assigned: string[] = []
+    const src = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')!
+    Object.defineProperty(video, 'src', {
+      configurable: true,
+      get: () => src.get!.call(video),
+      set: (value: string) => {
+        assigned.push(value)
+        src.set!.call(video, value)
+      },
+    })
+    await act(async () => ctx.toggle())
+    expect(assigned).toEqual(['https://cdn.test/a.mp3'])
+    // The retry is the news now, not the earlier failure.
+    expect(ctx.mediaError).toBeNull()
+    expect(ctx.isLoading).toBe(true)
+  })
+
+  it('says nothing when a source that was only preloaded fails, and loads it on Play', async () => {
+    const video = renderPlayer()
+    await act(async () => ctx.play(track))
+    act(() => ctx.pause())
+    // The same state as a session restored on page load: loaded, not asked to play.
+    fire(video, 'error')
+    expect(ctx.mediaError).toBeNull()
+  })
+
+  it('stops showing the wait when the engine reports the start did not happen', async () => {
+    const video = renderPlayer()
+    await act(async () => ctx.play(track))
+    expect(ctx.isLoading).toBe(true)
+    // What a start refused after a reload, or after a held start, ends in.
+    fire(video, 'pause')
+    expect(ctx.isPlaying).toBe(false)
+    expect(ctx.isLoading).toBe(false)
   })
 
   it('keeps waiting on a slow source that has started to arrive', async () => {

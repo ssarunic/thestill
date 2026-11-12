@@ -43,7 +43,7 @@ from __future__ import annotations
 import threading
 import time
 from typing import Callable, Dict, Optional, Tuple
-from urllib.parse import parse_qsl, urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 
 import requests
 from structlog import get_logger
@@ -56,6 +56,12 @@ USER_AGENT = "Thestill/1.0"
 MAX_HOPS = 8
 #: Connect and read timeouts, per hop. A range seek waits on this.
 TIMEOUT_S: Tuple[float, float] = (4.0, 6.0)
+#: The whole walk must answer before the player gives up on the audio
+#: (15 s), whatever the hop count.
+DEADLINE_S = 10.0
+#: How long a failure is remembered, so a player retrying its range
+#: requests does not walk an unreachable chain each time.
+FAILURE_TTL_S = 15.0
 #: How long a resolved address is reused when it does not say when it
 #: expires.
 DEFAULT_TTL_S = 300.0
@@ -63,13 +69,26 @@ DEFAULT_TTL_S = 300.0
 #: it is dropped (a range request made near the end must still succeed).
 MAX_TTL_S = 4 * 60 * 60.0
 EXPIRY_MARGIN_S = 15 * 60.0
+#: A short-lived signature gives up a quarter of its life, not the full
+#: margin (which would leave it nothing).
+EXPIRY_MARGIN_SHARE = 0.25
 CACHE_MAX_ENTRIES = 512
 
 _REDIRECTS = (301, 302, 303, 307, 308)
 
 
 def _https(url: str) -> str:
-    return "https://" + url[len("http://") :] if url.startswith("http://") else url
+    """``url`` over ``https``: scheme replaced (any case), an explicit port 80
+    dropped (it is the plain-http port; TLS is not spoken there)."""
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() != "http":
+        return url.strip()
+    netloc = parts.netloc[: -len(":80")] if parts.netloc.endswith(":80") else parts.netloc
+    return urlunsplit(("https", netloc, parts.path, parts.query, parts.fragment))
+
+
+def _scheme(url: str) -> str:
+    return urlsplit(url.strip()).scheme.lower()
 
 
 def _host(url: str) -> str:
@@ -77,12 +96,26 @@ def _host(url: str) -> str:
 
 
 def _ttl(resolved: str, wall_now: float) -> float:
-    """How long ``resolved`` may be reused: until its ``Expires`` (the epoch
-    second a signed address carries), less a margin, within the cap."""
+    """How long ``resolved`` may be reused.
+
+    A signed address says when it stops working: ``Expires`` is an epoch
+    second, ``X-Amz-Expires`` / ``X-Goog-Expires`` a number of seconds from
+    signing (taken as from now). It is dropped a margin before that, within
+    the cap. An address that says nothing gets the default.
+    """
+    remaining: Optional[float] = None
     for name, value in parse_qsl(urlsplit(resolved).query):
-        if name.lower() == "expires" and value.isdigit():
-            return max(0.0, min(MAX_TTL_S, int(value) - wall_now - EXPIRY_MARGIN_S))
-    return DEFAULT_TTL_S
+        if not value.isdigit():
+            continue
+        key = name.lower()
+        if key == "expires":
+            remaining = int(value) - wall_now
+        elif key in ("x-amz-expires", "x-goog-expires"):
+            remaining = float(value)
+    if remaining is None:
+        return DEFAULT_TTL_S
+    margin = min(EXPIRY_MARGIN_S, remaining * EXPIRY_MARGIN_SHARE)
+    return max(0.0, min(MAX_TTL_S, remaining - margin))
 
 
 class AudioAddressResolver:
@@ -96,7 +129,12 @@ class AudioAddressResolver:
         self._get = get_fn
         self._clock = clock
         self._lock = threading.Lock()
-        self._cache: Dict[Tuple[str, str], Tuple[str, float]] = {}
+        # (enclosure, listener) -> (address or None for a failure, good until)
+        self._cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
+        # One walk at a time per (enclosure, listener): a player opens with
+        # several range requests at once, and each walk of an ad-splicing
+        # host may come back with a different copy.
+        self._walking: Dict[Tuple[str, str], threading.Event] = {}
 
     def playable_url(self, audio_url: str, listener: str = "") -> Optional[str]:
         """The address to hand a browser on an ``https`` page, or ``None``.
@@ -106,33 +144,60 @@ class AudioAddressResolver:
         ``listener`` only keys the memory of earlier answers; it is never
         sent anywhere.
         """
-        if audio_url.startswith("https://"):
+        scheme = _scheme(audio_url)
+        if scheme == "https":
             return audio_url
-        if not audio_url.startswith("http://"):
+        if scheme != "http":
             return None
         key = (audio_url, listener)
-        now = self._clock()
-        with self._lock:
-            cached = self._cache.get(key)
-            if cached and cached[1] > now:
-                return cached[0]
-        resolved = self._resolve(audio_url)
-        if resolved is not None:
-            ttl = _ttl(resolved, now)
+        while True:
             with self._lock:
-                if len(self._cache) >= CACHE_MAX_ENTRIES:
-                    # Drop what has expired; if that is not enough, start over.
-                    self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
-                    if len(self._cache) >= CACHE_MAX_ENTRIES:
-                        self._cache.clear()
+                cached = self._cache.get(key)
+                if cached and cached[1] > self._clock():
+                    return cached[0]
+                waiting = self._walking.get(key)
+                if waiting is None:
+                    mine = self._walking[key] = threading.Event()
+                    break
+            # Someone is already walking this chain for this listener:
+            # take their answer.
+            waiting.wait(DEADLINE_S + TIMEOUT_S[0] + TIMEOUT_S[1])
+        try:
+            resolved = self._resolve(audio_url)
+            # After the walk: its seconds count against the address's life.
+            now = self._clock()
+            ttl = _ttl(resolved, now) if resolved is not None else FAILURE_TTL_S
+            with self._lock:
                 if ttl > 0:
-                    self._cache[key] = (resolved, now + ttl)
-        return resolved
+                    self._remember(key, resolved, now + ttl, now)
+            return resolved
+        finally:
+            with self._lock:
+                self._walking.pop(key, None)
+            mine.set()
+
+    def _remember(self, key: Tuple[str, str], value: Optional[str], until: float, now: float) -> None:
+        self._cache.pop(key, None)
+        if len(self._cache) >= CACHE_MAX_ENTRIES:
+            # Make room without taking a listener's address away mid-play:
+            # first what has expired, then the oldest entry.
+            for stale in [k for k, v in self._cache.items() if v[1] <= now]:
+                del self._cache[stale]
+            while len(self._cache) >= CACHE_MAX_ENTRIES:
+                del self._cache[next(iter(self._cache))]
+        self._cache[key] = (value, until)
 
     def _resolve(self, audio_url: str) -> Optional[str]:
         current = _https(audio_url)
+        started = time.monotonic()
         try:
             for hop in range(MAX_HOPS + 1):
+                left = DEADLINE_S - (time.monotonic() - started)
+                if left <= 0:
+                    logger.warning(
+                        "audio_address_unresolved", source_host=_host(audio_url), reason="deadline", hops=hop
+                    )
+                    return None
                 # Every hop is checked: the enclosure comes from a feed, and a
                 # redirect must not reach an internal address from here.
                 validate_public_url(current)
@@ -141,10 +206,10 @@ class AudioAddressResolver:
                     headers={"User-Agent": USER_AGENT, "Range": "bytes=0-0"},
                     allow_redirects=False,
                     stream=True,
-                    timeout=TIMEOUT_S,
+                    timeout=(min(TIMEOUT_S[0], left), min(TIMEOUT_S[1], left)),
                 )
                 status = response.status_code
-                location = response.headers.get("Location", "")
+                location = (response.headers.get("Location") or "").strip()
                 response.close()
                 if status in _REDIRECTS and location:
                     current = _https(urljoin(current, location))

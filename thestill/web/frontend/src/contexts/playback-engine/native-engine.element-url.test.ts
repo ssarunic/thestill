@@ -60,6 +60,7 @@ describe('NativeEngine element address', () => {
   it('says the audio could not be loaded when none of it arrived, whatever the code', () => {
     const { engine, fail, onError } = makeEngine()
     engine.load({ url: ENCLOSURE, elementUrl: VIA })
+    void engine.play()
     fail(4) // what a refused or unreachable address is reported as
     expect(onError).toHaveBeenLastCalledWith(AUDIO_NOT_LOADED_MESSAGE)
   })
@@ -67,8 +68,19 @@ describe('NativeEngine element address', () => {
   it('keeps the specific message once the source had loaded', () => {
     const { engine, fail, onError, setReadyState } = makeEngine()
     engine.load({ url: ENCLOSURE })
+    void engine.play()
     setReadyState(2)
     fail(3)
     expect(onError).toHaveBeenLastCalledWith('The media could not be decoded.')
+  })
+
+  it('assigns the element address again when Play is pressed on a source that failed', () => {
+    const { el, engine, fail } = makeEngine()
+    engine.load({ url: ENCLOSURE, elementUrl: VIA })
+    void engine.play()
+    fail(4)
+    el.removeAttribute('src')
+    void engine.play()
+    expect(el.getAttribute('src')).toBe(VIA)
   })
 })
