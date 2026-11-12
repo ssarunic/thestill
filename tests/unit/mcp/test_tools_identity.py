@@ -300,6 +300,24 @@ class TestStdioBranch:
             assert {r["id"] for r in rows} == {p0, p1}
 
     @pytest.mark.anyio
+    async def test_every_listed_tool_carries_a_title_and_explicit_hints(self, stdio):
+        """Spec #109 — what a client (and Claude's directory) reads from
+        ``tools/list``: no tool without a title or with a hint left unset."""
+        server, _, _ = stdio
+        async with Client(server) as session:
+            tools = (await session.list_tools()).tools
+        assert tools
+        for tool in tools:
+            assert tool.title, tool.name
+            assert tool.annotations is not None, tool.name
+            assert tool.annotations.read_only_hint is not None, tool.name
+            assert tool.annotations.destructive_hint is not None, tool.name
+        by_name = {t.name: t.annotations for t in tools}
+        assert by_name["search_corpus"].read_only_hint is True
+        assert by_name["add_podcast"].read_only_hint is False
+        assert by_name["remove_podcast"].destructive_hint is True
+
+    @pytest.mark.anyio
     async def test_numeric_ids_accepted_and_remove_deletes(self, stdio):
         server, p0, p1 = stdio
         async with Client(server) as session:

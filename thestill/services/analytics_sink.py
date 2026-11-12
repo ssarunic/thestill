@@ -39,8 +39,8 @@ logger = get_logger(__name__)
 # can tell thestill's events apart (server events have no ``$host``).
 APP_PROPERTY = {"app": "thestill"}
 
-PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal"]
-PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "none"]
+PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude"]
+PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude", "none"]
 # Where a follow was made: the episode page's first-follow prompt, the show
 # page (or its follow carried through sign-in), the Top podcasts chart or
 # the Add podcast modal.

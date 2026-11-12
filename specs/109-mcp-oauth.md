@@ -472,7 +472,8 @@ retired more than 30 days ago.
 
 ### Phase 2: make it the default
 
-- [ ] Tool titles and hints, with the contract test.
+- [x] Tool titles and hints, with the contract test
+  (`thestill/mcp/annotations.py`, applied to every `tools/list`).
 - [ ] `mcp_oauth_granted` / `mcp_oauth_revoked`, and `client` from the
   grant on `mcp_tool_call`.
 - [ ] Flip `MCP_OAUTH_ENABLED` on. The Settings card leads with the
