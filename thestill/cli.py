@@ -5327,10 +5327,15 @@ def _curate(ctx, action):
 @click.argument("loser")
 @click.option("--dry-run", "-d", is_flag=True, help="Report without writing.")
 @click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.option(
+    "--no-alias",
+    is_flag=True,
+    help="Do not keep LOSER's name as an alias of KEEPER (for a name that is not a name of the thing).",
+)
 @click.pass_context
 @require_config
 @log_command
-def entity_merge(ctx, keeper, loser, dry_run, reason):
+def entity_merge(ctx, keeper, loser, dry_run, reason, no_alias):
     """Move everything that refers to LOSER onto KEEPER and delete LOSER.
 
     For two rows that are one thing. Both are entity ids
@@ -5338,15 +5343,44 @@ def entity_merge(ctx, keeper, loser, dry_run, reason):
     recurring / guest lists and mention candidates all move. Use
     ``entity move-mentions`` or ``entity split`` when they are different
     things.
+
+    LOSER's name stays as an alias of KEEPER when it resembles KEEPER's
+    name, so a facts file or a transcript that still uses it finds KEEPER
+    instead of creating LOSER again. A name that does not resemble it, and
+    LOSER's own aliases, are listed and not carried over; add the right
+    ones with ``thestill entity-alias-add``.
     """
-    result = _curate(ctx, lambda svc, actor: svc.merge(keeper, loser, actor=actor, reason=reason, dry_run=dry_run))
+    result = _curate(
+        ctx,
+        lambda svc, actor: svc.merge(
+            keeper, loser, actor=actor, reason=reason, dry_run=dry_run, keep_name=not no_alias
+        ),
+    )
+    dropped = ", ".join(repr(a) for a in result.dropped_aliases)
     if dry_run:
         click.echo(f"  [dry-run] would repoint every reference {result.loser_id!r} → {result.keeper_id!r}")
+        if result.alias_added:
+            click.echo(f"  [dry-run] would keep {result.alias_added!r} as an alias of {result.keeper_id!r}")
+        if result.alias_skipped:
+            click.echo(f"  [dry-run] would not keep {result.alias_skipped!r}: it does not resemble the keeper's name")
+        if dropped:
+            click.echo(f"  [dry-run] would drop {result.loser_id!r}'s aliases: {dropped}")
         click.echo(f"  [dry-run] would delete {result.loser_id!r}")
         click.echo("\n🎉 1 would merge (dry-run)")
         return
     moved = ", ".join(f"{kind} {count}" for kind, count in result.moved.items() if count) or "nothing"
     click.echo(f"✓ moved {moved}; {result.loser_id} deleted")
+    if result.alias_added:
+        click.echo(f"✓ {result.alias_added!r} is now an alias of {result.keeper_id}")
+    if result.alias_skipped:
+        click.echo(
+            f"⚠ {result.alias_skipped!r} was not kept as an alias: it does not resemble the keeper's name, so "
+            "clean-aliases would remove it and unlink its mentions. If it is a real name of "
+            f"{result.keeper_id}, run: thestill entity-alias-add {result.keeper_id} {result.alias_skipped!r} "
+            "and add it to the alias allowlist."
+        )
+    if dropped:
+        click.echo(f"⚠ aliases not carried over: {dropped} (thestill entity-alias-add {result.keeper_id} <alias>)")
     click.echo("\n🎉 1 merged")
 
 

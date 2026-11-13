@@ -74,7 +74,7 @@ thestill narrate --briefing <briefing-id>
 
 # Entity curation (admin-only; same service as /api/admin/entities, audited).
 # Never fix entity data with SQL — use these:
-thestill entity merge KEEPER LOSER            # two rows, one thing
+thestill entity merge KEEPER LOSER            # two rows, one thing; LOSER's name stays as an alias if it resembles KEEPER's
 thestill entity move-mentions FROM TO ID...   # one name, two things
 thestill entity split FROM --name N --type T [--qid Q] [--mention ID]...
 thestill entity relink ID QID                 # wrong Wikidata item; blacklists the old one

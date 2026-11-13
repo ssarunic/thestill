@@ -186,3 +186,57 @@ def test_merge_moves_everything_and_prune_reports_before_deleting(client, app_st
     assert repo.get_entity("company:doximity") is not None
     applied = client.post("/api/admin/entities/prune-orphans", json={"apply": True}).json()
     assert applied["deleted"] == report["orphans"] and repo.get_entity("company:doximity") is None
+
+
+def test_merge_keeps_the_losers_name_as_an_alias_but_not_its_aliases(client, app_state, corpus):
+    _admin(client, app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(
+        EntityRecord(id="person:nikhyl-singhal", type=EntityType.PERSON, canonical_name="Nikhyl Singhal")
+    )
+    repo.upsert_entity(
+        EntityRecord(
+            id="person:nikhil-singh", type=EntityType.PERSON, canonical_name="Nikhil Singh", aliases=["Nik", "tariffs"]
+        )
+    )
+    body = {"keeper_id": "person:nikhyl-singhal", "loser_id": "person:nikhil-singh"}
+
+    preview = client.post("/api/admin/entities/merge", json={**body, "dry_run": True}).json()
+    assert preview["alias_added"] == "Nikhil Singh" and preview["dropped_aliases"] == ["Nik", "tariffs"]
+    assert repo.get_entity("person:nikhyl-singhal").aliases == []  # a dry run writes nothing
+
+    merged = client.post("/api/admin/entities/merge", json=body).json()
+    assert merged["alias_added"] == "Nikhil Singh" and merged["dropped_aliases"] == ["Nik", "tariffs"]
+    assert repo.get_entity("person:nikhyl-singhal").aliases == ["Nikhil Singh"]
+    # The old spelling now finds the keeper, so nothing recreates the loser.
+    assert [e.id for e in repo.find_entities_by_name("Nikhil Singh")] == ["person:nikhyl-singhal"]
+
+
+def test_merge_adds_no_alias_for_the_same_name_or_when_told_not_to(client, app_state, corpus):
+    _admin(client, app_state)
+    repo = app_state.entity_repository
+    for entity_id, name in (
+        ("company:doximity", "Doximity"),
+        ("company:doximity-inc", "doximity"),  # the keeper's name up to case
+        ("company:junk", "the the company"),
+        ("person:jose-alvarez", "José Alvarez"),
+        ("person:jose-alvarez-2", "Jose Alvarez"),  # name lookups keep accents, so this is another name
+        ("person:kanye-west", "Kanye West"),
+        ("person:ye", "Ye"),
+    ):
+        entity_type = EntityType.PERSON if entity_id.startswith("person:") else EntityType.COMPANY
+        repo.upsert_entity(EntityRecord(id=entity_id, type=entity_type, canonical_name=name))
+
+    def merge(keeper, loser, **extra):
+        return client.post("/api/admin/entities/merge", json={"keeper_id": keeper, "loser_id": loser, **extra}).json()
+
+    assert merge("company:doximity", "company:doximity-inc")["alias_added"] is None
+    assert merge("company:doximity", "company:junk", keep_name=False)["alias_added"] is None
+    assert repo.get_entity("company:doximity").aliases == []
+    assert merge("person:jose-alvarez", "person:jose-alvarez-2")["alias_added"] == "Jose Alvarez"
+    assert repo.get_entity("person:jose-alvarez").aliases == ["Jose Alvarez"]
+    # A name that does not resemble the keeper's is what clean-aliases strips,
+    # unlinking its mentions: reported for a human to vouch for, not stored.
+    stage_name = merge("person:kanye-west", "person:ye")
+    assert stage_name["alias_added"] is None and stage_name["alias_skipped"] == "Ye"
+    assert repo.get_entity("person:kanye-west").aliases == []
