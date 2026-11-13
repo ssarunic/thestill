@@ -79,6 +79,20 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 _STOPWORDS: FrozenSet[str] = frozenset({"and", "of", "the", "for", "de", "la", "in", "on", "at", "to", "a", "an"})
 
 
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def lookup_key(name: str) -> str:
+    """Two names with the same key are found by the same
+    ``find_entities_by_name`` call on both backends. That lookup is SQL
+    ``LOWER(a) = LOWER(b)``, which SQLite applies to ASCII letters only and
+    which never equates "ß" with "ss" or "é" with "e", so only ASCII case is
+    folded here. A name that merely looks the same ("Jose" for "José",
+    "Weiss" for "Weiß", "John  Smith" for "John Smith") is another name to
+    the lookup: as an alias it is the only way to find the row by it."""
+    return name.translate(_ASCII_LOWER)
+
+
 def _fold(text: str) -> str:
     """Casefold and strip diacritics: ``"Håland"`` -> ``"haland"``."""
     decomposed = unicodedata.normalize("NFKD", text)
@@ -140,7 +154,7 @@ class AliasVerdict:
     canonical_name: str
     alias: str
     keep: bool
-    reason: str  # related | accent_variant | evidence | allowlisted | redundant | unsupported
+    reason: str  # related | spelling_variant | evidence | allowlisted | redundant | unsupported
     direct_since_fix: int = 0
     direct_before_fix: int = 0
     anchor_mentions: int = 0
@@ -204,14 +218,14 @@ def plan_alias_cleanup(
         compact = "".join(_TOKEN_RE.findall(_fold(row.alias)))
         needed = MIN_EVIDENCE_SHORT if len(compact) <= SHORT_ALIAS_CHARS else MIN_EVIDENCE
         if _fold(row.alias) == _fold(row.canonical_name):
-            # Name lookups compare case only, so "Jose" finds "José" through
-            # this alias and through nothing else: a merge keeps it for that
-            # (``EntityCurationService.merge``). Only a repeat up to case is
-            # redundant.
-            if row.alias.strip().casefold() == row.canonical_name.strip().casefold():
+            # Only an alias the name lookup already equates with the name is
+            # redundant. "Jose" for "José" and "Weiss" for "Weiß" find the
+            # row through this alias and through nothing else: a merge
+            # keeps them for that (``EntityCurationService.merge``).
+            if lookup_key(row.alias) == lookup_key(row.canonical_name):
                 keep, reason = False, "redundant"
             else:
-                keep, reason = True, "accent_variant"
+                keep, reason = True, "spelling_variant"
         elif is_related_alias(row.alias, row.canonical_name):
             keep, reason = True, "related"
         elif (row.entity_id, _fold(row.alias)) in allowed:

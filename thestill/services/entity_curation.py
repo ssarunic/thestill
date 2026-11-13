@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from structlog import get_logger
 
-from ..core.entity_alias_hygiene import _fold, is_related_alias
+from ..core.entity_alias_hygiene import _fold, is_related_alias, lookup_key
 from ..core.entity_linking.cache import invalidate_link_decisions
 from ..core.entity_linking.shared import _build_entity_id
 from ..models.entities import EntityRecord, EntityType
@@ -46,21 +46,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _QID_RE = re.compile(r"^Q[1-9][0-9]*$")
-
-
-_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
-
-
-def _lookup_key(name: str) -> str:
-    """Two names with the same key are found by the same
-    ``find_entities_by_name`` call on both backends. That lookup is SQL
-    ``LOWER(a) = LOWER(b)``, which SQLite applies to ASCII letters only and
-    which never equates "ß" with "ss" or "é" with "e", so only ASCII case is
-    folded here. A name that merely looks the same ("Jose" for "José",
-    "Weiss" for "Weiß", "John  Smith" for "John Smith") gets its own alias,
-    or nothing would find the row by it; an alias too many is harmless, one
-    too few recreates the loser."""
-    return name.translate(_ASCII_LOWER)
 
 
 @dataclass(frozen=True)
@@ -215,15 +200,15 @@ class EntityCurationService:
             raise AdminActionError(
                 "type_mismatch", f"Cannot merge across types: {keeper.type.value} ≠ {loser.type.value}."
             )
-        keeper_names = {_lookup_key(name) for name in (keeper.canonical_name, *keeper.aliases)}
+        keeper_names = {lookup_key(name) for name in (keeper.canonical_name, *keeper.aliases)}
         alias = loser.canonical_name.strip()
         alias_added = alias_skipped = None
-        if keep_name and alias and _lookup_key(alias) not in keeper_names:
+        if keep_name and alias and lookup_key(alias) not in keeper_names:
             if is_related_alias(alias, keeper.canonical_name) or _fold(alias) == _fold(keeper.canonical_name):
                 alias_added = alias
             else:
                 alias_skipped = alias
-        dropped = sorted(a for a in loser.aliases if _lookup_key(a) not in keeper_names | {_lookup_key(alias)})
+        dropped = sorted(a for a in loser.aliases if lookup_key(a) not in keeper_names | {lookup_key(alias)})
         if dry_run:
             return MergeResult(keeper.id, loser.id, {}, alias_added, alias_skipped, dropped)
         moved = self._repo.repoint_entity_references(from_entity_id=loser.id, to_entity_id=keeper.id)
