@@ -62,10 +62,46 @@ GENERIC_NOUNS = frozenset(
 )
 
 
+# Words in front of a generic noun that leave it generic: "this person",
+# "that guy", "our team". "the" is left out on purpose: "The Founder" and
+# "The Agent" are films, and a skipped name is remembered as "no such entity".
+_DETERMINERS = frozenset("a an this that these those some any every each another my your his her its our their".split())
+# "this person's", "our customers'": singular and plural possessives.
+_POSSESSIVE_SUFFIXES = ("'s", "\u2019s", "'", "\u2019")
+
+
 def is_generic_noun(group: NameGroup) -> bool:
-    """The chooser would reject these anyway; skipping the lookup is a cost
-    control, never a quality rule."""
-    return group.surface_key in GENERIC_NOUNS
+    """A generic word, bare or behind a determiner, with or without a
+    possessive: "person", "this person", "that guy's".
+
+    The chooser was expected to reject these, so skipping the lookup began
+    as a cost control. It does not reject them all: Wikipedia's search
+    answers "this person" with the article Person, and the chooser took
+    it, which put "Person" among an episode's people. The linker therefore
+    also refuses a remembered link for such a name
+    (``LiveWikidataLinker.link``).
+
+    A determiner is only looked past in running speech. A name whose noun
+    is capitalised as spoken is a title: "This Country" is a sitcom and
+    "Another Country" a film, while "this country" and "This country" (a
+    sentence start) are not. The extractor has no label for works, so the
+    capital is the only sign.
+    """
+    words = group.surface_key.split()
+    if len(words) > 1:
+        spoken_noun = group.surface_form.split()[-1]
+        if spoken_noun[:1].isupper():
+            return False
+        while len(words) > 1 and words[0] in _DETERMINERS:
+            words = words[1:]
+        if len(words) != 1:
+            return False
+    word = words[0] if words else ""
+    for suffix in _POSSESSIVE_SUFFIXES:
+        if word.endswith(suffix):
+            word = word[: -len(suffix)]
+            break
+    return word in GENERIC_NOUNS
 
 
 class WikidataCandidateSource:
