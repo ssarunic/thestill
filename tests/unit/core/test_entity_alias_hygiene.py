@@ -124,6 +124,10 @@ class TestPlan:
         assert (v.keep, v.reason) == (False, "redundant")
         assert v.mentions_to_delete == 0 and v.mentions_to_reset == 0
 
+    def test_an_accent_only_variant_is_kept_because_lookups_compare_case_only(self):
+        v = self._verdict(_ev("person:jose-alvarez", "José Alvarez", "Jose Alvarez"))
+        assert (v.keep, v.reason) == (True, "accent_variant")
+
     def test_summary_counts(self):
         plan = plan_alias_cleanup(
             [

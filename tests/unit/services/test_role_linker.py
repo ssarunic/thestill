@@ -1086,6 +1086,35 @@ def test_merging_a_misspelt_show_host_into_the_real_one_survives_a_relink(tmp_pa
     assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal", "person:dana-ingraham"]
 
 
+def test_a_merged_host_is_cleared_from_an_episode_that_names_no_other_guest(tmp_path):
+    """A solo episode: after the merge nothing in the facts file would
+    rewrite the guest list, so the host stored as its guest has to be
+    taken out explicitly."""
+    facts = "## Speaker Mapping\n- SPEAKER_01: Nikhyl Singhal (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts, show_hosts="- Nikhil Singh - Host\n")
+    transcript = _transcript({"Nikhyl Singhal": (60, 6000)})
+    link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+    assert er.get_episode_guests(episode_id) == ["person:nikhyl-singhal"]
+
+    EntityCurationService(er, _NoAudit()).merge("person:nikhyl-singhal", "person:nikhil-singh", actor=Actor.cli())
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+
+    assert after.cleared_host_guests == ["person:nikhyl-singhal"] and after.guests == []
+    assert er.get_episode_guests(episode_id) == []
+    assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal"]
+
+
+def test_a_pinned_guest_who_is_not_a_host_is_left_alone_when_the_facts_name_nobody(tmp_path):
+    facts = "## Speaker Mapping\n- SPEAKER_01: Harry Stebbings (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts)
+    er.upsert_entity(EntityRecord(id="person:pinned-guest", type=EntityType.PERSON, canonical_name="Pinned Guest"))
+    er.set_episode_guests(episode_id, ["person:pinned-guest"])
+
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript({"Harry Stebbings": (60, 6000)}))
+
+    assert after.cleared_host_guests == [] and er.get_episode_guests(episode_id) == ["person:pinned-guest"]
+
+
 def test_a_cohost_already_under_guests_is_not_added_twice(tmp_path):
     facts = _TRIO_FACTS.replace("## Guest(s)\n", "## Guest(s)\n- Jason Lemkin - Founder/SaaStr\n")
     er, podcast_id, _episode_id, link = _trio(tmp_path, episode_facts=facts)

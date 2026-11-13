@@ -140,7 +140,7 @@ class AliasVerdict:
     canonical_name: str
     alias: str
     keep: bool
-    reason: str  # related | evidence | allowlisted | redundant | unsupported
+    reason: str  # related | accent_variant | evidence | allowlisted | redundant | unsupported
     direct_since_fix: int = 0
     direct_before_fix: int = 0
     anchor_mentions: int = 0
@@ -204,7 +204,14 @@ def plan_alias_cleanup(
         compact = "".join(_TOKEN_RE.findall(_fold(row.alias)))
         needed = MIN_EVIDENCE_SHORT if len(compact) <= SHORT_ALIAS_CHARS else MIN_EVIDENCE
         if _fold(row.alias) == _fold(row.canonical_name):
-            keep, reason = False, "redundant"
+            # Name lookups compare case only, so "Jose" finds "José" through
+            # this alias and through nothing else: a merge keeps it for that
+            # (``EntityCurationService.merge``). Only a repeat up to case is
+            # redundant.
+            if row.alias.strip().casefold() == row.canonical_name.strip().casefold():
+                keep, reason = False, "redundant"
+            else:
+                keep, reason = True, "accent_variant"
         elif is_related_alias(row.alias, row.canonical_name):
             keep, reason = True, "related"
         elif (row.entity_id, _fold(row.alias)) in allowed:

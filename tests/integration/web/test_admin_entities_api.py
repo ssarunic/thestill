@@ -223,6 +223,8 @@ def test_merge_adds_no_alias_for_the_same_name_or_when_told_not_to(client, app_s
         ("person:jose-alvarez-2", "Jose Alvarez"),  # name lookups keep accents, so this is another name
         ("person:kanye-west", "Kanye West"),
         ("person:ye", "Ye"),
+        ("person:stefan-weiss", "Stefan Weiß"),
+        ("person:stefan-weiss-2", "Stefan Weiss"),  # casefold-equal, but no SQL LOWER() equates ß and ss
     ):
         entity_type = EntityType.PERSON if entity_id.startswith("person:") else EntityType.COMPANY
         repo.upsert_entity(EntityRecord(id=entity_id, type=entity_type, canonical_name=name))
@@ -235,6 +237,8 @@ def test_merge_adds_no_alias_for_the_same_name_or_when_told_not_to(client, app_s
     assert repo.get_entity("company:doximity").aliases == []
     assert merge("person:jose-alvarez", "person:jose-alvarez-2")["alias_added"] == "Jose Alvarez"
     assert repo.get_entity("person:jose-alvarez").aliases == ["Jose Alvarez"]
+    assert merge("person:stefan-weiss", "person:stefan-weiss-2")["alias_added"] == "Stefan Weiss"
+    assert [e.id for e in repo.find_entities_by_name("Stefan Weiss")] == ["person:stefan-weiss"]
     # A name that does not resemble the keeper's is what clean-aliases strips,
     # unlinking its mentions: reported for a human to vouch for, not stored.
     stage_name = merge("person:kanye-west", "person:ye")

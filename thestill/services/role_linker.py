@@ -227,6 +227,8 @@ class LinkResult:
     cohosts: List[str] = field(default_factory=list)
     # Such names the transcript refused: they did not take part.
     refused_cohosts: List[str] = field(default_factory=list)
+    # Stored guest ids removed because they are the show's hosts.
+    cleared_host_guests: List[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +753,15 @@ def link_episode_roles(
     # have stored it.
     if guests.writes or roles.ad_voices or roles.clip_voices or refused_cohosts:
         entity_repo.set_episode_guests(episode_id, result.guests)
+    elif podcast_id:
+        # Nothing above rewrites the list, so a show host stored as a guest
+        # stays: the host under another spelling was a co-host here until
+        # the two rows were merged. A show's host is not its own guest.
+        show_hosts = set(entity_repo.get_podcast_anchors(podcast_id).get("hosts", []))
+        stored = entity_repo.get_episode_guests(episode_id) if show_hosts else []
+        result.cleared_host_guests = [g for g in stored if g in show_hosts]
+        if result.cleared_host_guests:
+            entity_repo.set_episode_guests(episode_id, [g for g in stored if g not in show_hosts])
     logger.info(
         "episode_roles_linked",
         episode_id=episode_id,
@@ -763,6 +774,7 @@ def link_episode_roles(
         clip_voices=result.clip_voices,
         cohosts=result.cohosts,
         refused_cohosts=result.refused_cohosts,
+        cleared_host_guests=result.cleared_host_guests,
     )
     return result
 

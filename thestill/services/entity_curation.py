@@ -48,11 +48,19 @@ logger = get_logger(__name__)
 _QID_RE = re.compile(r"^Q[1-9][0-9]*$")
 
 
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
 def _lookup_key(name: str) -> str:
-    """A name as ``find_entities_by_name`` compares it: case only. Accents
-    are kept, because the lookup keeps them: "Jose" must stay an alias of
-    "José" or nothing finds the row by the unaccented spelling."""
-    return " ".join(name.split()).casefold()
+    """Two names with the same key are found by the same
+    ``find_entities_by_name`` call on both backends. That lookup is SQL
+    ``LOWER(a) = LOWER(b)``, which SQLite applies to ASCII letters only and
+    which never equates "ß" with "ss" or "é" with "e", so only ASCII case is
+    folded here. A name that merely looks the same ("Jose" for "José",
+    "Weiss" for "Weiß", "John  Smith" for "John Smith") gets its own alias,
+    or nothing would find the row by it; an alias too many is harmless, one
+    too few recreates the loser."""
+    return name.translate(_ASCII_LOWER)
 
 
 @dataclass(frozen=True)

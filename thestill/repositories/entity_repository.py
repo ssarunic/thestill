@@ -713,6 +713,11 @@ class EntityRepository(ABC):
         """Replace ``episodes.guest_entity_ids`` with the given list."""
 
     @abstractmethod
+    def get_episode_guests(self, episode_id: str) -> List[str]:
+        """``episodes.guest_entity_ids`` as stored (empty when the episode
+        is missing or has none)."""
+
+    @abstractmethod
     def get_podcast_anchors(self, podcast_id: str) -> dict:
         """``{'hosts': [...], 'recurring': [...]}`` for one podcast
         (empty lists when the podcast is missing).
