@@ -176,6 +176,9 @@ def test_a_remembered_link_for_a_generic_name_is_dropped_and_the_cache_heals(dec
     assert after.status == "unresolvable" and after.entity.wikidata_qid is None
     assert decisions.get("this person", POD).qid is None
     assert len(provider.user_messages) == 1  # only the first, pre-rule decision asked the model
+    # The healed row is an ordinary remembered "no entity": reused, not re-decided.
+    linker.resolve([mention(3, "this person", episode_id="ep-3")], context=CTX)
+    assert decisions.get("this person", POD).hits == 1
 
 
 def test_the_second_episode_is_answered_from_the_cache(decisions):

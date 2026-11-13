@@ -66,7 +66,8 @@ GENERIC_NOUNS = frozenset(
 # "that guy", "our team". "the" is left out on purpose: "The Founder" and
 # "The Agent" are films, and a skipped name is remembered as "no such entity".
 _DETERMINERS = frozenset("a an this that these those some any every each another my your his her its our their".split())
-_POSSESSIVE_SUFFIXES = ("'s", "\u2019s")
+# "this person's", "our customers'": singular and plural possessives.
+_POSSESSIVE_SUFFIXES = ("'s", "\u2019s", "'", "\u2019")
 
 
 def is_generic_noun(group: NameGroup) -> bool:
@@ -76,15 +77,25 @@ def is_generic_noun(group: NameGroup) -> bool:
     The chooser was expected to reject these, so skipping the lookup began
     as a cost control. It does not reject them all: Wikipedia's search
     answers "this person" with the article Person, and the chooser took
-    it, which put "Person" among an episode's people. The linker therefore also refuses a remembered link
-    for such a name (``LiveWikidataLinker.link``).
+    it, which put "Person" among an episode's people. The linker therefore
+    also refuses a remembered link for such a name
+    (``LiveWikidataLinker.link``).
+
+    A determiner is only looked past in running speech. A name the extractor
+    tagged a work, or one whose noun is capitalised as spoken, is a title:
+    "This Country" is a sitcom and "Another Country" a film, while "this
+    country" and "This country" (a sentence start) are not.
     """
     words = group.surface_key.split()
-    while len(words) > 1 and words[0] in _DETERMINERS:
-        words = words[1:]
-    if len(words) != 1:
-        return False
-    word = words[0]
+    if len(words) > 1:
+        spoken_noun = group.surface_form.split()[-1]
+        if group.surface_label == "work" or spoken_noun[:1].isupper():
+            return False
+        while len(words) > 1 and words[0] in _DETERMINERS:
+            words = words[1:]
+        if len(words) != 1:
+            return False
+    word = words[0] if words else ""
     for suffix in _POSSESSIVE_SUFFIXES:
         if word.endswith(suffix):
             word = word[: -len(suffix)]

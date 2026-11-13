@@ -110,9 +110,17 @@ def test_generic_nouns_are_not_searched():
         ("these people", "person", True),
         ("our team", "company", True),
         ("a person", "person", True),
+        ("our customers'", "person", True),  # plural possessive
+        ("these founders\u2019", "person", True),
         # "the" is not stripped: these are titles
         ("The Founder", "work", False),
         ("the agent", "work", False),
+        # a determiner in a title: tagged a work, or the noun capitalised as spoken
+        ("this country", "work", False),
+        ("This Country", "topic", False),
+        ("Another Country", "person", False),
+        ("That Guy", "person", False),
+        ("This country", "topic", True),  # a sentence start, not a title
         # a determiner in front of a name, or of two words, is not generic
         ("this Bitcoin", "topic", False),
         ("my first company", "company", False),
