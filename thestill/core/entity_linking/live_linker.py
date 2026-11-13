@@ -35,7 +35,7 @@ from structlog import get_logger
 from ...models.entities import EntityMention, ResolutionMethod
 from ..wikidata_client import WikidataUnavailable
 from .cache import LinkDecisionCache
-from .candidates import WikidataCandidateSource
+from .candidates import WikidataCandidateSource, is_generic_noun
 from .chooser import LLMCandidateChooser
 from .protocol import IsBlacklisted
 from .shared import (
@@ -186,6 +186,12 @@ class LiveWikidataLinker:
                 # A reviewer has since ruled this link out. Decide the name
                 # again, so a correction heals the cache even if nobody
                 # remembered to invalidate it.
+                cached = None
+            if cached is not None and cached.qid and is_generic_noun(group):
+                # A link remembered before the generic rule covered this
+                # name ("this person" → the Wikidata item Person). Decide it
+                # again: the candidate source answers "nothing", and that
+                # replaces the remembered link.
                 cached = None
             if cached is None:
                 misses.append(group)

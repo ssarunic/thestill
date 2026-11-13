@@ -103,6 +103,20 @@ def test_generic_nouns_are_not_searched():
         ("kubernetes", "topic", False),
         ("rationalism", "topic", False),
         ("apple", "company", False),
+        # a determiner or a possessive leaves a generic word generic
+        ("this person", "person", True),
+        ("This person's", "person", True),
+        ("that guy\u2019s", "person", True),
+        ("these people", "person", True),
+        ("our team", "company", True),
+        ("a person", "person", True),
+        # "the" is not stripped: these are titles
+        ("The Founder", "work", False),
+        ("the agent", "work", False),
+        # a determiner in front of a name, or of two words, is not generic
+        ("this Bitcoin", "topic", False),
+        ("my first company", "company", False),
+        ("this", "topic", False),
     ],
 )
 def test_generic_noun_rule(name, label, generic):

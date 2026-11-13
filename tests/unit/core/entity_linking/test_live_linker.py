@@ -16,6 +16,7 @@
 
 import sqlite3
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -38,6 +39,7 @@ CTX = LinkContext(episode_id="ep-1", podcast_id=POD, podcast_title="Show", episo
 FILM = WikidataSearchHit("Q214801", "The Truman Show", "1998 film")
 PRESIDENT = WikidataSearchHit("Q11613", "Harry S. Truman", "33rd US president")
 DARIO = WikidataSearchHit("Q100", "Dario Amodei", "American AI researcher")
+PERSON_CONCEPT = WikidataSearchHit("Q215627", "person", "being that has certain capacities")
 
 
 class FakeWikidata:
@@ -149,6 +151,31 @@ def test_a_remembered_link_that_was_blacklisted_since_is_decided_again(decisions
     (again,) = linker.resolve([mention(2, "Truman")], context=CTX, is_blacklisted=lambda s, q: q == "Q11613")
     assert again.entity.wikidata_qid == "Q214801"
     assert decisions.get("truman", POD).qid == "Q214801"  # the cache healed itself
+
+
+def test_a_generic_name_with_a_determiner_is_never_searched_or_asked(decisions):
+    wikidata = FakeWikidata({"this person": [PERSON_CONCEPT]})
+    linker, provider = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "this person")], context=CTX)
+    assert result.status == "unresolvable" and result.entity.wikidata_qid is None
+    assert wikidata.searched == [] and provider.user_messages == []
+
+
+def test_a_remembered_link_for_a_generic_name_is_dropped_and_the_cache_heals(decisions):
+    """The link was remembered before the rule covered "this person"."""
+    wikidata = FakeWikidata({"this person": [PERSON_CONCEPT]})
+    linker, provider = make_linker(decisions, wikidata, [pick_first_candidate])
+    with (
+        patch("thestill.core.entity_linking.live_linker.is_generic_noun", return_value=False),
+        patch("thestill.core.entity_linking.candidates.is_generic_noun", return_value=False),
+    ):
+        (before,) = linker.resolve([mention(1, "this person")], context=CTX)
+    assert before.entity.wikidata_qid == "Q215627"
+    assert decisions.get("this person", POD).qid == "Q215627"
+    (after,) = linker.resolve([mention(2, "this person", episode_id="ep-2")], context=CTX)
+    assert after.status == "unresolvable" and after.entity.wikidata_qid is None
+    assert decisions.get("this person", POD).qid is None
+    assert len(provider.user_messages) == 1  # only the first, pre-rule decision asked the model
 
 
 def test_the_second_episode_is_answered_from_the_cache(decisions):
