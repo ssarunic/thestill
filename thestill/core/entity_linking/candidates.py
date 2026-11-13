@@ -81,15 +81,16 @@ def is_generic_noun(group: NameGroup) -> bool:
     also refuses a remembered link for such a name
     (``LiveWikidataLinker.link``).
 
-    A determiner is only looked past in running speech. A name the extractor
-    tagged a work, or one whose noun is capitalised as spoken, is a title:
-    "This Country" is a sitcom and "Another Country" a film, while "this
-    country" and "This country" (a sentence start) are not.
+    A determiner is only looked past in running speech. A name whose noun
+    is capitalised as spoken is a title: "This Country" is a sitcom and
+    "Another Country" a film, while "this country" and "This country" (a
+    sentence start) are not. The extractor has no label for works, so the
+    capital is the only sign.
     """
     words = group.surface_key.split()
     if len(words) > 1:
         spoken_noun = group.surface_form.split()[-1]
-        if group.surface_label == "work" or spoken_noun[:1].isupper():
+        if spoken_noun[:1].isupper():
             return False
         while len(words) > 1 and words[0] in _DETERMINERS:
             words = words[1:]

@@ -113,10 +113,9 @@ def test_generic_nouns_are_not_searched():
         ("our customers'", "person", True),  # plural possessive
         ("these founders\u2019", "person", True),
         # "the" is not stripped: these are titles
-        ("The Founder", "work", False),
-        ("the agent", "work", False),
-        # a determiner in a title: tagged a work, or the noun capitalised as spoken
-        ("this country", "work", False),
+        ("The Founder", "product", False),
+        ("the agent", "product", False),
+        # a determiner in a title: the noun is capitalised as spoken
         ("This Country", "topic", False),
         ("Another Country", "person", False),
         ("That Guy", "person", False),
