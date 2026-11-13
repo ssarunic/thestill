@@ -313,8 +313,11 @@ def apply_alias_cleanup(
         entity = repo.get_entity(entity_id)
         if entity is None:
             continue
-        doomed = {_fold(v.alias) for v in removals}
-        kept = [a for a in entity.aliases if _fold(a) not in doomed]
+        # By the lookup's own equivalence, not ``_fold``: that equates a
+        # redundant "José Alvarez" with the kept spelling "Jose Alvarez" and
+        # would take both off the list.
+        doomed = {lookup_key(v.alias) for v in removals}
+        kept = [a for a in entity.aliases if lookup_key(a) not in doomed]
         if len(kept) != len(entity.aliases):
             repo.replace_aliases(entity_id, kept)
             result.entities_updated += 1

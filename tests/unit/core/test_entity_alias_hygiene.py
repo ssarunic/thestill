@@ -225,6 +225,22 @@ class TestApply:
         assert (result.anchor_mentions_deleted, result.mentions_reset) == (30, 2)
         assert queue.tasks == [("ep-a", "resolve-entities"), ("ep-b", "resolve-entities")]
 
+    def test_removing_a_redundant_alias_leaves_a_spelling_variant_of_the_name(self):
+        """Planned and applied together: the repeat of the name goes, the
+        spelling only this alias makes findable stays."""
+        entity = EntityRecord(
+            id="person:jose-alvarez",
+            type=EntityType.PERSON,
+            canonical_name="José Alvarez",
+            aliases=["José Alvarez", "Jose Alvarez", "jose alvarez"],
+        )
+        plan = plan_alias_cleanup([_ev("person:jose-alvarez", "José Alvarez", alias) for alias in entity.aliases])
+        repo = FakeRepo(entity)
+        result = apply_alias_cleanup(repo, plan)
+        # "jose alvarez" is the kept spelling up to ASCII case: also kept.
+        assert ("replace", "person:jose-alvarez", ("Jose Alvarez", "jose alvarez")) in repo.calls
+        assert result.aliases_removed == 1
+
     def test_redundant_alias_never_touches_mentions(self):
         repo, plan = self._setup()
         apply_alias_cleanup(repo, plan)
