@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from structlog import get_logger
 
+from ..core.entity_alias_hygiene import _fold, is_related_alias, lookup_key
 from ..core.entity_linking.cache import invalidate_link_decisions
 from ..core.entity_linking.shared import _build_entity_id
 from ..models.entities import EntityRecord, EntityType
@@ -53,6 +54,21 @@ class MergeResult:
     loser_id: str
     #: Rows moved per reference kind (``mentions``, ``overrides``, ``hosts``, ...).
     moved: Dict[str, int]
+    #: The loser's name, kept as an alias of the keeper. ``None`` when the
+    #: keeper already answers to it, the caller asked to keep nothing, or
+    #: the name was refused (``alias_skipped``).
+    alias_added: Optional[str] = None
+    #: The loser's name when it was not kept because it does not resemble
+    #: the keeper's ("Ye" for "Kanye West"). ``clean-aliases`` takes such an
+    #: alias for pollution: it would strip it and unlink every mention the
+    #: merge just moved. Vouch for it by hand: ``entity-alias-add`` plus a
+    #: line in the alias allowlist.
+    alias_skipped: Optional[str] = None
+    #: The loser's own aliases, deleted with it. They are not carried over:
+    #: stored aliases can be wrong (``entity_alias_hygiene``) and an alias
+    #: is taken as a name of the keeper by the role linker and the anchors.
+    #: Add the right ones by hand with ``thestill entity-alias-add``.
+    dropped_aliases: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -146,12 +162,32 @@ class EntityCurationService:
     # -- operations ------------------------------------------------------
 
     def merge(
-        self, keeper_id: str, loser_id: str, *, actor: Actor, reason: Optional[str] = None, dry_run: bool = False
+        self,
+        keeper_id: str,
+        loser_id: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        dry_run: bool = False,
+        keep_name: bool = True,
     ) -> MergeResult:
         """Move everything that refers to ``loser_id`` onto ``keeper_id`` (two
         rows for one thing), then delete the loser. Both must have the same
         type; move mentions or split when they are different things.
-        ``dry_run`` checks the rules and writes nothing."""
+        ``dry_run`` checks the rules and writes nothing.
+
+        The loser's name stays as an alias of the keeper: two rows for one
+        thing means two names for it, and whatever wrote the loser's name
+        will write it again. Without the alias the next ``backfill-roles``
+        finds nobody by that name and creates the loser afresh (a show's
+        host under a misheard spelling came back this way, and the real host
+        became a guest of every episode). Only a name that resembles the
+        keeper's is kept (``is_related_alias``, or the same name up to
+        accents): any other is what ``clean-aliases`` removes, together with
+        the mentions under it, so it is reported in ``alias_skipped`` for a
+        human to vouch for. ``keep_name=False`` is for a loser whose name is
+        not a name of the thing at all.
+        """
         if keeper_id == loser_id:
             raise AdminActionError("same_entity", "Keeper and loser are the same entity.")
         keeper = self._repo.get_entity(keeper_id)
@@ -164,12 +200,35 @@ class EntityCurationService:
             raise AdminActionError(
                 "type_mismatch", f"Cannot merge across types: {keeper.type.value} ≠ {loser.type.value}."
             )
+        keeper_names = {lookup_key(name) for name in (keeper.canonical_name, *keeper.aliases)}
+        alias = loser.canonical_name.strip()
+        alias_added = alias_skipped = None
+        if keep_name and alias and lookup_key(alias) not in keeper_names:
+            if is_related_alias(alias, keeper.canonical_name) or _fold(alias) == _fold(keeper.canonical_name):
+                alias_added = alias
+            else:
+                alias_skipped = alias
+        dropped = sorted(a for a in loser.aliases if lookup_key(a) not in keeper_names | {lookup_key(alias)})
         if dry_run:
-            return MergeResult(keeper.id, loser.id, {})
+            return MergeResult(keeper.id, loser.id, {}, alias_added, alias_skipped, dropped)
         moved = self._repo.repoint_entity_references(from_entity_id=loser.id, to_entity_id=keeper.id)
+        if alias_added:
+            # After the references, so a failed repoint leaves name lookups
+            # as they were; ``upsert_entity`` unions the alias in.
+            self._repo.upsert_entity(keeper.model_copy(update={"aliases": [*keeper.aliases, alias_added]}))
         self._repo.delete_entity(loser.id)
-        self._audit.record(actor, "entity.merge", keeper=keeper.id, loser=loser.id, moved=moved, reason=reason)
-        return MergeResult(keeper.id, loser.id, moved)
+        self._audit.record(
+            actor,
+            "entity.merge",
+            keeper=keeper.id,
+            loser=loser.id,
+            moved=moved,
+            alias_added=alias_added,
+            alias_skipped=alias_skipped,
+            dropped_aliases=dropped,
+            reason=reason,
+        )
+        return MergeResult(keeper.id, loser.id, moved, alias_added, alias_skipped, dropped)
 
     def move_mentions(
         self,

@@ -13,6 +13,8 @@ from pathlib import Path
 from thestill.models.entities import EntityRecord, EntityType
 from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from thestill.services.abuse.actor import Actor
+from thestill.services.entity_curation import EntityCurationService
 from thestill.services.role_linker import (
     backfill_all_roles,
     collect_host_evidence,
@@ -1044,6 +1046,73 @@ def test_episode_cohosts_who_are_not_the_shows_hosts_become_its_guests(tmp_path)
     assert harry.id not in result.guests
     # Anchors are the show's hosts plus the episode's guests.
     assert er.get_episode_anchors(episode_id) == [harry.id, lemkin.id, rory.id]
+
+
+class _NoAudit:
+    def record(self, *_args, **_kwargs) -> None:
+        pass
+
+
+def test_merging_a_misspelt_show_host_into_the_real_one_survives_a_relink(tmp_path):
+    """The Skip Podcast, 2026-11-13: the show file names the host "Nikhil
+    Singh", every episode names him "Nikhyl Singhal", so the real host was
+    a co-host, hence a guest. Merging the two rows and re-linking recreated
+    the misspelt host, because the merge kept nothing of its name."""
+    facts = (
+        "## Speaker Mapping\n- SPEAKER_01: Nikhyl Singhal (Host)\n- SPEAKER_02: Dana Ingraham (Guest)\n\n"
+        "## Guest(s)\n- Dana Ingraham - Recruiter\n"
+    )
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts, show_hosts="- Nikhil Singh - Host\n")
+    transcript = _transcript({"Nikhyl Singhal": (60, 6000), "Dana Ingraham": (50, 5000)})
+    before = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+    assert before.cohosts == ["Nikhyl Singhal"] and "person:nikhyl-singhal" in before.guests  # the incident
+
+    merged = EntityCurationService(er, _NoAudit()).merge(
+        "person:nikhyl-singhal", "person:nikhil-singh", actor=Actor.cli()
+    )
+    assert merged.alias_added == "Nikhil Singh"
+    podcast_slug = next(iter((tmp_path / "storage").glob("podcast_facts/*.facts.md"))).name[: -len(".facts.md")]
+    relinked = link_podcast_roles(
+        podcast_id=podcast_id,
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=PathManager(str(tmp_path / "storage")),
+    )
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+
+    assert relinked.hosts == ["person:nikhyl-singhal"] and relinked.created_entities == []
+    assert er.get_entity("person:nikhil-singh") is None  # not recreated
+    assert after.cohosts == [] and after.guests == ["person:dana-ingraham"]
+    assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal", "person:dana-ingraham"]
+
+
+def test_a_merged_host_is_cleared_from_an_episode_that_names_no_other_guest(tmp_path):
+    """A solo episode: after the merge nothing in the facts file would
+    rewrite the guest list, so the host stored as its guest has to be
+    taken out explicitly."""
+    facts = "## Speaker Mapping\n- SPEAKER_01: Nikhyl Singhal (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts, show_hosts="- Nikhil Singh - Host\n")
+    transcript = _transcript({"Nikhyl Singhal": (60, 6000)})
+    link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+    assert er.get_episode_guests(episode_id) == ["person:nikhyl-singhal"]
+
+    EntityCurationService(er, _NoAudit()).merge("person:nikhyl-singhal", "person:nikhil-singh", actor=Actor.cli())
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+
+    assert after.cleared_host_guests == ["person:nikhyl-singhal"] and after.guests == []
+    assert er.get_episode_guests(episode_id) == []
+    assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal"]
+
+
+def test_a_pinned_guest_who_is_not_a_host_is_left_alone_when_the_facts_name_nobody(tmp_path):
+    facts = "## Speaker Mapping\n- SPEAKER_01: Harry Stebbings (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts)
+    er.upsert_entity(EntityRecord(id="person:pinned-guest", type=EntityType.PERSON, canonical_name="Pinned Guest"))
+    er.set_episode_guests(episode_id, ["person:pinned-guest"])
+
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript({"Harry Stebbings": (60, 6000)}))
+
+    assert after.cleared_host_guests == [] and er.get_episode_guests(episode_id) == ["person:pinned-guest"]
 
 
 def test_a_cohost_already_under_guests_is_not_added_twice(tmp_path):

@@ -889,6 +889,10 @@ def test_get_entity_roles_and_anchor_roundtrip(repo):
     # Episode anchors = union(host, recurring, guest), order-preserving dedup.
     assert repo.get_episode_anchors(EP_1) == ["person:elon-musk", "person:chamath"]
     assert repo.get_episode_anchors(EP_3) == []
+    assert repo.get_episode_guests(EP_1) == ["person:chamath"]
+    assert (
+        repo.get_episode_guests(EP_3) == [] and repo.get_episode_guests("00000000-0000-4000-8000-00000000dead") == []
+    )  # a missing episode
 
     roles = repo.get_entity_roles("person:elon-musk")
     assert [p["podcast_id"] for p in roles["hosts_podcasts"]] == [POD_1]

@@ -1539,6 +1539,11 @@ class PostgresEntityRepository(EntityRepository):
                 (Jsonb(list(entity_ids)), episode_id),
             )
 
+    def get_episode_guests(self, episode_id: str) -> List[str]:
+        with connect(self.dsn) as conn:
+            row = conn.execute("SELECT guest_entity_ids FROM episodes WHERE id = %s", (episode_id,)).fetchone()
+        return list(row["guest_entity_ids"] or []) if row is not None else []
+
     def get_podcast_anchors(self, podcast_id: str) -> dict:
         """Return ``{'hosts': [...], 'recurring': [...]}`` for one podcast."""
         with connect(self.dsn) as conn:

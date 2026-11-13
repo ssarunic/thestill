@@ -209,9 +209,32 @@ class TestEntityMergeCli:
         assert result.exit_code == 0
         assert "deleted" in result.output
 
+        # "Tesla" does not resemble "SpaceX": reported, never stored.
+        assert "'Tesla' was not kept as an alias" in result.output
+
         repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
         assert repo.get_entity("company:tesla") is None
-        assert repo.get_entity("company:spacex") is not None
+        assert "Tesla" not in repo.get_entity("company:spacex").aliases
+
+    def _misspelt_spacex(self, tmp_db_with_entities) -> SqliteEntityRepository:
+        repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
+        repo.upsert_entity(EntityRecord(id="company:space-x", type=EntityType.COMPANY, canonical_name="Space X"))
+        return repo
+
+    def test_a_merge_keeps_a_spelling_of_the_keepers_name_as_an_alias(self, tmp_db_with_entities):
+        repo = self._misspelt_spacex(tmp_db_with_entities)
+        preview = _run(["entity", "merge", "company:spacex", "company:space-x", "--dry-run"])
+        assert "would keep 'Space X' as an alias" in preview.output
+        assert "Space X" not in repo.get_entity("company:spacex").aliases
+        result = _run(["entity", "merge", "company:spacex", "company:space-x"])
+        assert result.exit_code == 0 and "'Space X' is now an alias of company:spacex" in result.output
+        assert "Space X" in repo.get_entity("company:spacex").aliases
+
+    def test_no_alias_keeps_the_losers_name_out(self, tmp_db_with_entities):
+        repo = self._misspelt_spacex(tmp_db_with_entities)
+        result = _run(["entity", "merge", "company:spacex", "company:space-x", "--no-alias"])
+        assert result.exit_code == 0 and "alias" not in result.output
+        assert "Space X" not in repo.get_entity("company:spacex").aliases
 
     def test_refuses_cross_type(self, tmp_db_with_entities):
         result = _run(["entity", "merge", "person:elon-musk", "company:tesla"])
