@@ -184,7 +184,8 @@ describe('NowPlayingSheet (spec #72)', () => {
     expect(dialog).not.toHaveAttribute('aria-modal')
     expect(dialog).toHaveAttribute('data-media-host', 'now-playing')
     expect(screen.getByTestId('now-playing-root')).toHaveClass('z-[70]')
-    expect(screen.getByTestId('now-playing-root')).toHaveStyle({ bottom: 'calc(var(--player-h, 0px) + 0.5rem)' })
+    // The authored value: jsdom 31 computes calc(var()) down to pixels.
+    expect(screen.getByTestId('now-playing-root').style.bottom).toBe('calc(var(--player-h, 0px) + 0.5rem)')
     expect(document.body.style.overflow).toBe('')
 
     fireEvent.mouseDown(screen.getByRole('button', { name: 'opener' }))
@@ -260,7 +261,9 @@ describe('NowPlayingSheet (spec #72)', () => {
     const ticks = screen.getByTestId('scrubber-ticks')
     expect(ticks.querySelectorAll('button')).toHaveLength(3)
     const ed = screen.getByRole('button', { name: 'Ed Elson at 10:00' })
-    expect(ed.style.left).toBe(`${(600 / 3600) * 100}%`)
+    // jsdom 31 serialises the percentage to fewer digits (16.6667%).
+    expect(ed.style.left).toMatch(/%$/)
+    expect(parseFloat(ed.style.left)).toBeCloseTo((600 / 3600) * 100, 3)
     await userEvent.click(ed)
     expect(state.time).toBe(600)
   })
