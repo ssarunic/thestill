@@ -397,6 +397,10 @@ export interface EpisodeDetail {
   // Spec #76 §3.6 — show facts and provenance for the Information list.
   podcast_author: string | null
   podcast_language: string | null
+  // Spec #117 — the header's Follow: the caller follows this show, and the
+  // show can be followed (not the synthetic parent of bare audio imports).
+  podcast_is_following: boolean
+  podcast_followable: boolean
   origin: 'feed' | 'import'
   import_kind: ImportKind | null
   // Spec #87 — this episode's page on other platforms (resolved links only).
@@ -657,7 +661,13 @@ export interface RefreshTaskStatus {
 // Add Podcast API Types
 // Spec #95 usage event: where in the app a follow was made. The server maps
 // anything else to ``other``.
-export type FollowSource = 'episode_prompt' | 'show_page' | 'pending_follow' | 'top_podcasts' | 'add_podcast'
+export type FollowSource =
+  | 'episode_page'
+  | 'episode_pending_follow'
+  | 'show_page'
+  | 'pending_follow'
+  | 'top_podcasts'
+  | 'add_podcast'
 
 export interface AddPodcastRequest {
   url: string

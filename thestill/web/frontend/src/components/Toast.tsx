@@ -3,16 +3,31 @@ import { abovePlayer } from '../constants/layers'
 
 type ToastType = 'success' | 'error' | 'info'
 
+/** A button inside the toast; pressing it runs ``onClick`` and closes the toast. */
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
+interface ToastOptions {
+  action?: ToastAction
+  /** How long the toast stays up (default 5 s). */
+  durationMs?: number
+}
+
 interface Toast {
   id: number
   message: string
   type: ToastType
+  action?: ToastAction
 }
 
 interface ToastContextType {
-  showToast: (message: string, type?: ToastType) => number
+  showToast: (message: string, type?: ToastType, options?: ToastOptions) => number
   dismissToast: (id: number) => void
 }
+
+const DEFAULT_DURATION_MS = 5000
 
 const ToastContext = createContext<ToastContextType | null>(null)
 
@@ -21,14 +36,13 @@ let toastId = 0
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const showToast = useCallback((message: string, type: ToastType = 'info') => {
+  const showToast = useCallback((message: string, type: ToastType = 'info', options: ToastOptions = {}) => {
     const id = ++toastId
-    setToasts((prev) => [...prev, { id, message, type }])
+    setToasts((prev) => [...prev, { id, message, type, action: options.action }])
 
-    // Auto-remove after 5 seconds
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 5000)
+    }, options.durationMs ?? DEFAULT_DURATION_MS)
 
     return id
   }, [])
@@ -76,6 +90,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
             {/* Message */}
             <span className="text-sm font-medium">{toast.message}</span>
+            {toast.action && (
+              <button
+                type="button"
+                onClick={() => {
+                  dismissToast(toast.id)
+                  toast.action?.onClick()
+                }}
+                className="shrink-0 rounded px-2 py-1 text-sm font-semibold underline underline-offset-2 hover:bg-white/20"
+              >
+                {toast.action.label}
+              </button>
+            )}
             {/* Close button */}
             <button
               onClick={() => dismissToast(toast.id)}

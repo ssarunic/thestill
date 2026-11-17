@@ -113,16 +113,6 @@ export function usePodcasts() {
   })
 }
 
-// How many shows the reader follows: one row fetched, ``total`` is the
-// count. Under ['podcasts'], so a follow or unfollow refreshes it.
-export function useFollowCount() {
-  return useQuery({
-    queryKey: ['podcasts', 'follow-count'],
-    queryFn: () => getPodcasts(1, 0),
-    select: (data) => data.total,
-  })
-}
-
 export function usePodcastsInfinite(limit = 12, q?: string) {
   return useInfiniteQuery({
     queryKey: ['podcasts', 'infinite', limit, q ?? ''],
