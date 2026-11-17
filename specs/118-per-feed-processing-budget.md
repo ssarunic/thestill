@@ -108,6 +108,8 @@ A `standard` feed has two rolling 24-hour limits. An episode is admitted only if
 - **Per feed:** `episodes_per_day` (6) and `minutes_per_day` (240), counted over the feed's admitted episodes. The episode count catches many short episodes and lying durations. The minutes catch a few very long ones.
 - **Per introducer:** `introducer_minutes_per_day` (480), counted over every `standard` feed the same user introduced. Ten feeds share one allowance.
 
+**An episode longer than a whole window.** Spec #119's untrusted cap (360 minutes) is above `minutes_per_day` (240), so one legitimate long episode could never fit and would sit held until it expires. An episode whose minutes alone exceed a limit is admitted when that limit's window is otherwise empty, and it then fills the window. The episode count still bounds how often this can happen, and spec #119's cap bounds how long the episode can be.
+
 Neither limit resets on a new follow. The window belongs to the feed, so unfollowing and refollowing gains nothing. A refollow from zero also costs a `feed_introduced` (spec #104).
 
 **Audio minutes** come from the feed-reported duration. A missing, zero or unparseable duration counts as `unknown_duration_minutes` (60). Once spec #119 measures real durations, the measured value replaces the reported one on the ledger row, so later admissions see the truth. Until then, the episode count bounds a lying feed.
