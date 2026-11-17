@@ -41,10 +41,21 @@ APP_PROPERTY = {"app": "thestill"}
 
 PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude"]
 PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude", "none"]
-# Where a follow was made: the episode page's first-follow prompt, the show
-# page (or its follow carried through sign-in), the Top podcasts chart or
-# the Add podcast modal.
-FollowSource = Literal["episode_prompt", "show_page", "pending_follow", "top_podcasts", "add_podcast", "other"]
+# Where a follow was made: the episode header's Follow (spec #117), or that
+# Follow pressed signed out and finished after sign-in; the show page (or its
+# follow carried through sign-in), the Top podcasts chart or the Add podcast
+# modal. ``episode_prompt`` was the retired first-follow panel; it stays so
+# past events keep their meaning.
+FollowSource = Literal[
+    "episode_page",
+    "episode_pending_follow",
+    "episode_prompt",
+    "show_page",
+    "pending_follow",
+    "top_podcasts",
+    "add_podcast",
+    "other",
+]
 _FOLLOW_SOURCES = frozenset(FollowSource.__args__)
 
 
