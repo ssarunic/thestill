@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 from structlog import get_logger
 
-from ..core.entity_alias_hygiene import _fold, is_related_alias, lookup_key
+from ..core.entity_alias_hygiene import is_alias_of, lookup_key
 from ..core.entity_linking.cache import invalidate_link_decisions
 from ..core.entity_linking.shared import _build_entity_id
 from ..models.entities import EntityRecord, EntityType
@@ -182,7 +182,7 @@ class EntityCurationService:
         finds nobody by that name and creates the loser afresh (a show's
         host under a misheard spelling came back this way, and the real host
         became a guest of every episode). Only a name that resembles the
-        keeper's is kept (``is_related_alias``, or the same name up to
+        keeper's is kept (``is_alias_of``: related, or the same name up to
         accents): any other is what ``clean-aliases`` removes, together with
         the mentions under it, so it is reported in ``alias_skipped`` for a
         human to vouch for. ``keep_name=False`` is for a loser whose name is
@@ -204,7 +204,7 @@ class EntityCurationService:
         alias = loser.canonical_name.strip()
         alias_added = alias_skipped = None
         if keep_name and alias and lookup_key(alias) not in keeper_names:
-            if is_related_alias(alias, keeper.canonical_name) or _fold(alias) == _fold(keeper.canonical_name):
+            if is_alias_of(alias, keeper.canonical_name):
                 alias_added = alias
             else:
                 alias_skipped = alias

@@ -92,6 +92,13 @@ class TestDisambiguationQualifier:
         variants = expand_anchor_variants([_person("Scott Galloway (professor)")])
         assert "scott galloway" in index_variants_by_surface(variants)
 
+    def test_accent_only_alias_is_kept(self):
+        # The scan does not fold accents, so "Jose Alvarez" is the only
+        # surface that matches an unaccented speaker label. Codex on #531.
+        for canonical in ("José Álvarez (politician)", "José Álvarez"):
+            variants = expand_anchor_variants([_person(canonical, aliases=["Jose Alvarez"])])
+            assert "Jose Alvarez" in {v.surface for v in variants}, canonical
+
     def test_single_token_name_with_qualifier_does_not_expand(self):
         variants = expand_anchor_variants([_person("Madonna (singer)")])
         surfaces = {v.surface for v in variants}

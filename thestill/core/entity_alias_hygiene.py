@@ -103,6 +103,15 @@ def _initials(tokens: List[str]) -> str:
     return "".join(t[0] for t in tokens if t)
 
 
+def is_alias_of(alias: str, name: str) -> bool:
+    """True when ``alias`` may stand for ``name``: a related alias, or the
+    same name up to case and accents ("Jose Alvarez" for "José Álvarez").
+    ``is_related_alias`` calls the latter the name itself, but SQL lookups
+    and the anchor scan match accents exactly, so the plain spelling still
+    has to be stored and matched as a separate surface."""
+    return is_related_alias(alias, name) or (bool(_fold(alias)) and _fold(alias) == _fold(name))
+
+
 def is_related_alias(alias: str, canonical_name: str) -> bool:
     """True when ``alias`` plausibly names ``canonical_name`` on its face.
 
