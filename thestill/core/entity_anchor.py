@@ -22,8 +22,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List
 
-from ..models.entities import EntityRecord, EntityType
-from .entity_alias_hygiene import is_related_alias
+from ..models.entities import EntityRecord, EntityType, display_name
+from .entity_alias_hygiene import is_alias_of
 
 _TOKEN_SPLIT_RE = re.compile(r"\s+")
 _PUNCT_STRIP_RE = re.compile(r"[^\w\-']")
@@ -90,13 +90,20 @@ def _surfaces_for(entity: EntityRecord) -> List[str]:
         seen = frozenset({*seen, cleaned.lower()})
         out.append(cleaned)
 
+    # "Scott Galloway (professor)": the qualifier only separates namesakes in
+    # the entities table. Nobody says it, and the scan matches case-blind, so
+    # left in it made "professor" a surname and anchored every "a professor
+    # at Stanford" to the host. Variants and alias checks use the bare name.
+    name = display_name(entity.canonical_name)
     _add(entity.canonical_name)
+    _add(name)
     # Only aliases that visibly name this entity. A stored alias becomes a
     # match surface here, so one bad row ("price" on Elon Musk, from the
     # pre-#79 resolver bug) manufactures a wrong mention every time the
-    # entity anchors an episode. See core/entity_alias_hygiene.py.
+    # entity anchors an episode. See core/entity_alias_hygiene.py. An
+    # accent-free spelling stays: the scan matches accents exactly.
     for alias in entity.aliases:
-        if is_related_alias(alias, entity.canonical_name):
+        if is_alias_of(alias, name):
             _add(alias)
 
     # Person-specific token expansion. Companies/products/topics rarely
@@ -104,7 +111,7 @@ def _surfaces_for(entity: EntityRecord) -> List[str]:
     # "Apple", and treating it as such would mis-anchor every mention
     # of the fruit. Keep it limited to people.
     if entity.type == EntityType.PERSON:
-        tokens = [t for t in _TOKEN_SPLIT_RE.split(entity.canonical_name) if t]
+        tokens = [t for t in _TOKEN_SPLIT_RE.split(name) if t]
         cleaned = [_PUNCT_STRIP_RE.sub("", t) for t in tokens]
         cleaned = [t for t in cleaned if len(t) >= _MIN_TOKEN_CHARS]
         if len(cleaned) >= 2:
