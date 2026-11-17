@@ -39,8 +39,11 @@ export function Button({
   rel,
   children,
   type = 'button',
+  size = 'md',
 }: {
   variant?: 'primary' | 'secondary' | 'text'
+  /** ``sm`` fits a line of meta text (the episode hero's Follow). */
+  size?: 'md' | 'sm'
   google?: boolean
   onClick?: () => void
   /** Navigation (e.g. to /login): rendered as a link styled as a button. */
@@ -49,7 +52,7 @@ export function Button({
   children: ReactNode
   type?: 'button' | 'submit'
 }) {
-  const className = cx('ts-btn', `ts-btn-${variant}`)
+  const className = cx('ts-btn', `ts-btn-${variant}`, size === 'sm' && 'ts-btn-sm')
   const content = (
     <>
       {google && <GoogleG />}

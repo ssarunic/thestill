@@ -29,8 +29,8 @@ vi.mock('../hooks/useApi', () => ({
   useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
   useEntityBranchRefresh: vi.fn(),
   useReprocessEpisode: vi.fn(() => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null })),
-  useFollowCount: vi.fn(() => ({ data: 1 })),
-  useFollowPodcast: vi.fn(() => ({ mutate: vi.fn(), isPending: false, isError: false })),
+  useFollowPodcast: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useUnfollowPodcast: vi.fn(() => ({ mutateAsync: vi.fn() })),
 }))
 
 let mockIsAdmin = false
@@ -60,7 +60,6 @@ vi.mock('../hooks/useReaderEvents', () => ({ useReaderEvents: vi.fn() }))
 
 import {
   useEpisode,
-  useFollowCount,
   useEpisodeSummary,
   useEpisodeTranscript,
   useMarkInboxReadOnView,
@@ -86,6 +85,8 @@ function episodeResponse(): EpisodeDetailResponse {
       podcast_title: 'Sample Pod',
       podcast_author: 'Sample Media',
       podcast_language: 'en',
+      podcast_is_following: false,
+      podcast_followable: true,
       origin: 'feed',
       import_kind: null,
       title: 'Sample Episode',
@@ -297,18 +298,27 @@ describe('EpisodeReader page/overlay parity (spec #52)', () => {
     expect(screen.getByRole('link', { name: /example\.com/ })).toHaveAttribute('href', 'https://www.example.com/notes')
   })
 
-  it('offers the show to a reader who follows nothing yet, never for an imported file', () => {
-    ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 0 })
+  // Spec #117 — Follow sits beside the show name for a show the reader
+  // doesn't follow; the first-follow panel is gone.
+  it('offers Follow beside the show name only for a show the reader does not follow', () => {
     const { unmount } = renderAtEpisodeRoute(<EpisodeReader />)
-    expect(screen.getByRole('region', { name: 'Follow Sample Pod' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Follow' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Follow Sample Pod' })).toBeNull()
     unmount()
 
-    const imported = episodeResponse()
-    imported.episode.origin = 'import'
-    mockUseEpisode.mockReturnValue({ data: imported, isLoading: false })
+    const followed = episodeResponse()
+    followed.episode.podcast_is_following = true
+    mockUseEpisode.mockReturnValue({ data: followed, isLoading: false })
+    const second = renderAtEpisodeRoute(<EpisodeReader />)
+    expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull()
+    second.unmount()
+
+    const bareAudio = episodeResponse()
+    bareAudio.episode.origin = 'import'
+    bareAudio.episode.podcast_followable = false
+    mockUseEpisode.mockReturnValue({ data: bareAudio, isLoading: false })
     renderAtEpisodeRoute(<EpisodeReader />)
-    expect(screen.queryByRole('region', { name: 'Follow Sample Pod' })).toBeNull()
-    ;(useFollowCount as ReturnType<typeof vi.fn>).mockReturnValue({ data: 1 })
+    expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull()
   })
 
   it('holds reading depth back while the tab has nothing to read yet', () => {

@@ -34,7 +34,7 @@ import { InboxActionButton } from './InboxStatus'
 import FailureBanner from './FailureBanner'
 import Panel from './Panel'
 import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
-import FollowPrompt from './FollowPrompt'
+import EpisodeFollow from './episode-header/EpisodeFollow'
 import People from './episode-header/People'
 import { buildEpisodeInformationRows } from './episode-header/episodeInformation'
 import DefinitionList from './DefinitionList'
@@ -360,18 +360,7 @@ export default function EpisodeReader({
     [reprocess],
   )
 
-  // The first-follow prompt sits above the tabs from `sm` up; a phone has
-  // no room there (spec #76 keeps the tabs in the first viewport), so it
-  // opens the tab panel instead.
   const isSmUp = useIsSmUp()
-  const followPrompt =
-    episode?.origin === 'feed' ? (
-      <FollowPrompt
-        podcastSlug={episode.podcast_slug}
-        podcastTitle={episode.podcast_title}
-        className={isSmUp ? '' : 'mx-4 mt-4'}
-      />
-    ) : null
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
@@ -656,10 +645,15 @@ export default function EpisodeReader({
             onMarkPlayed={handleMarkPlayed}
             onReprocess={canReprocess ? () => openReprocess('clean') : undefined}
             onEditTranscript={canEditTranscript ? openTranscriptEditor : undefined}
+            follow={
+              <EpisodeFollow
+                podcastSlug={episode.podcast_slug}
+                podcastTitle={episode.podcast_title}
+                isFollowing={episode.podcast_is_following}
+                followable={episode.podcast_followable}
+              />
+            }
           />
-          {/* A reader who follows nothing yet is offered this show; an
-              imported file's synthetic show has nothing to follow. */}
-          {isSmUp && followPrompt}
           {canReprocess && (
             <ReprocessDialog
               isOpen={reprocessOpen}
@@ -799,8 +793,6 @@ export default function EpisodeReader({
               </div>
             )}
           </div>
-
-          {!isSmUp && followPrompt}
 
           {/* Spec #76 §3.4 — the entity branch reports here as a one-line
               strip only while a task is running or failed. Spec #28

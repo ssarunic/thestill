@@ -3,6 +3,14 @@ import { abovePlayer } from '../constants/layers'
 
 type ToastType = 'success' | 'error' | 'info'
 
+// No action buttons here: toasts render outside the inbox reader's modal
+// dialog, which keeps focus inside its panel, so a keyboard user could not
+// reach one there (spec #117 puts its Undo in the episode header instead).
+interface ToastOptions {
+  /** How long the toast stays up (default 5 s). */
+  durationMs?: number
+}
+
 interface Toast {
   id: number
   message: string
@@ -10,9 +18,11 @@ interface Toast {
 }
 
 interface ToastContextType {
-  showToast: (message: string, type?: ToastType) => number
+  showToast: (message: string, type?: ToastType, options?: ToastOptions) => number
   dismissToast: (id: number) => void
 }
+
+const DEFAULT_DURATION_MS = 5000
 
 const ToastContext = createContext<ToastContextType | null>(null)
 
@@ -21,14 +31,13 @@ let toastId = 0
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
-  const showToast = useCallback((message: string, type: ToastType = 'info') => {
+  const showToast = useCallback((message: string, type: ToastType = 'info', options: ToastOptions = {}) => {
     const id = ++toastId
     setToasts((prev) => [...prev, { id, message, type }])
 
-    // Auto-remove after 5 seconds
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 5000)
+    }, options.durationMs ?? DEFAULT_DURATION_MS)
 
     return id
   }, [])
@@ -41,12 +50,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ showToast, dismissToast }}>
       {children}
       {/* Toast container */}
-      <div className="fixed right-4 z-[70] flex flex-col gap-2" style={{ bottom: abovePlayer('1rem') }}>
+      {/* Phones: inset 16 px from both edges, so a long message wraps
+          instead of running off the left side (max-w-sm is wider than a
+          320 px screen). */}
+      {/* The container passes taps through (on phones it spans the width);
+          each toast takes its own. Announced politely to screen readers. */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed left-4 right-4 z-[70] flex flex-col items-end gap-2 sm:left-auto"
+        style={{ bottom: abovePlayer('1rem') }}
+      >
         {toasts.map((toast) => (
           <div
             key={toast.id}
             className={`
-              flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-sm
+              pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-sm
               animate-slide-in
               ${toast.type === 'success' ? 'bg-green-600 text-white' : ''}
               ${toast.type === 'error' ? 'bg-red-600 text-white' : ''}

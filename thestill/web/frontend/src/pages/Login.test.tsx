@@ -65,6 +65,13 @@ describe('Login (spec #102)', () => {
     expect(screen.getByRole('link', { name: 'Not now' })).toHaveAttribute('href', '/podcasts/prof-g')
   })
 
+  it('remembers a Follow pressed on an episode for its show (spec #117)', () => {
+    renderAt('/login#next=%2Fpodcasts%2Fprof-g%2Fepisodes%2Fa&intent=follow')
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
+    expect(auth.login).toHaveBeenCalledWith('/podcasts/prof-g/episodes/a')
+    expect(JSON.parse(window.sessionStorage.getItem('thestill.pendingFollow') ?? '{}').slug).toBe('prof-g')
+  })
+
   it('never remembers a Follow without a show to return to', () => {
     renderAt('/login?next=%2Finbox&intent=follow')
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))

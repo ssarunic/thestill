@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
 from ...models.user import User
+from ...repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID
 from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
 from ...services.audio_address import resolver as audio_address_resolver
 from ...services.follower_service import AlreadyFollowingError, NotFollowingError, PodcastNotFoundError
@@ -376,6 +377,11 @@ def get_episode_by_slugs(
                 # slug lookup, so these cost no extra query.
                 "podcast_author": podcast.author,
                 "podcast_language": podcast.language,
+                # Spec #117 — the header's Follow: shown when the show is a
+                # real one (bare audio imports sit under a synthetic parent
+                # nobody can follow) and the caller doesn't follow it yet.
+                "podcast_is_following": bool(state.follower_repository.exists(user.id, podcast.id)),
+                "podcast_followable": podcast.id != SYNTHETIC_AUDIO_IMPORTS_ID,
                 "origin": origin,
                 "import_kind": import_kind,
                 "platform_links": platform_links,

@@ -99,6 +99,8 @@ def test_events_reject_unknown_props_and_bad_values():
 def test_follow_source_maps_anything_unknown_to_other():
     assert follow_source("top_podcasts") == "top_podcasts"
     assert follow_source("episode_prompt") == "episode_prompt"
+    assert follow_source("episode_page") == "episode_page"
+    assert follow_source("episode_pending_follow") == "episode_pending_follow"
     assert follow_source(None) == "other"
     assert follow_source("TOP_PODCASTS") == "other"
 
