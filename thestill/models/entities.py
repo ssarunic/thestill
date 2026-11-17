@@ -25,11 +25,21 @@ Plus five enums (``EntityType``, ``ResolutionStatus``,
 the ``CHECK``-constrained string columns in SQLite.
 """
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+_DISAMBIGUATION = re.compile(r"\s*\([^)]*\)$")
+
+
+def display_name(name: Optional[str]) -> str:
+    """``Amazon (company)`` → ``Amazon``: the name without its Wikidata-style
+    disambiguation. The qualifier tells two namesakes apart in the entities
+    table; it is not part of the name anyone says or reads."""
+    return _DISAMBIGUATION.sub("", name or "").strip() or (name or "")
 
 
 class EntityType(str, Enum):

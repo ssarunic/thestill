@@ -65,6 +65,39 @@ class TestPersonExpansion:
         assert lengths == sorted(lengths, reverse=True)
 
 
+class TestDisambiguationQualifier:
+    """A "(professor)" qualifier separates namesakes in the table; it is
+    not a name token. Left in, it became the surname variant and the
+    case-blind scan anchored every "professor" to the Prof G host."""
+
+    def test_qualifier_is_not_a_surname_variant(self):
+        variants = expand_anchor_variants([_person("Scott Galloway (professor)")])
+        surfaces = {v.surface.lower() for v in variants}
+        assert "professor" not in surfaces
+        assert "s. professor" not in surfaces
+        assert {"scott galloway", "scott", "galloway", "s. galloway"} <= surfaces
+
+    def test_aliases_are_judged_against_the_bare_name(self):
+        # "Prof" was only "related" because it sits inside "(professor)".
+        variants = expand_anchor_variants(
+            [_person("Scott Galloway (professor)", aliases=["Prof", "Professor Galloway", "Scott Galloway"])]
+        )
+        surfaces = {v.surface for v in variants}
+        assert "Prof" not in surfaces
+        assert "Professor Galloway" in surfaces
+
+    def test_bare_name_is_a_variant_without_an_alias(self):
+        # Speaker labels say "Scott Galloway"; the anchor must match them
+        # even when no alias spells the bare name out.
+        variants = expand_anchor_variants([_person("Scott Galloway (professor)")])
+        assert "scott galloway" in index_variants_by_surface(variants)
+
+    def test_single_token_name_with_qualifier_does_not_expand(self):
+        variants = expand_anchor_variants([_person("Madonna (singer)")])
+        surfaces = {v.surface for v in variants}
+        assert surfaces == {"Madonna (singer)", "Madonna"}
+
+
 class TestCompanyExpansion:
     def test_company_does_not_token_split(self):
         # We don't want "Apple Inc" → "Apple" — that confuses the

@@ -45,6 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
+from ...models.entities import display_name
 from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.analytics_sink import PublicPageView
 from ...services.podcast_service import PodcastWithIndex
@@ -160,15 +161,6 @@ def _json_list(value: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 # Entity references
 # ---------------------------------------------------------------------------
-
-
-_DISAMBIGUATION = re.compile(r"\s*\([^)]*\)$")
-
-
-def display_name(name: Optional[str]) -> str:
-    """``Amazon (company)`` → ``Amazon``: Wikidata-style disambiguation reads
-    as noise on a page; the type is already shown beside the name."""
-    return _DISAMBIGUATION.sub("", name or "").strip() or (name or "")
 
 
 def entity_slug(entity_id: str) -> str:
