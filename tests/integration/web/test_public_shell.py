@@ -190,6 +190,27 @@ def test_robots_blocks_training_crawlers_but_not_search_or_user_fetches(site):
         assert not parser.can_fetch(agent, "https://thestill.test/inbox"), agent
 
 
+def test_robots_keeps_entity_heavy_crawlers_off_entities_only(site):
+    """Their own group drops /entities/ but keeps every private block of ``*``."""
+    parser = urllib.robotparser.RobotFileParser()
+    parser.parse(site.get("/robots.txt").text.splitlines())
+    base = "https://thestill.test"
+    for agent in public_shell.ENTITY_HEAVY_CRAWLERS:
+        for blocked in (
+            "/entities/person/jane-doe",
+            "/api/public/entities/person/jane-doe",
+            "/inbox",
+            "/api/inbox",
+            "/login",
+            "/mcp",
+        ):
+            assert not parser.can_fetch(agent, base + blocked), (agent, blocked)
+        for allowed in ("/", "/top", "/podcasts/a/episodes/b", "/api/public/podcasts/a"):
+            assert parser.can_fetch(agent, base + allowed), (agent, allowed)
+    for agent in ("Googlebot", "Bingbot", "Applebot", "Amazonbot"):
+        assert parser.can_fetch(agent, base + "/entities/person/jane-doe"), agent
+
+
 def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
     """Spec #105 §5: kind, status and crawler family; no IP, no user agent."""
     _seed(app_state)
