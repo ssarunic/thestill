@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '../Toast'
 import EpisodeFollow from './EpisodeFollow'
 import { useFollowPodcast, useUnfollowPodcast } from '../../hooks/useApi'
+import { rememberPendingFollow } from '../../utils/signIn'
 
 vi.mock('../../hooks/useApi', () => ({
   useFollowPodcast: vi.fn(),
@@ -107,6 +108,40 @@ describe('EpisodeFollow', () => {
 
     expect(screen.getByText("Couldn't follow Sample Pod: Server error")).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+  })
+
+  it('finishes a Follow pressed signed out on this episode, once', () => {
+    follow.mockImplementation((_vars, callbacks: Callbacks) => callbacks.onSuccess?.())
+    rememberPendingFollow('sample-pod')
+    const { rerender } = renderFollow()
+
+    expect(follow).toHaveBeenCalledTimes(1)
+    expect(follow).toHaveBeenCalledWith({ podcastSlug: 'sample-pod', source: 'episode_pending_follow' }, expect.anything())
+    expect(screen.getByRole('button', { name: 'Following' })).toBeDisabled()
+    expect(screen.getByText(/Following Sample Pod\./)).toBeInTheDocument()
+    expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
+
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <ToastProvider>
+          <EpisodeFollow podcastSlug="sample-pod" podcastTitle="Sample Pod" isFollowing followable />
+        </ToastProvider>
+      </QueryClientProvider>,
+    )
+    expect(follow).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a pending follow for another show, or one already followed', () => {
+    rememberPendingFollow('other-pod')
+    const { unmount } = renderFollow()
+    expect(follow).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
+    unmount()
+
+    rememberPendingFollow('sample-pod')
+    renderFollow({ isFollowing: true })
+    expect(follow).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
   })
 
   it('does not carry a confirmation over to another show', async () => {

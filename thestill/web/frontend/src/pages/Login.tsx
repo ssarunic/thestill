@@ -19,7 +19,7 @@ import {
   parseIntent,
   parseSignInFragment,
   rememberPendingFollow,
-  showSlugFromNext,
+  followSlugFromNext,
   type SignInIntent,
 } from '../utils/signIn'
 import '../styles/public.css'
@@ -82,7 +82,7 @@ export default function Login() {
   if (isLoading || !isMultiUser) return null
 
   const start = (provider: Provider) => {
-    const show = intent === 'follow' ? showSlugFromNext(next) : null
+    const show = intent === 'follow' ? followSlugFromNext(next) : null
     if (show) rememberPendingFollow(show)
     if (provider.id === 'google') login(next ?? undefined)
   }

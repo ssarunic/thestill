@@ -1,9 +1,10 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { FollowSource } from '../../api/types'
 import { useFollowPodcast, useUnfollowPodcast } from '../../hooks/useApi'
 import { useToast } from '../Toast'
 import FollowButton from '../FollowButton'
+import { consumePendingFollow } from '../../utils/signIn'
 
 interface EpisodeFollowProps {
   podcastSlug: string
@@ -65,7 +66,6 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
     (source: FollowSource) => {
       const slug = podcastSlug
       const title = podcastTitle
-      setFailedSlug(null)
       follow(
         { podcastSlug: slug, source },
         {
@@ -87,6 +87,17 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
     [podcastSlug, podcastTitle, follow, refreshShowEpisodes, showToast, undo],
   )
 
+  // Spec #117 — finish a Follow pressed on the public episode page before
+  // signing in. The intent was stored on /login by that click (never read
+  // from the URL); it is read once per show this header shows.
+  const pendingChecked = useRef<string | null>(null)
+  useEffect(() => {
+    if (pendingChecked.current === podcastSlug) return
+    pendingChecked.current = podcastSlug
+    if (!consumePendingFollow(podcastSlug) || isFollowing || !followable) return
+    startFollow('episode_pending_follow')
+  }, [podcastSlug, isFollowing, followable, startFollow])
+
   if (!followable) return null
   const mine = local?.slug === podcastSlug ? local : null
   const following = mine ? mine.following : isFollowing
@@ -100,7 +111,10 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
       size="sm"
       status={status}
       labels={{ idle: 'Follow', pending: 'Following…' }}
-      onClick={() => startFollow('episode_page')}
+      onClick={() => {
+        setFailedSlug(null)
+        startFollow('episode_page')
+      }}
     />
   )
 }

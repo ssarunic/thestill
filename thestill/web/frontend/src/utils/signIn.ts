@@ -43,10 +43,12 @@ export function parseIntent(value: string | null): SignInIntent | null {
   return INTENTS.find((i) => i === value) ?? null
 }
 
-/** The show slug when ``next`` is a show page (``/podcasts/<slug>``). */
-export function showSlugFromNext(next: string | null): string | null {
+/** The show a Follow on ``next`` is for: a show page (``/podcasts/<slug>``)
+ * or one of its episodes (``/podcasts/<slug>/episodes/<episode>``, spec
+ * #117). Anything else follows nothing. */
+export function followSlugFromNext(next: string | null): string | null {
   const path = (next ?? '').split(/[?#]/)[0]
-  const match = /^\/podcasts\/([a-z0-9][a-z0-9-]{0,110})\/?$/.exec(path)
+  const match = /^\/podcasts\/([a-z0-9][a-z0-9-]{0,110})(?:\/episodes\/[^/]+)?\/?$/.exec(path)
   return match ? match[1] : null
 }
 

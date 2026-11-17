@@ -154,6 +154,7 @@
 .ts-btn-secondary:hover { background: var(--surface-container-lowest); border-color: var(--outline); }
 .ts-btn-text { background: transparent; color: var(--primary); padding-inline: 0; font-weight: 500; min-height: 32px; }
 .ts-btn-text:hover { text-decoration: underline; }
+.ts-btn-sm { padding: 4px 12px; min-height: 28px; }
 .ts-btn-icon { flex: none; }
 .ts-btn-primary .ts-btn-icon { background: var(--surface-container-lowest); border-radius: var(--radius-md); padding: 2px; box-sizing: content-box; }
 

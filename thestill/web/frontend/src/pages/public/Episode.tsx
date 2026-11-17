@@ -55,6 +55,9 @@ export default function Episode() {
   // the summary is behind sign-in and comes back to this episode.
   const episodeHref = episodePath(podcastSlug, episodeSlug)
   const readFullSummary = useSignIn('summary', episodeHref)
+  // Spec #117 — Follow signs in and comes back to this episode, where the
+  // follow completes (the pending follow set on /login).
+  const signInToFollow = useSignIn('follow', episodeHref)
   // A response cached from before the cut has no ``more_sections``.
   const moreSections = summary.data?.more_sections ?? []
   // The signed-in reader opens on the transcript with ?view=transcript; a
@@ -118,6 +121,9 @@ export default function Episode() {
             <>
               <span className="ts-eyebrow">
                 <Link to={`/podcasts/${episode.podcast.slug}`}>{episode.podcast.title}</Link>
+                <Button to={signInToFollow} rel="nofollow" variant="secondary" size="sm">
+                  Follow
+                </Button>
                 {episode.pub_date && <span>· {formatDate(episode.pub_date)}</span>}
                 {episode.duration_formatted && <span>· {episode.duration_formatted}</span>}
               </span>
