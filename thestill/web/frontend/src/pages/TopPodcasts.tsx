@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useQueryClient } from '@tanstack/react-query'
 import { resolvePodcast } from '../api/client'
@@ -143,8 +143,10 @@ export default function TopPodcasts() {
 
   return (
     <div className="max-w-4xl">
-      <div className="flex items-baseline justify-between mb-2 gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold text-gray-900">{headerLabel}</h1>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are, and the Region control shows the chart's region. */}
+      <h1 className="sr-only">{headerLabel}</h1>
+      <div className="mb-4">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative">
             <input
@@ -207,18 +209,6 @@ export default function TopPodcasts() {
           </label>
         </div>
       </div>
-
-      <p className="text-gray-600 mb-6">
-        {user?.region_locked
-          ? 'Showing your region. '
-          : user?.region
-            ? 'Auto-detected from your IP. '
-            : ''}
-        <Link to="/settings" className="text-primary-700 hover:underline">
-          Change in settings
-        </Link>
-        .
-      </p>
 
       {showRegionHint && (
         <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">

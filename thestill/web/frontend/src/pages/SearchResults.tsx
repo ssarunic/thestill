@@ -120,13 +120,15 @@ export default function SearchResults() {
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Search</h1>
+        {/* Top-level pages carry no visible title: the nav already says where
+            you are. The heading stays for screen readers. */}
+        <h1 className="sr-only">Search</h1>
         <input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search the corpus…"
-          className="mt-3 w-full rounded-lg border border-gray-300 px-4 py-3 text-base outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+          className="w-full rounded-lg border border-gray-300 px-4 py-3 text-base outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
           autoFocus
           data-testid="search-page-input"
         />

@@ -120,15 +120,9 @@ export default function Episodes() {
 
   return (
     <div className="space-y-6 pb-20">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Episodes</h1>
-          <p className="text-gray-500 mt-1">
-            {isLoading ? 'Loading...' : `${totalEpisodes} episodes`}
-          </p>
-        </div>
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Episodes</h1>
 
       {/* Filters */}
       <EpisodeFilters filters={filters} onFiltersChange={handleFiltersChange} />
@@ -152,6 +146,8 @@ export default function Episodes() {
               ({selectedIds.size} selected)
             </span>
           )}
+          {/* The filter's total, now the page has no title line to carry it. */}
+          <span className="ml-auto text-sm text-gray-500">{totalEpisodes} episodes</span>
         </div>
       )}
 

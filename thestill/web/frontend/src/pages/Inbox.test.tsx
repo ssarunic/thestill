@@ -318,7 +318,7 @@ describe('Scheduled briefing card (spec #84)', () => {
 
     const upNext = screen.getByText('Up next').closest('p')!
     expect(upNext).toHaveTextContent(/(today|tomorrow|\w{3}) \d/)
-    expect(upNext).toHaveTextContent('5 new episodes so far')
+    expect(upNext).toHaveTextContent('5 new so far')
     await userEvent.click(screen.getByRole('button', { name: 'Generate now' }))
     expect(mutate).toHaveBeenCalledOnce()
   })
@@ -334,7 +334,7 @@ describe('Scheduled briefing card (spec #84)', () => {
     render(<Inbox />, { wrapper: createWrapper() })
 
     expect(screen.getByRole('link', { name: /4 episodes/ })).toHaveAttribute('href', '/briefings/b-1')
-    expect(screen.getByText('Up next').closest('p')).toHaveTextContent('3 still processing')
+    expect(screen.getByText('Up next').closest('p')).toHaveTextContent('3 processing')
     expect(screen.queryByText('Your briefing is catching up')).toBeNull()
   })
 

@@ -46,10 +46,9 @@ export default function AdminUsers() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-ink">Users</h1>
-        <p className="text-muted mt-1">Who is doing what. Accounts with quota hits or many new feeds come first.</p>
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Users</h1>
 
       <div className="flex flex-wrap gap-2 items-center">
         <input

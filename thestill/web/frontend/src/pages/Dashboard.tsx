@@ -33,12 +33,10 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Status</h1>
-          <p className="text-gray-500 mt-1">Overview of your podcast processing pipeline</p>
-        </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Status</h1>
+      <div className="flex justify-end">
         <RefreshButton />
       </div>
 

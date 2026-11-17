@@ -36,15 +36,12 @@ export default function Analytics() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-ink">Analytics</h1>
-          <p className="text-muted mt-1">Scorecard, signups, activation, retention and reading from product data</p>
-        </div>
-        {data?.available !== false && (
-          <SegmentedControl options={RANGES} value={range} onChange={setRange} ariaLabel="Date range" />
-        )}
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Analytics</h1>
+      {data?.available !== false && (
+        <SegmentedControl options={RANGES} value={range} onChange={setRange} ariaLabel="Date range" />
+      )}
 
       {error ? (
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md mx-auto text-center">
