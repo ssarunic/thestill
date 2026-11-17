@@ -19,23 +19,6 @@ afterEach(() => {
 })
 
 describe('Toast', () => {
-  it('runs an action once and closes the toast', () => {
-    const onClick = vi.fn()
-    render(
-      <ToastProvider>
-        <Capture />
-      </ToastProvider>,
-    )
-    act(() => {
-      show('Following Sample Pod.', 'success', { action: { label: 'Undo', onClick } })
-    })
-
-    act(() => screen.getByRole('button', { name: 'Undo' }).click())
-
-    expect(onClick).toHaveBeenCalledTimes(1)
-    expect(screen.queryByText('Following Sample Pod.')).toBeNull()
-  })
-
   it('stays up for the requested duration instead of the default 5 s', () => {
     vi.useFakeTimers()
     render(

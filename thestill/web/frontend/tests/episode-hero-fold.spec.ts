@@ -122,7 +122,7 @@ test.describe('episode hero on a phone (spec #76)', () => {
       await page.goto(EPISODE_PATH)
       const follow = page.getByRole('button', { name: 'Follow', exact: true })
       // The show link in Follow's own row (the page links the show elsewhere too).
-      const show = follow.locator('xpath=..').getByRole('link', { name: /Prof G Markets/ })
+      const show = follow.locator('xpath=ancestor::div[1]').getByRole('link', { name: /Prof G Markets/ })
       await expect(follow).toBeVisible()
       const showBox = (await show.boundingBox())!
       const followBox = (await follow.boundingBox())!

@@ -3,16 +3,10 @@ import { abovePlayer } from '../constants/layers'
 
 type ToastType = 'success' | 'error' | 'info'
 
-/** A button inside the toast; pressing it runs ``onClick`` and closes the toast. */
-export interface ToastAction {
-  label: string
-  /** Fuller name for screen readers when the label alone is ambiguous ("Undo"). */
-  ariaLabel?: string
-  onClick: () => void
-}
-
+// No action buttons here: toasts render outside the inbox reader's modal
+// dialog, which keeps focus inside its panel, so a keyboard user could not
+// reach one there (spec #117 puts its Undo in the episode header instead).
 interface ToastOptions {
-  action?: ToastAction
   /** How long the toast stays up (default 5 s). */
   durationMs?: number
 }
@@ -21,7 +15,6 @@ interface Toast {
   id: number
   message: string
   type: ToastType
-  action?: ToastAction
 }
 
 interface ToastContextType {
@@ -40,7 +33,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const showToast = useCallback((message: string, type: ToastType = 'info', options: ToastOptions = {}) => {
     const id = ++toastId
-    setToasts((prev) => [...prev, { id, message, type, action: options.action }])
+    setToasts((prev) => [...prev, { id, message, type }])
 
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
@@ -101,19 +94,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
             {/* Message */}
             <span className="text-sm font-medium">{toast.message}</span>
-            {toast.action && (
-              <button
-                type="button"
-                aria-label={toast.action.ariaLabel}
-                onClick={() => {
-                  dismissToast(toast.id)
-                  toast.action?.onClick()
-                }}
-                className="shrink-0 rounded px-2 py-1 text-sm font-semibold underline underline-offset-2 hover:bg-white/20"
-              >
-                {toast.action.label}
-              </button>
-            )}
             {/* Close button */}
             <button
               onClick={() => dismissToast(toast.id)}

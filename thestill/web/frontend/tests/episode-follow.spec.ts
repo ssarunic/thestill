@@ -9,7 +9,7 @@ import { EPISODE_PATH, PHONE, mockEpisodeApi } from './episode-hero-fixture'
 // The narrowest supported width: the long confirmation must still fit.
 test.use({ viewport: { width: 320, height: PHONE.height }, isMobile: true, hasTouch: true })
 
-test('Follow explains itself, and Undo unfollows', async ({ page }) => {
+test('Follow explains itself, and Undo beside it unfollows', async ({ page }) => {
   await mockEpisodeApi(page)
   const calls: string[] = []
   await page.route('**/api/podcasts/prof-g-markets/follow*', (route) => {
@@ -31,12 +31,19 @@ test('Follow explains itself, and Undo unfollows', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Following', exact: true })).toBeDisabled()
   expect(calls).toEqual(['POST ?source=episode_page'])
   await page.waitForTimeout(800)
-  const toast = (await page.getByRole('button', { name: 'Undo' }).locator('xpath=..').boundingBox())!
+  const toast = (await page.getByText(/^Following Prof G Markets\./).locator('xpath=..').boundingBox())!
   expect(toast.x).toBeGreaterThanOrEqual(0)
   expect(toast.x + toast.width).toBeLessThanOrEqual(320)
+  // Undo sits on the show row, next to Following, and has focus.
+  const undo = page.getByRole('button', { name: 'Undo following Prof G Markets' })
+  await expect(undo).toBeFocused()
+  const followingBox = (await page.getByRole('button', { name: 'Following', exact: true }).boundingBox())!
+  const undoBox = (await undo.boundingBox())!
+  expect(Math.abs(followingBox.y + followingBox.height / 2 - (undoBox.y + undoBox.height / 2))).toBeLessThanOrEqual(4)
+  expect(undoBox.x + undoBox.width).toBeLessThanOrEqual(320)
   await page.screenshot({ path: 'test-results/spec117-followed-phone.png' })
 
-  await page.getByRole('button', { name: 'Undo' }).click()
+  await undo.click()
   await expect(page.getByText('Unfollowed Prof G Markets')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Follow', exact: true })).toBeEnabled()
   expect(calls).toEqual(['POST ?source=episode_page', 'DELETE '])

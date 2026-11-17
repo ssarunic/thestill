@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ToastProvider } from '../Toast'
@@ -65,7 +65,9 @@ describe('EpisodeFollow', () => {
     expect(follow).toHaveBeenCalledWith({ podcastSlug: 'sample-pod', source: 'episode_page' })
     expect(await screen.findByRole('button', { name: 'Following' })).toBeDisabled()
     expect(screen.getByText(/Following Sample Pod\. New episodes will arrive summarised in your inbox and briefing\./)).toBeInTheDocument()
-    expect(screen.getByRole('button', UNDO)).toBeInTheDocument()
+    // Undo sits beside it in the header (reachable inside the reader's
+    // modal dialog), and focus moves there from the button just pressed.
+    expect(screen.getByRole('button', UNDO)).toHaveFocus()
     // The open episodes of this show re-read their follow state.
     expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ predicate: expect.any(Function) }))
   })
@@ -92,12 +94,15 @@ describe('EpisodeFollow', () => {
     expect(unfollow).toHaveBeenCalledWith('sample-pod')
     expect(await screen.findByText('Unfollowed Sample Pod')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Follow' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Follow' })).toHaveFocus()
+    expect(screen.queryByRole('button', UNDO)).toBeNull()
   })
 
-  it('Undo still unfollows, reports and refreshes after the header is gone', async () => {
-    // The toast outlives the header: the reader closed the overlay or moved
-    // on before pressing Undo.
+  it('a follow that finishes after the header is gone still confirms and refreshes', async () => {
+    // The reader closed the overlay or moved on mid-request.
     const user = userEvent.setup()
+    let resolveFollow: () => void = () => {}
+    follow.mockReturnValue(new Promise<void>((resolve) => (resolveFollow = resolve)))
     const queryClient = new QueryClient()
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     function Page() {
@@ -117,15 +122,11 @@ describe('EpisodeFollow', () => {
       </QueryClientProvider>,
     )
     await user.click(screen.getByRole('button', { name: 'Follow' }))
-    await screen.findByRole('button', UNDO)
     await user.click(screen.getByRole('button', { name: 'Close' }))
-    expect(screen.queryByRole('button', { name: 'Following' })).toBeNull()
-    invalidate.mockClear()
 
-    await user.click(screen.getByRole('button', UNDO))
+    await act(async () => resolveFollow())
 
-    expect(unfollow).toHaveBeenCalledWith('sample-pod')
-    expect(await screen.findByText('Unfollowed Sample Pod')).toBeInTheDocument()
+    expect(await screen.findByText(/Following Sample Pod\./)).toBeInTheDocument()
     expect(invalidate).toHaveBeenCalled()
   })
 
@@ -159,6 +160,8 @@ describe('EpisodeFollow', () => {
     expect(follow).toHaveBeenCalledTimes(1)
     expect(follow).toHaveBeenCalledWith({ podcastSlug: 'sample-pod', source: 'episode_pending_follow' })
     expect(screen.getByText(/Following Sample Pod\./)).toBeInTheDocument()
+    // Not the reader's click: focus stays where the page put it.
+    expect(screen.getByRole('button', UNDO)).not.toHaveFocus()
     expect(window.sessionStorage.getItem('thestill.pendingFollow')).toBeNull()
 
     rerender(tree(queryClient, { isFollowing: true }))

@@ -31,7 +31,7 @@ This spec puts a **Follow** button beside the show name in the episode
 header, for every reader who doesn't follow that show, signed in or not.
 The click is explained after the fact, in a confirmation toast that says
 what Follow does ("new episodes arrive summarised in your inbox and
-briefing") and offers **Undo**. Signed out, the same button goes through
+briefing"), with **Undo** beside the button. Signed out, the same button goes through
 sign-in and comes back to the episode with the follow done, reusing the
 spec #102 pending follow. The first-follow panel is retired; the inline
 button replaces it.
@@ -45,7 +45,8 @@ be read as experiment 2 against activation cohorts.
    Follow button beside the show name in the episode header, on the
    episode page and in the inbox reader, on phone and desktop.
 2. Following shows a toast that says what happened and what it means,
-   with Undo; Undo unfollows.
+   and an Undo beside the button (built: the plan had Undo in the toast;
+   see Outcome); Undo unfollows.
 3. A reader who already follows the show sees no follow control in the
    header (except "Following" right after following, while the reader
    stays on that show's episodes).
@@ -69,7 +70,7 @@ be read as experiment 2 against activation cohorts.
   Wikidata-linked people with a host or guest role should ever drive
   delivery. Separate spec.
 - Unfollow from the episode page. Unfollow stays on the show page; the
-  toast's Undo covers a mistaken click.
+  Undo right after following covers a mistaken click.
 - An end-of-summary follow card. Considered for later, after this
   change has been read, so the two can be told apart.
 - Showing how often a show publishes in the toast ("about 5 episodes a
@@ -293,15 +294,20 @@ as planned, plus e2e coverage.
   `max-w-sm` is wider than the screen. The toast container now spans the
   width on phones (16 px insets) and passes taps through outside each
   toast; desktop is unchanged.
-- **Toasts are announced** (`aria-live="polite"`), and a toast action can
-  carry a fuller accessible name ("Undo following *Show*").
+- **Undo sits beside "Following", not in the toast.** Codex (PR #527)
+  found that the inbox reader is a modal dialog that keeps Tab inside its
+  panel, while toasts render outside it: a toast's Undo was out of
+  keyboard and screen-reader reach there, and gone after 8 s. Undo is now
+  a button in the header row (`Undo following *Show*` for screen
+  readers), focus moves Follow → Undo → Follow after each click, and it
+  stays while the reader is on that show. The toast only explains, and
+  toasts lost the action support added for it.
+- **Toasts are announced** (`aria-live="polite"`).
 - **Follow and Undo use `mutateAsync`, not `mutate` callbacks.** A
-  review found that TanStack Query drops per-call callbacks once the
-  component unmounts, and the Undo toast outlives the header by up to
-  8 s (the reader closed the overlay or moved on). Undo then unfollowed
-  silently and left the episode cache saying "following". Awaiting the
-  promise reports and refreshes either way; a test covers Undo after the
-  header is gone.
+  pre-PR review found that TanStack Query drops per-call callbacks once
+  the component unmounts, so a follow finishing after the reader closed
+  the overlay never confirmed or refreshed. Awaiting the promise reports
+  and refreshes either way; a test covers it.
 - **"Following" lasts per show, not per episode.** The confirmation is
   keyed by show slug, so it stays on other episodes of the same show in
   the reader until it moves to another show. Consistent with the refetched
@@ -315,12 +321,12 @@ as planned, plus e2e coverage.
 - Backend: the episode response's `podcast_is_following` and
   `podcast_followable` (followed, not followed, synthetic parent); the new
   `follow` sources.
-- Unit: `EpisodeFollow` (follow, Undo, Undo after unmount, failures,
-  pending follow once, no carry-over between shows), toast action and
-  duration, `followSlugFromNext`, `/login` remembering an episode's show,
+- Unit: `EpisodeFollow` (follow, Undo and where focus goes, a follow
+  finishing after unmount, failures, pending follow once without moving
+  focus, no carry-over between shows), toast duration, `followSlugFromNext`, `/login` remembering an episode's show,
   the public episode Follow link.
 - E2E (hermetic): Follow on the show row at 393 and 320 px with the tabs
-  in the first viewport; Follow, toast and Undo at 320 px; the public
+  in the first viewport; Follow, toast and the row's Undo at 320 px; the public
   episode's Follow through `/login` and back.
 
 **Not yet verified:** the full signed-out round trip with a real Google
@@ -328,5 +334,4 @@ sign-in (needs prod or a multi-user local server with OAuth), and the
 experiment 2 read (three weeks after shipping).
 
 **Follow-ups:** Follow Guest (separate spec, after entity quality);
-a publishing-cadence line in the toast; pausing the toast timer while it
-has focus, so keyboard users can reach Undo comfortably.
+a publishing-cadence line in the toast.
