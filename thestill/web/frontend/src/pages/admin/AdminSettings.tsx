@@ -58,10 +58,9 @@ export default function AdminSettings() {
 
   return (
     <div className="space-y-6 max-w-2xl">
-      <div>
-        <h1 className="text-2xl font-bold text-ink">Admin settings</h1>
-        <p className="text-muted mt-1">Runtime switches. Every server process picks a change up within 15 seconds.</p>
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Admin settings</h1>
 
       <section className="bg-surface border border-hairline rounded-lg p-4 space-y-3">
         <h2 className="font-semibold text-ink">Signups</h2>

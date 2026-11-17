@@ -94,7 +94,8 @@ describe('Inbox search (spec #85)', () => {
     expect(lastCallOptions().q).toBeUndefined()
     expect(await screen.findByText('Deep Dive into LLMs like ChatGPT')).toBeInTheDocument()
     expect(screen.getByTestId('briefing-card')).toBeInTheDocument()
-    expect(screen.getByText('1 delivered')).toBeInTheDocument()
+    // The match count shows only while searching.
+    expect(screen.queryByText(/matching/)).not.toBeInTheDocument()
   })
 
   it('debounces typing, sends the trimmed query as q, and switches the count copy', async () => {
@@ -115,6 +116,29 @@ describe('Inbox search (spec #85)', () => {
     await waitFor(() => expect(lastCallOptions().q).toBe('karpathy'))
     expect(screen.getByTestId('inbox-search-input')).toHaveValue('karpathy')
     expect(screen.queryByTestId('briefing-card')).not.toBeInTheDocument()
+    // A restored query keeps the phone search row open.
+    expect(screen.getByRole('button', { name: 'Close search' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('phone: the search icon opens the row, and closing it clears the query', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => expect(mockGetInbox).toHaveBeenCalled())
+
+    expect(document.getElementById('inbox-phone-search')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Open search' }))
+    const row = document.getElementById('inbox-phone-search')!
+    const input = within(row).getByRole('searchbox', { name: 'Search your inbox' })
+    expect(input).toHaveFocus()
+
+    await user.type(input, 'karpathy')
+    await waitFor(() => expect(lastCallOptions().q).toBe('karpathy'))
+    await user.click(screen.getByRole('button', { name: 'Close search' }))
+
+    // The unfiltered page comes back from the cache: assert on the page.
+    expect(document.getElementById('inbox-phone-search')).toBeNull()
+    expect(screen.getByTestId('inbox-search-input')).toHaveValue('')
+    expect(await screen.findByTestId('briefing-card')).toBeInTheDocument()
   })
 
   it('renders the no-match state with Clear search and Search everything', async () => {
@@ -155,6 +179,6 @@ describe('Inbox search (spec #85)', () => {
 
     expect(input).toHaveValue('')
     expect(await screen.findByTestId('briefing-card')).toBeInTheDocument()
-    expect(await screen.findByText('1 delivered')).toBeInTheDocument()
+    expect(screen.queryByText(/matching/)).not.toBeInTheDocument()
   })
 })

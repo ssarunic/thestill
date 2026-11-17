@@ -130,41 +130,32 @@ export default function Podcasts() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Podcasts</h1>
-          <p className="text-gray-500 mt-1">
-            {isLoading
-              ? 'Loading...'
-              : debouncedQ
-                ? `${totalPodcasts} podcast${totalPodcasts === 1 ? '' : 's'} matching "${debouncedQ}"`
-                : `${totalPodcasts} podcasts tracked`}
-          </p>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Podcasts</h1>
+      <div className="flex items-center gap-3 sm:justify-end">
+        <div className="flex-1 sm:flex-none">
+          <SearchBox
+            value={searchInput}
+            onChange={setSearchInput}
+            inputClassName="py-2 sm:py-1.5 w-full sm:w-56"
+            testId="podcasts-search-input"
+          />
         </div>
-        <div className="flex items-center gap-3">
-          <div className="hidden sm:block">
-            <SearchBox
-              value={searchInput}
-              onChange={setSearchInput}
-              inputClassName="py-1.5 w-56"
-              testId="podcasts-search-input"
-            />
-          </div>
-          <Button
-            onClick={() => setIsAddModalOpen(true)}
-            icon={<PlusIcon />}
-            iconOnlyMobile
-          >
-            Follow
-          </Button>
-        </div>
+        <Button
+          onClick={() => setIsAddModalOpen(true)}
+          icon={<PlusIcon />}
+          iconOnlyMobile
+        >
+          Follow
+        </Button>
       </div>
 
-      {/* Mobile: full-width search below the header */}
-      <div className="sm:hidden">
-        <SearchBox value={searchInput} onChange={setSearchInput} inputClassName="py-2 w-full" />
-      </div>
+      {debouncedQ && !isLoading && (
+        <p className="text-sm text-gray-500" role="status">
+          {totalPodcasts} podcast{totalPodcasts === 1 ? '' : 's'} matching "{debouncedQ}"
+        </p>
+      )}
 
       {/* Grid */}
       {isLoading ? (

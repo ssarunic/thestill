@@ -7,6 +7,7 @@ interface SearchBoxProps {
   ariaLabel: string
   inputClassName: string
   testId?: string
+  autoFocus?: boolean
 }
 
 // Text filter for a list page: magnifier, native search input, an × button
@@ -21,6 +22,7 @@ export default function SearchBox({
   ariaLabel,
   inputClassName,
   testId,
+  autoFocus,
 }: SearchBoxProps) {
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape' && value) {
@@ -37,6 +39,7 @@ export default function SearchBox({
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        autoFocus={autoFocus}
         className={`rounded-md border border-gray-300 pl-8 pr-7 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 ${inputClassName}`}
         data-testid={testId}
       />

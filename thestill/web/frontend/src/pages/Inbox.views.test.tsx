@@ -127,7 +127,7 @@ describe('Inbox views (spec #88)', () => {
 
     await waitFor(() => expect(lastInboxCall().state).toBe('saved'))
     expect(screen.getByTestId('location')).toHaveTextContent('/inbox?view=saved')
-    expect(await screen.findByText('1 saved')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Saved' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByTestId('briefing-card')).not.toBeInTheDocument()
     expect(screen.queryByTestId('arriving-soon')).not.toBeInTheDocument()
   })
@@ -182,7 +182,12 @@ describe('Arriving soon (spec #88)', () => {
     renderPage()
 
     const strip = await screen.findByTestId('arriving-soon')
-    expect(strip).toHaveTextContent('Arriving soon')
+    // Folded to one line until opened.
+    const toggle = within(strip).getByRole('button', { name: /Arriving soon · 5/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(strip).not.toHaveTextContent('Higgsfield story')
+    await userEvent.setup().click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(strip).toHaveTextContent('Higgsfield story')
     expect(strip).toHaveTextContent('Transcribing…')
     expect(strip).toHaveTextContent('and 3 more')
@@ -209,6 +214,7 @@ describe('Arriving soon (spec #88)', () => {
     renderPage()
 
     const strip = await screen.findByTestId('arriving-soon')
+    await userEvent.setup().click(within(strip).getByRole('button', { name: /Arriving soon/ }))
     expect(within(strip).getByRole('link', { name: /On Dalston/ })).toHaveTextContent('Transcribing…')
     expect(within(strip).getByRole('link', { name: /Waiting/ })).toHaveTextContent('Queued')
     expect(strip).not.toHaveTextContent('Downloading…')

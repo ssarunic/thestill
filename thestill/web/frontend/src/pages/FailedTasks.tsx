@@ -282,15 +282,11 @@ export default function FailedTasks() {
 
   return (
     <div className="max-w-4xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Failed Tasks</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Tasks that failed and need manual intervention
-          </p>
-        </div>
-        {tasks.length > 0 && (
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Failed Tasks</h1>
+      {tasks.length > 0 && (
+        <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
             {selectedTasks.size > 0 ? (
               <button
@@ -320,8 +316,8 @@ export default function FailedTasks() {
               }
             </Button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Branch filter tabs (spec #28 Phase 3.2) */}
       <div className="mb-4 flex border-b border-gray-200">
