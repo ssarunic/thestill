@@ -511,29 +511,53 @@ TRAINING_CRAWLERS = (
     "Bytespider",
 )
 
+# Crawlers whose volume on entity pages costs more than they send back:
+# on 2026-11-16/17 Reflectionbot made ~6.1k and PetalBot ~1.2k entity
+# requests in 29 h, almost all cold builds that crowd the prerender cap
+# (spec #105 §4). They keep podcasts and episodes; only /entities/ and its
+# JSON go. Applebot, Amazonbot and the search/user-fetch agents are not here.
+ENTITY_HEAVY_CRAWLERS = (
+    "Reflectionbot",
+    "PetalBot",
+)
+
+# The ``*`` group's rules. A crawler that matches a named group ignores
+# ``*`` entirely, so a named group that only narrows access has to repeat
+# these, or it would open /inbox, /api/ and the rest to that crawler.
+_ROBOTS_RULES = (
+    "Allow: /$",
+    "Allow: /top",
+    "Allow: /podcasts/",
+    "Allow: /entities/",
+    "Allow: /api/auth/status",
+    "Allow: /api/public/",
+    "Disallow: /inbox",
+    "Disallow: /briefings",
+    "Disallow: /search",
+    "Disallow: /settings",
+    "Disallow: /episodes",
+    "Disallow: /status",
+    "Disallow: /queue",
+    "Disallow: /failed",
+    "Disallow: /login",
+    "Disallow: /api/",
+    "Disallow: /mcp",
+)
+# Disallow first: urllib.robotparser applies the first matching line, while
+# Google-style parsers take the longest match; this order agrees in both.
+_ENTITY_HEAVY_RULES = ("Disallow: /entities/", "Disallow: /api/public/entities/") + tuple(
+    rule for rule in _ROBOTS_RULES if rule != "Allow: /entities/"
+)
+
 ROBOTS_PUBLIC = (
     "".join(f"User-agent: {agent}\n" for agent in TRAINING_CRAWLERS)
     + "Disallow: /\n\n"
-    + """User-agent: *
-Allow: /$
-Allow: /top
-Allow: /podcasts/
-Allow: /entities/
-Allow: /api/auth/status
-Allow: /api/public/
-Disallow: /inbox
-Disallow: /briefings
-Disallow: /search
-Disallow: /settings
-Disallow: /episodes
-Disallow: /status
-Disallow: /queue
-Disallow: /failed
-Disallow: /login
-Disallow: /api/
-Disallow: /mcp
-Sitemap: {base}/sitemap.xml
-"""
+    + "".join(f"User-agent: {agent}\n" for agent in ENTITY_HEAVY_CRAWLERS)
+    + "".join(f"{rule}\n" for rule in _ENTITY_HEAVY_RULES)
+    + "\n"
+    + "User-agent: *\n"
+    + "".join(f"{rule}\n" for rule in _ROBOTS_RULES)
+    + "Sitemap: {base}/sitemap.xml\n"
 )
 
 ROBOTS_PRIVATE = "User-agent: *\nDisallow: /\n"
