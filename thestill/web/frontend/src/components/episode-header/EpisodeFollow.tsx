@@ -34,8 +34,8 @@ const CONFIRM_DURATION_MS = 8000
 export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, followable }: EpisodeFollowProps) {
   const queryClient = useQueryClient()
   const { showToast } = useToast()
-  const { mutate: follow, isPending, variables } = useFollowPodcast()
-  const { mutate: unfollow } = useUnfollowPodcast()
+  const { mutateAsync: follow, isPending, variables } = useFollowPodcast()
+  const { mutateAsync: unfollow } = useUnfollowPodcast()
   const [local, setLocal] = useState<LocalFollow | null>(null)
   const [failedSlug, setFailedSlug] = useState<string | null>(null)
 
@@ -49,40 +49,42 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
     [queryClient],
   )
 
+  // Promises, not ``mutate`` callbacks: those are dropped once this header
+  // unmounts, and the toast's Undo outlives it by up to 8 s (the reader
+  // closed the overlay or moved on). The query client and the toasts are
+  // app-level, so the outcome is still reported and refreshed.
   const undo = useCallback(
-    (slug: string, title: string) =>
-      unfollow(slug, {
-        onSuccess: () => {
-          setLocal({ slug, following: false })
-          refreshShowEpisodes(slug)
-          showToast(`Unfollowed ${title}`, 'success')
-        },
-        onError: (error) => showToast(`Couldn't unfollow ${title}: ${error.message}`, 'error'),
-      }),
+    async (slug: string, title: string) => {
+      try {
+        await unfollow(slug)
+        setLocal({ slug, following: false })
+        showToast(`Unfollowed ${title}`, 'success')
+      } catch (error) {
+        showToast(`Couldn't unfollow ${title}: ${(error as Error).message}`, 'error')
+      } finally {
+        refreshShowEpisodes(slug)
+      }
+    },
     [unfollow, refreshShowEpisodes, showToast],
   )
 
   const startFollow = useCallback(
-    (source: FollowSource) => {
+    async (source: FollowSource) => {
       const slug = podcastSlug
       const title = podcastTitle
-      follow(
-        { podcastSlug: slug, source },
-        {
-          onSuccess: () => {
-            setLocal({ slug, following: true })
-            refreshShowEpisodes(slug)
-            showToast(`Following ${title}. New episodes will arrive summarised in your inbox and briefing.`, 'success', {
-              durationMs: CONFIRM_DURATION_MS,
-              action: { label: 'Undo', onClick: () => undo(slug, title) },
-            })
-          },
-          onError: (error) => {
-            setFailedSlug(slug)
-            showToast(`Couldn't follow ${title}: ${error.message}`, 'error')
-          },
-        },
-      )
+      try {
+        await follow({ podcastSlug: slug, source })
+      } catch (error) {
+        setFailedSlug(slug)
+        showToast(`Couldn't follow ${title}: ${(error as Error).message}`, 'error')
+        return
+      }
+      setLocal({ slug, following: true })
+      refreshShowEpisodes(slug)
+      showToast(`Following ${title}. New episodes will arrive summarised in your inbox and briefing.`, 'success', {
+        durationMs: CONFIRM_DURATION_MS,
+        action: { label: `Undo`, ariaLabel: `Undo following ${title}`, onClick: () => void undo(slug, title) },
+      })
     },
     [podcastSlug, podcastTitle, follow, refreshShowEpisodes, showToast, undo],
   )
@@ -95,7 +97,10 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
     if (pendingChecked.current === podcastSlug) return
     pendingChecked.current = podcastSlug
     if (!consumePendingFollow(podcastSlug) || isFollowing || !followable) return
-    startFollow('episode_pending_follow')
+    // State is set only after the awaited follow request, never during the
+    // effect itself; the rule can't see past the await.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void startFollow('episode_pending_follow')
   }, [podcastSlug, isFollowing, followable, startFollow])
 
   if (!followable) return null
@@ -113,7 +118,7 @@ export default function EpisodeFollow({ podcastSlug, podcastTitle, isFollowing, 
       labels={{ idle: 'Follow', pending: 'Following…' }}
       onClick={() => {
         setFailedSlug(null)
-        startFollow('episode_page')
+        void startFollow('episode_page')
       }}
     />
   )

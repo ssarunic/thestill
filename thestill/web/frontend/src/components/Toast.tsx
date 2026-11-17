@@ -6,6 +6,8 @@ type ToastType = 'success' | 'error' | 'info'
 /** A button inside the toast; pressing it runs ``onClick`` and closes the toast. */
 export interface ToastAction {
   label: string
+  /** Fuller name for screen readers when the label alone is ambiguous ("Undo"). */
+  ariaLabel?: string
   onClick: () => void
 }
 
@@ -58,12 +60,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {/* Phones: inset 16 px from both edges, so a long message wraps
           instead of running off the left side (max-w-sm is wider than a
           320 px screen). */}
-      <div className="fixed left-4 right-4 z-[70] flex flex-col items-end gap-2 sm:left-auto" style={{ bottom: abovePlayer('1rem') }}>
+      {/* The container passes taps through (on phones it spans the width);
+          each toast takes its own. Announced politely to screen readers. */}
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed left-4 right-4 z-[70] flex flex-col items-end gap-2 sm:left-auto"
+        style={{ bottom: abovePlayer('1rem') }}
+      >
         {toasts.map((toast) => (
           <div
             key={toast.id}
             className={`
-              flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-sm
+              pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg max-w-sm
               animate-slide-in
               ${toast.type === 'success' ? 'bg-green-600 text-white' : ''}
               ${toast.type === 'error' ? 'bg-red-600 text-white' : ''}
@@ -96,6 +104,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {toast.action && (
               <button
                 type="button"
+                aria-label={toast.action.ariaLabel}
                 onClick={() => {
                   dismissToast(toast.id)
                   toast.action?.onClick()

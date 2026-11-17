@@ -29,8 +29,8 @@ vi.mock('../hooks/useApi', () => ({
   useEpisodeTasks: vi.fn(() => ({ data: { tasks: [] } })),
   useEntityBranchRefresh: vi.fn(),
   useReprocessEpisode: vi.fn(() => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null })),
-  useFollowPodcast: vi.fn(() => ({ mutate: vi.fn(), isPending: false, isError: false })),
-  useUnfollowPodcast: vi.fn(() => ({ mutate: vi.fn() })),
+  useFollowPodcast: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useUnfollowPodcast: vi.fn(() => ({ mutateAsync: vi.fn() })),
 }))
 
 let mockIsAdmin = false

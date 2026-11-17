@@ -1,6 +1,6 @@
 # Follow a Show from Its Episode Page
 
-> **Status:** 🚧 Active development
+> **Status:** 🚧 Implemented on `feat/117-follow-from-episode-page` (2026-11-17); pending PR + merge
 > **Created:** 2026-11-17
 > **Updated:** 2026-11-17
 > **Priority:** High. Every signup in the week to 2026-11-14 came from an
@@ -47,8 +47,8 @@ be read as experiment 2 against activation cohorts.
 2. Following shows a toast that says what happened and what it means,
    with Undo; Undo unfollows.
 3. A reader who already follows the show sees no follow control in the
-   header (except "Following" right after following, until they leave
-   that episode).
+   header (except "Following" right after following, while the reader
+   stays on that show's episodes).
 4. Imported episodes with a real parent show offer Follow for that show;
    bare audio imports (the synthetic `audio-imports` parent) never do.
 5. A signed-out visitor on a public episode page sees the same Follow
@@ -148,7 +148,8 @@ Answered by the operator on 2026-11-17.
    controls for the same action compete.
 2. **What does the header show when the reader already follows the
    show?** Nothing. Right after following it shows "Following ✓" until
-   the reader leaves that episode.
+   the reader leaves that episode (built: until the reader moves to
+   another show, see Outcome).
    *Why:* nearly every inbox episode is from a followed show; a permanent
    label on each one is noise.
 3. **Do imported episodes offer Follow for their parent show?** Yes, when
@@ -279,3 +280,53 @@ and their tests.
 Revert the PR. No migration, no stored data changes. Follow events
 already sent with the new sources stay in PostHog under those names;
 `follow_source` maps them to `other` if the values are removed.
+
+## Outcome
+
+Built on `feat/117-follow-from-episode-page` on 2026-11-17, phases A–D
+as planned, plus e2e coverage.
+
+### Deviations from the plan
+
+- **Phone toasts are inset from both edges.** At 320 px the confirmation
+  (the longest toast in the app) ran off the left edge, because
+  `max-w-sm` is wider than the screen. The toast container now spans the
+  width on phones (16 px insets) and passes taps through outside each
+  toast; desktop is unchanged.
+- **Toasts are announced** (`aria-live="polite"`), and a toast action can
+  carry a fuller accessible name ("Undo following *Show*").
+- **Follow and Undo use `mutateAsync`, not `mutate` callbacks.** A
+  review found that TanStack Query drops per-call callbacks once the
+  component unmounts, and the Undo toast outlives the header by up to
+  8 s (the reader closed the overlay or moved on). Undo then unfollowed
+  silently and left the episode cache saying "following". Awaiting the
+  promise reports and refreshes either way; a test covers Undo after the
+  header is gone.
+- **"Following" lasts per show, not per episode.** The confirmation is
+  keyed by show slug, so it stays on other episodes of the same show in
+  the reader until it moves to another show. Consistent with the refetched
+  state (the show is followed), so kept.
+- The pending-follow effect carries an eslint suppression for
+  `react-hooks/set-state-in-effect`: state is set only after the awaited
+  request, which the rule cannot see.
+
+### Tests added
+
+- Backend: the episode response's `podcast_is_following` and
+  `podcast_followable` (followed, not followed, synthetic parent); the new
+  `follow` sources.
+- Unit: `EpisodeFollow` (follow, Undo, Undo after unmount, failures,
+  pending follow once, no carry-over between shows), toast action and
+  duration, `followSlugFromNext`, `/login` remembering an episode's show,
+  the public episode Follow link.
+- E2E (hermetic): Follow on the show row at 393 and 320 px with the tabs
+  in the first viewport; Follow, toast and Undo at 320 px; the public
+  episode's Follow through `/login` and back.
+
+**Not yet verified:** the full signed-out round trip with a real Google
+sign-in (needs prod or a multi-user local server with OAuth), and the
+experiment 2 read (three weeks after shipping).
+
+**Follow-ups:** Follow Guest (separate spec, after entity quality);
+a publishing-cadence line in the toast; pausing the toast timer while it
+has focus, so keyboard users can reach Undo comfortably.
