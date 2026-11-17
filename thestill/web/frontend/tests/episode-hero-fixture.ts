@@ -138,6 +138,10 @@ export async function mockEpisodeApi(
           podcast_title: 'Prof G Markets',
           podcast_author: 'Prof G Media',
           podcast_language: 'en',
+          // Spec #117 — an unfollowed show: the header carries Follow, the
+          // widest identity row the fold has to fit.
+          podcast_is_following: false,
+          podcast_followable: true,
           origin: 'feed',
           import_kind: null,
           title: EPISODE_TITLE,

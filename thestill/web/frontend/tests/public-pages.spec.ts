@@ -198,6 +198,20 @@ test('with public pages off, a signed-out visitor gets the sign-in wall', async 
   expect(privateCalls).toEqual([])
 })
 
+test('Follow on a public episode signs in for its show and comes back to the episode (spec #117)', async ({ page }) => {
+  const privateCalls = await mockPublicApi(page)
+  await page.goto('/podcasts/public-show/episodes/chips')
+  const follow = page.getByRole('link', { name: 'Follow', exact: true })
+  await expect(follow).toHaveAttribute('rel', 'nofollow')
+  await page.screenshot({ path: 'test-results/spec117-public-episode.png' })
+  await follow.click()
+  await expect(page).toHaveURL(/\/login#next=%2Fpodcasts%2Fpublic-show%2Fepisodes%2Fchips&intent=follow$/)
+  await expect(page.getByText(/we'll follow the show for you/)).toBeVisible()
+  await page.getByRole('link', { name: 'Not now' }).click()
+  await expect(page).toHaveURL(/\/podcasts\/public-show\/episodes\/chips$/)
+  expect(privateCalls).toEqual([])
+})
+
 test('every sign-in goes through the sign-in page and back (spec #102)', async ({ page }) => {
   const privateCalls = await mockPublicApi(page)
   await page.goto('/podcasts/public-show/episodes/chips')

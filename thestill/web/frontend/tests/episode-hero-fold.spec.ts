@@ -113,19 +113,28 @@ test.describe('episode hero on a phone (spec #76)', () => {
     await expect(page.getByTestId('collapsed-episode-bar')).toBeVisible()
   })
 
-  test('a reader who follows nothing gets the follow prompt under the tabs, not above them', async ({ page }) => {
-    await mockEpisodeApi(page)
-    await page.route('**/api/podcasts?*', (route) =>
-      route.fulfill({ json: { status: 'ok', podcasts: [], total: 0, count: 0, offset: 0, limit: 1, has_more: false } }),
-    )
-    await page.goto(EPISODE_PATH)
-    const prompt = page.getByRole('region', { name: 'Follow Prof G Markets' })
-    await expect(prompt).toBeAttached()
-    const tabBox = (await page.getByRole('button', { name: 'Summary' }).boundingBox())!
-    expect(tabBox.y + tabBox.height).toBeLessThanOrEqual(PHONE.height)
-    const promptBox = (await prompt.boundingBox())!
-    expect(promptBox.y).toBeGreaterThan(tabBox.y + tabBox.height)
-  })
+  // Spec #117 — Follow shares the show row; the row never wraps and the
+  // tabs still start inside the first viewport, down to 320 px.
+  for (const width of [PHONE.width, 320]) {
+    test(`Follow sits beside the show name at ${width} px without pushing the tabs down`, async ({ page }) => {
+      await page.setViewportSize({ width, height: PHONE.height })
+      await mockEpisodeApi(page)
+      await page.goto(EPISODE_PATH)
+      const follow = page.getByRole('button', { name: 'Follow', exact: true })
+      // The show link in Follow's own row (the page links the show elsewhere too).
+      const show = follow.locator('xpath=..').getByRole('link', { name: /Prof G Markets/ })
+      await expect(follow).toBeVisible()
+      const showBox = (await show.boundingBox())!
+      const followBox = (await follow.boundingBox())!
+      // Same row: vertical centres within a few px; button right of the name.
+      expect(Math.abs(showBox.y + showBox.height / 2 - (followBox.y + followBox.height / 2))).toBeLessThanOrEqual(4)
+      expect(followBox.x).toBeGreaterThanOrEqual(showBox.x + showBox.width)
+      expect(followBox.x + followBox.width).toBeLessThanOrEqual(width)
+      const tabBox = (await page.getByRole('button', { name: 'Summary' }).boundingBox())!
+      expect(tabBox.y + tabBox.height).toBeLessThanOrEqual(PHONE.height)
+      await page.screenshot({ path: `test-results/spec117-follow-${width}.png` })
+    })
+  }
 
   test('People and Information render below the tabs', async ({ page }) => {
     await mockEpisodeApi(page)

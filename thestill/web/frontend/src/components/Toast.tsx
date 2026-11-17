@@ -55,7 +55,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ showToast, dismissToast }}>
       {children}
       {/* Toast container */}
-      <div className="fixed right-4 z-[70] flex flex-col gap-2" style={{ bottom: abovePlayer('1rem') }}>
+      {/* Phones: inset 16 px from both edges, so a long message wraps
+          instead of running off the left side (max-w-sm is wider than a
+          320 px screen). */}
+      <div className="fixed left-4 right-4 z-[70] flex flex-col items-end gap-2 sm:left-auto" style={{ bottom: abovePlayer('1rem') }}>
         {toasts.map((toast) => (
           <div
             key={toast.id}
