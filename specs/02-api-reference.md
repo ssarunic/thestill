@@ -2,6 +2,13 @@
 
 This document describes the REST API endpoints provided by the Thestill web server.
 
+> **Route list:** this spec is not kept complete. The current list of every
+> route is [docs/web-server.md](../docs/web-server.md), which
+> `tests/docs/test_api_route_drift.py` checks against the app. The guard each
+> router is mounted with is in
+> [thestill/web/routes/EGM.md](../thestill/web/routes/EGM.md). Use this spec
+> for request and response formats.
+
 ## Overview
 
 - **Base URL**: `http://localhost:8000` (development)
