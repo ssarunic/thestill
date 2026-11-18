@@ -119,6 +119,16 @@ export default function DriftDebugStrip({
               <dd className="break-all">{report.audioHost ?? '—'}</dd>
             </div>
             <div>
+              <dt className="text-slate-500">Copy read</dt>
+              <dd>
+                {report.copySource === 'element'
+                  ? 'the element’s own'
+                  : report.copySource === 'enclosure'
+                    ? 'asked afresh from the feed URL'
+                    : '—'}
+              </dd>
+            </div>
+            <div>
               <dt className="text-slate-500">Read / transcribed copy</dt>
               <dd>
                 {megabytes(report.fetchedBytes)} / {megabytes(report.audioBytes)}

@@ -18,7 +18,7 @@ Podcast API endpoints for Thestill web UI.
 Provides access to podcasts, episodes, and follow/unfollow functionality.
 """
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -600,6 +600,9 @@ class DriftOutcomeRequest(BaseModel):
     fetched_bytes: Optional[int] = Field(default=None, ge=0, le=1 << 40)
     fetch_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
     fit_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    # Which copy was aligned: the element's own (named by the service
+    # worker) or a fresh one asked through the enclosure URL.
+    copy_source: Optional[Literal["element", "enclosure"]] = None
     # Family and major version, for example "Safari 27".
     browser: Optional[str] = Field(default=None, max_length=40, pattern=r"^[A-Za-z][A-Za-z ]{0,30} \d{1,4}$")
     error: Optional[str] = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9_ .:-]+$")
@@ -678,6 +681,7 @@ def report_drift_outcome(
             applied=body.applied,
             fetch_ms=body.fetch_ms,
             fit_ms=body.fit_ms,
+            copy_source=body.copy_source,
         ),
         user=user,
     )

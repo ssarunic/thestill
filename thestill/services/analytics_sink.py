@@ -182,6 +182,7 @@ class DriftAlignmentResult(_Event):
     applied: bool = False
     fetch_ms: Optional[int] = Field(default=None, ge=0)
     fit_ms: Optional[int] = Field(default=None, ge=0)
+    copy_source: Optional[Literal["element", "enclosure"]] = None
 
 
 AnalyticsEvent = Union[

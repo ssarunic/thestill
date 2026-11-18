@@ -52,6 +52,9 @@ export interface DriftOutcomeBody {
   fetched_bytes: number | null
   fetch_ms: number | null
   fit_ms: number | null
+  // Which copy was aligned: the one the element plays, named by the
+  // service worker, or a fresh one asked through the enclosure URL.
+  copy_source: 'element' | 'enclosure' | null
   browser: string | null
   error: string | null
 }
@@ -109,6 +112,7 @@ export function toOutcomeBody(
     fetched_bytes: report.fetchedBytes,
     fetch_ms: report.fetchMs,
     fit_ms: report.fitMs,
+    copy_source: report.copySource,
     browser: browserLabel(userAgent),
     error: report.error,
   }

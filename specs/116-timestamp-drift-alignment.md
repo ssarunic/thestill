@@ -430,8 +430,21 @@ All work runs in a Web Worker so playback and scrolling are unaffected.
    two rules. Three samples cannot see a shift that opens and closes
    between them, so they never end the work for a show that inserts
    ads.
-4. **Full pass.** Otherwise `fetch()` the audio URL as a stream with
-   `mode: 'cors'`. Parse MP3 frame headers as bytes arrive, keep a
+4. **Full pass.** Otherwise `fetch()` the audio as a stream with
+   `mode: 'cors'`: the URL the element's copy came from, after
+   redirects, when the service worker (step 6) has read it from the
+   element's first response within 2 s; else the enclosure URL, which
+   is also the fallback when the element's URL cannot be read (an
+   expired signature). Asking the enclosure a second time is not
+   asking for the same copy: Acast stitches a copy per request behind
+   a signed `livestitches/<id>` URL, and in Safari the alignment's
+   request and the element's were served different copies on 5 of 7
+   plays (2026-11-11 to 11-18), every one a `variant_mismatch`, while
+   curl from the same machine always got the same one. The
+   `livestitches` URL itself is a fixed file whatever the user agent
+   (one ETag) and stays valid for about three hours. The report says
+   which copy was read (`copy_source`). Parse MP3 frame headers as
+   bytes arrive, keep a
    rolling 4-frame hash, and look each one up in the anchor table. In
    the same pass, keep an 8-byte hash of every 64 KB block of the
    stream (the block digest, about 7 KB for a 60 MB file). The bytes
@@ -718,6 +731,7 @@ as `drift_map_reported` and forwards the summary to PostHog as
 | `anchors_total`, `anchors_hit`, `anchors_inlier`, `anchors_outlier` | how many landmarks were found, and how many agree with the span they fall in |
 | `verify_length_ok`, `verify_ranges_checked`, `verify_ranges_matched` | the two checks of step 6 |
 | `audio_host`, `audio_bytes`, `fetched_bytes`, `fetch_ms`, `fit_ms` | where the audio came from and what the pass cost |
+| `copy_source` | `element`: the copy the element plays, at the URL the service worker read; `enclosure`: a fresh copy asked through the feed's URL |
 | `browser` | family and major version |
 
 What to read from it:

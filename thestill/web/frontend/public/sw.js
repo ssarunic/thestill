@@ -118,11 +118,17 @@ async function relay(event) {
     blockIndex: null,
     crc: null,
     adler: null,
+    finalUrl: null,
     t: Date.now(),
   }
   const response = await fetch(request)
   report.status = response.status
   report.opaque = response.type === 'opaque'
+  // Where the bytes came from after redirects. A host that stitches a copy
+  // per request (Acast) names that copy here, and the page aligns against
+  // this URL so that it reads the very copy the element plays. It stays in
+  // the page: it can carry a signature and a listener id.
+  if (!report.opaque && response.url) report.finalUrl = response.url
   const length = Number(response.headers.get('content-length'))
   if (!report.opaque && Number.isFinite(length) && length > 0) report.contentLength = length
 

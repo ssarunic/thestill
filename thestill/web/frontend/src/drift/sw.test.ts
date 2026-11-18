@@ -170,7 +170,25 @@ describe('service worker', () => {
     const worker = loadWorker(async () => opaque)
     const response = await worker.request('https://nocors.example/a.mp3', { destination: 'audio', range: 'bytes=0-' })
     expect(response).toBe(opaque)
-    expect(worker.posted[0].report).toMatchObject({ opaque: true, blockIndex: null, contentLength: null })
+    expect(worker.posted[0].report).toMatchObject({
+      opaque: true,
+      blockIndex: null,
+      contentLength: null,
+      finalUrl: null,
+    })
+  })
+
+  it('names the URL the element’s copy came from after redirects', async () => {
+    // Acast answers each request through the enclosure with its own
+    // stitched copy; this URL names the one the element got.
+    const stitch = 'https://stitch.example/livestitches/abc.mp3?Signature=s'
+    const worker = loadWorker(async (request) => {
+      const response = await server.fetchImpl(request)
+      Object.defineProperty(response, 'url', { value: stitch })
+      return response
+    })
+    await worker.request('https://sphinx.example/a.mp3', { destination: 'audio', range: 'bytes=0-1' })
+    expect(worker.posted[0].report).toMatchObject({ url: 'https://sphinx.example/a.mp3', finalUrl: stitch })
   })
 
   it('lets a failed fetch fail as it would without a worker', async () => {
