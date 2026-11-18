@@ -153,3 +153,52 @@ export function onMediaReport(watcher: () => void): () => void {
     watchers.delete(watcher)
   }
 }
+
+/**
+ * The URL the element's copy of `audioUrl` came from, after redirects, as
+ * the worker read it from the element's first readable response of the
+ * load that began at `sinceMs`. Null when there is none (yet), or when it
+ * is not https (a worker cannot fetch an http file from an https page).
+ */
+export function elementCopyUrl(audioUrl: string, sinceMs: number): string | null {
+  const first = reports.find(
+    (report) =>
+      report.t >= sinceMs &&
+      report.url === audioUrl &&
+      !report.opaque &&
+      (report.status === 200 || report.status === 206) &&
+      typeof report.finalUrl === 'string',
+  )
+  if (!first?.finalUrl) return null
+  try {
+    return new URL(first.finalUrl).protocol === 'https:' ? first.finalUrl : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Call `done` once with `elementCopyUrl` as soon as the worker has reported
+ * it, or with null after `timeoutMs`. At once (synchronously) when it is
+ * already known: the element asks for its first range when playback
+ * starts, usually a moment before the alignment does.
+ */
+export function whenElementCopyUrl(
+  audioUrl: string,
+  sinceMs: number,
+  timeoutMs: number,
+  done: (url: string | null) => void,
+): void {
+  const known = elementCopyUrl(audioUrl, sinceMs)
+  if (known !== null) return done(known)
+  const finish = (url: string | null) => {
+    clearTimeout(timer)
+    stop()
+    done(url)
+  }
+  const stop = onMediaReport(() => {
+    const url = elementCopyUrl(audioUrl, sinceMs)
+    if (url !== null) finish(url)
+  })
+  const timer = setTimeout(() => finish(null), timeoutMs)
+}

@@ -34,6 +34,7 @@ const report: DriftReport = {
   anchorsHit: 3301,
   anchorsInlier: 3299,
   audioHost: 'stitcher2.acast.com',
+  copySource: 'element',
   audioBytes: 54_000_000,
   fetchedBytes: 54_720_000,
   fetchMs: 2100,
@@ -74,8 +75,11 @@ describe('toOutcomeBody', () => {
       coverage: 0.9959,
       anchors_outlier: 2,
       audio_host: 'stitcher2.acast.com',
+      copy_source: 'element',
       browser: 'Safari 27',
     })
+    // The URL itself never leaves the page: it can carry a signature.
+    expect(JSON.stringify(body)).not.toMatch(/https?:/)
   })
 
   it('reports the checks as unknown, never as passed, when none was possible', () => {

@@ -6,7 +6,13 @@ import type { DriftReport } from './run'
 import { getCorsVerdict, setCorsVerdict, beginAudioLoad, setCrossOriginLoadingEnabled } from './corsVerdict'
 import { isTimelineExpected, resetTimelineExpectations } from './expectation'
 import { recordMediaReport, resetDriftServiceWorkerClient } from './swClient'
-import { checkPlay, resetDriftAttempts, transcriptIntervals, useDriftAlignment } from './useDriftAlignment'
+import {
+  checkPlay,
+  COPY_URL_WAIT_MS,
+  resetDriftAttempts,
+  transcriptIntervals,
+  useDriftAlignment,
+} from './useDriftAlignment'
 
 const reportDriftOutcome = vi.fn<(...args: unknown[]) => Promise<void>>(async () => {})
 vi.mock('../api/client', () => ({ reportDriftOutcome: (...args: unknown[]) => reportDriftOutcome(...args) }))
@@ -64,6 +70,7 @@ const report: DriftReport = {
   anchorsHit: 10,
   anchorsInlier: 10,
   audioHost: 'cdn.example',
+  copySource: 'enclosure',
   audioBytes: 1,
   trackDurationS: 20,
   fetchedBytes: 2,
@@ -240,7 +247,14 @@ describe('a play is checked again as later ranges arrive', () => {
     const hook = renderHook(() => useDriftAlignment(props()))
     return hook
   }
-  const finish = () => act(() => FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report } }))
+  // The element loaded with crossorigin under a controlling worker, so the
+  // alignment waits for the worker to name the element's copy. These
+  // reports never do (a worker from before `finalUrl`): let the wait run out.
+  const worker = () => {
+    if (FakeWorker.instances.length === 0) vi.advanceTimersByTime(COPY_URL_WAIT_MS)
+    return FakeWorker.instances[0]
+  }
+  const finish = () => act(() => worker().onmessage?.({ data: { type: 'done', report } }))
   const settle = (ms: number) => act(() => vi.advanceTimersByTime(ms))
 
   it('finds out a copy that only differs at a later ad break', () => {
@@ -385,7 +399,7 @@ describe('a play is checked again as later ranges arrive', () => {
     const identity = play()
     recordMediaReport(range())
     act(() =>
-      FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
+      worker().onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
     )
     settle(1500)
     expect(identity.result.current.check?.verification?.verdict).toBe('verified')
@@ -500,7 +514,7 @@ describe('a play is checked again as later ranges arrive', () => {
     const identity = play()
     recordMediaReport(range())
     act(() =>
-      FakeWorker.instances[0].onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
+      worker().onmessage?.({ data: { type: 'done', report: { ...report, outcome: 'identity' } } }),
     )
     // The held start, if any, is let go the moment the outcome is known.
     expect(player.releaseTimelineHold).toHaveBeenCalledWith('ep-1', AUDIO)
@@ -629,6 +643,91 @@ describe('a play is checked again as later ranges arrive', () => {
     settle(500)
     expect(result.current.check?.verification?.verdict).toBe('verified')
     expect(bodies()).toHaveLength(1)
+  })
+})
+
+describe('the copy that is aligned', () => {
+  // Acast stitches a copy per request behind a signed URL. Asked a second
+  // time through the enclosure, Safari was served another copy than the
+  // element on 5 of 7 plays, and every map was refused at the check.
+  const AUDIO = 'https://host.example/a.mp3'
+  const STITCH = 'https://stitch.example/livestitches/abc.mp3?Signature=s'
+  const first = (finalUrl: string | null, overrides: object = {}) => ({
+    url: AUDIO,
+    range: 'bytes=0-1',
+    status: 206,
+    opaque: false,
+    contentLength: 2,
+    blockIndex: null,
+    crc: null,
+    adler: null,
+    finalUrl,
+    t: Date.now() + 1,
+    ...overrides,
+  })
+  const startInput = () => (FakeWorker.instances[0].posted[0] as { input: { copyUrl?: string | null } }).input
+
+  function crossOriginLoad() {
+    vi.stubGlobal('navigator', {
+      userAgent: CHROME_UA,
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    setCorsVerdict(AUDIO, 'cors_ok')
+    beginAudioLoad(AUDIO, true)
+  }
+
+  it('fetches the copy the element plays when the worker has already named it', () => {
+    crossOriginLoad()
+    recordMediaReport(first(STITCH))
+    renderHook(() => useDriftAlignment(props()))
+    expect(FakeWorker.instances).toHaveLength(1)
+    expect(startInput().copyUrl).toBe(STITCH)
+  })
+
+  it('waits for the element’s first response to name its copy', () => {
+    crossOriginLoad()
+    const { result } = renderHook(() => useDriftAlignment(props()))
+    expect(result.current.status).toBe('running')
+    expect(FakeWorker.instances).toHaveLength(0)
+    // An opaque or failed response names nothing.
+    act(() => recordMediaReport(first(STITCH, { opaque: true })))
+    act(() => recordMediaReport(first(STITCH, { status: 403 })))
+    expect(FakeWorker.instances).toHaveLength(0)
+    act(() => recordMediaReport(first(STITCH)))
+    expect(startInput().copyUrl).toBe(STITCH)
+    // The wait is over: its timeout starts nothing more.
+    act(() => vi.advanceTimersByTime(COPY_URL_WAIT_MS))
+    expect(FakeWorker.instances).toHaveLength(1)
+  })
+
+  it('falls back to the enclosure when the worker names nothing in time', () => {
+    crossOriginLoad()
+    renderHook(() => useDriftAlignment(props()))
+    act(() => vi.advanceTimersByTime(COPY_URL_WAIT_MS - 1))
+    expect(FakeWorker.instances).toHaveLength(0)
+    act(() => vi.advanceTimersByTime(1))
+    expect(startInput().copyUrl).toBeUndefined()
+  })
+
+  it('never names a copy from an earlier load or an http file', () => {
+    crossOriginLoad()
+    recordMediaReport(first(STITCH, { t: Date.now() - 10 }))
+    recordMediaReport(first('http://plain.example/a.mp3'))
+    renderHook(() => useDriftAlignment(props()))
+    act(() => vi.advanceTimersByTime(COPY_URL_WAIT_MS))
+    expect(startInput().copyUrl).toBeUndefined()
+  })
+
+  it('does not wait when the element cannot be read', () => {
+    // No crossorigin: the worker leaves the element's requests alone.
+    vi.stubGlobal('navigator', {
+      userAgent: CHROME_UA,
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    beginAudioLoad(AUDIO, true)
+    renderHook(() => useDriftAlignment(props()))
+    expect(FakeWorker.instances).toHaveLength(1)
+    expect(startInput().copyUrl).toBeUndefined()
   })
 })
 

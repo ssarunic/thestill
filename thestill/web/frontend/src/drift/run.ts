@@ -31,9 +31,21 @@ export interface DriftInput {
   trackUrl: string
   /** The audio URL the player is playing. */
   audioUrl: string
+  /**
+   * The URL the audio element's copy was served from, after redirects, when
+   * the service worker saw it. Fetched instead of `audioUrl`: a host that
+   * stitches a copy per request (Acast in Safari) can answer a second
+   * request through the enclosure with another copy than the element's,
+   * and a map of that copy is useless. Falls back to `audioUrl` when this
+   * one cannot be read (an expired signature, no CORS on that host).
+   */
+  copyUrl?: string | null
   /** The transcript's segments on the transcribed copy's timeline. */
   segments: TranscriptInterval[]
 }
+
+/** Which copy was aligned: the element's own, or a fresh one from the enclosure. */
+export type CopySource = 'element' | 'enclosure'
 
 export interface DriftReport {
   outcome: DriftOutcome
@@ -49,6 +61,8 @@ export interface DriftReport {
   anchorsInlier: number | null
   /** Host that served the audio after redirects. */
   audioHost: string | null
+  /** Which copy was fetched; null before the audio was requested. */
+  copySource: CopySource | null
   /** Byte length of the transcribed copy, from the track. */
   audioBytes: number | null
   /** Duration of the transcribed copy, from the track. */
@@ -86,6 +100,7 @@ function emptyReport(outcome: DriftOutcome, error: string | null = null): DriftR
     anchorsHit: null,
     anchorsInlier: null,
     audioHost: null,
+    copySource: null,
     audioBytes: null,
     trackDurationS: null,
     fetchedBytes: null,
@@ -137,15 +152,33 @@ export async function runDriftAlignment(
   }
 
   const started = now()
-  let response: Response
-  try {
-    // No credentials: the audio host is a third party, and a wildcard
-    // Access-Control-Allow-Origin only satisfies an anonymous request.
-    response = await fetch(input.audioUrl, { mode: 'cors', credentials: 'omit', signal })
-  } catch (error) {
-    if (aborted()) throw error
-    // A CORS refusal and a network failure are indistinguishable by design.
-    return { ...report, outcome: 'no_cors' }
+  // No credentials: the audio host is a third party, and a wildcard
+  // Access-Control-Allow-Origin only satisfies an anonymous request.
+  const fetchAudio = (url: string) => fetch(url, { mode: 'cors', credentials: 'omit', signal })
+  let response: Response | null = null
+  if (input.copyUrl && input.copyUrl !== input.audioUrl) {
+    try {
+      const candidate = await fetchAudio(input.copyUrl)
+      if (candidate.ok && candidate.body) {
+        response = candidate
+        report.copySource = 'element'
+      } else {
+        void candidate.body?.cancel().catch(() => {})
+      }
+    } catch (error) {
+      if (aborted()) throw error
+      // Unreadable from here: fall back to the enclosure below.
+    }
+  }
+  if (response === null) {
+    report.copySource = 'enclosure'
+    try {
+      response = await fetchAudio(input.audioUrl)
+    } catch (error) {
+      if (aborted()) throw error
+      // A CORS refusal and a network failure are indistinguishable by design.
+      return { ...report, outcome: 'no_cors' }
+    }
   }
   report.audioHost = hostOf(response.url) ?? report.audioHost
   if (!response.ok || !response.body) {

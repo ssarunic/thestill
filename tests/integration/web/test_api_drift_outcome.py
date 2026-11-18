@@ -159,6 +159,7 @@ def test_applied_map_that_failed_a_range_check_is_an_error(client, episode, log)
         {"generation": "../../etc/passwd"},
         {"user_email": "someone@example.com"},
         {"error": "<script>alert(1)</script>"},
+        {"copy_source": "https://stitch.example/livestitches/abc.mp3?Signature=s"},
     ],
 )
 def test_malformed_reports_are_rejected(client, episode, log, change):
@@ -277,3 +278,18 @@ def test_applied_map_is_recorded_and_must_have_been_verified(client, app_state, 
     assert [event["log_level"] for event in events] == ["info", "error", "error", "error", "error"]
     assert all(event["applied"] is True for event in events)
     assert sink.events[0][0].properties()["applied"] is True
+
+
+def test_report_says_which_copy_was_aligned(client, app_state, episode, log):
+    """Spec #116 section 4 step 4 — the element's own copy (named by the
+    service worker) or a fresh one through the enclosure; never its URL."""
+    url, generation = episode
+    app_state.analytics_sink = sink = RecordingSink()
+
+    assert client.post(url, json={**_aligned(generation), "copy_source": "element"}).status_code == 200
+    assert client.post(url, json={**_aligned(generation), "copy_source": "enclosure"}).status_code == 200
+    # A browser from before the field.
+    assert client.post(url, json=_aligned(generation)).status_code == 200
+
+    assert [event["copy_source"] for event in log.named("drift_map_reported")] == ["element", "enclosure", None]
+    assert [event.properties()["copy_source"] for event, _ in sink.events] == ["element", "enclosure", None]

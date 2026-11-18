@@ -20,6 +20,7 @@ import {
   onMediaReport,
   serviceWorkerControlling,
   serviceWorkerSupported,
+  whenElementCopyUrl,
 } from './swClient'
 import { verifyAgainst } from './verify'
 import type { DriftProgress, DriftReport } from './run'
@@ -288,12 +289,40 @@ function checkThisLoad(
   }, CHECK_EARLY_MS)
 }
 
+/** How long the alignment waits for the service worker to name the element's copy. */
+export const COPY_URL_WAIT_MS = 2000
+
 function startAttempt(
   key: string,
   input: DriftWorkerRequest['input'],
   hooks: PlayHooks,
 ): void {
   publish(key, { ...IDLE, status: 'running' })
+  // Align the element's own copy where it can be named: the element loaded
+  // this audio with `crossorigin` under a controlling service worker, which
+  // reads the URL from the element's first response. Asked afresh through
+  // the enclosure, a host that stitches a copy per request (Acast) can
+  // answer with another copy than the element's, and a map of that copy is
+  // refused at the check. Otherwise nothing can name it: start at once.
+  const load = currentAudioLoad()
+  if (!load || load.url !== input.audioUrl || !load.crossOrigin || !serviceWorkerControlling()) {
+    runAttempt(key, input, hooks)
+    return
+  }
+  whenElementCopyUrl(input.audioUrl, load.t, COPY_URL_WAIT_MS, (copyUrl) => {
+    // A URL read from a load that has since been replaced names a copy the
+    // element may no longer play: align through the enclosure, as before.
+    const now = currentAudioLoad()
+    const sameLoad = now !== null && now.url === load.url && now.t === load.t
+    runAttempt(key, copyUrl && sameLoad ? { ...input, copyUrl } : input, hooks)
+  })
+}
+
+function runAttempt(
+  key: string,
+  input: DriftWorkerRequest['input'],
+  hooks: PlayHooks,
+): void {
   const worker = new Worker(new URL('../workers/driftAlign.worker.ts', import.meta.url), { type: 'module' })
   const fail = () => {
     worker.terminate()

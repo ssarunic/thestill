@@ -19,6 +19,7 @@ const report: DriftReport = {
   anchorsHit: 3301,
   anchorsInlier: 3299,
   audioHost: 'stitcher2.acast.com',
+  copySource: 'element',
   audioBytes: 54_000_000,
   trackDurationS: 3290,
   fetchedBytes: 54_720_000,
@@ -56,6 +57,7 @@ describe('DriftDebugStrip', () => {
     expect(screen.getByText(/Aligned/)).toBeInTheDocument()
     expect(screen.getByText(/Not applied yet: checking the playing audio/)).toBeInTheDocument()
     expect(screen.getByText('stitcher2.acast.com')).toBeInTheDocument()
+    expect(screen.getByText('the element’s own')).toBeInTheDocument()
     expect(screen.getByText('+40.124 s')).toBeInTheDocument()
     expect(screen.getByText(/3301 of 3372 \(2 outside a span\)/)).toBeInTheDocument()
 

@@ -22,6 +22,12 @@ export interface MediaReport {
   blockIndex: number | null
   crc: number | null
   adler: number | null
+  /**
+   * The response's URL after redirects, when readable. Never leaves the
+   * page: it can carry a signature and a listener id. Absent in reports
+   * from a worker older than this field.
+   */
+  finalUrl?: string | null
   /** `Date.now()` in the worker when the request arrived. */
   t: number
 }

@@ -20,9 +20,13 @@ interface Served {
   track?: Uint8Array | number
   audio?: Uint8Array | number | 'blocked'
   finalUrl?: string
+  /** What COPY_URL (the element's copy, named by the service worker) answers. */
+  copy?: Uint8Array | number | 'blocked'
 }
 
-function serve({ track, audio, finalUrl = 'https://cdn.host.example/a/b.mp3?session=1' }: Served) {
+const COPY_URL = 'https://stitch.host.example/livestitches/abc.mp3?Signature=s'
+
+function serve({ track, audio, finalUrl = 'https://cdn.host.example/a/b.mp3?session=1', copy }: Served) {
   const calls: { url: string; init?: RequestInit }[] = []
   vi.stubGlobal(
     'fetch',
@@ -31,6 +35,13 @@ function serve({ track, audio, finalUrl = 'https://cdn.host.example/a/b.mp3?sess
       if (url === TRACK_URL) {
         if (typeof track === 'number') return new Response('', { status: track })
         return new Response(track as Uint8Array)
+      }
+      if (url === COPY_URL) {
+        if (copy === 'blocked' || copy === undefined) throw new TypeError('Failed to fetch')
+        if (typeof copy === 'number') return new Response('', { status: copy })
+        const response = new Response(streamOf(copy), { headers: { 'content-length': String(copy.length) } })
+        Object.defineProperty(response, 'url', { value: COPY_URL })
+        return response
       }
       if (audio === 'blocked') throw new TypeError('Failed to fetch')
       if (typeof audio === 'number') return new Response('', { status: audio })
@@ -135,6 +146,51 @@ describe('runDriftAlignment', () => {
     serve({ ...served, track } as Served)
     const report = await runDriftAlignment(input())
     expect(report).toMatchObject({ outcome: 'error', error })
+  })
+
+  it('aligns the copy the element plays when the service worker named it', async () => {
+    const testCase = vectorCase('pre-roll added and a longer mid-roll')
+    // The enclosure would answer with another copy (Acast stitches one per
+    // request); only the element's own copy gives a map that passes the check.
+    const elementCopy = render(testCase.other)
+    const calls = serve({
+      track: fromBase64(testCase.sync_track),
+      audio: render(vectorCase('identical copy').other),
+      copy: elementCopy,
+    })
+    const segments = [
+      { startS: 0, endS: 20, isAd: false },
+      { startS: 20, endS: 26, isAd: true },
+      { startS: 26, endS: 46, isAd: false },
+    ]
+    const report = await runDriftAlignment({ ...input(segments), copyUrl: COPY_URL })
+    expect(report.outcome).toBe('aligned')
+    expect(report.spans.map((s) => Math.round(s.offsetS))).toEqual([8, 17])
+    expect(report.copySource).toBe('element')
+    expect(report.fetchedBytes).toBe(elementCopy.length)
+    expect(report.audioHost).toBe('stitch.host.example')
+    expect(calls.map((c) => c.url)).toEqual([TRACK_URL, COPY_URL])
+    expect(calls[1].init).toMatchObject({ mode: 'cors', credentials: 'omit' })
+  })
+
+  it.each([['blocked' as const], [403]])(
+    'falls back to the enclosure when the element’s copy cannot be read: %s',
+    async (copy) => {
+      const testCase = vectorCase('identical copy')
+      const calls = serve({ track: fromBase64(testCase.sync_track), audio: render(testCase.other), copy })
+      const report = await runDriftAlignment({ ...input([{ startS: 0, endS: 29, isAd: false }]), copyUrl: COPY_URL })
+      expect(report.outcome).toBe('identity')
+      expect(report.copySource).toBe('enclosure')
+      expect(calls.map((c) => c.url)).toEqual([TRACK_URL, COPY_URL, AUDIO_URL])
+    },
+  )
+
+  it('asks the enclosure when no copy was named', async () => {
+    const testCase = vectorCase('identical copy')
+    const calls = serve({ track: fromBase64(testCase.sync_track), audio: render(testCase.other) })
+    const report = await runDriftAlignment(input([{ startS: 0, endS: 29, isAd: false }]))
+    expect(report.copySource).toBe('enclosure')
+    expect(calls.map((c) => c.url)).toEqual([TRACK_URL, AUDIO_URL])
   })
 
   it('rejects when aborted, so a cancelled attempt reports nothing', async () => {
