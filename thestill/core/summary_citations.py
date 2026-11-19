@@ -44,6 +44,14 @@ logger = get_logger(__name__)
 SCHEMA_VERSION = 1
 DEFAULT_GAP_TOLERANCE_SECONDS = 5.0
 DEFAULT_MAX_CITATIONS = 500
+# Segment kinds a citation may link to. Intros, outros and music are audio
+# every listener hears, and the summariser reads them, so a Timeline chapter
+# such as ``[00:00 - 00:19] Introduction`` links there. Ad breaks differ per
+# listener, and filler is dropped from every view, so neither is a target.
+_CITABLE_KINDS = frozenset({"content", "intro", "outro", "music"})
+# Timestamp labels have whole-second precision: a segment labelled ``00:19``
+# may start anywhere up to 19.999 s.
+_LABEL_PRECISION_SECONDS = 1.0
 
 _TIMESTAMP_RE = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b")
 _RANGE_RE = re.compile(
@@ -474,8 +482,8 @@ class _CitationRewriteBuilder:
         self.gap_tolerance_seconds = gap_tolerance_seconds
         self.max_citations = max_citations
         self.citations: List[SummaryCitation] = []
-        self._content_segments = sorted(
-            [segment for segment in transcript.segments if segment.kind == "content"],
+        self._citable_segments = sorted(
+            [segment for segment in transcript.segments if segment.kind in _CITABLE_KINDS],
             key=lambda segment: segment.start,
         )
 
@@ -526,26 +534,28 @@ class _CitationRewriteBuilder:
     def _resolve_range_segment(
         self, start_s: float, end_s: Optional[float]
     ) -> tuple[Optional[AnnotatedSegment], Optional[float]]:
-        # A range whose start lands on (or near) a content segment seeks to the
-        # labeled start, unchanged. When the start falls in a stripped intro/ad
-        # — no content segment within tolerance — seek to the first content
-        # segment that begins within the chapter span, so a Timeline entry still
-        # links and lands on real content instead of failing to resolve.
+        # A range whose start lands on (or near) a citable segment seeks to the
+        # labeled start, unchanged. When the start falls in an ad break or a
+        # gap — no citable segment within tolerance — seek to the first citable
+        # segment that begins within the chapter span, so a Timeline entry
+        # still links instead of failing to resolve. The span's end is a
+        # whole-second label, so a segment starting within the following
+        # second still counts as inside it.
         direct = self._resolve_segment(start_s)
         if direct is not None:
             return direct, start_s
         offset = self.transcript.playback_time_offset_seconds
-        upper = end_s if end_s is not None else float("inf")
-        for segment in self._content_segments:
+        upper = end_s + _LABEL_PRECISION_SECONDS if end_s is not None else float("inf")
+        for segment in self._citable_segments:
             seg_playback = segment.start + offset
-            if start_s <= seg_playback <= upper:
+            if start_s <= seg_playback < upper:
                 return segment, seg_playback
         return None, None
 
     def _resolve_segment(self, playback_s: Optional[float]) -> Optional[AnnotatedSegment]:
         if playback_s is None or playback_s < 0:
             return None
-        if not self._content_segments:
+        if not self._citable_segments:
             return None
 
         offset = self.transcript.playback_time_offset_seconds
@@ -554,11 +564,19 @@ class _CitationRewriteBuilder:
             return None
 
         raw_t = playback_s - offset
-        for segment in self._content_segments:
+        # A whole-second label covers [t, t + 1): content that begins within
+        # that second wins over the intro or ad it follows, so ``[00:19]``
+        # points at the interview starting at 19.4 s, not the intro before it.
+        for segment in self._citable_segments:
+            if segment.kind == "content" and (
+                segment.start <= raw_t <= segment.end or raw_t < segment.start < raw_t + _LABEL_PRECISION_SECONDS
+            ):
+                return segment
+        for segment in self._citable_segments:
             if segment.start <= raw_t <= segment.end:
                 return segment
 
-        nearest = min(self._content_segments, key=lambda segment: abs(segment.start - raw_t))
+        nearest = min(self._citable_segments, key=lambda segment: abs(segment.start - raw_t))
         if abs(nearest.start - raw_t) <= self.gap_tolerance_seconds:
             return nearest
         return None

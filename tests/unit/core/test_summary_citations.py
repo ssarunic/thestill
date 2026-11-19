@@ -17,6 +17,7 @@ def segment(
     end: float,
     source_segment_ids: list[int] | None = None,
     source_word_span: WordSpan | None = None,
+    kind: str = "content",
 ) -> AnnotatedSegment:
     return AnnotatedSegment(
         id=segment_id,
@@ -24,7 +25,7 @@ def segment(
         end=end,
         speaker="Host",
         text=f"segment {segment_id}",
-        kind="content",
+        kind=kind,
         source_segment_ids=source_segment_ids or [segment_id],
         source_word_span=source_word_span,
     )
@@ -203,6 +204,86 @@ def test_leaves_range_untouched_when_no_content_in_span():
 
     assert result.markdown == "Timeline: [00:25 - 00:35]"
     assert result.resolved_count == 0
+    assert result.unresolved_count == 1
+
+
+def test_range_links_intro_and_outro_chapters():
+    # Timeline chapters for a show's intro and its "please leave a review"
+    # outro: both segments are real audio the summariser read, so both link.
+    tr = transcript(
+        segments=[
+            segment(segment_id=1, start=0, end=19.4, kind="intro"),
+            segment(segment_id=2, start=19.4, end=182.7),
+            segment(segment_id=3, start=183.2, end=290, kind="outro"),
+        ],
+        duration=290,
+    )
+    result = resolve_summary_citations(
+        "* [00:00 - 00:19] Introduction\n* [00:19 - 03:03] Interview\n* [03:03 - End] Wrap Up\n",
+        tr,
+    )
+
+    assert result.markdown == (
+        "* [00:00 - 00:19](?t=0&cite=c0) Introduction\n"
+        "* [00:19 - 03:03](?t=19&cite=c1) Interview\n"
+        "* [03:03 - End](?t=183&cite=c2) Wrap Up\n"
+    )
+    assert [c.segment_id_hint for c in result.sidecar.citations] == [1, 2, 3]
+    assert result.unresolved_count == 0
+
+
+def test_point_citation_links_into_outro():
+    tr = transcript(
+        segments=[
+            segment(segment_id=1, start=0, end=60),
+            segment(segment_id=2, start=60, end=120, kind="outro"),
+        ],
+    )
+    result = resolve_summary_citations("Source: [01:30]", tr)
+
+    assert result.markdown == "Source: [01:30](?t=90&cite=c0)"
+    assert result.sidecar.citations[0].segment_id_hint == 2
+
+
+def test_range_end_label_covers_segment_starting_within_that_second():
+    # The opening is an ad break, and the first citable segment starts at
+    # 19.4 s, which the range's end label rounds down to 00:19. It still
+    # begins inside the chapter.
+    tr = transcript(
+        segments=[
+            segment(segment_id=1, start=0, end=19.4, kind="ad_break"),
+            segment(segment_id=2, start=19.4, end=120),
+        ],
+    )
+    result = resolve_summary_citations("Timeline: [00:00 - 00:19]", tr)
+
+    assert result.markdown == "Timeline: [00:00 - 00:19](?t=19.4&cite=c0)"
+    assert result.sidecar.citations[0].segment_id_hint == 2
+
+
+def test_range_does_not_link_segment_starting_a_full_second_after_end():
+    tr = transcript(
+        segments=[
+            segment(segment_id=1, start=0, end=20, kind="ad_break"),
+            segment(segment_id=2, start=20, end=120),
+        ],
+    )
+    result = resolve_summary_citations("Timeline: [00:00 - 00:19]", tr)
+
+    assert result.markdown == "Timeline: [00:00 - 00:19]"
+    assert result.unresolved_count == 1
+
+
+def test_ad_break_is_never_a_citation_target():
+    tr = transcript(
+        segments=[
+            segment(segment_id=1, start=0, end=60),
+            segment(segment_id=2, start=60, end=120, kind="ad_break"),
+        ],
+    )
+    result = resolve_summary_citations("Source: [01:30]", tr)
+
+    assert result.markdown == "Source: [01:30]"
     assert result.unresolved_count == 1
 
 
