@@ -54,7 +54,7 @@ class FakeRepo:
         self.rows: Dict[str, UserMessage] = {}
         self.pages = 0
 
-    def candidates(self, *, created_from, created_to, channel, limit, user_id=None, after=None):
+    def candidates(self, *, created_from, created_to, channel, limit, user_id=None, after=None, now=None):
         self.pages += 1
         out = sorted(
             (f for f in self.facts.values() if created_from <= f.created_at <= created_to),

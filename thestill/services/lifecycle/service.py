@@ -136,6 +136,7 @@ class LifecycleEmailService:
                 channel=_CHANNEL,
                 limit=self._page_size,
                 after=after,
+                now=now,
             )
             yield from page
             if len(page) < self._page_size:
@@ -247,6 +248,7 @@ class LifecycleEmailService:
             channel=_CHANNEL,
             limit=1,
             user_id=row.user_id,
+            now=now,
         )
         if not facts:
             raise _Skip("tips off, account inactive or deleted")

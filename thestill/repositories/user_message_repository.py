@@ -48,6 +48,7 @@ class UserMessageRepository(ABC):
         limit: int,
         user_id: Optional[str] = None,
         after: Optional[Tuple[datetime, str]] = None,
+        now: Optional[datetime] = None,
     ) -> List[LifecycleFacts]:
         """Users who may get a lifecycle message, ordered by
         ``(created_at, user_id)``.
@@ -57,7 +58,8 @@ class UserMessageRepository(ABC):
         last row's ``(created_at, user_id)`` of the previous page (keyset
         paging, so every candidate is reached however many there are). With
         ``user_id``, just that user (the send-time re-check); empty when
-        they no longer qualify.
+        they no longer qualify. ``now`` (default: the current time) decides
+        whether an MCP token has expired, for ``connector_connected``.
         """
 
     @abstractmethod

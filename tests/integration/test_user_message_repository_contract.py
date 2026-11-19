@@ -200,6 +200,26 @@ def test_revoked_connector_does_not_count(env):
     assert facts.connector_connected is False
 
 
+def test_expired_connector_token_does_not_count(env):
+    # Codex P2 (re-review): expiry never sets revoked_at, so it must be
+    # checked like McpTokenRepository.find_active does.
+    expired = env.add_user("expired@example.com")
+    env.tokens.upsert(
+        McpToken(
+            user_id=expired.id, token_hash="h1", token_prefix="p", created_at=NOW, expires_at=NOW - timedelta(days=1)
+        )
+    )
+    live = env.add_user("live@example.com")
+    env.tokens.upsert(
+        McpToken(user_id=live.id, token_hash="h2", token_prefix="p", created_at=NOW, expires_at=NOW + timedelta(days=1))
+    )
+
+    by_user = {f.user_id: f for f in env.messages.candidates(**WINDOW, now=NOW)}
+
+    assert by_user[expired.id].connector_connected is False
+    assert by_user[live.id].connector_connected is True
+
+
 def test_candidates_exclude_tips_off_inactive_and_out_of_window(env):
     keep = env.add_user("keep@example.com")
     env.add_user("off@example.com", tips=False)

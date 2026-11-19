@@ -25,7 +25,7 @@ workers from double-sending.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from structlog import get_logger
@@ -47,7 +47,8 @@ SELECT u.id, u.email, u.name, u.created_at,
        (SELECT count(*) FROM podcast_followers f WHERE f.user_id = u.id) AS follow_count,
        EXISTS (SELECT 1 FROM user_episode_inbox i WHERE i.user_id = u.id AND i.state = 'read') AS has_read,
        (EXISTS (SELECT 1 FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked_at IS NULL)
-        OR EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL))
+        OR EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL
+                     AND (t.expires_at IS NULL OR t.expires_at > %s)))
            AS connector_connected,
        (SELECT max(d.sent_at)
           FROM briefing_deliveries d JOIN user_briefings b ON b.id = d.briefing_id
@@ -82,9 +83,10 @@ class PostgresUserMessageRepository(UserMessageRepository):
         limit: int,
         user_id: Optional[str] = None,
         after: Optional[Tuple[datetime, str]] = None,
+        now: Optional[datetime] = None,
     ) -> List[LifecycleFacts]:
         sql = _CANDIDATES_SQL
-        params: list = [channel, created_from, created_to]
+        params: list = [now or datetime.now(timezone.utc), channel, created_from, created_to]
         if user_id is not None:
             sql += " AND u.id = %s"
             params.append(user_id)

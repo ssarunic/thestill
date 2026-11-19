@@ -17,7 +17,7 @@
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -43,7 +43,8 @@ SELECT u.id, u.email, u.name, u.created_at,
        (SELECT COUNT(*) FROM podcast_followers f WHERE f.user_id = u.id) AS follow_count,
        EXISTS (SELECT 1 FROM user_episode_inbox i WHERE i.user_id = u.id AND i.state = 'read') AS has_read,
        (EXISTS (SELECT 1 FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked_at IS NULL)
-        OR EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL))
+        OR EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.user_id = u.id AND t.revoked_at IS NULL
+                     AND (t.expires_at IS NULL OR t.expires_at > ?)))
            AS connector_connected,
        (SELECT MAX(d.sent_at)
           FROM briefing_deliveries d JOIN user_briefings b ON b.id = d.briefing_id
@@ -92,9 +93,11 @@ class SqliteUserMessageRepository(UserMessageRepository):
         limit: int,
         user_id: Optional[str] = None,
         after: Optional[Tuple[datetime, str]] = None,
+        now: Optional[datetime] = None,
     ) -> List[LifecycleFacts]:
         sql = _CANDIDATES_SQL
-        params: list = [channel, created_from.isoformat(), created_to.isoformat()]
+        clock = now or datetime.now(timezone.utc)
+        params: list = [clock.isoformat(), channel, created_from.isoformat(), created_to.isoformat()]
         if user_id is not None:
             sql += " AND u.id = ?"
             params.append(user_id)
