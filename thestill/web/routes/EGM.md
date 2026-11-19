@@ -167,6 +167,10 @@ Per-route guards on top of the router guard:
   - `_verify_signature` uses HMAC-SHA256 over `"<ts>.<body>"` with `hmac.compare_digest`,
     and allows at most 300 s of clock skew (`_MAX_WEBHOOK_CLOCK_SKEW_SECONDS`).
   - Processing errors are reported inside a 200 response.
+  - Every callback with an `episode_id` (delivered or not) deletes that episode's
+    ElevenLabs pending operations (`_settle_pending_operations`). That is what
+    `thestill transcribe` waits on, so it finishes whichever process receives the
+    callback.
 - **`unsubscribe.py`:** `unsubscribe_briefings` (GET) never changes anything, so mail
   scanners that prefetch the link are harmless. `unsubscribe_briefings_one_click` (POST)
   is idempotent and shows the same success page whether or not a row changed. The only

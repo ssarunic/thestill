@@ -43,7 +43,11 @@ PODCAST_ID = "pod-1"
 def _client(current_user, *, follows=False, inbox=False, task=None):
     client, state = auth_client(ROUTERS, multi_user=True, current_user=current_user)
     state.task_manager = TaskManager()
-    state.repository.get_episode.return_value = SimpleNamespace(id=EPISODE_ID, podcast_id=PODCAST_ID)
+    # The real repository returns a ``(Podcast, Episode)`` tuple.
+    state.repository.get_episode.return_value = (
+        SimpleNamespace(id=PODCAST_ID),
+        SimpleNamespace(id=EPISODE_ID, podcast_id=PODCAST_ID),
+    )
     state.follower_service.is_following.return_value = follows
     state.inbox_service.get_entry.return_value = object() if inbox else None
     state.queue_manager.get_task.return_value = task
@@ -147,8 +151,9 @@ class TestQueueTasks:
 
     @pytest.mark.parametrize("path", QUEUE_TASK_PATHS)
     def test_follower_can_read(self, path):
-        client, _ = _client(PLAIN_USER, follows=True, task=_episode_task())
+        client, state = _client(PLAIN_USER, follows=True, task=_episode_task())
         assert client.get(path).status_code == 200
+        state.follower_service.is_following.assert_called_with(PLAIN_USER.id, PODCAST_ID)
 
     @pytest.mark.parametrize("path", QUEUE_TASK_PATHS)
     def test_inbox_holder_can_read(self, path):

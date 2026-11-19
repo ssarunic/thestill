@@ -23,8 +23,8 @@ lives in `thestill/core/queue_manager.py:TaskStage`
 
 - thestill: [./thestill/EGM.md](./thestill/EGM.md) - the Python package: the
   CLI, structured logging, and the `core`, `services`, `repositories`,
-  `models`, `search`, `mcp`, `web`, `utils`, `migrations`, `evals` and
-  `webhook` subpackages.
+  `models`, `search`, `mcp`, `web`, `utils`, `migrations` and `evals`
+  subpackages.
 - deploy: [./deploy/EGM.md](./deploy/EGM.md) - deployment topologies; today
   one single-EC2 kit (`thestill-aws`, compose stack with Caddy and pgvector)
   driven by the `v*`-tag deploy workflow.
