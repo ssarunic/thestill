@@ -213,12 +213,24 @@ Callers import every other module by its own path.
   - Restructuring: `merge`, `move_mentions`, `split`.
   - Correcting: `relink`, `set_type`.
   - Cleanup: `blacklist`, `prune_orphans`.
+  - Mentions: `drop_mention`, `repoint_mention`.
+  - Entity edits: `add_alias`, `set_visibility`.
+  - Roles: `pin_hosts`, `pin_recurring` (a podcast), `pin_guests` (an
+    episode). Unknown entity ids are refused (`not_found`) before writing.
+  - `correct(*, actor, queue_manager, wikidata_client, **correction)`: the
+    admin correction (`core.entity_review.apply_correction`), audited; the
+    API's `POST /api/entities/corrections` calls it.
 
   The results are `MergeResult`, `MoveResult`, `SplitResult`,
   `RelinkResult`, `SetTypeResult` and `PruneResult`. `merge(keeper_id,
   loser_id, *, actor, reason=None, dry_run=False, keep_name=True)` reports
   `alias_added`, `alias_skipped` and `dropped_aliases` in its
   `MergeResult` besides `moved`.
+- `podcast_curation.py:PodcastCurationService(podcasts, audit)`: show
+  settings, each audited: `set_show_link(podcast_id, platform, url|None)`
+  (curated; validates the platform and the link's shape),
+  `set_summary_profile(podcast_id, profile|None)` (validated against
+  `PROFILES`), `set_public_pages(podcast_id, public)`.
 - `episode_curation.py:EpisodeCurationService`: `find_import_twins` and
   `fold_import_twins(*, actor, apply=False, podcast_id=None)`. Related
   exports: `ImportTwin`, `FoldResult` and `PUB_DATE_TOLERANCE` (1 h).
@@ -521,9 +533,12 @@ Callers import every other module by its own path.
   - import-twin folds: `episode_curation.py:EpisodeCurationService`
   - legacy account claims: `legacy_claim_service.py:LegacyClaimService`
 - Audit rows go through `abuse.AuditLog.record`:
-  - `entity.*` from `entity_curation.py:EntityCurationService`
-    (`entity.merge` also records `alias_added`, `alias_skipped` and
-    `dropped_aliases`)
+  - `entity.*`, `mention.drop`, `mention.repoint`, `podcast.set_hosts`,
+    `podcast.set_recurring` and `episode.set_guests` from
+    `entity_curation.py:EntityCurationService` (`entity.merge` also records
+    `alias_added`, `alias_skipped` and `dropped_aliases`)
+  - `podcast.set_show_link`, `podcast.set_summary_profile` and
+    `podcast.set_public_pages` from `podcast_curation.py:PodcastCurationService`
   - `episode.fold_import_twin` from
     `episode_curation.py:EpisodeCurationService.fold_import_twins`
   - `transcript.edit_session`, `transcript.revert_bulk` and

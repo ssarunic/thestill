@@ -56,7 +56,10 @@ service, which imports `abuse.errors`.
     - `user.*`
     - `admin.grant` and `admin.revoke`
     - `setting.set`
-    - `entity.*`
+    - `entity.*` and `mention.drop` / `mention.repoint`
+    - `podcast.set_hosts`, `podcast.set_recurring`, `podcast.set_show_link`,
+      `podcast.set_summary_profile`, `podcast.set_public_pages` and
+      `episode.set_guests`
     - `transcript.edit_session` and `transcript.revert_bulk`
     - `facts.add_host`
     - `episode.fold_import_twin`

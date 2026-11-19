@@ -11,12 +11,9 @@ the MCP server. `pyproject.toml` exposes two entry points:
 
 The CLI is a thin shell. `main` builds every repository and service once into
 a `CLIContext` held in `ctx.obj`, and each command calls a service or
-repository from there. Most admin and curation commands go through the same
-audited services the web admin API uses, acting as `Actor.cli()`. The
-exceptions write the repository directly, with no `Actor` and no audit row:
-`mention drop`, `mention repoint`, `entity-alias-add`,
-`set-entity-visibility`, `episode set-guests`, `podcast set-hosts` and
-`podcast set-recurring`.
+repository from there. Admin and curation commands go through the same
+audited services the web admin API uses (`EntityCurationService`,
+`PodcastCurationService`, account admin, settings), acting as `Actor.cli()`.
 
 ## Interface
 
@@ -105,9 +102,15 @@ covers only the cross-command invariants and side effects below.
   [`cli.py:refresh`, `cli.py:repair_images`].
 - `reprocess` only queues work for the web server's worker
   (`queue_reprocess`); it runs nothing in-process [`cli.py:reprocess`].
-- Entity curation (`entity …`, `resolution-blacklist add`) goes through
-  `EntityCurationService` with `Actor.cli()` and the abuse audit log;
-  `AdminActionError` exits 1 [`cli.py:_curate`].
+- Every curation write goes through `_curate`, which calls an audited service
+  with `Actor.cli()`; `AdminActionError` exits 1 [`cli.py:_curate`]:
+  - `EntityCurationService`: `entity …`, `resolution-blacklist add`,
+    `mention drop / repoint`, `entity-alias-add`, `set-entity-visibility`,
+    `podcast set-hosts / set-recurring`, `episode set-guests`;
+  - `PodcastCurationService` (`_podcast_curation`): `set-show-link`,
+    `set-summary-profile`, `set-podcast-visibility`.
+  Argument checks that are usage errors (an unknown profile name, a link that
+  does not look like the platform's) still exit 2 before the service runs.
 - `entity merge` keeps LOSER's name as an alias of KEEPER when it resembles
   KEEPER's name (`is_alias_of`); a name that does not is reported as skipped,
   and LOSER's own aliases are listed as dropped, not carried over.
@@ -127,12 +130,6 @@ covers only the cross-command invariants and side effects below.
   [`cli.py:rebuild_entities`].
 - `relink-direct` refuses when open tasks exceed `--max-open-tasks` (default
   2000) [`cli.py:relink_direct`].
-- `podcast set-hosts`, `podcast set-recurring`, `episode set-guests`,
-  `set-entity-visibility`, `entity-alias-add`, `mention drop` and
-  `mention repoint` write the entity repository directly, with no `Actor` and
-  no audit row [`cli.py:podcast_set_hosts`, `cli.py:podcast_set_recurring`,
-  `cli.py:episode_set_guests`, `cli.py:set_entity_visibility`,
-  `cli.py:entity_alias_add`, `cli.py:mention_drop`, `cli.py:mention_repoint`].
 - `entity get` shows at most 5 recent mentions, in both the text and the
   `--json` output [`cli.py:entity_get`].
 - `podcast detect-hosts` with no speaker data points at

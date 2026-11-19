@@ -303,8 +303,9 @@ Per-route guards on top of the router guard:
     (`retry_failed_episode` first calls `repository.clear_episode_failure`).
   Other queue operations:
   - `services.episode_reprocess.queue_reprocess` (`api_episodes.py:reprocess_episode`);
-  - `core.entity_review.apply_correction` (`api_entities.py:post_correction`), which also
-    calls Wikidata through `WikidataClient`;
+  - `EntityCurationService.correct` (`api_entities.py:post_correction`, audited as
+    `entity.correction` with `Actor.web`), which also calls Wikidata through
+    `WikidataClient`;
   - `refresh_on_open.maybe_trigger` (`api_podcasts.py:resolve_podcast` and `get_podcast`);
   - `queue_manager.bump_task`, `cancel_task`, `fail_task`, `retry_dead_task(s)` and
     `complete_task` (`api_commands.py`).

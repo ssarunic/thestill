@@ -112,13 +112,18 @@ class TestCorrectionEndpoint:
         assert len(repo.list_pending_mentions(episode_id=episode_id)) == 3
         # ...and a resolve-entities task was queued for the episode.
         assert app_state.queue_manager.has_pending_task(episode_id, TaskStage.RESOLVE_ENTITIES)
+        # The correction is audited, like every curation write.
+        (entry,) = app_state.abuse.audit.entries(action="entity.correction")
+        assert entry.actor == "web"
+        assert entry.details["surface_form"] == "Anthropic" and entry.details["wrong_qid"] == "Q240581"
 
-    def test_missing_wrong_qid_is_a_400(self, client):
+    def test_missing_wrong_qid_is_a_400(self, client, app_state):
         resp = client.post(
             "/api/entities/corrections",
             json={"action": "blacklist", "surface_form": "Anthropic"},
         )
         assert resp.status_code == 400
+        assert app_state.abuse.audit.entries(action="entity.correction") == []  # refused: not audited
 
     def test_force_entity_unknown_target_is_a_400(self, client, app_config):
         _seed_wrong_resolution(app_config.database_path)

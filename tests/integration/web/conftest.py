@@ -119,6 +119,13 @@ def app_state(app_config: Config) -> AppState:
     entity_repository = SqliteEntityRepository(db_path=app_config.database_path)
     refresh_on_open = RefreshOnOpenService(repository, queue_manager, min_interval_seconds=900)
 
+    # ``create_app`` always builds the abuse services; admin curation needs
+    # their audit log.
+    from thestill.repositories.factory import make_repositories
+    from thestill.services.abuse.wiring import build_abuse_services
+
+    abuse = build_abuse_services(app_config, make_repositories(app_config))
+
     return AppState(
         config=app_config,
         path_manager=path_manager,
@@ -142,6 +149,7 @@ def app_state(app_config: Config) -> AppState:
         briefing_service=briefing_service,
         entity_repository=entity_repository,
         refresh_on_open=refresh_on_open,
+        abuse=abuse,
     )
 
 
