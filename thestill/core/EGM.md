@@ -65,7 +65,7 @@ Most modules are processors that receive their collaborators: an LLM provider, a
 
 - `feed_manager.py:PodcastFeedManager`:
   - Podcasts: `add_podcast`, `remove_podcast`, `list_podcasts`.
-  - Refresh: `refresh_feeds` (returns `RefreshOutcome`), `get_new_episodes`, `repair_episode_images` (returns `ImageRepairOutcome`).
+  - Refresh: `refresh_feeds` (returns `RefreshOutcome`; `dry_run=True` fetches but skips the batch save and transcript links), `get_new_episodes`, `repair_episode_images` (returns `ImageRepairOutcome`).
   - Episode state: `mark_episode_downloaded`, `mark_episode_downsampled`, `mark_episode_processed`, `clear_episode_*_path`.
   - Work lists: `get_episodes_to_download`, `get_episodes_to_downsample`, `get_downloaded_episodes`.
   - Batching: `transaction`.

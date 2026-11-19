@@ -310,6 +310,30 @@ class TestGetNewEpisodes:
         assert outcome.total_podcasts == 1
         assert len(outcome.episodes_by_podcast) == 1
 
+    def test_dry_run_reports_new_episodes_but_writes_nothing(self, feed_manager, mock_repository):
+        """``refresh --dry-run`` lists what it would discover without saving
+        episodes, cache headers or transcript links."""
+        podcast = Podcast(title="OK", description="", rss_url="https://example.com/ok.xml", episodes=[])
+        mock_repository.get_podcasts_for_refresh.return_value = ([podcast], {})
+        mock_source = Mock()
+        mock_source.fetch_episodes.return_value = [
+            Episode(
+                title="New",
+                audio_url="https://example.com/new.mp3",
+                external_id="new-1",
+                pub_date=datetime(2026, 5, 21),
+                description="d",
+            )
+        ]
+        feed_manager.media_source_factory.detect_source.return_value = mock_source
+        feed_manager._save_transcript_links_for_episodes = Mock()
+
+        outcome = feed_manager.refresh_feeds(dry_run=True)
+
+        assert len(outcome.episodes_by_podcast) == 1
+        assert not mock_repository.save_refresh_batch.called
+        assert not feed_manager._save_transcript_links_for_episodes.called
+
     def test_errored_feed_not_persisted(self, feed_manager, mock_repository):
         """FM-2: a feed that errors is not written to the batch.
 

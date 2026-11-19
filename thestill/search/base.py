@@ -99,6 +99,11 @@ class SearchFilters:
     # fill the result set and push every other episode out of it. ``None``
     # keeps the ungrouped ranking (MCP, CLI, evals).
     max_per_episode: Optional[int] = None
+    # FTS5 ``OR`` expression of the query's ``-term`` exclusions, set by
+    # the backend from ``TranslatedQuery.exclude_match``. Every leg drops
+    # chunks whose text matches it, so an excluded word cannot come back
+    # through the semantic or entity leg.
+    exclude_match: Optional[str] = None
 
 
 _T = TypeVar("_T")

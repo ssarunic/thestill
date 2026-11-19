@@ -66,11 +66,9 @@ and `evaluation/outputs*` (gitignored data) have no contract.
   `PathManager` ([utils](./thestill/utils/EGM.md)).
 - Outbound fetches of user-supplied URLs go through `utils/url_guard.py` (SSRF
   guard: public addresses only, every redirect hop re-validated).
-- Known issue: `core/media_source.py:_resolve_apple_podcast_redirect`
-  (media_source.py:1067-1084) validates the URL once with
-  `validate_public_url`, then calls `urllib.request.urlopen`, which follows
-  redirects without re-validating them; the URL reaching it is filtered only
-  by a substring test (`"podcasts.apple.com" not in url`, media_source.py:1005).
+  This includes the Apple-URL fallback
+  (`core/media_source.py:_resolve_apple_podcast_redirect`), which fetches the
+  page with `guarded_get` and only for the hosts in `_APPLE_PODCAST_HOSTS`.
 - Admin and curation writes (accounts, settings, entity curation, transcript
   edits, import-twin folds) go through audited services acting as an `Actor`
   (`web`, `cli` or `system`); entity and transcript data is never fixed with

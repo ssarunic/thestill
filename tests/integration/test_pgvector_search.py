@@ -194,6 +194,21 @@ def test_lexical_negation_and_or(seeded):
     assert len(hits) >= 3
 
 
+def test_exclusions_apply_to_every_leg(seeded):
+    """``-term`` drops chunks on the semantic and hybrid legs too, and an
+    exclusion-only query searches for nothing (mirrors the SQLite suite)."""
+    from thestill.search.base import SearchMode
+
+    model, _ = seeded
+    backend = _backend(model)
+    for mode in (SearchMode.SEMANTIC, SearchMode.HYBRID):
+        hits = backend.search("tell me about computing -quantum", mode=mode, limit=10, filters=None)
+        assert hits, f"{mode}: the non-quantum computing chunk should still match"
+        assert all("quantum" not in h.text for h in hits), mode
+    for mode in (SearchMode.LEXICAL, SearchMode.SEMANTIC, SearchMode.HYBRID):
+        assert backend.search("-quantum", mode=mode, limit=10, filters=None) == [], mode
+
+
 def test_semantic_search_orders_by_cosine(seeded):
     from thestill.search.base import SearchMode
 

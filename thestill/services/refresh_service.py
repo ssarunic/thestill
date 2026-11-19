@@ -134,6 +134,7 @@ class RefreshService:
             max_episodes_per_podcast=max_episodes_per_podcast,
             progress_callback=progress_callback,
             podcast_id=str(podcast_id) if podcast_id else None,
+            dry_run=dry_run,
         )
         new_episodes = outcome.episodes_by_podcast
 

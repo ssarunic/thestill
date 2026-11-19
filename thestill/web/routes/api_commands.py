@@ -45,7 +45,8 @@ from ...services.abuse.errors import AbusePreventionError
 from ...services.analytics_sink import Follow, follow_source
 from ...utils.url_patterns import is_remote_fetchable_audio_url
 from ..analytics_request import capture_event
-from ..dependencies import AppState, get_app_state, require_admin, require_auth
+from ..dependencies import AppState, get_app_state, is_effective_admin, require_admin, require_auth
+from ..task_manager import Task as CommandTask
 from ..task_manager import TaskStatus, TaskType
 
 logger = get_logger(__name__)
@@ -127,6 +128,44 @@ class TaskStatusResponse(BaseModel):
 
 
 # Background task functions
+
+
+def _is_admin(state: AppState, user: User) -> bool:
+    return is_effective_admin(user, state.config)
+
+
+def _can_read_command_task(state: AppState, user: User, task: Optional[CommandTask]) -> bool:
+    """An in-memory command task is readable by whoever started it, or an admin."""
+    return task is not None and (_is_admin(state, user) or task.user_id == user.id)
+
+
+def _has_episode(state: AppState, user: User, episode_id: str) -> bool:
+    """True when the episode is in the user's library: they follow its podcast
+    or hold it in their inbox. Pipeline tasks have no single initiator (one
+    task processes an episode for every follower), so this is the read rule
+    for them."""
+    if state.inbox_service.get_entry(user.id, episode_id) is not None:
+        return True
+    episode = state.repository.get_episode(episode_id)
+    return episode is not None and state.follower_service.is_following(user.id, episode.podcast_id)
+
+
+def _can_read_queue_task(state: AppState, user: User, task) -> bool:
+    if _is_admin(state, user):
+        return True
+    if task.episode_id:
+        return _has_episode(state, user, task.episode_id)
+    if task.podcast_id:
+        return state.follower_service.is_following(user.id, task.podcast_id)
+    return False
+
+
+def _readable_queue_task(state: AppState, user: User, task_id: str):
+    """The queue task, or a 404 that does not say whether it exists."""
+    task = state.queue_manager.get_task(task_id)
+    if not task or not _can_read_queue_task(state, user, task):
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return task
 
 
 def run_add_podcast_task(
@@ -320,6 +359,7 @@ def refresh_feeds(
     request: RefreshRequest,
     background_tasks: BackgroundTasks,
     state: AppState = Depends(get_app_state),
+    admin: User = Depends(require_admin),
 ) -> RefreshResponse:
     """
     Refresh podcast feeds and discover new episodes.
@@ -341,7 +381,7 @@ def refresh_feeds(
     task_manager = state.task_manager
 
     # Try to start the task
-    task = task_manager.start_task(TaskType.REFRESH, "Initializing refresh...")
+    task = task_manager.start_task(TaskType.REFRESH, "Initializing refresh...", user_id=admin.id)
     if task is None:
         # Task already running
         current = task_manager.get_task(TaskType.REFRESH)
@@ -373,15 +413,21 @@ def refresh_feeds(
 @router.get("/refresh/status", response_model=TaskStatusResponse)
 def get_refresh_status(
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> TaskStatusResponse:
     """
     Get the status of the current or last refresh task.
+
+    Only the admin who started the refresh, or another admin, sees it; its
+    result lists every podcast. Anyone else gets ``status: "none"``.
 
     Returns:
         TaskStatusResponse with current task status, progress, and results
     """
     task_manager = state.task_manager
     task = task_manager.get_task(TaskType.REFRESH)
+    if not _can_read_command_task(state, user, task):
+        task = None
 
     if task is None:
         return TaskStatusResponse(
@@ -405,16 +451,19 @@ def get_refresh_status(
 @router.get("/status")
 def get_all_tasks_status(
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Get the status of all tracked command tasks.
+
+    An admin sees every task; anyone else only the tasks they started.
 
     Returns:
         Dictionary mapping task types to their status
     """
     task_manager = state.task_manager
     return {
-        "tasks": task_manager.get_all_tasks(),
+        "tasks": task_manager.get_all_tasks(user_id=None if _is_admin(state, user) else user.id),
     }
 
 
@@ -452,10 +501,13 @@ def add_podcast(
     task_manager = state.task_manager
 
     # Try to start the task
-    task = task_manager.start_task(TaskType.ADD_PODCAST, "Initializing...")
+    task = task_manager.start_task(TaskType.ADD_PODCAST, "Initializing...", user_id=user.id)
     if task is None:
-        # Task already running
+        # Task already running. Its progress and message are shown only to
+        # whoever started it (or an admin): another user's add is private.
         current = task_manager.get_task(TaskType.ADD_PODCAST)
+        if not _can_read_command_task(state, user, current):
+            current = None
         raise HTTPException(
             status_code=409,
             detail={
@@ -491,14 +543,15 @@ def add_podcast(
 def get_add_podcast_status(
     task_id: Optional[str] = Query(None, max_length=64),
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> TaskStatusResponse:
     """
     Get the status of one add podcast task, or of the current or last one.
 
     Args:
-        task_id: the ``task_id`` ``POST /api/commands/add`` returned. Adds run
-            one at a time server-wide, so without it a caller may read the
-            next add's status (someone else's) instead of its own.
+        task_id: the ``task_id`` ``POST /api/commands/add`` returned. Without
+            it, the caller's own most recent add (an admin: the latest add).
+            Another user's add is never returned.
 
     Returns:
         TaskStatusResponse with the task's status, progress, and results
@@ -509,13 +562,15 @@ def get_add_podcast_status(
     task_manager = state.task_manager
     if task_id is not None:
         task = task_manager.get_task_by_id(task_id)
-        if task is None or task.task_type != TaskType.ADD_PODCAST:
+        if task is None or task.task_type != TaskType.ADD_PODCAST or not _can_read_command_task(state, user, task):
             raise HTTPException(
                 status_code=404,
                 detail="Lost track of this add (the server may have restarted). Check the Podcasts page.",
             )
-    else:
+    elif _is_admin(state, user):
         task = task_manager.get_task(TaskType.ADD_PODCAST)
+    else:
+        task = task_manager.get_latest_for_user(TaskType.ADD_PODCAST, user.id)
 
     if task is None:
         return TaskStatusResponse(
@@ -1077,6 +1132,7 @@ def cancel_pipeline(
 def get_queued_task_status(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> QueuedTaskStatusResponse:
     """
     Get the status of a queued task.
@@ -1090,9 +1146,7 @@ def get_queued_task_status(
     Raises:
         HTTPException 404: If task not found
     """
-    task = state.queue_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    task = _readable_queue_task(state, user, task_id)
 
     return QueuedTaskStatusResponse(
         task_id=task.id,
@@ -1374,6 +1428,7 @@ def cancel_queue_task(
 def get_episode_tasks(
     episode_id: str,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Get all tasks for a specific episode.
@@ -1384,6 +1439,11 @@ def get_episode_tasks(
     Returns:
         Dictionary with episode tasks
     """
+    if not _is_admin(state, user) and not _has_episode(state, user, episode_id):
+        # Not in the caller's library: no tasks, rather than a 404, so the
+        # episode reader (which polls this for every viewer) backs off
+        # normally instead of retrying an error.
+        return {"episode_id": episode_id, "tasks": []}
     tasks = state.queue_manager.get_tasks_for_episode(episode_id)
 
     return {
@@ -1396,6 +1456,7 @@ def get_episode_tasks(
 async def stream_task_progress(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> StreamingResponse:
     """
     Stream real-time progress updates for a task via Server-Sent Events (SSE).
@@ -1427,10 +1488,8 @@ async def stream_task_progress(
         };
         ```
     """
-    # Verify task exists
-    task = state.queue_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    # Verify the task exists and the caller may read it
+    _readable_queue_task(state, user, task_id)
 
     async def event_generator():
         """Generate SSE events for progress updates."""
@@ -1483,6 +1542,7 @@ async def stream_task_progress(
 def get_current_progress(
     task_id: str,
     state: AppState = Depends(get_app_state),
+    user: User = Depends(require_auth),
 ) -> Dict[str, Any]:
     """
     Get the current progress for a task (non-streaming).
@@ -1499,9 +1559,7 @@ def get_current_progress(
     Raises:
         HTTPException 404: If task not found
     """
-    task = state.queue_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    task = _readable_queue_task(state, user, task_id)
 
     # Try to get progress from store
     progress = state.progress_store.get(task_id)

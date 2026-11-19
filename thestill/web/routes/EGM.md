@@ -120,15 +120,21 @@ Per-route guards on top of the router guard:
   - `api_oauth.py:disconnect_grant`.
   `api_inbox.py`, `api_me_listening.py`, `api_imports.py` and `api_me_mcp_token.py`
   scope every service call to `user.id`.
-- **Commands are not scoped to a user.** In `api_commands.py`, the non-admin read routes
-  (`get_queued_task_status`, `get_episode_tasks`, `stream_task_progress`,
-  `get_current_progress`, `get_refresh_status`, `get_all_tasks_status`) have no
-  ownership or follow check. `get_add_podcast_status` without a `task_id` returns the
-  last add, whoever started it.
-- Known issue: any signed-in user can read any task's status and progress by id
-  (`api_commands.py:1077`, `:1374`, `:1396`, `:1483`), and
-  `GET /api/commands/add/status` without `task_id` exposes another user's add
-  (`api_commands.py:491`).
+- **Task status is readable by its owner.** In `api_commands.py`:
+  - In-memory command tasks (add podcast, refresh) record who started them
+    (`task_manager.py:Task.user_id`). `get_add_podcast_status`,
+    `get_refresh_status` and `get_all_tasks_status` show a task only to that
+    user or an admin (`_can_read_command_task`). Without a `task_id`,
+    `get_add_podcast_status` returns the caller's own latest add; another
+    user's add answers 404 by id and is left out of the 409 detail of
+    `add_podcast`.
+  - Pipeline queue tasks have no single initiator, so `get_queued_task_status`,
+    `stream_task_progress` and `get_current_progress` serve a task only to an
+    admin or to a user who has its episode in their library (follows its
+    podcast or holds it in the inbox; a feed task needs a follow). Anyone else
+    gets the same 404 as an unknown id (`_readable_queue_task`).
+    `get_episode_tasks` returns an empty list instead of a 404, because the
+    episode reader polls it for every viewer.
 - **Reads by slug are open.** `api_podcasts.py` reads by slug (`get_podcast`,
   `get_episode_by_slugs`, `.../transcript`, `.../summary`, `.../sync-track/...`,
   `.../audio`) and `api_transcript_words.py:get_episode_transcript_words` have no follow

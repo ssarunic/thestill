@@ -29,11 +29,19 @@ backend can route safely:
                         ``speaker:`` or ``-`` artefacts.
 - ``speaker``        — case-insensitive substring filter applied to
                         ``chunks.speaker`` (joined separately).
+- ``exclude_match``  — FTS5 ``OR`` expression of the ``-term`` exclusions.
+                        Backends apply it as a filter on every leg
+                        (lexical, semantic, entity), so an excluded word
+                        never comes back through the embedding side.
 
 Supported syntax (the rest is conservatively passed through as terms):
 
 - ``"phrase one"``       — preserved as an FTS5 phrase.
-- ``-term``              — exclusion (translated to ``NOT term``).
+- ``-term``              — exclusion: ``NOT term`` in ``fts_match`` plus
+                            ``exclude_match`` for the other legs. Excluded
+                            words are never encoded. A query with only
+                            exclusions has nothing to search for: both
+                            ``fts_match`` and ``embedding_text`` are empty.
 - ``AND`` / ``OR``       — uppercase, kept as FTS5 operators.
 - ``speaker:VALUE``      — extracted as a side filter, not FTS.
 - ``column:VALUE``       — any other unknown column is treated as a
@@ -60,6 +68,7 @@ class TranslatedQuery:
     fts_match: str
     embedding_text: str
     speaker: Optional[str] = None
+    exclude_match: str = ""
 
 
 # Characters FTS5 treats as punctuation/operators inside a bareword.
@@ -105,24 +114,34 @@ def translate_lexical_query(raw: str) -> TranslatedQuery:
             operators_in_order.append((len(positives), value))
             continue
         if kind == "negative":
+            # Excluded words never reach the encoder: embedding them
+            # would steer the semantic leg toward what the user ruled out.
             negatives.append(value)
-            embedding_parts.append(embed_value)
             continue
         # positive (phrase or bareword, possibly an unknown column-prefixed
         # token that was quoted to keep FTS5 happy).
         positives.append(value)
         embedding_parts.append(embed_value)
 
-    fts_match = _assemble(positives, operators_in_order, negatives)
+    exclude_match = " OR ".join(negatives)
+    if not positives:
+        # Nothing to look for. ``-nvidia`` alone must not become a search
+        # *for* nvidia, so neither leg gets a query; callers return no
+        # hits. Speaker-only input keeps its raw-text embedding fallback
+        # below (minus any exclusions), as before.
+        fts_match = ""
+    else:
+        fts_match = _assemble(positives, operators_in_order, negatives)
     embedding_text = " ".join(embedding_parts).strip()
-    if not embedding_text:
-        # Speaker-only or operator-only input — fall back to the raw
-        # text so the embedding model still has something to encode.
-        embedding_text = text
+    if not embedding_text and speaker_filter is not None:
+        # Speaker-only input — fall back to the raw text (without the
+        # exclusions) so the embedding model still has something to encode.
+        embedding_text = " ".join(t for t in tokens if t and _classify(t)[0] != "negative").strip()
     return TranslatedQuery(
         fts_match=fts_match,
         embedding_text=embedding_text,
         speaker=speaker_filter,
+        exclude_match=exclude_match,
     )
 
 
@@ -177,25 +196,19 @@ def _assemble(
     negatives: List[str],
 ) -> str:
     """Build the final FTS5 MATCH expression from the parsed parts."""
-    if not positives and not negatives:
+    if not positives:
+        # Exclusions alone match nothing (see ``translate_lexical_query``).
         return ""
 
-    if positives:
-        # Reinsert explicit AND/OR operators at the positions they
-        # appeared, defaulting to space (implicit AND) elsewhere.
-        op_at = {pos: op for pos, op in operators}
-        parts: List[str] = [positives[0]]
-        for i in range(1, len(positives)):
-            sep = op_at.get(i, "AND")
-            parts.append(sep)
-            parts.append(positives[i])
-        positive_expr = " ".join(parts)
-    else:
-        # Negatives without positives — synthesise a degenerate
-        # positive so FTS5 has something to scan against. Use the
-        # first negative as a positive (better than 500-ing).
-        positive_expr = negatives[0]
-        negatives = negatives[1:]
+    # Reinsert explicit AND/OR operators at the positions they
+    # appeared, defaulting to space (implicit AND) elsewhere.
+    op_at = {pos: op for pos, op in operators}
+    parts: List[str] = [positives[0]]
+    for i in range(1, len(positives)):
+        sep = op_at.get(i, "AND")
+        parts.append(sep)
+        parts.append(positives[i])
+    positive_expr = " ".join(parts)
 
     if not negatives:
         return positive_expr

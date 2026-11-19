@@ -5262,15 +5262,14 @@ def entity_get(ctx, id_or_name, entity_type, json_output):
                 }
                 for c in summary["cooccurring"]
             ],
-            "recent_mentions": summary["recent_mentions"][0:5]
-            and [
+            "recent_mentions": [
                 {
                     "episode_id": ctx_.episode_id,
                     "episode_title": ctx_.episode_title,
                     "start_ms": ctx_.mention.start_ms,
                     "speaker": ctx_.mention.speaker,
                 }
-                for ctx_ in summary["recent_mentions"]
+                for ctx_ in summary["recent_mentions"][:5]
             ],
         }
         click.echo(json.dumps(payload, indent=2, default=str))
@@ -5612,8 +5611,8 @@ def podcast_detect_hosts(ctx, podcast_id, limit):
     rows = repo.detect_top_speakers(podcast_id, limit=limit)
     if not rows:
         click.echo(
-            f"No speaker data for {podcast_id} yet — run "
-            "``thestill extract-entities --podcast-id {podcast_id}`` first."
+            f"No speaker data for {podcast_id} yet — re-extract its entities with "
+            f"`thestill rebuild-entities --podcast-id {podcast_id}` first."
         )
         return
     click.echo(f"Top {len(rows)} speakers for {podcast_id}:")
