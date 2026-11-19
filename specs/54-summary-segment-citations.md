@@ -216,9 +216,16 @@ Given an emitted playback-time timestamp `p` (seconds) and the transcript's
 `offset = playback_time_offset_seconds`:
 
 - `raw_t = p − offset` is the raw transcript time.
-- Resolve to the `content`-kind segment whose `[start, end]` contains `raw_t`.
-  If `raw_t` lands in a trimmed gap, snap to the nearest segment start within a
-  tolerance (default 5 s); otherwise mark **unresolved**.
+- Resolve to the citable segment whose `[start, end]` contains `raw_t`.
+  Citable kinds are `content`, `intro`, `outro` and `music`: audio every
+  listener hears. `ad_break` (differs per listener) and `filler` are never
+  targets. A `content` segment that starts within the label's second
+  (`raw_t < start < raw_t + 1`) wins over the intro or ad it follows. If
+  `raw_t` lands in a trimmed gap, snap to the nearest citable segment start
+  within a tolerance (default 5 s); otherwise mark **unresolved**.
+- A range (`[a - b]`, `[a - End]`) whose start does not resolve seeks to the
+  first citable segment starting in `[a, b + 1)`: `b` is a whole-second label,
+  so a segment starting at 19.4 s still begins inside a chapter ending `00:19`.
 - `cited_playback_s = p` (what we seek to and label with — **unchanged**).
 - `target_playback_s` defaults to `cited_playback_s`; kept as a distinct field
   only so a future policy could seek to a segment boundary without touching the

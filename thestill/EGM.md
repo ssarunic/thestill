@@ -67,8 +67,6 @@ covers only the cross-command invariants and side effects below.
   log safety, tokens, DB connection helpers.
 - [web](./web/EGM.md): FastAPI app, routes, middleware, remote MCP and OAuth,
   public pages, and the React frontend.
-- [webhook](./webhook/EGM.md): in-process tracker the CLI blocks on while
-  waiting for transcription webhook callbacks.
 
 ## Invariants
 
@@ -169,8 +167,10 @@ covers only the cross-command invariants and side effects below.
   (resolve-entities), `reprocess`, `transcript refresh` and
   `sync-track backfill` [`cli.py` per command].
 - Webhook server: `transcribe` on ElevenLabs starts a background webhook
-  server and waits on `thestill.webhook` tracker callbacks
-  [`cli.py:transcribe`].
+  server (or reuses a running `thestill server`) and waits until each
+  submitted episode's ElevenLabs pending operation is settled by the webhook,
+  or its raw transcript changes. It waits on stored state, so it finishes
+  whichever process receives the callback [`cli.py:_wait_for_webhook_transcripts`].
 - `facts edit` launches `$EDITOR` (default `nano`) [`cli.py:facts_edit`].
 - `server` runs `uvicorn.run(create_app(config))`, default host 127.0.0.1;
   `--reload` forces one worker [`cli.py:server`].

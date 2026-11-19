@@ -43,7 +43,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from structlog import get_logger
 
-from ...webhook import get_tracker
 from ..dependencies import AppState, get_app_state, require_admin
 from ..middleware import WEBHOOK_LIMIT, rate_limit_dependency
 from ..services import WebhookTranscriptProcessor
@@ -223,6 +222,19 @@ async def elevenlabs_webhook(
     return await run_in_threadpool(_process_elevenlabs_webhook, body, elevenlabs_signature, state)
 
 
+def _settle_pending_operations(state: AppState, episode_id: str) -> None:
+    """Delete the episode's ElevenLabs pending operations (never raises)."""
+    repo = getattr(state, "pending_ops_repository", None)
+    if repo is None:
+        return
+    try:
+        for op in repo.list_by_episode(episode_id):
+            if op.provider == "elevenlabs":
+                repo.delete(op.operation_id)
+    except Exception as e:  # pylint: disable=broad-except
+        logger.error("webhook_pending_operation_settle_failed", episode_id=episode_id, error=str(e))
+
+
 def _process_elevenlabs_webhook(
     body: bytes,
     elevenlabs_signature: Optional[str],
@@ -348,15 +360,13 @@ def _process_elevenlabs_webhook(
     elif not has_text:
         logger.warning(f"Webhook {transcription_id} has no transcript text, skipping processing")
 
-    # Notify the webhook tracker that this episode's transcription is complete
-    # This allows the CLI to know when all pending transcriptions are done
-    # Note: We use episode_id (not transcription_id) because ElevenLabs returns
-    # a different request_id in the webhook callback than the transcription_id
-    # from the submission response. episode_id is consistent in both.
+    # The job is over (delivered or not), so settle the episode's pending
+    # operation. ``thestill transcribe`` waits for these rows to disappear,
+    # which works whichever process received the callback. Keyed by
+    # episode_id: ElevenLabs' callback request_id differs from the
+    # transcription_id the submission returned.
     if episode_id:
-        tracker = get_tracker()
-        success = transcript_path is not None and processing_error is None
-        tracker.mark_completed(episode_id, success=success)
+        _settle_pending_operations(state, episode_id)
 
     # Return 200 OK immediately (required by ElevenLabs)
     response = {
