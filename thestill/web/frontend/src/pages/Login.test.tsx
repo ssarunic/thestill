@@ -11,6 +11,7 @@ const auth = {
   isLoading: false,
   isMultiUser: true,
   login: vi.fn(),
+  productTipsEmailAvailable: false,
 }
 vi.mock('../contexts/AuthContext', () => ({ useAuth: () => auth }))
 
@@ -27,6 +28,7 @@ describe('Login (spec #102)', () => {
     auth.login.mockReset()
     auth.accountDisabled = false
     auth.adminContactEmail = null
+    auth.productTipsEmailAvailable = false
   })
   afterEach(() => window.sessionStorage.clear())
 
@@ -39,6 +41,15 @@ describe('Login (spec #102)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Google' }))
     expect(auth.login).toHaveBeenCalledWith('/podcasts/prof-g/episodes/a')
     expect(window.sessionStorage.length).toBe(0)
+  })
+
+  it('tells new accounts about tips email only where it can be sent (spec #118)', () => {
+    const { unmount } = renderAt('/login')
+    expect(screen.queryByText(/welcome email and a few product tips/)).not.toBeInTheDocument()
+    unmount()
+    auth.productTipsEmailAvailable = true
+    renderAt('/login')
+    expect(screen.getByText(/welcome email and a few product tips/)).toBeInTheDocument()
   })
 
   it('says why, and remembers a Follow for the show it returns to', () => {

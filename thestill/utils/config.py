@@ -537,6 +537,10 @@ class Config(BaseModel):
     # standard response to a session-token leak; it must not dead-link
     # every already-delivered email).
     unsubscribe_secret: str = ""
+    # Lifecycle email (welcome + product tips, spec #118). The env default
+    # for the ``lifecycle_email_enabled`` runtime switch; ships off so the
+    # operator previews the copy (``thestill lifecycle preview``) first.
+    lifecycle_email_enabled: bool = False
 
     # Authentication Configuration
     multi_user: bool = False  # False = single-user (local), True = multi-user (hosted)
@@ -963,6 +967,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         "briefing_email_max_attempts": int(os.getenv("BRIEFING_EMAIL_MAX_ATTEMPTS", "3")),
         "briefing_email_backoff_seconds": int(os.getenv("BRIEFING_EMAIL_BACKOFF_SECONDS", "300")),
         "unsubscribe_secret": os.getenv("UNSUBSCRIBE_SECRET", ""),
+        "lifecycle_email_enabled": os.getenv("LIFECYCLE_EMAIL_ENABLED", "false").lower() == "true",
         # Authentication
         "multi_user": os.getenv("MULTI_USER", "false").lower() == "true",
         "google_client_id": os.getenv("GOOGLE_CLIENT_ID", ""),

@@ -174,7 +174,9 @@ Per-route guards on top of the router guard:
 - **`unsubscribe.py`:** `unsubscribe_briefings` (GET) never changes anything, so mail
   scanners that prefetch the link are harmless. `unsubscribe_briefings_one_click` (POST)
   is idempotent and shows the same success page whether or not a row changed. The only
-  credential is the HMAC token checked in `_verify`.
+  credential is the HMAC token checked in `_verify`. `unsubscribe_tips` /
+  `unsubscribe_tips_one_click` (spec #118) follow the same rules for "Product tips by
+  email" and accept only `TIPS_PURPOSE` tokens.
 
 ### Public API (`api_public.py`)
 

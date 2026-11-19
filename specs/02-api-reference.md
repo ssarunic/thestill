@@ -187,9 +187,11 @@ Get authentication status and configuration.
     "picture": "https://...",
     "created_at": "2026-01-01T...",
     "last_login_at": "2026-01-21T...",
-    "usage_analytics_enabled": true
+    "usage_analytics_enabled": true,
+    "product_tips_email_enabled": true
   },
   "usage_analytics_available": true,
+  "product_tips_email_available": true,
   "analytics": {"key": "phc_..."},
   "account_disabled": false,
   "admin_contact_email": "ops@example.com"
@@ -199,6 +201,9 @@ Get authentication status and configuration.
 `usage_analytics_available` is true when usage events are configured
 (spec #95); `analytics` carries the PostHog project key only for a signed-in
 user who has not opted out and whose request has no `Sec-GPC: 1`, else null.
+`product_tips_email_available` is true when welcome and product-tips email
+can be sent (multi-user mode with an email provider, spec #118); it shows
+the Settings switch backed by `user.product_tips_email_enabled`.
 
 Spec #104: for a suspended or banned account this endpoint answers
 `authenticated: false`, `user: null` and `account_disabled: true` rather

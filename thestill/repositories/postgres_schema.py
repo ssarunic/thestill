@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin boolean NOT NULL DEFAULT false,
     signup_source text NULL,
     usage_analytics_enabled boolean NOT NULL DEFAULT true,
+    product_tips_email_enabled boolean NOT NULL DEFAULT false,
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'banned')),
     status_reason text NULL,
     status_changed_at timestamptz NULL,
@@ -75,6 +76,9 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source text NULL;
 -- Spec #95 Layer B — per-user usage-events switch (alembic 0018).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_analytics_enabled boolean NOT NULL DEFAULT true;
+-- Spec #118 — "Product tips by email" (alembic 0029). Off by default; the
+-- sign-in callback turns it on for a new signup that was told about tips.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS product_tips_email_enabled boolean NOT NULL DEFAULT false;
 -- Spec #104 — account status + token revocation (alembic 0021).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'suspended', 'banned'));
@@ -605,6 +609,27 @@ CREATE TABLE IF NOT EXISTS briefing_deliveries (
 );
 CREATE INDEX IF NOT EXISTS idx_briefing_deliveries_due
     ON briefing_deliveries(next_attempt_at)
+    WHERE status IN ('pending','sending');
+
+-- Spec #118 — lifecycle message ledger (alembic 0029). One row per
+-- (user, message, channel): the UNIQUE constraint is the send-once anchor.
+-- ``next_attempt_at`` drives the due-scan while pending and is the claim
+-- lease while sending; NULL once terminal.
+CREATE TABLE IF NOT EXISTS user_messages (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_key text NOT NULL,
+    channel text NOT NULL DEFAULT 'email' CHECK (channel IN ('email')),
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','failed','skipped')),
+    attempts bigint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NULL,
+    sent_at timestamptz NULL,
+    last_error text NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, message_key, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_user_messages_due
+    ON user_messages(next_attempt_at)
     WHERE status IN ('pending','sending');
 
 -- ===== task queue =========================================================

@@ -125,3 +125,42 @@ class TestUnsubscribePost:
 
         assert response.status_code == 200
         mock_app_state.briefing_schedule_repository.set_email_enabled.assert_called_once_with("user-1", False)
+
+
+class TestUnsubscribeTips:
+    """Spec #118 — the product-tips link turns tips off, never briefings."""
+
+    def _token(self, user_id="user-1"):
+        from thestill.utils.unsubscribe_token import TIPS_PURPOSE
+
+        return make_unsubscribe_token(user_id, SECRET, purpose=TIPS_PURPOSE)
+
+    def test_get_confirms_without_mutating(self, client, mock_app_state):
+        token = self._token()
+
+        response = client.get("/unsubscribe/tips", params={"token": token})
+
+        assert response.status_code == 200
+        assert f"/unsubscribe/tips?token={token}" in response.text
+        mock_app_state.user_repository.update_product_tips_email.assert_not_called()
+
+    def test_post_turns_tips_off_only(self, client, mock_app_state):
+        response = client.post("/unsubscribe/tips", params={"token": self._token()})
+
+        assert response.status_code == 200
+        mock_app_state.user_repository.update_product_tips_email.assert_called_once_with("user-1", False)
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_not_called()
+
+    def test_briefing_token_cannot_unsubscribe_tips(self, client, mock_app_state):
+        briefing_token = make_unsubscribe_token("user-1", SECRET)
+
+        response = client.post("/unsubscribe/tips", params={"token": briefing_token})
+
+        assert response.status_code == 400
+        mock_app_state.user_repository.update_product_tips_email.assert_not_called()
+
+    def test_tips_token_cannot_unsubscribe_briefings(self, client, mock_app_state):
+        response = client.post("/unsubscribe/briefings", params={"token": self._token()})
+
+        assert response.status_code == 400
+        mock_app_state.briefing_schedule_repository.set_email_enabled.assert_not_called()

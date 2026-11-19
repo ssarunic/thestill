@@ -305,12 +305,12 @@ public page calls any `/api` endpoint outside `/api/public` and
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95). A suspended or banned session reads as signed out with `account_disabled: true`; `admin_contact_email` comes from `ADMIN_CONTACT_EMAIL` (spec #104) |
+| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95), and `product_tips_email_available` (welcome and tips email can be sent here; spec #118). A suspended or banned session reads as signed out with `account_disabled: true`; `admin_contact_email` comes from `ADMIN_CONTACT_EMAIL` (spec #104) |
 | `/api/auth/google/login` | GET | Initiate Google OAuth flow |
 | `/api/auth/google/callback` | GET | OAuth callback handler. Redirects to `/login?error=account_disabled` or `/login?error=signups_closed` when spec #104 refuses the sign-in |
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
-| `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference) and/or `usage_analytics_enabled` (spec #95 Settings switch) |
+| `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference), `usage_analytics_enabled` (spec #95 Settings switch) and/or `product_tips_email_enabled` (spec #118 "Product tips by email") |
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
@@ -351,6 +351,8 @@ required).
 |----------|--------|-------------|
 | `/unsubscribe/briefings` | GET | Confirm page for a signed link (read-only; mail gateways prefetch GETs) |
 | `/unsubscribe/briefings` | POST | Perform the unsubscribe (confirm button and RFC 8058 one-click) |
+| `/unsubscribe/tips` | GET | Confirm page for a product-tips link (spec #118; read-only) |
+| `/unsubscribe/tips` | POST | Turn "Product tips by email" off (confirm button and RFC 8058 one-click); briefing emails are untouched |
 
 ## Project Structure
 

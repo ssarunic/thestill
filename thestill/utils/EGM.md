@@ -153,6 +153,8 @@ The pluggable storage backends are in the
   `TokenPayload` or `None`), `get_token_expiry`, `is_token_expiring_soon`.
 - `unsubscribe_token.py` - `make_unsubscribe_token` and
   `verify_unsubscribe_token`: HMAC-SHA256 tokens, deliberately not JWTs.
+  Each takes a `purpose` (`BRIEFING_PURPOSE`, the default, or
+  `TIPS_PURPOSE`); a token only verifies for the purpose it was made for.
 
 ### Databases
 

@@ -50,6 +50,7 @@ interfaces, never to a backend class.
   - `briefing_schedule`, `briefing_delivery`, `mcp_token`, `oauth`
   - `listening_progress`, `link_decision`, `legacy_claim`, `pending_ops`
   - `entity`, `queue_manager`, `analytics`, `episode_view`
+  - `user_message` (spec #118)
   - `public_page_view`, `connector_day`, `sync_track`, `settings`
   - `audit_log`, `suspended_follow`, `user_directory`, `usage`
   - `transcript_edit`
@@ -80,6 +81,7 @@ concrete classes read or write (taken from their SQL strings).
 | `briefing_repository.py:BriefingRepository` | `sqlite_briefing_repository.py:SqliteBriefingRepository` | `postgres_briefing_repository.py:PostgresBriefingRepository` | `user_briefings`, `tasks`, `episodes`, `podcast_followers`, `user_episode_inbox` |
 | `briefing_schedule_repository.py:BriefingScheduleRepository` | `sqlite_briefing_schedule_repository.py:SqliteBriefingScheduleRepository` | `postgres_briefing_schedule_repository.py:PostgresBriefingScheduleRepository` | `user_briefing_schedules` |
 | `briefing_delivery_repository.py:BriefingDeliveryRepository` | `sqlite_briefing_delivery_repository.py:SqliteBriefingDeliveryRepository` | `postgres_briefing_delivery_repository.py:PostgresBriefingDeliveryRepository` | `briefing_deliveries` |
+| `user_message_repository.py:UserMessageRepository` | `sqlite_user_message_repository.py:SqliteUserMessageRepository` | `postgres_user_message_repository.py:PostgresUserMessageRepository` | `user_messages` (reads `users`, `podcast_followers`, `user_episode_inbox`, `oauth_grants`, `mcp_tokens`, `user_briefing_schedules`, `briefing_deliveries` for `candidates`) |
 | `listening_progress_repository.py:ListeningProgressRepository` | `sqlite_listening_progress_repository.py:SqliteListeningProgressRepository` | `postgres_listening_progress_repository.py:PostgresListeningProgressRepository` | `user_episode_progress`, `users` |
 | `episode_view_repository.py:EpisodeViewRepository` | `sqlite_episode_view_repository.py:SqliteEpisodeViewRepository` | `postgres_episode_view_repository.py:PostgresEpisodeViewRepository` | `user_episode_views`, `episodes`, `users` |
 | `connector_day_repository.py:ConnectorDayRepository` | `sqlite_connector_day_repository.py:SqliteConnectorDayRepository` | `postgres_connector_day_repository.py:PostgresConnectorDayRepository` | `user_connector_days`, `users`; Postgres also reads `user_briefing_schedules` |

@@ -431,6 +431,15 @@ class AuthService:
         logger.info("user_usage_analytics_set", user_id=user.id, enabled=enabled)
         return user
 
+    def set_product_tips_email(self, user: User, enabled: bool) -> User:
+        """The user's "Product tips by email" Settings switch (spec #118)."""
+        self.user_repository.update_product_tips_email(user.id, enabled)
+        user.product_tips_email_enabled = enabled
+        if self._default_user and self._default_user.id == user.id:
+            self._default_user.product_tips_email_enabled = enabled
+        logger.info("user_product_tips_email_set", user_id=user.id, enabled=enabled)
+        return user
+
     def set_user_region(self, user: User, region: Optional[str]) -> User:
         """Persist an explicit user-chosen region and lock further inference.
 
