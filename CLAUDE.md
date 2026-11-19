@@ -108,6 +108,13 @@ thestill settings set signup_mode closed     # settings get / reset; read_only =
 thestill user quota <email> imports_per_day 20   # per-user quota override; "default" reverts
 thestill alerts test                         # operator alert channels; alerts digest previews the daily digest
 
+# Welcome + product-tips email (spec #118). Ships off; preview, then switch on
+# with `thestill settings set lifecycle_email_enabled true`:
+thestill lifecycle status                  # the switch, the sequence, sends per message
+thestill lifecycle plan                    # dry run: who would get what now, and why
+thestill lifecycle preview <key> [--out DIR]
+thestill lifecycle send-test <key> --to <you>
+
 # Web server
 thestill server                     # Start on localhost:8000
 ```

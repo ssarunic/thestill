@@ -145,6 +145,10 @@ module path, for example `from thestill.models.podcast import Episode`.
 - `briefing_delivery.py:DeliveryChannel` (`email`),
   `briefing_delivery.py:DeliveryStatus` (`pending`, `sending`, `sent`,
   `failed`), and `briefing_delivery.py:BriefingDelivery`.
+- `user_message.py:MessageChannel` (`email`), `user_message.py:MessageStatus`
+  (`pending`, `sending`, `sent`, `failed`, `skipped`),
+  `user_message.py:UserMessage` and `user_message.py:LifecycleFacts`
+  (spec #118).
 - `briefing_schedule.py:BriefingFrequency` (`daily`, `weekly`) and
   `briefing_schedule.py:BriefingSchedule`, which provides the `tzinfo`
   property.

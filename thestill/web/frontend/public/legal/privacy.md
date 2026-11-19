@@ -28,6 +28,7 @@ Legal basis: our legitimate interest in running a secure service and showing rel
 | Your country, looked up from your IP address on first sign-in | To pick your default chart; you can change it in Settings | Legitimate interests |
 | Shows you follow, your inbox and what you have read, briefings, settings, searches and episodes you import | To provide the features you use | Contract |
 | Briefing email delivery and unsubscribe records | To send briefings by email, if you turn that on | Contract |
+| Your email address, your sign-up date, whether you follow a show or have connected an AI assistant, and which welcome and tips emails we have sent you | To send a welcome email and a few product tips in your first weeks, and to skip tips that no longer apply. On for new accounts; turn it off in Settings ("Product tips by email") or from the link in any tips email | Legitimate interests |
 | Access tokens you create for connecting an AI assistant | To let that assistant read your thestill data on your behalf | Contract |
 | Which features you use, such as pages by type, searches (not what you searched for), shares and AI assistant requests | To learn what to improve; you can turn it off in Settings | Legitimate interests |
 | Messages you send us | To answer you and handle requests | Legitimate interests |
@@ -71,7 +72,7 @@ We use these service providers ("processors") to run thestill. They may only use
 
 | Provider | What they do | Data they receive |
 | --- | --- | --- |
-| Amazon Web Services, London (UK) | Hosting, database, backups, server logs and sending briefing emails | Everything thestill stores |
+| Amazon Web Services, London (UK) | Hosting, database, backups, server logs and sending briefing, welcome and tips emails | Everything thestill stores |
 | Google Gemini API (US and other countries) | Writing summaries, briefings and person descriptions | Podcast transcripts and episode information; for briefings, the episodes in your briefing, not your name or email |
 | ipinfo.io (US) | Looking up the country of an IP address | Your IP address |
 | PostHog, EU hosting (Germany) | Usage analytics (see "Usage analytics") | Internal account number, which features you use, pages by type, browser and device type; not your IP address |

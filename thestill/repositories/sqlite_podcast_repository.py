@@ -588,6 +588,11 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             # Spec #95 Layer B — the Settings switch for usage events (0018).
             if "usage_analytics_enabled" not in user_columns:
                 conn.execute("ALTER TABLE users ADD COLUMN usage_analytics_enabled INTEGER NOT NULL DEFAULT 1")
+            # Spec #118 — "Product tips by email" (Postgres 0029). Off by
+            # default; the sign-in callback turns it on for a new signup
+            # that was told about tips.
+            if "product_tips_email_enabled" not in user_columns:
+                conn.execute("ALTER TABLE users ADD COLUMN product_tips_email_enabled INTEGER NOT NULL DEFAULT 0")
             # Spec #104 — account status + token revocation (Postgres 0021).
             if "status" not in user_columns:
                 conn.execute(
@@ -1815,6 +1820,37 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             )
             logger.info("Migration complete: briefing_deliveries table created")
 
+        # Lifecycle message ledger (spec #118). One row per (user, message,
+        # channel): the UNIQUE constraint is the send-once anchor. Same
+        # pending → sending → sent | failed machine as briefing_deliveries,
+        # plus ``skipped`` for a message that no longer applied at send time.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS user_messages (
+                id              TEXT PRIMARY KEY NOT NULL,
+                user_id         TEXT NOT NULL,
+                message_key     TEXT NOT NULL,
+                channel         TEXT NOT NULL DEFAULT 'email',
+                status          TEXT NOT NULL DEFAULT 'pending',
+                attempts        INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TIMESTAMP NULL,
+                sent_at         TIMESTAMP NULL,
+                last_error      TEXT NULL,
+                created_at      TIMESTAMP NOT NULL
+                                DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE (user_id, message_key, channel),
+                CHECK (channel IN ('email')),
+                CHECK (status IN ('pending','sending','sent','failed','skipped')),
+                CHECK (attempts >= 0)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_user_messages_due
+                ON user_messages(next_attempt_at)
+                WHERE status IN ('pending','sending');
+            """
+        )
+
         # Imports + auto-add columns. Indexes are created unconditionally
         # (IF NOT EXISTS) so fresh databases (columns came from _create_schema)
         # and legacy databases (columns just added below) end up identical.
@@ -2821,6 +2857,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                 is_admin INTEGER NOT NULL DEFAULT 0,
                 signup_source TEXT NULL,
                 usage_analytics_enabled INTEGER NOT NULL DEFAULT 1,
+                product_tips_email_enabled INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'active',
                 status_reason TEXT NULL,
                 status_changed_at TIMESTAMP NULL,

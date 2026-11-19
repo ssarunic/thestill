@@ -46,7 +46,8 @@ logger = get_logger(__name__)
 
 SELECT_COLS = (
     "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
-    " usage_analytics_enabled, status, status_reason, status_changed_at, status_changed_by, tokens_valid_after"
+    " usage_analytics_enabled, product_tips_email_enabled, status, status_reason, status_changed_at,"
+    " status_changed_by, tokens_valid_after"
 )
 
 
@@ -128,9 +129,9 @@ class PostgresUserRepository(UserRepository):
                 INSERT INTO users (
                     id, email, name, picture, google_id,
                     created_at, last_login_at, region, region_locked, is_admin,
-                    signup_source, usage_analytics_enabled
+                    signup_source, usage_analytics_enabled, product_tips_email_enabled
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (email) DO UPDATE SET
                     name = EXCLUDED.name,
                     picture = EXCLUDED.picture,
@@ -150,6 +151,7 @@ class PostgresUserRepository(UserRepository):
                     user.is_admin,
                     user.signup_source,
                     user.usage_analytics_enabled,
+                    user.product_tips_email_enabled,
                 ),
             )
             logger.debug("Saved user", email=user.email)
@@ -167,6 +169,11 @@ class PostgresUserRepository(UserRepository):
                     "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = %s AND listened_at IS NOT NULL",
                     (user_id,),
                 )
+            return cursor.rowcount > 0
+
+    def update_product_tips_email(self, user_id: str, enabled: bool) -> bool:
+        with connect(self.dsn) as conn:
+            cursor = conn.execute("UPDATE users SET product_tips_email_enabled = %s WHERE id = %s", (enabled, user_id))
             return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
@@ -308,6 +315,7 @@ def row_to_user(row: dict) -> User:
         is_admin=bool(row["is_admin"]),
         signup_source=row["signup_source"],
         usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
+        product_tips_email_enabled=bool(row["product_tips_email_enabled"]),
         status=UserStatus(row["status"]),
         status_reason=row["status_reason"],
         status_changed_at=row["status_changed_at"],

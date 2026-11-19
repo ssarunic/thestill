@@ -16,7 +16,7 @@ import functools
 import json
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -100,12 +100,15 @@ class CLIContext:
         analytics_service=None,
         abuse=None,
         transcript_edit_repository=None,
+        user_message_repository=None,
     ):
         self.config = config
         self.path_manager = path_manager
         # Spec #110 — the transcript editor's op log (``thestill transcript``
         # and every CLI path that reads a cleaned sidecar).
         self.transcript_edit_repository = transcript_edit_repository
+        # Spec #118 — the lifecycle message ledger (``thestill lifecycle``).
+        self.user_message_repository = user_message_repository
         self.repository = repository
         self.podcast_service = podcast_service
         self.stats_service = stats_service
@@ -311,6 +314,7 @@ def main(ctx, config, quiet):
             ),
             abuse=abuse,
             transcript_edit_repository=repos.transcript_edit,
+            user_message_repository=repos.user_message,
         )
 
     except Exception as e:
@@ -6093,6 +6097,171 @@ def admin_revoke(ctx, email):
     """Remove a user's admin role (never the last active admin)."""
     user, _ = _act_on(ctx, email, lambda admin, user, actor: admin.revoke_admin(user.id, actor=actor))
     click.echo(f"✓ {user.email} is no longer an admin.")
+
+
+@main.group("lifecycle")
+def lifecycle_group():
+    """Welcome and product-tips emails (spec #118)."""
+
+
+class _NoEmailSender:
+    """The CLI's planner never sends; only ``send-test`` builds a real sender."""
+
+    def send(self, **_kwargs) -> None:
+        raise RuntimeError("this command does not send email")
+
+
+def _lifecycle_service(ctx, sender=None):
+    from .services.lifecycle.renderer import LifecycleEmailRenderer
+    from .services.lifecycle.service import LifecycleEmailService
+
+    config = ctx.obj.config
+    renderer = LifecycleEmailRenderer(
+        public_base_url=config.public_base_url or "http://localhost:8000",
+        secret=config.unsubscribe_secret or config.jwt_secret_key or "preview-only",
+    )
+    return LifecycleEmailService(ctx.obj.user_message_repository, renderer, sender or _NoEmailSender()), renderer
+
+
+def _lifecycle_facts(ctx, service, user_email: Optional[str], follows: int, connected: bool):
+    """Real facts for ``user_email`` (who must have tips on), else a sample reader."""
+    from .models.user_message import LifecycleFacts
+
+    now = datetime.now(timezone.utc)
+    if user_email:
+        user = ctx.obj.auth_service.user_repository.get_by_email(user_email)
+        if user is None:
+            raise click.ClickException(f"No user with email {user_email}")
+        rows = ctx.obj.user_message_repository.candidates(
+            created_from=datetime.min.replace(tzinfo=timezone.utc),
+            created_to=now,
+            channel="email",
+            limit=1,
+            user_id=user.id,
+        )
+        if not rows:
+            raise click.ClickException(f"{user_email} is not eligible: tips are off or the account is not active")
+        return rows[0]
+    return LifecycleFacts(
+        user_id="00000000-0000-0000-0000-000000000000",
+        email="reader@example.com",
+        name="Alex Reader",
+        created_at=now,
+        timezone_name="Europe/London",
+        briefing_enabled=True,
+        briefing_hour_local=8,
+        follow_count=follows,
+        connector_connected=connected,
+    )
+
+
+@lifecycle_group.command("status")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_status(ctx):
+    """The switch, the sequence and what the ledger holds per message."""
+    service, _ = _lifecycle_service(ctx)
+    enabled = ctx.obj.abuse.settings.get("lifecycle_email_enabled") if ctx.obj.abuse else False
+    click.echo(f"lifecycle_email_enabled: {enabled}")
+    counts = ctx.obj.user_message_repository.status_counts()
+    for message in service.sequence:
+        per_status = {status: n for (key, status), n in counts.items() if key == message.key}
+        summary = ", ".join(f"{status}={n}" for status, n in sorted(per_status.items())) or "none yet"
+        click.echo(
+            f"  {message.key:<20} day {message.send_after.total_seconds() / 86400:g}"
+            f"–{message.expires_after.total_seconds() / 86400:g}  {summary}"
+        )
+
+
+@lifecycle_group.command("plan")
+@click.option("--json", "json_output", is_flag=True, help="One JSON object per candidate.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_plan(ctx, json_output):
+    """Dry run: what the next tick would queue for each candidate, and why. Writes nothing."""
+    service, _ = _lifecycle_service(ctx)
+    now = datetime.now(timezone.utc)
+    rows = service.candidates(now)
+    if not rows and not json_output:
+        click.echo("No candidates: no recent signups with Product tips by email on.")
+    for facts in rows:
+        message, reason = service.next_message(facts, now)
+        entry = {
+            "user_id": facts.user_id,
+            "email": facts.email,
+            "signed_up": facts.created_at.isoformat(),
+            "would_queue": message.key if message else None,
+            "reason": reason,
+            "already": sorted(facts.message_keys),
+        }
+        if json_output:
+            click.echo(json.dumps(entry))
+        else:
+            click.echo(f"{facts.email:<40} {entry['would_queue'] or '-':<20} {reason}")
+
+
+@lifecycle_group.command("preview")
+@click.argument("message_key")
+@click.option("--user", "user_email", help="Render with this user's real facts (tips must be on).")
+@click.option("--follows", type=int, default=0, show_default=True, help="Sample reader: shows followed.")
+@click.option("--connected", is_flag=True, help="Sample reader: Claude connector already connected.")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False), help="Write <key>.html and <key>.txt here.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_preview(ctx, message_key, user_email, follows, connected, out_dir):
+    """Render one message (subject + text; HTML with --out). Sends nothing."""
+    service, renderer = _lifecycle_service(ctx)
+    try:
+        message = service.message(message_key)
+    except KeyError:
+        raise click.ClickException(
+            f"Unknown message {message_key!r}; known: {', '.join(m.key for m in service.sequence)}"
+        )
+    facts = _lifecycle_facts(ctx, service, user_email, follows, connected)
+    if not message.applies(facts):
+        click.echo(f"note: {message_key} does not apply to this reader; it would be skipped.", err=True)
+    email = renderer.render(message, facts)
+    click.echo(f"Subject: {email.subject}\n")
+    click.echo(email.text)
+    if out_dir:
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{message_key}.html").write_text(email.html, encoding="utf-8")
+        (out / f"{message_key}.txt").write_text(email.text, encoding="utf-8")
+        click.echo(f"Wrote {out / (message_key + '.html')}", err=True)
+
+
+@lifecycle_group.command("send-test")
+@click.argument("message_key")
+@click.option("--to", "to_address", required=True, help="Where to send the test (yours). Not recorded in the ledger.")
+@click.option("--user", "user_email", help="Render with this user's real facts (tips must be on).")
+@click.option("--follows", type=int, default=0, show_default=True, help="Sample reader: shows followed.")
+@click.option("--connected", is_flag=True, help="Sample reader: Claude connector already connected.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_send_test(ctx, message_key, to_address, user_email, follows, connected):
+    """Send one rendered message to --to through the configured provider."""
+    from .services.email_sender import make_email_sender
+
+    sender = make_email_sender(ctx.obj.config)
+    if sender is None:
+        raise click.ClickException("No email provider configured (EMAIL_PROVIDER=none)")
+    service, renderer = _lifecycle_service(ctx, sender)
+    try:
+        message = service.message(message_key)
+    except KeyError:
+        raise click.ClickException(
+            f"Unknown message {message_key!r}; known: {', '.join(m.key for m in service.sequence)}"
+        )
+    email = renderer.render(message, _lifecycle_facts(ctx, service, user_email, follows, connected))
+    sender.send(
+        to=to_address, subject=f"[test] {email.subject}", html=email.html, text=email.text, headers=email.headers
+    )
+    click.echo(f"✓ Sent {message_key} to {to_address}")
 
 
 @main.group("alerts")

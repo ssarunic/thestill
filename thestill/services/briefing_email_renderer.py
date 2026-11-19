@@ -31,45 +31,24 @@ slot is reserved for #34.
 """
 
 import html
-import re
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Optional
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from ..models.briefing import Briefing
 from ..utils.unsubscribe_token import make_unsubscribe_token
-
-_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
-_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
-
-_STYLE_BODY = "margin:0;padding:0;background-color:#f4f4f5;"
-_STYLE_CARD = (
-    "max-width:600px;margin:0 auto;padding:24px;background-color:#ffffff;"
-    "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;"
-    "font-size:15px;line-height:1.6;color:#18181b;"
+from .email_markup import (
+    STYLE_BODY,
+    STYLE_BUTTON,
+    STYLE_CARD,
+    STYLE_FOOTER,
+    STYLE_LINK,
+    RenderedEmail,
+    absolutize_links,
+    markdown_to_html,
 )
-_STYLE_H1 = "font-size:22px;line-height:1.3;margin:0 0 12px;"
-_STYLE_H2 = "font-size:18px;line-height:1.3;margin:24px 0 8px;"
-_STYLE_H3 = "font-size:16px;line-height:1.3;margin:16px 0 4px;"
-_STYLE_P = "margin:8px 0;"
-_STYLE_HR = "border:none;border-top:1px solid #e4e4e7;margin:20px 0;"
-_STYLE_LINK = "color:#1d4ed8;text-decoration:underline;"
-_STYLE_BUTTON = (
-    "display:inline-block;padding:10px 18px;margin:16px 0;background-color:#18181b;"
-    "color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;"
-)
-_STYLE_FOOTER = "margin-top:28px;padding-top:16px;border-top:1px solid #e4e4e7;font-size:12px;color:#71717a;"
 
-
-@dataclass
-class RenderedEmail:
-    """The composed parts the delivery pass hands to ``EmailSender``."""
-
-    subject: str
-    html: str
-    text: str
-    headers: Dict[str, str] = field(default_factory=dict)
+__all__ = ["BriefingEmailRenderer", "RenderedEmail"]
 
 
 class BriefingEmailRenderer:
@@ -108,7 +87,7 @@ class BriefingEmailRenderer:
             f" ({subject_date.strftime('%b')} {subject_date.day})"
         )
 
-        absolute_markdown = self._absolutize_links(script_markdown)
+        absolute_markdown = absolutize_links(script_markdown, self._base_url)
         briefing_url = f"{self._base_url}/briefings"
         unsubscribe_url = self._unsubscribe_url(briefing.user_id)
 
@@ -119,21 +98,21 @@ class BriefingEmailRenderer:
             f"Stop receiving these emails: {unsubscribe_url}\n"
         )
 
-        html_body = self._markdown_to_html(absolute_markdown)
+        html_body = markdown_to_html(absolute_markdown)
         html_doc = (
             "<!DOCTYPE html>\n"
             '<html lang="en">\n'
             '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>\n'
-            f'<body style="{_STYLE_BODY}">\n'
-            f'<div style="{_STYLE_CARD}">\n'
+            f'<body style="{STYLE_BODY}">\n'
+            f'<div style="{STYLE_CARD}">\n'
             f"{html_body}\n"
-            f'<p><a href="{html.escape(briefing_url, quote=True)}" style="{_STYLE_BUTTON}">Read in app</a></p>\n'
+            f'<p><a href="{html.escape(briefing_url, quote=True)}" style="{STYLE_BUTTON}">Read in app</a></p>\n'
             # Spec #34 interlock: the audio link slot renders here once
             # briefing audio ships (hosted file or personal-feed player).
-            f'<div style="{_STYLE_FOOTER}">\n'
+            f'<div style="{STYLE_FOOTER}">\n'
             "<p>You are receiving this because briefing email delivery is enabled in your "
             "Thestill settings.</p>\n"
-            f'<p><a href="{html.escape(unsubscribe_url, quote=True)}" style="{_STYLE_LINK}">Unsubscribe</a> '
+            f'<p><a href="{html.escape(unsubscribe_url, quote=True)}" style="{STYLE_LINK}">Unsubscribe</a> '
             "with one click — no login needed.</p>\n"
             "</div>\n</div>\n</body>\n</html>\n"
         )
@@ -149,71 +128,3 @@ class BriefingEmailRenderer:
     def _unsubscribe_url(self, user_id: str) -> str:
         token = make_unsubscribe_token(user_id, self._secret)
         return f"{self._base_url}/unsubscribe/briefings?token={quote(token, safe='')}"
-
-    def _absolutize_links(self, markdown: str) -> str:
-        """Rewrite app-relative link targets (``/podcasts/…``) to absolute."""
-
-        def rewrite(match: "re.Match[str]") -> str:
-            label, target = match.group(1), match.group(2)
-            if target.startswith("/"):
-                target = f"{self._base_url}{target}"
-            return f"[{label}]({target})"
-
-        return _LINK_RE.sub(rewrite, markdown)
-
-    def _markdown_to_html(self, markdown: str) -> str:
-        """Convert the briefing-script markdown subset to inline-styled HTML."""
-        blocks: List[str] = []
-        list_items: List[str] = []
-
-        def flush_list() -> None:
-            if list_items:
-                blocks.append('<ul style="margin:8px 0;padding-left:24px;">' + "".join(list_items) + "</ul>")
-                list_items.clear()
-
-        for raw_line in markdown.splitlines():
-            line = raw_line.strip()
-            if not line:
-                flush_list()
-                continue
-            if line == "---":
-                flush_list()
-                blocks.append(f'<hr style="{_STYLE_HR}">')
-            elif line.startswith("### "):
-                flush_list()
-                blocks.append(f'<h3 style="{_STYLE_H3}">{self._inline(line[4:])}</h3>')
-            elif line.startswith("## "):
-                flush_list()
-                blocks.append(f'<h2 style="{_STYLE_H2}">{self._inline(line[3:])}</h2>')
-            elif line.startswith("# "):
-                flush_list()
-                blocks.append(f'<h1 style="{_STYLE_H1}">{self._inline(line[2:])}</h1>')
-            elif line.startswith("- "):
-                list_items.append(f"<li>{self._inline(line[2:])}</li>")
-            else:
-                flush_list()
-                blocks.append(f'<p style="{_STYLE_P}">{self._inline(line)}</p>')
-        flush_list()
-        return "\n".join(blocks)
-
-    def _inline(self, text: str) -> str:
-        """Escape, then apply inline links and bold.
-
-        Escaping runs first so script content can never inject markup; the
-        link/bold substitutions insert the only tags allowed through.
-        Link targets are matched pre-escape via placeholder indirection.
-        """
-        # Extract links before escaping so URLs survive intact.
-        links: List[tuple[str, str]] = []
-
-        def stash(match: "re.Match[str]") -> str:
-            links.append((match.group(1), match.group(2)))
-            return f"\x00{len(links) - 1}\x00"
-
-        stashed = _LINK_RE.sub(stash, text)
-        escaped = html.escape(stashed)
-        escaped = _BOLD_RE.sub(r"<strong>\1</strong>", escaped)
-        for index, (label, target) in enumerate(links):
-            anchor = f'<a href="{html.escape(target, quote=True)}" style="{_STYLE_LINK}">{html.escape(label)}</a>'
-            escaped = escaped.replace(f"\x00{index}\x00", anchor)
-        return escaped

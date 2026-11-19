@@ -167,6 +167,14 @@ Callers import every other module by its own path.
 - `briefing_delivery_service.py:BriefingDeliveryService`: `ensure_pending`
   and `deliver_due`.
 - `briefing_email_renderer.py:BriefingEmailRenderer.render -> RenderedEmail`.
+- `email_markup.py`: `RenderedEmail`, the inline `STYLE_*` constants,
+  `markdown_to_html`, `markdown_to_plain`, `absolutize_links` and
+  `inline_html`, shared by the briefing and lifecycle renderers.
+- `lifecycle/` (spec #118): `build_lifecycle_email_service(config, repos,
+  email_sender, settings)`; `service.py:LifecycleEmailService` with `tick`,
+  `plan`, `deliver_due`, `candidates` and `next_message`;
+  `renderer.py:LifecycleEmailRenderer`; `messages.py:SEQUENCE` of
+  `LifecycleMessage`.
 - `email_sender.py`:
   - `EmailSender`, the ABC, with `send(*, to, subject, html, text, headers)`
   - `SmtpEmailSender` and `SesEmailSender`
@@ -344,6 +352,14 @@ Callers import every other module by its own path.
     account, and a script that is missing or outside the storage root.
   - Retryable failures back off by `backoff * 2^(attempts-1)` until
     `max_attempts`.
+- `lifecycle/service.py:LifecycleEmailService`:
+  - `tick` does nothing while the `lifecycle_email_enabled` switch is off.
+  - `plan` queues at most one message per user per pass, never an expired
+    one, and none inside the frequency cap, within `briefing_quiet` of a
+    briefing email, or outside the reader's send window.
+  - `deliver_due` re-reads the facts before sending; a reader who turned
+    tips off, is no longer active, or no longer matches the condition gets
+    the row settled as `skipped`.
 - `email_sender.py:make_email_sender` returns `None` for provider `none`,
   which disables delivery, and raises `ValueError` for an unknown provider.
   The transports never retry.

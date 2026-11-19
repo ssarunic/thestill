@@ -78,6 +78,12 @@ class User(BaseModel):
             events (PostHog). Off means the browser loads no analytics code
             and the server drops every event for this user. Product tables
             still count them (Layer A).
+        product_tips_email_enabled: Spec #118 — the Settings switch "Product
+            tips by email" (welcome and product-tips emails). Separate from
+            ``usage_analytics_enabled``: marketing consent is not analytics
+            consent. Off unless the sign-in page told the reader about tips:
+            the Google callback turns it on for a new account only when
+            tips can be sent (spec #118, PECR soft opt-in).
         status: Spec #104 — ``active``, ``suspended`` or ``banned``. Set only
             through the account admin service, never by ``save()``.
         status_reason: The operator's note; shown only to admins.
@@ -99,6 +105,7 @@ class User(BaseModel):
     is_admin: bool = False
     signup_source: Optional[str] = None
     usage_analytics_enabled: bool = True
+    product_tips_email_enabled: bool = False
     status: UserStatus = UserStatus.ACTIVE
     status_reason: Optional[str] = None
     status_changed_at: Optional[datetime] = None

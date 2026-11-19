@@ -404,6 +404,12 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
             access=abuse.guard,
         )
 
+    # Spec #118 — welcome and product-tips emails: None in single-user mode
+    # or without a sender; paused by the lifecycle_email_enabled switch.
+    from ..services.lifecycle import build_lifecycle_email_service
+
+    lifecycle_email_service = build_lifecycle_email_service(config, repos, email_sender, abuse.settings)
+
     # Spec #28 — entity-layer repository + search backend, backend-resolved
     # (spec #44): sqlite-vec locally, pgvector when DATABASE_URL is set.
     from ..core.embedding_model import EmbeddingModel
@@ -452,6 +458,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         briefing_schedule_repository=briefing_schedule_repository,
         briefing_delivery_repository=briefing_delivery_repository,
         briefing_delivery_service=briefing_delivery_service,
+        lifecycle_email_service=lifecycle_email_service,
         pending_ops_repository=pending_ops_repository,
         sync_track_service=SyncTrackService(config, repos.sync_track),
         platform_link_service=platform_link_service,
@@ -697,6 +704,14 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
                 # Spec #110 §4 — an editing session idle for 15 minutes (or a
                 # closed tab) still gets its entity refresh.
                 PeriodicJob("transcript_edit_refresh", 300, app_state.transcript_edit_service.sweep_refreshes),
+                # Spec #118 — plan and send welcome / product-tips emails.
+                # Idempotent (send-once ledger + leased claims), so every
+                # worker may run it.
+                *(
+                    [PeriodicJob("lifecycle_email", 900, app_state.lifecycle_email_service.tick)]
+                    if app_state.lifecycle_email_service is not None
+                    else []
+                ),
             ]
         )
         periodic_runner.start()

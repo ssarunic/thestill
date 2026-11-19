@@ -202,6 +202,11 @@ SETTINGS: Dict[str, SettingSpec] = {
             lambda c: bool(c.narration_enabled),
         ),
         _switch(
+            "lifecycle_email_enabled",
+            "Off: no welcome or product-tips emails are queued or sent (spec #118).",
+            lambda c: bool(c.lifecycle_email_enabled),
+        ),
+        _switch(
             "read_only",
             "Panic mode: non-admin writes return 503 and every feature above is paused.",
             lambda _c: False,

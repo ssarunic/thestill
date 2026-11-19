@@ -51,6 +51,7 @@ from .sync_track_repository import SyncTrackRepository
 from .transcript_edit_repository import TranscriptEditRepository
 from .usage_event_repository import UsageEventRepository
 from .user_directory_repository import UserDirectoryRepository
+from .user_message_repository import UserMessageRepository
 from .user_repository import UserRepository
 
 if TYPE_CHECKING:
@@ -137,6 +138,8 @@ class RepositoryBundle:
     briefing: BriefingRepository
     briefing_schedule: BriefingScheduleRepository
     briefing_delivery: BriefingDeliveryRepository
+    # Spec #118 — lifecycle message ledger.
+    user_message: UserMessageRepository
     mcp_token: McpTokenRepository
     oauth: OAuthRepository
     listening_progress: ListeningProgressRepository
@@ -198,6 +201,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_transcript_edit_repository import PostgresTranscriptEditRepository
         from .postgres_usage_event_repository import PostgresUsageEventRepository
         from .postgres_user_directory_repository import PostgresUserDirectoryRepository
+        from .postgres_user_message_repository import PostgresUserMessageRepository
         from .postgres_user_repository import PostgresUserRepository
 
         return RepositoryBundle(
@@ -209,6 +213,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             briefing=PostgresBriefingRepository(dsn),
             briefing_schedule=PostgresBriefingScheduleRepository(dsn),
             briefing_delivery=PostgresBriefingDeliveryRepository(dsn),
+            user_message=PostgresUserMessageRepository(dsn),
             mcp_token=PostgresMcpTokenRepository(dsn),
             oauth=PostgresOAuthRepository(dsn),
             listening_progress=PostgresListeningProgressRepository(dsn),
@@ -255,6 +260,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_transcript_edit_repository import SqliteTranscriptEditRepository
     from .sqlite_usage_event_repository import SqliteUsageEventRepository
     from .sqlite_user_directory_repository import SqliteUserDirectoryRepository
+    from .sqlite_user_message_repository import SqliteUserMessageRepository
     from .sqlite_user_repository import SqliteUserRepository
 
     return RepositoryBundle(
@@ -266,6 +272,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         briefing=SqliteBriefingRepository(db_path=db_path),
         briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
         briefing_delivery=SqliteBriefingDeliveryRepository(db_path=db_path),
+        user_message=SqliteUserMessageRepository(db_path=db_path),
         mcp_token=SqliteMcpTokenRepository(db_path=db_path),
         oauth=SqliteOAuthRepository(db_path=db_path),
         listening_progress=SqliteListeningProgressRepository(db_path=db_path),

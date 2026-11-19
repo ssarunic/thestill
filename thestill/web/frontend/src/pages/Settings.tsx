@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import BriefingScheduleSettings from '../components/BriefingScheduleSettings'
 import McpConnectorSettings from '../components/McpConnectorSettings'
+import ProductTipsSettings from '../components/ProductTipsSettings'
 import UsageEventsSettings from '../components/UsageEventsSettings'
 
 // Region dropdown options. The data layer ships top-podcast rankings for
@@ -94,6 +95,8 @@ export default function Settings() {
       <BriefingScheduleSettings />
 
       <McpConnectorSettings />
+
+      <ProductTipsSettings />
 
       <UsageEventsSettings />
 

@@ -71,6 +71,7 @@ if TYPE_CHECKING:
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..services.legacy_claim_service import LegacyClaimService
+    from ..services.lifecycle.service import LifecycleEmailService
     from ..services.listening_progress_service import ListeningProgressService
     from ..services.mcp_oauth_service import McpOAuthService
     from ..services.mcp_token_service import McpTokenService
@@ -159,6 +160,10 @@ class AppState:
     # capability flag the API/UI key off).
     briefing_delivery_repository: "Optional[BriefingDeliveryRepository]" = None
     briefing_delivery_service: "Optional[BriefingDeliveryService]" = None
+    # Spec #118 — welcome and product-tips emails. ``None`` without an email
+    # sender or in single-user mode (the ``product_tips_email_available``
+    # capability flag keys off it).
+    lifecycle_email_service: "Optional[LifecycleEmailService]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the

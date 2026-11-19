@@ -52,3 +52,17 @@ is read by comparing signup-week cohorts before and after it shipped.
 | Shipped | — |
 | Read on | — |
 | Result | — |
+
+### 3. Welcome and product-tips email
+
+| Field | Value |
+|---|---|
+| Change | [Spec #118](../specs/118-lifecycle-email.md): a welcome email a day after signup (follow a show, or what happens next for readers who already follow one), a follow nudge on day 3 for readers who still follow nothing, a Claude connector tip on day 7 and a search tip on day 14. Each is skipped when it no longer applies; "Product tips by email" in Settings turns them off |
+| Why | Activation stalls at the first follow, and a reader who leaves on day 0 never sees anything in the app again; email is the only way back |
+| Metric | Activation |
+| Guardrails | Tips unsubscribes (`/unsubscribe/tips` and the Settings switch) per email sent, bounces and complaints from the email provider, briefing-email unsubscribes in the same weeks |
+| Expected effect | Readers who follow nothing on day 1 follow a show within 7 days after the welcome or the day-3 nudge; activation at least doubles against the experiment 2 baseline |
+| Status | Built on `feat/lifecycle-email-prereqs`, switch off. Turn it on (`lifecycle_email_enabled`) only after experiment 2 is read, so the two activation changes don't overlap |
+| Shipped | — |
+| Read on | — |
+| Result | — |
