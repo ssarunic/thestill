@@ -34,6 +34,7 @@ from structlog import get_logger
 from ..core.entity_alias_hygiene import is_alias_of, lookup_key
 from ..core.entity_linking.cache import invalidate_link_decisions
 from ..core.entity_linking.shared import _build_entity_id
+from ..core.entity_review import CorrectionResult, apply_correction
 from ..models.entities import EntityRecord, EntityType
 from ..repositories.entity_repository import EntityRepository
 from .abuse.actor import Actor
@@ -375,3 +376,155 @@ class EntityCurationService:
         deleted = self._repo.delete_orphan_entities(orphans)
         self._audit.record(actor, "entity.prune_orphans", listed=len(orphans), deleted=deleted)
         return PruneResult(orphans, deleted, applied=True)
+
+    # -- per-item curation (the CLI ``mention`` / ``podcast`` / ``episode``
+    # commands and the admin correction endpoint). Each write is audited
+    # here, so no entry point can skip it.
+
+    def _mention(self, mention_id: int):
+        mention = self._repo.get_mention(mention_id)
+        if mention is None:
+            raise AdminActionError("not_found", f"No mention {mention_id}.")
+        return mention
+
+    def _require_entities(self, entity_ids: Sequence[str]) -> List[str]:
+        ids = list(entity_ids)
+        missing = [eid for eid in ids if self._repo.get_entity(eid) is None]
+        if missing:
+            raise AdminActionError("not_found", f"Unknown entity ids: {', '.join(missing)}.")
+        return ids
+
+    def drop_mention(self, mention_id: int, *, actor: Actor, reason: Optional[str] = None, scope_episode: bool = False):
+        """Soft-delete a mention and store a ``drop`` override so a reindex
+        keeps it dropped. The override is global by surface form unless
+        ``scope_episode``."""
+        mention = self._mention(mention_id)
+        self._repo.add_override(
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id if scope_episode else None,
+            kind="drop",
+            reason=reason,
+        )
+        invalidate_link_decisions(self._link_decisions, mention.surface_form)
+        self._repo.resolve_mention(mention_id=mention_id, entity_id=None, status="dropped", method="override")
+        self._audit.record(
+            actor,
+            "mention.drop",
+            mention_id=mention_id,
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id,
+            scope="episode" if scope_episode else "global",
+            reason=reason,
+        )
+        return mention
+
+    def repoint_mention(
+        self,
+        mention_id: int,
+        entity_id: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        scope_global: bool = False,
+    ):
+        """Force a mention to resolve to ``entity_id`` and store a
+        ``force_entity`` override (per episode unless ``scope_global``).
+
+        Returns ``(mention, target_entity)``."""
+        mention = self._mention(mention_id)
+        target = self._get(entity_id)
+        self._repo.add_override(
+            surface_form=mention.surface_form,
+            episode_id=None if scope_global else mention.episode_id,
+            kind="force_entity",
+            entity_id=entity_id,
+            reason=reason,
+        )
+        invalidate_link_decisions(self._link_decisions, mention.surface_form)
+        self._repo.resolve_mention(mention_id=mention_id, entity_id=entity_id, status="resolved", method="override")
+        self._audit.record(
+            actor,
+            "mention.repoint",
+            mention_id=mention_id,
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id,
+            from_entity_id=mention.entity_id,
+            to_entity_id=entity_id,
+            scope="global" if scope_global else "episode",
+            reason=reason,
+        )
+        return mention, target
+
+    def add_alias(self, entity_id: str, alias: str, *, actor: Actor) -> bool:
+        """Add ``alias`` to the entity's aliases. Returns False (and audits
+        nothing) when it is already there."""
+        entity = self._get(entity_id)
+        alias = alias.strip()
+        if not alias:
+            raise AdminActionError("no_surface", "Give the alias to add.")
+        if alias in entity.aliases:
+            return False
+        entity.aliases = sorted(set(entity.aliases) | {alias})
+        self._repo.upsert_entity(entity)
+        self._audit.record(actor, "entity.alias_add", entity_id=entity_id, alias=alias)
+        return True
+
+    def set_visibility(
+        self, entity_id: str, *, public: bool, actor: Actor, reason: Optional[str] = None
+    ) -> EntityRecord:
+        """Show or hide the entity's public page (spec #94 takedown switch)."""
+        entity = self._get(entity_id)
+        self._repo.set_entity_public_hidden(entity.id, not public)
+        self._audit.record(actor, "entity.set_visibility", entity_id=entity.id, public=public, reason=reason)
+        return entity
+
+    def pin_hosts(self, podcast_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin a podcast's canonical hosts (the extractor's anchor pass)."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_podcast_anchors(podcast_id).get("hosts", [])
+        self._repo.set_podcast_hosts(podcast_id, ids)
+        self._audit.record(actor, "podcast.set_hosts", podcast_id=podcast_id, old=old, new=ids)
+        return ids
+
+    def pin_recurring(self, podcast_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin a podcast's recurring voices (regular co-hosts)."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_podcast_anchors(podcast_id).get("recurring", [])
+        self._repo.set_podcast_recurring(podcast_id, ids)
+        self._audit.record(actor, "podcast.set_recurring", podcast_id=podcast_id, old=old, new=ids)
+        return ids
+
+    def pin_guests(self, episode_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin an episode's guests."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_episode_guests(episode_id)
+        self._repo.set_episode_guests(episode_id, ids)
+        self._audit.record(actor, "episode.set_guests", episode_id=episode_id, old=old, new=ids)
+        return ids
+
+    def correct(self, *, actor: Actor, queue_manager, wikidata_client=None, **correction) -> CorrectionResult:
+        """Apply an admin correction (blacklist / override) and queue the
+        re-resolution (``core.entity_review.apply_correction``), audited.
+
+        ``CorrectionError`` and ``EnrichmentUnavailable`` propagate; nothing
+        is audited when the correction is refused."""
+        result = apply_correction(
+            repo=self._repo,
+            queue_manager=queue_manager,
+            wikidata_client=wikidata_client,
+            link_decisions=self._link_decisions,
+            **correction,
+        )
+        self._audit.record(
+            actor,
+            "entity.correction",
+            correction=result.action,
+            surface_form=result.surface_form,
+            episode_id=correction.get("episode_id"),
+            wrong_qid=correction.get("wrong_qid"),
+            target_entity_id=result.target_entity_id,
+            created_entity_id=result.created_entity_id,
+            affected_mentions=result.affected_mentions,
+            reason=correction.get("reason"),
+        )
+        return result

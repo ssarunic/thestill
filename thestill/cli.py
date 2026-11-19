@@ -28,7 +28,6 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
-from .core.entity_linking.cache import invalidate_link_decisions
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
@@ -420,7 +419,11 @@ def set_show_link(ctx, podcast_id, platform, url, clear):
     ):
         click.echo(f"❌ That does not look like a {platform} show link: {url}", err=True)
         ctx.exit(2)
-    ctx.obj.repository.set_podcast_platform_url(str(podcast.id), platform, None if clear else url, source="curated")
+    _curate(
+        ctx,
+        lambda svc, actor: svc.set_show_link(str(podcast.id), platform, None if clear else url, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     if clear:
         click.echo(f"✓ Cleared the curated {platform} link for {podcast.title}.")
     else:
@@ -450,8 +453,11 @@ def set_summary_profile(ctx, podcast_id, profile):
         click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
         ctx.exit(1)
     override = None if profile == "auto" else profile
-    ctx.obj.repository.set_podcast_summary_profile(str(podcast.id), override)
-    podcast.summary_profile = override
+    podcast = _curate(
+        ctx,
+        lambda svc, actor: svc.set_summary_profile(str(podcast.id), override, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     click.echo(f"✓ {podcast.title}: summary profile {resolve_summary_profile(podcast).describe()}.")
 
 
@@ -497,7 +503,11 @@ def set_podcast_visibility(ctx, podcast_id, public):
 
     indexnow = IndexNow(ctx.obj.config)
     before = _public_page_paths(ctx.obj.repository, podcast) if indexnow.enabled and not public else []
-    ctx.obj.repository.set_podcast_public_pages(str(podcast.id), public)
+    _curate(
+        ctx,
+        lambda svc, actor: svc.set_public_pages(str(podcast.id), public, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
     if indexnow.enabled:
         paths = _public_page_paths(ctx.obj.repository, podcast) if public else before
@@ -564,12 +574,7 @@ def set_entity_visibility(ctx, entity_id, public):
     signed-out surfaces. Use it for a person who asks to be removed, or
     at once when a quote is attributed to the wrong person.
     """
-    repo = ctx.obj.entity_repository
-    entity = repo.get_entity(entity_id)
-    if entity is None:
-        click.echo(f"❌ Entity not found: {entity_id}", err=True)
-        ctx.exit(1)
-    repo.set_entity_public_hidden(entity.id, not public)
+    entity = _curate(ctx, lambda svc, actor: svc.set_visibility(entity_id, public=public, actor=actor))
     click.echo(f"✓ {entity.canonical_name} ({entity.id}): public page {'on' if public else 'hidden'}.")
 
 
@@ -5309,13 +5314,22 @@ def _entity_curation(ctx):
     )
 
 
-def _curate(ctx, action):
-    """Run ``action(service, actor)``; a refused action exits 1 with its message."""
+def _podcast_curation(ctx):
+    """The audited show-settings service; the CLI is the operator."""
+    from .services.podcast_curation import PodcastCurationService
+
+    return PodcastCurationService(ctx.obj.repository, ctx.obj.abuse.audit)
+
+
+def _curate(ctx, action, *, service=None):
+    """Run ``action(service, actor)`` on an audited curation service (the
+    entity one unless ``service`` is given); a refused action exits 1 with
+    its message. Every curation write goes through here, so it is audited."""
     from .services.abuse.actor import Actor
     from .services.abuse.errors import AdminActionError
 
     try:
-        return action(_entity_curation(ctx), Actor.cli())
+        return action(service or _entity_curation(ctx), Actor.cli())
     except AdminActionError as exc:
         click.echo(f"❌ {exc}", err=True)
         ctx.exit(1)
@@ -5567,12 +5581,7 @@ def podcast_set_hosts(ctx, podcast_id, entity_ids):
     The extractor's anchor pass uses this list to short-circuit
     resolution for host name mentions in the body text.
     """
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_podcast_hosts(podcast_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_hosts(podcast_id, entity_ids, actor=actor))
     click.echo(f"✓ {podcast_id}: hosts = {', '.join(entity_ids)}")
 
 
@@ -5584,12 +5593,7 @@ def podcast_set_hosts(ctx, podcast_id, entity_ids):
 @log_command
 def podcast_set_recurring(ctx, podcast_id, entity_ids):
     """Pin recurring voices (regular co-hosts who aren't the lead host)."""
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_podcast_recurring(podcast_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_recurring(podcast_id, entity_ids, actor=actor))
     click.echo(f"✓ {podcast_id}: recurring = {', '.join(entity_ids)}")
 
 
@@ -5676,12 +5680,7 @@ def episode_set_guests(ctx, episode_id, entity_ids):
     The extractor's anchor pass adds these to the host/recurring set
     for this one episode only — guests rotate, hosts don't.
     """
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_episode_guests(episode_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_guests(episode_id, entity_ids, actor=actor))
     click.echo(f"✓ {episode_id}: guests = {', '.join(entity_ids)}")
 
 
@@ -6249,23 +6248,9 @@ def mention_drop(ctx, mention_id, reason, scope_episode):
     """Soft-delete a mention. Stores a ``mention_overrides`` row so the
     drop survives a future reindex.
     """
-    repo = ctx.obj.entity_repository
-    mention = repo.get_mention(mention_id)
-    if mention is None:
-        click.echo(f"❌ No mention with id={mention_id}", err=True)
-        ctx.exit(1)
-    repo.add_override(
-        surface_form=mention.surface_form,
-        episode_id=mention.episode_id if scope_episode else None,
-        kind="drop",
-        reason=reason,
-    )
-    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
-    repo.resolve_mention(
-        mention_id=mention_id,
-        entity_id=None,
-        status="dropped",
-        method="override",
+    mention = _curate(
+        ctx,
+        lambda svc, actor: svc.drop_mention(mention_id, actor=actor, reason=reason, scope_episode=scope_episode),
     )
     click.echo(f"✓ Dropped mention id={mention_id} (surface={mention.surface_form!r})")
 
@@ -6282,28 +6267,11 @@ def mention_drop(ctx, mention_id, reason, scope_episode):
 @log_command
 def mention_repoint(ctx, mention_id, entity_id, reason, scope_global):
     """Override a mention's resolution to point at a specific entity."""
-    repo = ctx.obj.entity_repository
-    mention = repo.get_mention(mention_id)
-    if mention is None:
-        click.echo(f"❌ No mention with id={mention_id}", err=True)
-        ctx.exit(1)
-    target = repo.get_entity(entity_id)
-    if target is None:
-        click.echo(f"❌ No entity with id={entity_id}", err=True)
-        ctx.exit(1)
-    repo.add_override(
-        surface_form=mention.surface_form,
-        episode_id=None if scope_global else mention.episode_id,
-        kind="force_entity",
-        entity_id=entity_id,
-        reason=reason,
-    )
-    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
-    repo.resolve_mention(
-        mention_id=mention_id,
-        entity_id=entity_id,
-        status="resolved",
-        method="override",
+    mention, target = _curate(
+        ctx,
+        lambda svc, actor: svc.repoint_mention(
+            mention_id, entity_id, actor=actor, reason=reason, scope_global=scope_global
+        ),
     )
     click.echo(
         f"✓ Repointed mention id={mention_id} ({mention.surface_form!r}) " f"→ {entity_id} ({target.canonical_name})"
@@ -6360,16 +6328,9 @@ def entity_alias_add(ctx, entity_id, alias):
     etc.) and by the anchor expander (so e.g. "Karpathy" maps to
     person:andrej-karpathy when he's on the show).
     """
-    repo = ctx.obj.entity_repository
-    entity = repo.get_entity(entity_id)
-    if entity is None:
-        click.echo(f"❌ No entity with id={entity_id}", err=True)
-        ctx.exit(1)
-    if alias in entity.aliases:
-        click.echo(f"(alias already present)")
+    if not _curate(ctx, lambda svc, actor: svc.add_alias(entity_id, alias, actor=actor)):
+        click.echo("(alias already present)")
         return
-    entity.aliases = sorted(set(entity.aliases) | {alias})
-    repo.upsert_entity(entity)
     click.echo(f"✓ {entity_id}: aliases += {alias!r}")
 
 

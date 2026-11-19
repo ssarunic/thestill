@@ -47,6 +47,29 @@ export function describeAuditEntry(entry: AdminAuditEntry): string {
       return `Blacklisted “${String(d.surface_form)}” ↛ ${String(d.wrong_qid)}${reason}`
     case 'entity.prune_orphans':
       return `Deleted ${String(d.deleted ?? 0)} orphan entities`
+    case 'entity.alias_add':
+      return `${String(d.entity_id)}: alias “${String(d.alias)}” added`
+    case 'entity.set_visibility':
+      return `${String(d.entity_id)}: public page ${d.public ? 'on' : 'hidden'}${reason}`
+    case 'entity.correction':
+      return `Correction ${String(d.correction)} on “${String(d.surface_form)}” (${String(d.affected_mentions ?? 0)} mentions)${reason}`
+    case 'mention.drop':
+      return `Dropped mention ${String(d.mention_id)} “${String(d.surface_form)}” (${String(d.scope)})${reason}`
+    case 'mention.repoint':
+      return `Mention ${String(d.mention_id)} “${String(d.surface_form)}” → ${String(d.to_entity_id)}${reason}`
+    case 'podcast.set_hosts':
+    case 'podcast.set_recurring':
+    case 'episode.set_guests': {
+      const what = entry.action === 'podcast.set_hosts' ? 'hosts' : entry.action === 'podcast.set_recurring' ? 'recurring voices' : 'guests'
+      const target = String(d.podcast_id ?? d.episode_id)
+      return `${target}: ${what} ${JSON.stringify(d.old ?? [])} → ${JSON.stringify(d.new ?? [])}`
+    }
+    case 'podcast.set_show_link':
+      return `${String(d.podcast_id)}: ${String(d.platform)} link ${String(d.old ?? '—')} → ${String(d.new ?? '—')}`
+    case 'podcast.set_summary_profile':
+      return `${String(d.podcast_id)}: summary profile ${String(d.old ?? 'auto')} → ${String(d.new ?? 'auto')}`
+    case 'podcast.set_public_pages':
+      return `${String(d.podcast_id)}: public pages ${d.public ? 'on' : 'off'}${reason}`
     default:
       return entry.action
   }

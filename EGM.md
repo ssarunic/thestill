@@ -73,11 +73,10 @@ and `evaluation/outputs*` (gitignored data) have no contract.
   edits, import-twin folds) go through audited services acting as an `Actor`
   (`web`, `cli` or `system`); entity and transcript data is never fixed with
   raw SQL ([services](./thestill/services/EGM.md),
-  [services/abuse](./thestill/services/abuse/EGM.md)). Exception: a few CLI
-  curation commands (`mention drop / repoint`, `entity-alias-add`,
-  `set-entity-visibility`, `episode set-guests`, `podcast set-hosts /
-  set-recurring`) write the entity repository directly, with no `Actor` and
-  no audit row ([thestill](./thestill/EGM.md)).
+  [services/abuse](./thestill/services/abuse/EGM.md)). The CLI and the API
+  share `EntityCurationService` and `PodcastCurationService`, which record the
+  audit row themselves; `tests/unit/test_curation_writes_through_services.py`
+  fails if `cli.py` or a route calls a curation write directly.
 - Transcript edits are an append-only op log replayed by
   `core/transcript_edits.py:load_effective_transcript`; transcript files are
   never rewritten by an edit ([core](./thestill/core/EGM.md)).

@@ -351,6 +351,16 @@ class TestPodcastSetHostsCli:
             conn.close()
         assert row[0] == '["person:elon-musk"]'
 
+    def test_set_hosts_is_audited_as_the_cli(self, tmp_db_with_entities):
+        pid = self._podcast_id(tmp_db_with_entities)
+        assert _run(["podcast", "set-hosts", pid, "person:elon-musk"]).exit_code == 0
+        conn = sqlite3.connect(str(tmp_db_with_entities / "podcasts.db"))
+        try:
+            rows = conn.execute("SELECT actor, action FROM admin_audit_log").fetchall()
+        finally:
+            conn.close()
+        assert ("cli", "podcast.set_hosts") in rows
+
     def test_set_hosts_unknown_entity_exits_nonzero(self, tmp_db_with_entities):
         pid = self._podcast_id(tmp_db_with_entities)
         result = _run(["podcast", "set-hosts", pid, "person:nobody"])

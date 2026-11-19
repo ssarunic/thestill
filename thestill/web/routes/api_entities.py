@@ -39,12 +39,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
 from structlog import get_logger
 
-from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
+from ...core.entity_review import CorrectionError, scan_entities_for_review
 from ...core.wikidata_client import WikidataClient
 from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
 from ...models.entities import EntityRecord, MentionRole
 from ...models.user import User
 from ...repositories.entity_repository import MentionContext
+from ...services.abuse.actor import Actor
 from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import api_response
 
@@ -810,7 +811,7 @@ def get_review_queue(
 def post_correction(
     request: CorrectionRequest,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> dict:
     """Apply an admin correction (blacklist / override) and re-resolve.
 
@@ -820,12 +821,14 @@ def post_correction(
     lands on existing data. Returns a paste-ready golden-eval snippet so the
     correction can be locked in as a permanent regression guard.
     """
+    # Through the audited curation service, like every other curation write.
+    from .api_admin import _curation
+
     try:
-        result = apply_correction(
-            repo=state.entity_repository,
+        result = _curation(state).correct(
+            actor=Actor.web(admin.id),
             queue_manager=state.queue_manager,
             wikidata_client=WikidataClient(),
-            link_decisions=state.link_decision_repository,
             action=request.action,
             surface_form=request.surface_form,
             episode_id=request.episode_id,
