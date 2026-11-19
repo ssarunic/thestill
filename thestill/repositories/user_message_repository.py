@@ -47,13 +47,17 @@ class UserMessageRepository(ABC):
         channel: str,
         limit: int,
         user_id: Optional[str] = None,
+        after: Optional[Tuple[datetime, str]] = None,
     ) -> List[LifecycleFacts]:
-        """Users who may get a lifecycle message, oldest signup first.
+        """Users who may get a lifecycle message, ordered by
+        ``(created_at, user_id)``.
 
         Only accounts that are ``active``, have "Product tips by email" on
-        and were created in ``[created_from, created_to]``. With ``user_id``,
-        just that user (the send-time re-check); empty when they no longer
-        qualify.
+        and were created in ``[created_from, created_to]``. ``after`` is the
+        last row's ``(created_at, user_id)`` of the previous page (keyset
+        paging, so every candidate is reached however many there are). With
+        ``user_id``, just that user (the send-time re-check); empty when
+        they no longer qualify.
         """
 
     @abstractmethod

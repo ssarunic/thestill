@@ -39,7 +39,7 @@ opt-outs can't lose or skip a message: the next tick sees the same facts.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from structlog import get_logger
@@ -58,6 +58,15 @@ class _Skip(Exception):
     """The message no longer applies; settle it as ``skipped``."""
 
 
+class _Defer(Exception):
+    """Not now (outside the reader's hours, or a briefing email just went
+    out): put the row back, due at ``until``, without spending an attempt."""
+
+    def __init__(self, until: datetime, reason: str) -> None:
+        super().__init__(reason)
+        self.until = until
+
+
 class LifecycleEmailService:
     def __init__(
         self,
@@ -73,7 +82,7 @@ class LifecycleEmailService:
         max_attempts: int = 3,
         backoff_seconds: int = 300,
         max_per_pass: int = 50,
-        max_candidates: int = 500,
+        page_size: int = 500,
         claim_lease_seconds: int = 600,
     ) -> None:
         if max_attempts < 1:
@@ -92,7 +101,9 @@ class LifecycleEmailService:
         self._max_attempts = max_attempts
         self._backoff = backoff_seconds
         self._max_per_pass = max_per_pass
-        self._max_candidates = max_candidates
+        if page_size < 1:
+            raise ValueError("page_size must be at least 1")
+        self._page_size = page_size
         self._lease = claim_lease_seconds
 
     @property
@@ -112,17 +123,24 @@ class LifecycleEmailService:
         self.plan(now)
         self.deliver_due(now)
 
-    def candidates(self, now: datetime, *, user_id: Optional[str] = None) -> List[LifecycleFacts]:
-        """Facts for everyone the sequence could still reach at ``now``."""
+    def candidates(self, now: datetime) -> Iterator[LifecycleFacts]:
+        """Facts for everyone the sequence could still reach at ``now``,
+        page by page (keyset), so no signup is starved by older ones."""
         earliest = min(m.send_after for m in self._sequence)
         latest = max(m.expires_after for m in self._sequence)
-        return self._repo.candidates(
-            created_from=now - latest,
-            created_to=now - earliest,
-            channel=_CHANNEL,
-            limit=self._max_candidates,
-            user_id=user_id,
-        )
+        after: Optional[Tuple[datetime, str]] = None
+        while True:
+            page = self._repo.candidates(
+                created_from=now - latest,
+                created_to=now - earliest,
+                channel=_CHANNEL,
+                limit=self._page_size,
+                after=after,
+            )
+            yield from page
+            if len(page) < self._page_size:
+                return
+            after = (page[-1].created_at, page[-1].user_id)
 
     def next_message(self, facts: LifecycleFacts, now: datetime) -> Tuple[Optional[LifecycleMessage], str]:
         """The message to queue for ``facts`` now, or None with the reason.
@@ -183,6 +201,19 @@ class LifecycleEmailService:
             attempts = row.attempts + 1
             try:
                 self._send_one(row, now or datetime.now(timezone.utc))
+            except _Defer as defer:
+                # Hand the attempt back: waiting for the reader's morning is
+                # not a failed send.
+                self._repo.mark_retry(
+                    row.id, attempts=row.attempts, next_attempt_at=defer.until, error=row.last_error or ""
+                )
+                logger.info(
+                    "lifecycle_message_deferred",
+                    message_id=row.id,
+                    message_key=row.message_key,
+                    until=defer.until.isoformat(),
+                    reason=str(defer),
+                )
             except _Skip as skip:
                 self._repo.mark_skipped(row.id, reason=str(skip))
                 logger.info(
@@ -219,8 +250,17 @@ class LifecycleEmailService:
         )
         if not facts:
             raise _Skip("tips off, account inactive or deleted")
+        if now - facts[0].created_at >= message.expires_after:
+            raise _Skip("expired")
         if not message.applies(facts[0]):
             raise _Skip("no longer applies")
+        # Timing again, for a row sent later than planned (a retry, a
+        # backlog): the reader's hours and the briefing-email gap. The
+        # frequency cap needs no recheck: planning counts pending rows, so
+        # no second lifecycle message can be queued while this one waits.
+        until = self._blocked_until(facts[0], now)
+        if until is not None:
+            raise _Defer(until, "outside send window or briefing email sent recently")
         email = self._renderer.render(message, facts[0])
         self._sender.send(
             to=facts[0].email, subject=email.subject, html=email.html, text=email.text, headers=email.headers
@@ -250,12 +290,30 @@ class LifecycleEmailService:
 
     # --------------------------------------------------------------- helpers
 
-    def _in_send_window(self, facts: LifecycleFacts, now: datetime) -> bool:
-        zone = timezone.utc
+    @staticmethod
+    def _zone(facts: LifecycleFacts):
         if facts.timezone_name:
             try:
-                zone = ZoneInfo(facts.timezone_name)
+                return ZoneInfo(facts.timezone_name)
             except (KeyError, ValueError):
                 pass
+        return timezone.utc
+
+    def _in_send_window(self, facts: LifecycleFacts, now: datetime) -> bool:
         start, end = self._window
-        return start <= now.astimezone(zone).hour < end
+        return start <= now.astimezone(self._zone(facts)).hour < end
+
+    def _blocked_until(self, facts: LifecycleFacts, now: datetime) -> Optional[datetime]:
+        """The earliest time a send is allowed, or None when it is allowed now."""
+        candidates: List[datetime] = []
+        if not self._in_send_window(facts, now):
+            local = now.astimezone(self._zone(facts))
+            start = local.replace(hour=self._window[0], minute=0, second=0, microsecond=0)
+            if local.hour >= self._window[0]:
+                start += timedelta(days=1)
+            candidates.append(start.astimezone(timezone.utc))
+        if facts.last_briefing_email_at is not None:
+            quiet_until = facts.last_briefing_email_at + self._briefing_quiet
+            if quiet_until > now:
+                candidates.append(quiet_until)
+        return max(candidates) if candidates else None

@@ -219,6 +219,21 @@ def test_tips_switch_round_trips(env):
     assert env.messages.candidates(**WINDOW) == []
 
 
+def test_candidates_page_by_keyset(env):
+    ids = [env.add_user(f"u{i}@example.com", created_at=NOW - timedelta(days=2, minutes=i)).id for i in range(5)]
+    expected = list(reversed(ids))  # oldest signup first
+
+    seen, after = [], None
+    while True:
+        page = env.messages.candidates(**{**WINDOW, "limit": 2}, after=after)
+        seen += [f.user_id for f in page]
+        if len(page) < 2:
+            break
+        after = (page[-1].created_at, page[-1].user_id)
+
+    assert seen == expected
+
+
 # -- ledger ------------------------------------------------------------------
 
 

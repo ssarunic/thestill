@@ -81,13 +81,17 @@ class PostgresUserMessageRepository(UserMessageRepository):
         channel: str,
         limit: int,
         user_id: Optional[str] = None,
+        after: Optional[Tuple[datetime, str]] = None,
     ) -> List[LifecycleFacts]:
         sql = _CANDIDATES_SQL
         params: list = [channel, created_from, created_to]
         if user_id is not None:
             sql += " AND u.id = %s"
             params.append(user_id)
-        sql += " ORDER BY u.created_at LIMIT %s"
+        if after is not None:
+            sql += " AND (u.created_at > %s OR (u.created_at = %s AND u.id > %s))"
+            params.extend([after[0], after[0], after[1]])
+        sql += " ORDER BY u.created_at, u.id LIMIT %s"
         params.append(limit)
         with connect(self.dsn) as conn:
             rows = conn.execute(sql, params).fetchall()

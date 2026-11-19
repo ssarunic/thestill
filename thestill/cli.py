@@ -6183,7 +6183,7 @@ def lifecycle_plan(ctx, json_output):
     """Dry run: what the next tick would queue for each candidate, and why. Writes nothing."""
     service, _ = _lifecycle_service(ctx)
     now = datetime.now(timezone.utc)
-    rows = service.candidates(now)
+    rows = list(service.candidates(now))
     if not rows and not json_output:
         click.echo("No candidates: no recent signups with Product tips by email on.")
     for facts in rows:

@@ -357,9 +357,13 @@ Callers import every other module by its own path.
   - `plan` queues at most one message per user per pass, never an expired
     one, and none inside the frequency cap, within `briefing_quiet` of a
     briefing email, or outside the reader's send window.
+  - `candidates` pages by `(created_at, user_id)` keyset, so every
+    candidate is reached however many there are.
   - `deliver_due` re-reads the facts before sending; a reader who turned
-    tips off, is no longer active, or no longer matches the condition gets
-    the row settled as `skipped`.
+    tips off, is no longer active, or no longer matches the condition, or
+    a message past its expiry, gets the row settled as `skipped`. Outside
+    the reader's hours or within `briefing_quiet` of a briefing email, the
+    row is deferred to the next allowed time without spending an attempt.
 - `email_sender.py:make_email_sender` returns `None` for provider `none`,
   which disables delivery, and raises `ValueError` for an unknown provider.
   The transports never retry.

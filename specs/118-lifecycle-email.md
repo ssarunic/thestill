@@ -61,7 +61,12 @@ email**, separate from the usage-events switch.
   within 2 days of the last one, none within 12 hours of a briefing email,
   and only 09:00–19:00 in the briefing schedule's time zone (UTC without
   one). Expired messages are passed over, so a catch-up after an outage
-  sends only what is still current.
+  sends only what is still current. A send that happens later than
+  planned (a retry, a backlog) checks the hours and the briefing gap
+  again and waits for the next allowed time without spending a retry; a
+  message that expired while waiting is skipped. The planner pages
+  through candidates by keyset, so a large signup cohort can't starve
+  newer readers.
 - **Ships off.** The `lifecycle_email_enabled` runtime switch (env default
   `LIFECYCLE_EMAIL_ENABLED=false`). Turn it on after experiment 2 is read,
   so two activation changes don't overlap.

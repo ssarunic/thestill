@@ -52,11 +52,18 @@ class FakeRepo:
     def __init__(self, candidates: List[LifecycleFacts]):
         self.facts: Dict[str, LifecycleFacts] = {f.user_id: f for f in candidates}
         self.rows: Dict[str, UserMessage] = {}
+        self.pages = 0
 
-    def candidates(self, *, created_from, created_to, channel, limit, user_id=None):
-        out = [f for f in self.facts.values() if created_from <= f.created_at <= created_to]
+    def candidates(self, *, created_from, created_to, channel, limit, user_id=None, after=None):
+        self.pages += 1
+        out = sorted(
+            (f for f in self.facts.values() if created_from <= f.created_at <= created_to),
+            key=lambda f: (f.created_at, f.user_id),
+        )
         if user_id is not None:
             out = [f for f in out if f.user_id == user_id]
+        if after is not None:
+            out = [f for f in out if (f.created_at, f.user_id) > after]
         result = []
         for f in out:
             mine = [r for r in self.rows.values() if r.user_id == f.user_id]
@@ -267,6 +274,64 @@ def test_catch_up_sends_only_what_is_still_current():
     service.tick(NOW + timedelta(hours=1))
 
     assert [s["subject"] for s in sender.sent] == ["Ask Claude about your podcasts"]
+
+
+def test_paging_reaches_every_candidate():
+    # Codex P2: with more candidates than a page, later signups must not be
+    # starved by earlier ones that have nothing left to receive.
+    people = [facts(user_id=f"u-{i}", created_at=NOW - timedelta(hours=30 + i)) for i in range(5)]
+    repo = FakeRepo(people)
+    service = make_service(repo, page_size=2)
+
+    assert service.plan(NOW) == 5
+    assert repo.pages == 3  # 2 + 2 + 1
+
+
+def test_retry_after_hours_waits_for_the_readers_morning():
+    # Codex P2: a send that fails at 18:45 and retries at 19:00 must not go
+    # out after hours.
+    evening = datetime(2026, 11, 19, 18, 45, tzinfo=timezone.utc)
+    repo = FakeRepo([facts(created_at=evening - timedelta(hours=30))])
+    service = make_service(repo, FakeSender(fail=RuntimeError("smtp down")), backoff_seconds=900)
+    service.tick(evening)
+    [row] = repo.rows.values()
+    assert row.attempts == 1 and row.next_attempt_at == evening + timedelta(minutes=15)
+
+    sender = FakeSender()
+    service = make_service(repo, sender, backoff_seconds=900)
+    service.deliver_due(evening + timedelta(minutes=15))
+
+    assert sender.sent == []
+    assert row.status == MessageStatus.PENDING and row.attempts == 1  # the deferral spent no attempt
+    assert row.next_attempt_at == datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc)
+    service.deliver_due(datetime(2026, 11, 20, 9, 0, tzinfo=timezone.utc))
+    assert [s["subject"] for s in sender.sent] == ["Welcome to thestill"]
+
+
+def test_briefing_email_since_planning_defers_the_send():
+    repo = FakeRepo([facts()])
+    sender = FakeSender()
+    service = make_service(repo, sender)
+    service.plan(NOW)
+    repo.facts["u-1"] = replace(repo.facts["u-1"], last_briefing_email_at=NOW - timedelta(hours=1))
+
+    service.deliver_due(NOW)
+
+    [row] = repo.rows.values()
+    assert sender.sent == [] and row.status == MessageStatus.PENDING
+    assert row.next_attempt_at == NOW + timedelta(hours=11)
+
+
+def test_message_expired_while_waiting_is_skipped():
+    repo = FakeRepo([facts(created_at=NOW - timedelta(days=2, hours=23))])
+    service = make_service(repo, FakeSender())
+    service.plan(NOW)  # welcome, one hour before it expires
+    [row] = repo.rows.values()
+    row.next_attempt_at = NOW + timedelta(hours=2)  # e.g. a backoff
+
+    service.deliver_due(NOW + timedelta(hours=2))
+
+    assert row.status == MessageStatus.SKIPPED and row.last_error == "expired"
 
 
 def test_sequence_is_ordered_and_windows_are_sane():

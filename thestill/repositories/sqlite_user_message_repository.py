@@ -91,13 +91,17 @@ class SqliteUserMessageRepository(UserMessageRepository):
         channel: str,
         limit: int,
         user_id: Optional[str] = None,
+        after: Optional[Tuple[datetime, str]] = None,
     ) -> List[LifecycleFacts]:
         sql = _CANDIDATES_SQL
         params: list = [channel, created_from.isoformat(), created_to.isoformat()]
         if user_id is not None:
             sql += " AND u.id = ?"
             params.append(user_id)
-        sql += " ORDER BY u.created_at LIMIT ?"
+        if after is not None:
+            sql += " AND (u.created_at > ? OR (u.created_at = ? AND u.id > ?))"
+            params.extend([after[0].isoformat(), after[0].isoformat(), after[1]])
+        sql += " ORDER BY u.created_at, u.id LIMIT ?"
         params.append(limit)
         with self._get_connection() as conn:
             rows = conn.execute(sql, params).fetchall()
