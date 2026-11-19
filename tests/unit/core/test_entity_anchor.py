@@ -104,6 +104,16 @@ class TestDisambiguationQualifier:
         surfaces = {v.surface for v in variants}
         assert surfaces == {"Madonna (singer)", "Madonna"}
 
+    def test_a_leading_title_is_not_a_first_name_variant(self):
+        variants = expand_anchor_variants([_person("Professor Mariam Jamal-Hanjani")])
+        surfaces = {v.surface.lower() for v in variants}
+        assert "professor" not in surfaces
+        assert {"professor mariam jamal-hanjani", "mariam jamal-hanjani", "mariam", "jamal-hanjani"} <= surfaces
+
+    def test_a_title_that_is_half_the_name_still_expands(self):
+        surfaces = {v.surface for v in expand_anchor_variants([_person("Professor Green")])}
+        assert {"Professor", "Green"} <= surfaces
+
 
 class TestCompanyExpansion:
     def test_company_does_not_token_split(self):

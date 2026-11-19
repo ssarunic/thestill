@@ -31,7 +31,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.entities import EntityRecord, EntityType
+from ..models.entities import EntityRecord, EntityType, strip_honorifics
 from ..models.facts import AD_WORD
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -464,13 +464,21 @@ def _resolve_existing_person(
     share the name, the context has to single one out; otherwise the name
     is reported ambiguous and left unlinked — a missing host costs a few
     unresolved speaker mentions, a wrong one poisons thousands.
+
+    A leading title is not part of the name: "Professor Mariam
+    Jamal-Hanjani" is looked up as "Mariam Jamal-Hanjani", the row the
+    Wikidata linker makes for her, and only as written when that finds
+    nothing.
     """
-    matches = entity_repo.find_entities_by_name(name)
+    bare = strip_honorifics(name)
+    matches = entity_repo.find_entities_by_name(bare)
+    if not matches and bare != name:
+        matches = entity_repo.find_entities_by_name(name)
     if not matches:
         return None, False
     if len(matches) == 1:
         return matches[0], False
-    chosen = _pick_namesake(matches, name, hint)
+    chosen = _pick_namesake(matches, bare, hint)
     if chosen is None:
         logger.warning(
             "role_name_ambiguous",
@@ -497,7 +505,8 @@ def _resolve_or_create_person(
     authoritative; we don't want to fork a duplicate. Several existing
     entities are told apart by the bio and the description, or refused.
     If nothing matches we mint a new ``person:`` entity seeded with the
-    LLM-supplied bio as ``description``.
+    LLM-supplied bio as ``description``, named without any leading title
+    (kept as an alias, so the titled form still finds the row).
     """
     hint = " ".join(part for part in (bio, context_text) if part)
     existing, ambiguous = _resolve_existing_person(entity_repo, name, hint)
@@ -505,12 +514,13 @@ def _resolve_or_create_person(
         return None, False
     if existing is not None:
         return existing.id, False
-    new_id = f"person:{generate_slug(name)}"
+    bare = strip_honorifics(name)
+    new_id = f"person:{generate_slug(bare)}"
     record = EntityRecord(
         id=new_id,
         type=EntityType.PERSON,
-        canonical_name=name,
-        aliases=[],
+        canonical_name=bare,
+        aliases=[name] if bare != name else [],
         description=bio,
     )
     entity_repo.upsert_entity(record)
@@ -543,7 +553,7 @@ def collect_host_evidence(
     — unresolved variants and names shared by several entities contribute
     no evidence; nothing is created here.
     """
-    known = {name.casefold(): entity_id for name, entity_id in (resolved_names or {}).items()}
+    known = {_name_key(name): entity_id for name, entity_id in (resolved_names or {}).items()}
     episode_dir = path_manager.episode_facts_dir() / podcast_slug
     if not episode_dir.is_dir():
         return 0, {}
@@ -564,8 +574,8 @@ def collect_host_evidence(
             if not _is_real_person_name(name):
                 continue
             if name not in name_cache:
-                if name.casefold() in known:
-                    name_cache[name] = known[name.casefold()]
+                if _name_key(name) in known:
+                    name_cache[name] = known[_name_key(name)]
                 else:
                     existing, _ambiguous = _resolve_existing_person(entity_repo, name, context_text)
                     name_cache[name] = existing.id if existing is not None else None
@@ -834,8 +844,9 @@ def _takes_part(name: str, tally: SpeakerTally) -> bool:
 
 def _name_key(name: str) -> str:
     """A name with case, spaces and punctuation dropped, and a trailing
-    ``(disambiguator)`` too: "Scott Galloway (professor)" → "scottgalloway"."""
-    name = re.sub(r"\s*\([^)]*\)\s*$", "", name)
+    ``(disambiguator)`` too: "Scott Galloway (professor)" → "scottgalloway",
+    and a leading title: "Dr. Jane Doe" → "janedoe"."""
+    name = strip_honorifics(re.sub(r"\s*\([^)]*\)\s*$", "", name))
     return re.sub(r"[\W_]+", "", name.casefold())
 
 

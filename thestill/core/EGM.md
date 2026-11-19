@@ -148,7 +148,7 @@ Most modules are processors that receive their collaborators: an LLM provider, a
 - `entity_extractor.py:EntityExtractor`: GLiNER extraction over content segments (`extract`, `is_available`). Uses `DEFAULT_CONFIDENCE_THRESHOLD = 0.65`.
 - `entity_resolver.py:EntityResolver`: ReFinED resolver (`resolve`, `is_available`). Raises `EntityResolverBrokenError`.
 - `entity_type_rules.py:classify_entity_type`, `is_kind_of_person`, `is_ai_model`, `ALLOWED_P31_BY_TYPE`: choose the entity type from Wikidata "instance of" (P31) values.
-- `entity_review.py:scan_entities_for_review`, `apply_correction`: admin review and correction. Raises `CorrectionError`.
+- `entity_review.py:scan_entities_for_review`, `apply_correction`: admin review and correction. Raises `CorrectionError`. Review signals: `surface_extends_canonical`, `p31_says_other_type`, `name_shared_with_other_qid`, and `titled_duplicate` (a person row named with a leading title whose untitled name another person row answers to).
 - `entity_enricher.py:EntityEnricher.enrich`: builds Wikidata and Wikipedia enrichment. Does not persist it.
 - `entity_coref.py:resolve_coreferences_for_episode`: coreference within one episode.
 - `entity_anchor.py:expand_anchor_variants`, `load_anchor_entities`, `index_variants_by_surface`: host, guest and recurring name variants.
@@ -241,7 +241,7 @@ Most modules are processors that receive their collaborators: an LLM provider, a
 - `entity_enricher.py:EntityEnricher.enrich` has no side effects. The caller persists the result.
 - `entity_alias_hygiene.py:plan_alias_cleanup`: an alias equal to the canonical name up to case and accents is `redundant` (dropped) only when `lookup_key` already equates the two. Otherwise ("Jose" for "José", "Weiss" for "Weiß") it is kept as `spelling_variant`, because the SQL name lookup can find the row only through that alias.
 - `entity_alias_hygiene.py:apply_alias_cleanup`: removes aliases by `lookup_key`, not by the accent-folding `_fold`, so dropping a redundant spelling never also drops a kept accent-free variant.
-- `entity_anchor.py:_surfaces_for`: anchor surfaces include the canonical name and its `models.entities.display_name` (the name without a "(qualifier)" suffix). Person first/last-name tokens and the alias check use the bare `display_name`, so a qualifier such as "professor" never becomes a match surface. Aliases are kept when `is_alias_of` the bare name, which keeps accent-free spellings because the scan matches accents exactly.
+- `entity_anchor.py:_surfaces_for`: anchor surfaces include the canonical name and its `models.entities.display_name` (the name without a "(qualifier)" suffix; for a person, also without a leading title, `models.entities.strip_honorifics`). Person first/last-name tokens and the alias check use that bare name, so a title such as "Professor" never becomes a first-name variant and a qualifier such as "professor" never becomes a match surface. Aliases are kept when `is_alias_of` the bare name, which keeps accent-free spellings because the scan matches accents exactly.
 - `wikidata_client.py:WikidataUnavailable` means "retry later". It must never be treated as "no results".
 - `llm_provider.py:create_llm_provider`: the `openai`, `gemini`, `anthropic` and `mistral` providers need an API key. `ollama` is health-checked when it is created.
 - `llm_provider.py:GeminiProvider._build_config`: always sets the safety thresholds to `OFF`.

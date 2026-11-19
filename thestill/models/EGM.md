@@ -107,6 +107,12 @@ module path, for example `from thestill.models.podcast import Episode`.
   Wikidata-style disambiguation, so `Amazon (company)` becomes `Amazon`.
   Callers include `thestill/core/entity_anchor.py` and
   `thestill/web/routes/api_public.py`.
+- `entities.py:strip_honorifics(name)` and `entities.py:HONORIFICS`: the
+  name without its leading courtesy or academic titles, so `Professor Mariam
+  Jamal-Hanjani` becomes `Mariam Jamal-Hanjani`. Callers include
+  `thestill/services/role_linker.py`, `thestill/core/entity_anchor.py`,
+  `thestill/core/entity_review.py` and `thestill/core/entity_coref.py`
+  (`HONORIFICS` only).
 - `enrichment.py:EnrichmentUnavailable` (exception),
   `enrichment.py:EnrichmentStatus` (`pending`, `ok`, `empty`, `failed`),
   `enrichment.py:EntityFact`, `enrichment.py:EntityAffiliation`, and
@@ -240,6 +246,11 @@ module path, for example `from thestill.models.podcast import Episode`.
   an empty string for a non-empty name: when stripping leaves nothing, it
   returns the original name. `None` becomes `""`
   [`entities.py:display_name`, `entities.py:_DISAMBIGUATION`].
+- `strip_honorifics` removes leading `HONORIFICS` tokens (case-insensitive,
+  with or without a full stop) only while at least two words remain, so
+  `Dr. Dre` and `Lady Gaga` are unchanged. Royal and office titles are not
+  in `HONORIFICS`. A name with no title is returned unchanged, spacing
+  included. `None` becomes `""` [`entities.py:strip_honorifics`].
 
 ## Side Effects
 

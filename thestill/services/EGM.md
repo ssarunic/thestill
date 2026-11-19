@@ -405,7 +405,11 @@ Callers import every other module by its own path.
   `core.transcript_edits.load_effective_transcript`
   (`podcast_service.py:PodcastService._load_effective`).
 - `role_linker.py:_resolve_existing_person` leaves an ambiguous name
-  unlinked rather than guessing between namesakes. `_filter_hosts_by_evidence`
+  unlinked rather than guessing between namesakes. It looks a name up
+  without its leading title first (`models.entities.strip_honorifics`), and
+  as written only when that finds nothing. `_resolve_or_create_person`
+  mints a new person row under the untitled name, with the titled form as
+  its alias. `_filter_hosts_by_evidence`
   demotes hosts only when enough evidence files exist, and never demotes
   every host.
 - `role_linker.py:link_episode_roles`: when nothing else rewrites the

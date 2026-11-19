@@ -18,6 +18,7 @@ from thestill.models.entities import (
     MatchType,
     MentionRole,
     ResolutionStatus,
+    strip_honorifics,
 )
 
 
@@ -143,3 +144,25 @@ class TestEnumStrCompat:
             "skipped_unavailable",
             "linking_deferred",
         }
+
+
+class TestStripHonorifics:
+    def test_leading_titles_go(self):
+        assert strip_honorifics("Professor Mariam Jamal-Hanjani") == "Mariam Jamal-Hanjani"
+        assert strip_honorifics("Dr. Jane Doe") == "Jane Doe"
+        assert strip_honorifics("Prof. Dr. Jane Doe") == "Jane Doe"
+        assert strip_honorifics("sir david attenborough") == "david attenborough"
+
+    def test_a_title_that_is_half_the_name_stays(self):
+        for name in ("Dr. Dre", "Lady Gaga", "Professor Green", "Doctor Who"):
+            assert strip_honorifics(name) == name
+
+    def test_royal_and_office_titles_are_not_honorifics(self):
+        assert strip_honorifics("King Charles III") == "King Charles III"
+        assert strip_honorifics("President Joe Biden") == "President Joe Biden"
+
+    def test_an_untitled_name_comes_back_exactly(self):
+        assert strip_honorifics("John  Smith") == "John  Smith"
+        assert strip_honorifics("Drew Houston") == "Drew Houston"
+        assert strip_honorifics("") == ""
+        assert strip_honorifics(None) == ""
