@@ -2355,6 +2355,10 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
                 episode_language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
 
+                # Taken before submitting: an ElevenLabs callback can write the
+                # transcript while transcribe_audio is still returning. One second
+                # of slack absorbs filesystem mtime granularity.
+                submitted_at = time.time() - 1.0
                 # Pass episode context for Google Cloud operation persistence
                 # This allows resuming transcriptions if the app is restarted
                 transcript_data = transcriber.transcribe_audio(
@@ -2401,8 +2405,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     # In webhook mode, None means "submitted, waiting for callback"
                     # The webhook handler will save the transcript and update the database
                     click.echo("📤 Transcription submitted - waiting for webhook callback")
-                    # A second of slack absorbs filesystem mtime granularity.
-                    submitted_for_webhook[episode.id] = time.time() - 1.0
+                    submitted_for_webhook[episode.id] = submitted_at
                     transcribed_count += 1  # Count as submitted (will complete async)
                 else:
                     click.echo("❌ Transcription failed")
