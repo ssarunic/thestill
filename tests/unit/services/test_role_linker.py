@@ -1205,3 +1205,120 @@ def test_a_relink_without_a_transcript_leaves_cohosts_alone(tmp_path):
 
     assert result.refused_cohosts == []
     assert len(er.get_episode_anchors(episode_id)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Titles: "Professor Mariam Jamal-Hanjani" is Mariam Jamal-Hanjani
+# ---------------------------------------------------------------------------
+
+
+def _write_guest_facts(storage: Path, podcast_slug: str, episode_slug: str, bullet: str) -> None:
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(f"## Guest(s)\n- {bullet}\n")
+
+
+def _link_guests(tmp_path: Path, db_path: Path, episode_id: str, podcast_slug: str, episode_slug: str):
+    return link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=SqliteEntityRepository(db_path=str(db_path)),
+        path_manager=PathManager(str(tmp_path)),
+    )
+
+
+def test_a_titled_guest_adopts_the_row_the_wikidata_linker_made(tmp_path):
+    # The Rest Is Science, 2026-11-19: the facts file named the guest with
+    # her title, the linker had already made her row without it, and the
+    # role linker minted a second row beside it.
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:mariam-jamal-hanjani",
+            type=EntityType.PERSON,
+            canonical_name="Mariam Jamal-Hanjani",
+            wikidata_qid="Q117258018",
+        )
+    )
+    _write_guest_facts(
+        tmp_path,
+        podcast_slug,
+        episode_slug,
+        "Professor Mariam Jamal-Hanjani - Lung Cancer Specialist and Chief Clinician at Cancer Research UK",
+    )
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:mariam-jamal-hanjani"]
+    assert result.created_entities == []
+    assert er.get_entity("person:professor-mariam-jamal-hanjani") is None
+
+
+def test_a_titled_guest_with_no_row_is_minted_without_the_title(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Dr. Jane Doe - epidemiologist")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:jane-doe"]
+    entity = SqliteEntityRepository(db_path=str(db_path)).get_entity("person:jane-doe")
+    assert entity.canonical_name == "Jane Doe"
+    assert entity.aliases == ["Dr. Jane Doe"]
+    # A later run that finds the bare row by the titled name does not fork it.
+    again = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+    assert again.guests == ["person:jane-doe"]
+    assert again.created_entities == []
+
+
+def test_a_titled_row_that_is_another_person_is_still_a_candidate(tmp_path):
+    # Codex on #541: the untitled match must not win unseen when the
+    # titled name is a different row; the bio decides between them.
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway",
+            description="Scottish footballer",
+        )
+    )
+    er.upsert_entity(
+        EntityRecord(
+            id="person:professor-scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Professor Scott Galloway",
+            description="marketing professor at NYU Stern",
+        )
+    )
+    _write_guest_facts(
+        tmp_path, podcast_slug, episode_slug, "Professor Scott Galloway - marketing professor at NYU Stern"
+    )
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:professor-scott-galloway"]
+
+
+def test_a_titled_and_an_untitled_row_the_context_cannot_split_stay_unlinked(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    for entity_id, name in (("person:jane-doe", "Jane Doe"), ("person:dr-jane-doe", "Dr. Jane Doe")):
+        er.upsert_entity(EntityRecord(id=entity_id, type=EntityType.PERSON, canonical_name=name))
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Dr. Jane Doe - epidemiologist")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == []
+    assert result.created_entities == []
+
+
+def test_a_title_that_is_half_the_name_is_kept(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Professor Green - rapper")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:professor-green"]

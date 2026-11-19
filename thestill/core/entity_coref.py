@@ -15,7 +15,7 @@ from typing import List, Optional
 
 from structlog import get_logger
 
-from ..models.entities import EntityMention, EntityRecord, ResolutionMethod, ResolutionStatus
+from ..models.entities import HONORIFICS, EntityMention, EntityRecord, ResolutionMethod, ResolutionStatus
 from ..repositories.sqlite_entity_repository import SqliteEntityRepository
 from .entity_alias_hygiene import is_related_alias
 
@@ -105,9 +105,8 @@ _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z'\-]+")
 # alias, but matching on its first word hands every bare "president" in the
 # episode to whichever president happens to be resolved in it (88 such
 # links in one 110-episode re-resolution run, 2026-09-19).
-_TITLE_TOKENS = frozenset(
+_TITLE_TOKENS = HONORIFICS | frozenset(
     {
-        "mr", "mrs", "ms", "miss", "dr", "prof", "professor", "sir", "dame", "lord", "lady",
         "president", "vice", "senator", "governor", "congressman", "congresswoman", "secretary",
         "minister", "prime", "chancellor", "mayor", "judge", "justice", "general", "admiral",
         "captain", "colonel", "king", "queen", "prince", "princess", "pope", "saint", "st",

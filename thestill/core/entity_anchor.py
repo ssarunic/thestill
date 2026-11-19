@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List
 
-from ..models.entities import EntityRecord, EntityType, display_name
+from ..models.entities import EntityRecord, EntityType, display_name, strip_honorifics
 from .entity_alias_hygiene import is_alias_of
 
 _TOKEN_SPLIT_RE = re.compile(r"\s+")
@@ -94,7 +94,12 @@ def _surfaces_for(entity: EntityRecord) -> List[str]:
     # the entities table. Nobody says it, and the scan matches case-blind, so
     # left in it made "professor" a surname and anchored every "a professor
     # at Stanford" to the host. Variants and alias checks use the bare name.
+    #
+    # A leading title goes the same way: "Professor Mariam Jamal-Hanjani"
+    # would otherwise anchor "Professor" as her first name.
     name = display_name(entity.canonical_name)
+    if entity.type == EntityType.PERSON:
+        name = strip_honorifics(name)
     _add(entity.canonical_name)
     _add(name)
     # Only aliases that visibly name this entity. A stored alias becomes a
