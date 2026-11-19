@@ -312,6 +312,9 @@ All of these are registered inside `if static_dir.exists():` (`app.py:968`). Wit
     the UTC date. The raw IP is never stored.
 - **Task manager** (`task_manager.py:TaskManager`).
   - `start_task` returns `None` while a task of the same `TaskType` is running.
+  - Each run records the `user_id` that started it (not serialised by `to_dict`).
+    `get_latest_for_user` and `get_all_tasks(user_id=...)` let routes show a user
+    only their own runs.
   - All changes happen under a `threading.Lock`.
   - The history keeps at most `HISTORY_SIZE = 200` runs.
 - **Detecting an existing server.** `background_server.py:is_thestill_server_running`

@@ -356,3 +356,45 @@ class TestPodcastSetHostsCli:
         result = _run(["podcast", "set-hosts", pid, "person:nobody"])
         assert result.exit_code == 1
         assert "Unknown entity ids" in result.output
+
+
+class TestEntityGetJsonCap:
+    def test_json_recent_mentions_capped_at_five(self, tmp_db_with_entities):
+        repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
+        ep1 = (
+            sqlite3.connect(str(tmp_db_with_entities / "podcasts.db")).execute("SELECT id FROM episodes").fetchone()[0]
+        )
+        repo.insert_mentions(
+            [
+                EntityMention(
+                    episode_id=ep1,
+                    segment_id=seg,
+                    start_ms=seg * 10_000,
+                    end_ms=seg * 10_000 + 8_000,
+                    speaker="Scott Galloway",
+                    role=MentionRole.MENTIONED,
+                    surface_form="Musk",
+                    quote_excerpt="… Musk …",
+                    confidence=0.95,
+                    extractor="gliner:test",
+                )
+                for seg in range(10, 17)
+            ]
+        )
+        for m in repo.list_pending_mentions():
+            repo.resolve_mention(mention_id=m.id, entity_id="person:elon-musk", status="resolved")
+
+        result = _run(["entity", "get", "Elon Musk", "--json"])
+        idx = result.output.find('{\n  "entity":')
+        payload, _ = json.JSONDecoder().raw_decode(result.output[idx:])
+        assert len(payload["recent_mentions"]) == 5
+
+
+class TestPodcastDetectHostsCli:
+    def test_no_speaker_data_hint_names_a_real_command_with_the_id(self, tmp_db_with_entities):
+        missing = str(uuid.uuid4())
+        result = _run(["podcast", "detect-hosts", missing])
+        assert result.exit_code == 0
+        assert "{podcast_id}" not in result.output
+        assert "extract-entities" not in result.output
+        assert f"thestill rebuild-entities --podcast-id {missing}" in result.output

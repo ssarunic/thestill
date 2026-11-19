@@ -74,10 +74,10 @@ Commands below).
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/commands/refresh` | POST | Trigger feed refresh (all podcasts or one) |
-| `/api/commands/refresh/status` | GET | Status of the last refresh task |
-| `/api/commands/status` | GET | Status of all tracked command tasks |
+| `/api/commands/refresh/status` | GET | Status of the last refresh task (admins; others get `status: "none"`) |
+| `/api/commands/status` | GET | Status of the tracked command tasks: an admin sees all, anyone else only their own |
 | `/api/commands/add` | POST | Add new podcast `{url}` as a background task |
-| `/api/commands/add/status` | GET | Status of the last add-podcast task |
+| `/api/commands/add/status` | GET | Status of one add-podcast task (`?task_id=`), or of the caller's latest add. Another user's add is never returned (404 by id) |
 | `/api/commands/download` | POST | Queue audio download for an episode |
 | `/api/commands/downsample` | POST | Queue downsampling for an episode |
 | `/api/commands/transcribe` | POST | Queue transcription for an episode |
@@ -85,8 +85,8 @@ Commands below).
 | `/api/commands/summarize` | POST | Queue summarization for an episode |
 | `/api/commands/run-pipeline` | POST | Run full pipeline for episode |
 | `/api/commands/episode/{id}/cancel-pipeline` | POST | Cancel remaining pipeline stages for an episode |
-| `/api/commands/episode/{id}/tasks` | GET | List tasks for an episode |
-| `/api/commands/task/{id}` | GET | Get queued task status |
+| `/api/commands/episode/{id}/tasks` | GET | List tasks for an episode; empty unless the caller follows its podcast, has it in the inbox, or is an admin |
+| `/api/commands/task/{id}` | GET | Get queued task status (same access rule as the episode's tasks; 404 otherwise) |
 | `/api/commands/task/{id}/progress` | GET | Stream task progress via Server-Sent Events |
 | `/api/commands/task/{id}/progress/current` | GET | Latest progress snapshot for a task |
 | `/api/commands/queue/status` | GET | Queue counts by state |

@@ -315,13 +315,11 @@ Callers import every other module by its own path.
 
 ### Refresh
 
-- `refresh_service.py:RefreshService.refresh` with `dry_run=True` skips
-  the platform-link pass and the pipeline enqueue only.
-- Known issue: `dry_run` does not stop persistence. `refresh` always calls
-  `feed_manager.refresh_feeds` (`refresh_service.py:133`), which saves new
-  episodes and refresh state through `save_refresh_batch`
-  (`core/feed_manager.py:800`), so `thestill refresh --dry-run` still
-  writes the episodes it reports.
+- `refresh_service.py:RefreshService.refresh` with `dry_run=True` fetches
+  and reports what it would discover but writes nothing: it passes `dry_run`
+  to `feed_manager.refresh_feeds`, which skips the batch save
+  (`save_refresh_batch`) and the transcript links, and it skips the
+  platform-link pass and the pipeline enqueue.
 
 ### Inbox, briefings and email
 

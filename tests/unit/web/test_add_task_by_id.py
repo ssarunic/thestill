@@ -5,24 +5,27 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from thestill.models.user import User
 from thestill.web.routes.api_commands import get_add_podcast_status
 from thestill.web.task_manager import TaskManager, TaskType
 
+USER = User(id="user-1", email="u@example.com", name="U", is_admin=False)
+
 
 def _state(manager: TaskManager) -> SimpleNamespace:
-    return SimpleNamespace(task_manager=manager)
+    return SimpleNamespace(task_manager=manager, config=SimpleNamespace(multi_user=True))
 
 
 def test_task_id_reads_its_own_add_after_the_next_one_started():
     manager = TaskManager()
-    first = manager.start_task(TaskType.ADD_PODCAST)
+    first = manager.start_task(TaskType.ADD_PODCAST, user_id=USER.id)
     manager.fail_task(TaskType.ADD_PODCAST, "No public feed")
-    second = manager.start_task(TaskType.ADD_PODCAST)
+    second = manager.start_task(TaskType.ADD_PODCAST, user_id=USER.id)
     assert first is not None and second is not None
     assert first.task_id != second.task_id
 
-    mine = get_add_podcast_status(task_id=first.task_id, state=_state(manager))
-    latest = get_add_podcast_status(task_id=None, state=_state(manager))
+    mine = get_add_podcast_status(task_id=first.task_id, state=_state(manager), user=USER)
+    latest = get_add_podcast_status(task_id=None, state=_state(manager), user=USER)
 
     assert (mine.task_id, mine.status, mine.error) == (first.task_id, "failed", "No public feed")
     assert (latest.task_id, latest.status) == (second.task_id, "running")
@@ -30,7 +33,7 @@ def test_task_id_reads_its_own_add_after_the_next_one_started():
 
 def test_unknown_task_id_is_404():
     with pytest.raises(HTTPException) as exc:
-        get_add_podcast_status(task_id="nope", state=_state(TaskManager()))
+        get_add_podcast_status(task_id="nope", state=_state(TaskManager()), user=USER)
     assert exc.value.status_code == 404
 
 
@@ -39,7 +42,7 @@ def test_task_id_of_another_task_type_is_404():
     refresh = manager.start_task(TaskType.REFRESH)
     assert refresh is not None
     with pytest.raises(HTTPException) as exc:
-        get_add_podcast_status(task_id=refresh.task_id, state=_state(manager))
+        get_add_podcast_status(task_id=refresh.task_id, state=_state(manager), user=USER)
     assert exc.value.status_code == 404
 
 

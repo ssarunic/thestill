@@ -87,6 +87,9 @@ covers only the cross-command invariants and side effects below.
   ElevenLabs the webhook server starts first (`cli.py:1934-1966`), and on
   Google `--cancel-pending` calls `reset_pending_operations()`
   (`cli.py:2010-2025`).
+- `refresh --dry-run` fetches the feeds and reports what it would discover,
+  but saves nothing and enqueues nothing [`cli.py:refresh`,
+  `services/refresh_service.py:RefreshService.refresh`].
 - Known issue: `transcribe --dry-run --cancel-pending` on Google still
   cancels running operations and downloads finished ones
   (`cli.py:2010-2025`, `core/google_transcriber.py:reset_pending_operations`).
@@ -132,12 +135,10 @@ covers only the cross-command invariants and side effects below.
   no audit row [`cli.py:podcast_set_hosts`, `cli.py:podcast_set_recurring`,
   `cli.py:episode_set_guests`, `cli.py:set_entity_visibility`,
   `cli.py:entity_alias_add`, `cli.py:mention_drop`, `cli.py:mention_repoint`].
-- Known issue: `entity get --json` does not cap `recent_mentions` at 5; the
-  `[0:5]` slice only gates the list, which then iterates every recent mention
-  (`cli.py:5265`).
-- Known issue: the `podcast detect-hosts` no-data hint is not an f-string, so
-  it prints `{podcast_id}` literally, and it names a nonexistent
-  `extract-entities` command (`cli.py:5616`).
+- `entity get` shows at most 5 recent mentions, in both the text and the
+  `--json` output [`cli.py:entity_get`].
+- `podcast detect-hosts` with no speaker data points at
+  `thestill rebuild-entities --podcast-id <id>` [`cli.py:podcast_detect_hosts`].
 - `LOG_FORMAT=auto` resolves to `console` on a TTY, otherwise `json`; for
   `console`, `json`, `ecs` and `cloudwatch` the processor order is fixed and
   includes `log_safety_processor` [`logging.py:get_log_format`,

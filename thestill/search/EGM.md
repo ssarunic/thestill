@@ -131,12 +131,20 @@ Corpus search and the "Related episodes" rail. The package does four jobs:
 - An operator (`AND`, `OR`, `NOT`) is placed between the positives on either
   side of it, and adjacent positives are joined with `AND`. An operator with
   no positive before it or after it is dropped [`query_translator.py:_assemble`].
-- Exclusion terms are also added to `embedding_text`, so the semantic leg
-  encodes `-nvidia` as `nvidia` [`query_translator.py:translate_lexical_query`].
-- Known issue: input with only exclusions turns the first exclusion into a
-  positive term. `-nvidia` becomes the FTS expression `nvidia` and returns
-  the chunks the user tried to exclude, and `-a -b` becomes `a NOT b`
-  (`thestill/search/query_translator.py:194-198`).
+- Exclusions apply to every leg. The translator returns them as
+  `exclude_match` (an FTS5 `OR` expression), the backend copies it into
+  `SearchFilters.exclude_match`, and `_filter_clauses` drops matching chunks
+  in the lexical, semantic and entity legs: SQLite with
+  `c.id NOT IN (SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?)`,
+  Postgres with `NOT (c.text_tsv @@ websearch_to_tsquery(...))`
+  [`query_translator.py:translate_lexical_query`,
+  `sqlite_vec_client.py:SqliteVecBackend._filter_clauses`,
+  `pgvector_client.py:PgVectorBackend._filter_clauses`].
+- Excluded words are never encoded into `embedding_text`.
+- A query with only exclusions (`-nvidia`) has nothing to search for: the
+  translator returns empty `fts_match` and `embedding_text`, and `search`
+  returns `[]` in every mode [`sqlite_vec_client.py:SqliteVecBackend.search`,
+  `pgvector_client.py:PgVectorBackend.search`].
 - `embedding_dim_for` raises `KeyError` for an unknown model rather than
   guessing a dimension [`base.py:embedding_dim_for`].
 - Related rail [`related_builder.py:build_related_episodes`,

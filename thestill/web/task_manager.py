@@ -91,6 +91,9 @@ class Task:
     # Names this run, so a caller can read *its* outcome even after the next
     # run of the same type has replaced it as the current task.
     task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Who started this run. Only that user or an admin may read its status
+    # (routes/api_commands.py); never serialised by ``to_dict``.
+    user_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert task to dictionary for JSON serialization."""
@@ -127,13 +130,14 @@ class TaskManager:
 
     HISTORY_SIZE = 200
 
-    def start_task(self, task_type: TaskType, message: str = "") -> Optional[Task]:
+    def start_task(self, task_type: TaskType, message: str = "", *, user_id: Optional[str] = None) -> Optional[Task]:
         """
         Attempt to start a new task of the given type.
 
         Args:
             task_type: Type of task to start
             message: Optional initial status message
+            user_id: The user starting the run (recorded for read access)
 
         Returns:
             Task object if started successfully, None if task already running
@@ -149,6 +153,7 @@ class TaskManager:
                 status=TaskStatus.RUNNING,
                 started_at=now_utc(),
                 message=message or f"Starting {task_type.value}...",
+                user_id=user_id,
             )
             self._tasks[task_type] = task
             self._history[task.task_id] = task
@@ -234,6 +239,18 @@ class TaskManager:
         with self._lock:
             return self._history.get(task_id)
 
+    def get_latest_for_user(self, task_type: TaskType, user_id: str) -> Optional[Task]:
+        """The most recent run of ``task_type`` started by ``user_id``.
+
+        Returns:
+            Task object if one is among the last ``HISTORY_SIZE`` runs, None otherwise
+        """
+        with self._lock:
+            for task in reversed(self._history.values()):
+                if task.task_type == task_type and task.user_id == user_id:
+                    return task
+            return None
+
     def is_running(self, task_type: TaskType) -> bool:
         """
         Check if a task of the given type is currently running.
@@ -248,15 +265,22 @@ class TaskManager:
             task = self._tasks.get(task_type)
             return task is not None and task.status == TaskStatus.RUNNING
 
-    def get_all_tasks(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_tasks(self, *, user_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """
         Get status of all tracked tasks.
+
+        Args:
+            user_id: When given, only the current tasks this user started.
 
         Returns:
             Dictionary mapping task type names to their status dictionaries
         """
         with self._lock:
-            return {task_type.value: task.to_dict() for task_type, task in self._tasks.items()}
+            return {
+                task_type.value: task.to_dict()
+                for task_type, task in self._tasks.items()
+                if user_id is None or task.user_id == user_id
+            }
 
 
 # Global singleton instance for the web server
