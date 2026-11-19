@@ -1871,6 +1871,58 @@ def cleanup(ctx, dry_run):
         click.echo(f"\n✓ Cleanup complete - deleted {total_files} file(s), updated {db_updates} episode(s)")
 
 
+def _wait_for_webhook_transcripts(
+    *,
+    repository,
+    pending_ops_repository,
+    submitted: dict,
+    echo=click.echo,
+    sleep=time.sleep,
+    poll_seconds: float = 2.0,
+) -> tuple:
+    """Wait until every submitted ElevenLabs job has called back.
+
+    Waits on stored state rather than an in-process tracker, so it finishes
+    whichever process receives the callback: this CLI's own webhook server or
+    an already running ``thestill server``. An episode is settled when the
+    webhook has removed its ElevenLabs pending operation, or when its raw
+    transcript differs from the one it had at submission (a callback that beat
+    the pending-operation write).
+
+    Args:
+        submitted: episode_id -> raw_transcript_path before submission.
+
+    Returns:
+        (delivered, failed) episode-id lists; failed means the callback came
+        but no new raw transcript was saved.
+    """
+
+    def raw_path(episode_id):
+        found = repository.get_episode(episode_id)
+        return found[1].raw_transcript_path if found else None
+
+    def settled(episode_id):
+        if raw_path(episode_id) != submitted[episode_id] and raw_path(episode_id):
+            return True
+        return not any(op.provider == "elevenlabs" for op in pending_ops_repository.list_by_episode(episode_id))
+
+    waiting = list(submitted)
+    delivered, failed = [], []
+    last_reported = None
+    while waiting:
+        for episode_id in list(waiting):
+            if settled(episode_id):
+                waiting.remove(episode_id)
+                new_path = raw_path(episode_id)
+                (delivered if new_path and new_path != submitted[episode_id] else failed).append(episode_id)
+        if waiting:
+            if len(waiting) != last_reported:
+                echo(f"   {len(waiting)} webhook callback(s) still pending...")
+                last_reported = len(waiting)
+            sleep(poll_seconds)
+    return delivered, failed
+
+
 @main.command()
 @click.argument("audio_path", type=click.Path(exists=True), required=False)
 @click.option("--downsample", is_flag=True, help="Enable audio downsampling (16kHz, mono, 16-bit)")
@@ -2206,6 +2258,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     # Transcribe episodes
     transcribed_count = 0
     total_audio_seconds = 0  # Track total audio duration for speed calculation
+    # episode_id -> raw_transcript_path at submission (webhook mode)
+    submitted_for_webhook: dict = {}
     start_time = time.time()
 
     # Progress bar wrapper (episodes already flat and sorted)
@@ -2338,6 +2392,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     # In webhook mode, None means "submitted, waiting for callback"
                     # The webhook handler will save the transcript and update the database
                     click.echo("📤 Transcription submitted - waiting for webhook callback")
+                    submitted_for_webhook[episode.id] = episode.raw_transcript_path
                     transcribed_count += 1  # Count as submitted (will complete async)
                 else:
                     click.echo("❌ Transcription failed")
@@ -2357,36 +2412,28 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         click.echo(f"✓ {transcribed_count} episode(s) submitted in {format_duration(total_time)} ({total_time:.0f}s)")
         click.echo("")
 
-        # Wait for all webhook callbacks to complete
-        from thestill.webhook import get_tracker
-
-        tracker = get_tracker()
-
-        if tracker.pending_count > 0:
-            click.echo(f"   Waiting for {tracker.pending_count} webhook callback(s)...")
+        # Wait for every callback, whichever process receives it.
+        if submitted_for_webhook:
+            click.echo(f"   Waiting for {len(submitted_for_webhook)} webhook callback(s)...")
             click.echo("   (Press Ctrl+C to exit early)")
             click.echo("")
-
             try:
-                # Wait for all callbacks with progress updates
-                while not tracker.is_all_done:
-                    remaining = tracker.pending_count
-                    if remaining > 0:
-                        # Show progress every second
-                        if tracker.wait_for_all(timeout=1.0):
-                            break
-                    else:
-                        break
-
-                # All done!
+                delivered, failed = _wait_for_webhook_transcripts(
+                    repository=ctx.obj.repository,
+                    pending_ops_repository=ctx.obj.pending_ops_repository,
+                    submitted=submitted_for_webhook,
+                )
                 click.echo("🎉 All webhook callbacks received!")
-                click.echo(f"✓ {tracker.completed_count} transcript(s) delivered via webhook")
+                click.echo(f"✓ {len(delivered)} transcript(s) delivered via webhook")
+                if failed:
+                    click.echo(f"⚠️  {len(failed)} callback(s) arrived without a transcript", err=True)
             except KeyboardInterrupt:
                 click.echo("\n")
-                remaining = tracker.pending_count
-                if remaining > 0:
-                    click.echo(f"⚠️  Exiting with {remaining} pending callback(s)")
+                if getattr(ctx.obj, "started_webhook_server", False):
+                    click.echo("⚠️  Exiting with callbacks still pending")
                     click.echo("   Run 'thestill server' to continue receiving callbacks")
+                else:
+                    click.echo("⚠️  Exiting; the running thestill server will receive the pending callbacks")
         else:
             click.echo("   No pending callbacks to wait for.")
     else:
