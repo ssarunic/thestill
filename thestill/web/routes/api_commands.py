@@ -146,8 +146,11 @@ def _has_episode(state: AppState, user: User, episode_id: str) -> bool:
     for them."""
     if state.inbox_service.get_entry(user.id, episode_id) is not None:
         return True
-    episode = state.repository.get_episode(episode_id)
-    return episode is not None and state.follower_service.is_following(user.id, episode.podcast_id)
+    found = state.repository.get_episode(episode_id)  # (Podcast, Episode) or None
+    if found is None:
+        return False
+    podcast, _episode = found
+    return state.follower_service.is_following(user.id, podcast.id)
 
 
 def _can_read_queue_task(state: AppState, user: User, task) -> bool:
