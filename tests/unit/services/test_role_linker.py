@@ -1272,6 +1272,49 @@ def test_a_titled_guest_with_no_row_is_minted_without_the_title(tmp_path):
     assert again.created_entities == []
 
 
+def test_a_titled_row_that_is_another_person_is_still_a_candidate(tmp_path):
+    # Codex on #541: the untitled match must not win unseen when the
+    # titled name is a different row; the bio decides between them.
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway",
+            description="Scottish footballer",
+        )
+    )
+    er.upsert_entity(
+        EntityRecord(
+            id="person:professor-scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Professor Scott Galloway",
+            description="marketing professor at NYU Stern",
+        )
+    )
+    _write_guest_facts(
+        tmp_path, podcast_slug, episode_slug, "Professor Scott Galloway - marketing professor at NYU Stern"
+    )
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:professor-scott-galloway"]
+
+
+def test_a_titled_and_an_untitled_row_the_context_cannot_split_stay_unlinked(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    for entity_id, name in (("person:jane-doe", "Jane Doe"), ("person:dr-jane-doe", "Dr. Jane Doe")):
+        er.upsert_entity(EntityRecord(id=entity_id, type=EntityType.PERSON, canonical_name=name))
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Dr. Jane Doe - epidemiologist")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == []
+    assert result.created_entities == []
+
+
 def test_a_title_that_is_half_the_name_is_kept(tmp_path):
     db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
     _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Professor Green - rapper")

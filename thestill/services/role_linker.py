@@ -466,14 +466,18 @@ def _resolve_existing_person(
     unresolved speaker mentions, a wrong one poisons thousands.
 
     A leading title is not part of the name: "Professor Mariam
-    Jamal-Hanjani" is looked up as "Mariam Jamal-Hanjani", the row the
-    Wikidata linker makes for her, and only as written when that finds
-    nothing.
+    Jamal-Hanjani" also finds "Mariam Jamal-Hanjani", the row the Wikidata
+    linker makes for her. The name is looked up both untitled and as
+    written, and the rows either finds are candidates together, so a
+    titled row that is a different person from the untitled one is told
+    apart by the context like any other namesake, never skipped. A row that
+    answers to both forms (its alias is the titled name) counts once.
     """
     bare = strip_honorifics(name)
     matches = entity_repo.find_entities_by_name(bare)
-    if not matches and bare != name:
-        matches = entity_repo.find_entities_by_name(name)
+    if bare != name:
+        seen = {m.id for m in matches}
+        matches = [*matches, *(m for m in entity_repo.find_entities_by_name(name) if m.id not in seen)]
     if not matches:
         return None, False
     if len(matches) == 1:
