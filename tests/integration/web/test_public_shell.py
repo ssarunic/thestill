@@ -252,39 +252,43 @@ def _facts(entity_id, entity_type, said=0, about=0, episodes=1, qid=None, instan
     }
 
 
+PUBLIC_SHOW_ID = "11111111-1111-1111-1111-111111111111"
+
+
 def test_sitemap_lists_a_retyped_entity_over_an_empty_row(site, app_state, monkeypatch):
-    """``company:mistral-ai`` is an empty leftover; the re-typed
-    ``topic:mistral-ai`` (now a company) has the mentions, so the page shows
-    it and the sitemap lists its URL."""
+    """``person:jane-doe`` is an empty leftover; the re-typed
+    ``company:jane-doe`` (now a person, the show's host) has the mentions,
+    so the page shows it and the sitemap lists its URL once."""
     from thestill.models.entities import EntityMention, EntityRecord, EntityType, MentionRole
     from thestill.repositories import public_quotes
 
     _seed(app_state)
     repo = app_state.entity_repository
-    repo.upsert_entity(EntityRecord(id="company:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI"))
+    repo.upsert_entity(EntityRecord(id="person:jane-doe", type=EntityType.PERSON, canonical_name="Jane Doe"))
     repo.upsert_entity(
-        EntityRecord(id="topic:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI", wikidata_qid="Q1")
+        EntityRecord(id="company:jane-doe", type=EntityType.PERSON, canonical_name="Jane Doe", wikidata_qid="Q1")
     )
     repo.insert_mentions(
         [
             EntityMention(
-                entity_id="topic:mistral-ai",
+                entity_id="company:jane-doe",
                 episode_id="00000000-0000-0000-0000-000000000001",
                 segment_id=1,
                 start_ms=100_000,
                 end_ms=104_000,
                 role=MentionRole.MENTIONED,
-                surface_form="Mistral",
-                quote_excerpt="Mistral shipped a model.",
+                surface_form="Jane",
+                quote_excerpt="Jane shipped a model.",
                 confidence=0.9,
                 extractor="gliner:test",
             )
         ]
     )
-    rows = [_facts("topic:mistral-ai", "company", about=12)]
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["company:jane-doe"])
+    rows = [_facts("company:jane-doe", "person", about=12)]
     monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
-    assert body.count("https://thestill.test/entities/company/mistral-ai</loc>") == 1
+    assert body.count("https://thestill.test/entities/person/jane-doe</loc>") == 1
 
 
 def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkeypatch):
@@ -293,24 +297,56 @@ def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkey
     from thestill.models.entities import EntityRecord, EntityType
     from thestill.repositories import public_quotes
 
+    _seed(app_state)
     repo = app_state.entity_repository
     for entity_id, kind in (
-        ("topic:islam", EntityType.TOPIC),
-        ("person:islam", EntityType.TOPIC),  # a given name, re-typed to topic
+        ("person:ali", EntityType.PERSON),
+        ("topic:ali", EntityType.PERSON),  # re-typed to a person, a rival for person/ali
         ("company:abraham-pais", EntityType.PERSON),  # re-typed, no rival
     ):
         repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:ali", "topic:ali", "company:abraham-pais"])
     rows = [
-        _facts("person:islam", "topic", about=15),
-        _facts("topic:islam", "topic", about=10),
+        _facts("topic:ali", "person", said=15),
+        _facts("person:ali", "person", said=10),
         _facts("company:abraham-pais", "person", said=5),
     ]
     monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
-    assert body.count("https://thestill.test/entities/topic/islam</loc>") == 1
+    assert body.count("https://thestill.test/entities/person/ali</loc>") == 1
     assert "https://thestill.test/entities/person/abraham-pais</loc>" in body
     # The loser is dropped, not listed under its stale prefix either.
-    assert "/entities/person/islam" not in body
+    assert "/entities/topic/ali" not in body
+
+
+def test_sitemap_lists_only_people_with_a_role(site, app_state, monkeypatch):
+    """Spec #105 decision 3 (2026-11-20): topics, companies, products and
+    people only talked about stay out of the sitemap, however much they
+    are discussed; a host is listed."""
+    from thestill.models.entities import EntityRecord, EntityType
+    from thestill.repositories import public_quotes
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    for entity_id, kind in (
+        ("person:the-host", EntityType.PERSON),
+        ("person:only-mentioned", EntityType.PERSON),
+        ("topic:chips", EntityType.TOPIC),
+        ("company:nvidia", EntityType.COMPANY),
+    ):
+        repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:the-host"])
+    rows = [
+        _facts("person:the-host", "person", said=1),
+        _facts("person:only-mentioned", "person", said=20, about=40, episodes=9),
+        _facts("topic:chips", "topic", about=200, episodes=30),
+        _facts("company:nvidia", "company", about=90, episodes=12),
+    ]
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
+    body = site.get("/sitemap.xml").text
+    assert "https://thestill.test/entities/person/the-host</loc>" in body
+    for absent in ("only-mentioned", "/entities/topic/", "/entities/company/"):
+        assert absent not in body
 
 
 def test_sitemap_lists_exactly_the_public_pages(site, app_state):

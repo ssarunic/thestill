@@ -238,13 +238,6 @@ class PublicVisibility:
 # Spec #105 decision 3 — which entity pages are indexed
 # ---------------------------------------------------------------------------
 
-#: The entity speaks: this many quotes said (or a guest or host role).
-INDEX_MIN_SAID = 5
-#: It is discussed in depth: this many quotes about it.
-INDEX_MIN_ABOUT = 10
-#: It is discussed widely: this many public episodes and quotes in total.
-INDEX_WIDE_EPISODES = 2
-INDEX_WIDE_QUOTES = 5
 HUMAN_QID = "Q5"
 
 
@@ -276,25 +269,28 @@ def instance_of_list(value: Any) -> Tuple[str, ...]:
 
 
 def entity_is_indexable(facts: EntityIndexFacts, noindex: Collection[str] = ()) -> bool:
-    """The value test and the type test of spec #105 decision 3.
+    """Spec #105 decision 3, revised 2026-11-20: only people who take part
+    are indexed.
 
-    Value (any one): the entity speaks (``INDEX_MIN_SAID`` quotes said, or a
-    guest or host role); it is discussed in depth (``INDEX_MIN_ABOUT``
-    quotes about it); or widely (``INDEX_WIDE_EPISODES`` episodes and
-    ``INDEX_WIDE_QUOTES`` quotes in total). Type: a person whose Wikidata
-    item is known not to be a human (Q5) fails, and so does a thing that
-    is one. ``noindex`` is the operator's list for what the rule misses.
+    A page is indexed when it is a person with a role: a host, a recurring
+    voice or a guest of a public episode. Topic, company and product pages,
+    and people who are only talked about, stay public (readers follow them
+    from episode pages) but carry ``noindex`` and leave the sitemap. They
+    were three quarters of the sitemap and a twentieth of the search
+    clicks, and after the 2026-11-10 site-wide drop the thin ones are the
+    likeliest drag on how Google rates the site. A role is the test, not
+    quotes said: a sample of people without one found none with five.
+
+    Type: a person whose Wikidata item is known not to be a human (Q5)
+    fails. ``noindex`` is the operator's list for what the rule misses.
     """
     if facts.entity_id in noindex:
         return False
-    if facts.wikidata_qid and facts.instance_of:
-        human = HUMAN_QID in facts.instance_of
-        if (facts.entity_type == "person") != human:
-            return False
-    speaks = facts.said >= INDEX_MIN_SAID or facts.has_role
-    in_depth = facts.about >= INDEX_MIN_ABOUT
-    widely = facts.episodes >= INDEX_WIDE_EPISODES and facts.said + facts.about >= INDEX_WIDE_QUOTES
-    return speaks or in_depth or widely
+    if facts.entity_type != "person" or not facts.has_role:
+        return False
+    if facts.wikidata_qid and facts.instance_of and HUMAN_QID not in facts.instance_of:
+        return False
+    return True
 
 
 def entity_noindex_ids(state: "AppState") -> Set[str]:
