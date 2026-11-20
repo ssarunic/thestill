@@ -135,6 +135,8 @@ def _seed(app_state) -> None:
         for ep in podcast.episodes:
             if ep.summary_preview is not None:
                 app_state.repository.set_episode_summary_preview(ep.id, ep.summary_preview)
+                # Fully processed: entities extracted, so the page is indexable.
+                app_state.repository.update_entity_extraction_status(episode_id=ep.id, status="complete")
     app_state.repository.set_podcast_public_pages(hidden.id, False)
 
 

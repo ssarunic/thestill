@@ -970,13 +970,16 @@ def handle_summarize(task: Task, state: "AppState") -> None:
         # only on the actual NULL → set transition.
         if state.repository.mark_episode_published(episode.id):
             state.inbox_service.fanout_on_publish(episode.id, podcast.id)
-            _ping_indexnow_on_publish(state, podcast, episode.id)
+            # No IndexNow ping yet: the page is noindex until its entities
+            # are in, so the ping waits for resolve-entities.
 
 
 def _ping_indexnow_on_publish(state: "AppState", podcast, episode_id: str) -> None:
-    """Spec #105 Phase 4: a newly published episode with a public page goes
-    to IndexNow with its show, so Bing sees it before the next sitemap
-    crawl. Best-effort and off without ``INDEXNOW_KEY``."""
+    """Spec #105 Phase 4: an episode whose public page has just become
+    indexable goes to IndexNow with its show, so Bing sees it before the
+    next sitemap crawl. Called once entities are resolved, not at publish:
+    until then the page is ``noindex`` (``episode_is_indexable``).
+    Best-effort and off without ``INDEXNOW_KEY``."""
     from ..services.indexnow import IndexNow
 
     indexnow = IndexNow(state.config)
@@ -986,6 +989,10 @@ def _ping_indexnow_on_publish(state: "AppState", podcast, episode_id: str) -> No
         found = state.repository.get_episode(episode_id)
         episode = found[1] if found else None
         if not (episode and episode.slug and podcast.slug and (episode.summary_preview or "").strip()):
+            return
+        from ..web.public_access import PublicVisibility
+
+        if not PublicVisibility.episode_is_indexable(episode.entity_extraction_status):
             return
         if not state.repository.is_podcast_public(str(podcast.id)):
             return
@@ -1669,9 +1676,12 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
 
         if run.failure is not None:
             _retry_or_defer(task, state, episode, run.failure)
-        elif pending:
-            # A deferred episode that has now linked is no longer owed work.
-            state.repository.settle_linking_deferred(episode.id)
+        else:
+            if pending:
+                # A deferred episode that has now linked is no longer owed work.
+                state.repository.settle_linking_deferred(episode.id)
+            # Its quotes and people are in, so the page is now indexable.
+            _ping_indexnow_on_publish(state, podcast, episode.id)
 
 
 def _retry_or_defer(task: Task, state: "AppState", episode, failure: Exception) -> None:

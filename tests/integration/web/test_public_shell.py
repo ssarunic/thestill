@@ -95,7 +95,8 @@ def test_public_show_and_episode_tags(site, app_state):
     episode = site.get("/podcasts/public-show/episodes/summarised")
     assert episode.status_code == 200
     head = _head(episode.text)
-    assert "Episode 1 · Public Show" in _title(episode.text)
+    # Spec #105 search titles: what the page is, then the show; no site name.
+    assert _title(episode.text) == "Episode 1 — Public Show summary"
     assert 'content="Two hosts argue about chips."' in head
     assert '"@type":"PodcastEpisode"' in head
     assert "noindex" not in head
@@ -130,7 +131,8 @@ def test_metadata_cannot_break_out_of_the_head(site, app_state):
         )
     head = _head(site.get("/podcasts/public-show/episodes/summarised").text)
     assert "<script>alert(1)" not in head
-    assert "&lt;/title&gt;&lt;script&gt;" in head
+    # The search title drops tags from the publisher's title altogether.
+    assert "<" not in _title(head) and "alert(1)" in _title(head)
     ld = re.search(r'<script type="application/ld\+json">(.*?)</script>', head, re.S).group(1)
     assert "</" not in ld and "\\u003c/script\\u003e" in ld
 
@@ -607,3 +609,75 @@ def test_legacy_query_deep_links_move_to_the_fragment(site, app_state):
     assert site.get(episode, follow_redirects=False).status_code == 200
     assert site.get(f"{episode}?view=transcript", follow_redirects=False).status_code == 200
     assert site.get("/podcasts/public-show/episodes/nope?t=1", follow_redirects=False).status_code == 404
+
+
+def test_search_titles_name_the_guest_and_describe_the_person(site, app_state):
+    """An episode is titled by its guest when the publisher names them; a
+    person's description says who they are, not a cut quote."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:scott-galloway"])
+    repo.set_episode_guests("00000000-0000-0000-0000-000000000001", ["person:scott-galloway", "person:ed-elson"])
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET title = ?, description = ? WHERE slug = 'summarised'",
+            ("Why chips are the new oil", "Ed Elson joins to argue about chips."),
+        )
+    title = _title(site.get("/podcasts/public-show/episodes/summarised").text)
+    # The host is not a guest; the guest and the topic lead.
+    assert title == "Ed Elson: Why chips are the new oil — Public Show"
+    head = _head(site.get("/entities/person/scott-galloway").text)
+    description = re.search(r'<meta name="description" content="(.*?)"', head).group(1)
+    assert description.startswith("Scott Galloway, host of Public Show.")
+    assert "“" not in description  # no cut quote
+
+
+def test_two_episodes_with_the_same_guest_get_different_titles(site, app_state):
+    """A recurring guest without a topic that fits would give every episode
+    "<Guest> on <Show> — summary & key quotes"; within a show, titles are unique."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 1', description = 'Ed Elson joins.', summary_preview = 'A.' "
+            "WHERE id = '00000000-0000-0000-0000-000000000001'"
+        )
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 2', description = 'Ed Elson again.', summary_preview = 'B.', "
+            "summary_path = (SELECT summary_path FROM episodes WHERE id = '00000000-0000-0000-0000-000000000001') "
+            "WHERE id = '00000000-0000-0000-0000-000000000002'"
+        )
+    for episode_id in ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"):
+        repo.set_episode_guests(episode_id, ["person:ed-elson"])
+    first = _title(site.get("/podcasts/public-show/episodes/summarised").text)
+    second = _title(site.get("/podcasts/public-show/episodes/no-summary").text)
+    assert first.startswith("Ed Elson") and second.startswith("Ed Elson")
+    assert first != second
+
+
+@pytest.mark.parametrize("status", [None, "pending", "failed", "skipped_unavailable"])
+def test_an_episode_without_its_entities_is_readable_but_not_indexed(site, app_state, status):
+    """Summarised but entities not in: the page works, carries noindex and
+    is left out of the sitemap until extraction settles."""
+    _seed(app_state)
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute("UPDATE episodes SET entity_extraction_status = ? WHERE slug = 'summarised'", (status,))
+    response = site.get("/podcasts/public-show/episodes/summarised")
+    assert response.status_code == 200
+    assert 'name="robots" content="noindex"' in _head(response.text)
+    assert "/episodes/summarised" not in site.get("/sitemap.xml").text
+
+
+@pytest.mark.parametrize("status", ["complete", "linking_deferred", "skipped_legacy"])
+def test_an_episode_with_settled_entities_is_indexed(site, app_state, status):
+    _seed(app_state)
+    app_state.repository.update_entity_extraction_status(
+        episode_id="00000000-0000-0000-0000-000000000001", status=status
+    )
+    head = _head(site.get("/podcasts/public-show/episodes/summarised").text)
+    assert 'content="noindex"' not in head
+    assert "/episodes/summarised" in site.get("/sitemap.xml").text

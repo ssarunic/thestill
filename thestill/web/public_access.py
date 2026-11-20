@@ -168,6 +168,9 @@ def clear_public_caches() -> None:
         cache.clear()
 
 
+_ENTITIES_SETTLED = frozenset({"complete", "linking_deferred", "skipped_legacy"})
+
+
 class PublicVisibility:
     """The spec #94 visibility predicate, shared by every signed-out surface."""
 
@@ -208,6 +211,17 @@ class PublicVisibility:
         """Same rule as ``list_public_episode_rows``: a stored, non-empty
         preview. ``N/A`` summaries have no gist section, so no preview."""
         return bool(episode.summary_path) and bool((episode.summary_preview or "").strip())
+
+    @staticmethod
+    def episode_is_indexable(entity_extraction_status: Optional[str]) -> bool:
+        """A public episode goes to search only once its entities are in:
+        a page crawled between summary and extraction has no quotes or
+        people, and that thin copy is what a search engine keeps. Settled
+        is ``complete``, ``linking_deferred`` (mentions found, Wikidata link
+        owed) or ``skipped_legacy`` (never eligible). ``pending``, never
+        run, ``failed`` and ``skipped_unavailable`` are owed work: the page
+        stays readable but carries ``noindex`` and stays out of the sitemap."""
+        return entity_extraction_status in _ENTITIES_SETTLED
 
     def episode_is_public(self, podcast_id: str, episode: "Episode") -> bool:
         return bool(episode.slug) and self.has_real_summary(episode) and self.podcast_is_public(podcast_id)
