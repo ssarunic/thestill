@@ -54,6 +54,7 @@ from .public_access import (
     has_valid_session,
     instance_of_list,
 )
+from .search_titles import episode_search_title, lead_with_full_name, person_search_description, plain_text
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -239,6 +240,10 @@ def render_head(tags: HeadTags, base_url: Optional[str]) -> str:
     lines = [f"<title>{e(tags.title)}</title>", f'<meta name="description" content="{e(tags.description)}" />']
     if not tags.index:
         lines.append('<meta name="robots" content="noindex" />')
+    else:
+        # Let Google show a large thumbnail (and use the page in Discover);
+        # without it, results get a small image or none.
+        lines.append('<meta name="robots" content="max-image-preview:large" />')
     canonical = f"{base_url}{tags.canonical_path}" if base_url and tags.canonical_path is not None else None
     if canonical:
         lines.append(f'<link rel="canonical" href="{e(canonical)}" />')
@@ -387,7 +392,8 @@ class ShellRenderer:
             title = row.get("title") or ""
             return HeadTags(
                 title=f"{title} — episode summaries · {SITE_NAME}",
-                description=_first_sentence(row.get("description")) or DEFAULT_DESCRIPTION,
+                # Publishers often send the show description as HTML.
+                description=_first_sentence(plain_text(row.get("description"))) or DEFAULT_DESCRIPTION,
                 canonical_path=f"/podcasts/{parts[1]}",
                 image=row.get("image_url"),
                 index=summarised > 0,
@@ -395,14 +401,21 @@ class ShellRenderer:
                     "@context": "https://schema.org",
                     "@type": "PodcastSeries",
                     "name": title,
-                    "description": _clip(row.get("description"), 300),
+                    "description": _clip(plain_text(row.get("description")), 300),
                     "image": row.get("image_url"),
                     "author": {"@type": "Person", "name": row.get("author")} if row.get("author") else None,
                 },
             )
+        guests = self._episode_guest_names(podcast, episode)
         return HeadTags(
-            title=f"{episode.title} · {podcast.title} · {SITE_NAME}",
-            description=_first_sentence(episode.summary_preview) or DEFAULT_DESCRIPTION,
+            title=episode_search_title(
+                episode.title,
+                podcast.title,
+                guests,
+                description=episode.description or "",
+                language=podcast.language,
+            ),
+            description=lead_with_full_name(_first_sentence(episode.summary_preview), guests) or DEFAULT_DESCRIPTION,
             canonical_path=f"/podcasts/{parts[1]}/episodes/{parts[3]}",
             og_type="article",
             image=episode.image_url or podcast.image_url,
@@ -412,6 +425,7 @@ class ShellRenderer:
                 "@type": "PodcastEpisode",
                 "name": episode.title,
                 "description": _clip(episode.summary_preview, 300),
+                "image": episode.image_url or podcast.image_url,
                 "datePublished": episode.pub_date.isoformat() if episode.pub_date else None,
                 "associatedMedia": (
                     {"@type": "MediaObject", "contentUrl": str(episode.audio_url)} if episode.audio_url else None
@@ -419,6 +433,18 @@ class ShellRenderer:
                 "partOfSeries": {"@type": "PodcastSeries", "name": podcast.title},
             },
         )
+
+    def _episode_guest_names(self, podcast, episode) -> List[str]:
+        """The episode's guests, as its page lists them (hosts left out), for
+        the search title. Three small reads, no page payload: the head is
+        built even when the page body is shed (spec #105 §4)."""
+        from .routes.api_public import episode_guest_names
+
+        try:
+            return episode_guest_names(self._state, podcast, episode)
+        except Exception:  # noqa: BLE001 - a title without guests beats no page
+            logger.warning("public_shell.episode_guests_failed", episode_id=str(episode.id), exc_info=True)
+            return []
 
     def _entity(self, entity_type: str, slug: str) -> HeadTags:
         from fastapi import HTTPException
@@ -470,7 +496,19 @@ class ShellRenderer:
             title = f"{name} — podcast quotes and appearances · {SITE_NAME}"
         else:
             title = f"{name} in podcasts — who's talking and what they said · {SITE_NAME}"
-        if featured:
+        if is_person:
+            # Who they are and where they're heard. A quote cut at 160
+            # characters read as filler in a search result.
+            roles = payload.get("roles") or {}
+            description = person_search_description(
+                name,
+                headline=enrichment.get("headline") or entity.get("description"),
+                hosts=[r["title"] for r in roles.get("hosts", [])],
+                recurring=[r["title"] for r in roles.get("recurring", [])],
+                guest_on=[g["podcast_title"] for g in roles.get("guest_episodes", [])],
+                episodes=int((payload.get("stats") or {}).get("episodes") or 0),
+            )
+        elif featured:
             description = _clip(
                 f"\u201c{featured['text']}\u201d — {featured['speaker']['name']}, {featured['podcast']['title']}"
             )

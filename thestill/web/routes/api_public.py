@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import anyio
@@ -333,11 +333,34 @@ def public_podcast_episodes_payload(
     return _podcast_episodes_cache.get_or_compute((str(row["id"]), limit, offset, visibility.fingerprint()), build)
 
 
-def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+def _episode_people_ids(state: AppState, podcast, episode) -> Tuple[List[str], List[str]]:
+    """``(host_ids, guest_ids)`` for an episode: the show's hosts and
+    recurring voices, and the episode's own people who are neither."""
     anchors = state.entity_repository.get_podcast_anchors(podcast.id)
     host_ids = list(anchors.get("hosts", [])) + list(anchors.get("recurring", []))
-    episode_ids = state.entity_repository.get_episode_anchors(episode.id)
-    guest_ids = [i for i in episode_ids if i not in set(host_ids)]
+    hosts = set(host_ids)
+    guest_ids = [i for i in state.entity_repository.get_episode_anchors(episode.id) if i not in hosts]
+    return host_ids, guest_ids
+
+
+def episode_guest_names(state: AppState, podcast, episode) -> List[str]:
+    """The names of an episode's public guests who are people, in order:
+    what its page lists as guests, without building the page payload (the
+    search title needs them even when the page is shed)."""
+    _, guest_ids = _episode_people_ids(state, podcast, episode)
+    if not guest_ids:
+        return []
+    hidden = get_public_visibility(state).hidden_entity_ids()
+    by_id = {e.id: e for e in state.entity_repository.get_entities_by_ids(list(dict.fromkeys(guest_ids)))}
+    return [
+        display_name(by_id[i].canonical_name)
+        for i in dict.fromkeys(guest_ids)
+        if i in by_id and i not in hidden and _entity_type_str(by_id[i].type) == "person"
+    ]
+
+
+def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+    host_ids, guest_ids = _episode_people_ids(state, podcast, episode)
     refs = _entity_refs(state, visibility, [*host_ids, *guest_ids])
     platform_links = [
         {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
