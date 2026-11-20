@@ -425,7 +425,7 @@ class ShellRenderer:
 
         from .public_access import CacheMiss, cache_only
         from .public_prerender import get_prerenderer
-        from .routes.api_public import current_entity_path, public_entity_payload, stale_entity_path
+        from .routes.api_public import current_entity_path, merged_entity_path, public_entity_payload, stale_entity_path
 
         # The entity payload (quote counts decide noindex) is the costly part
         # of this page. Cached, it is free; uncached, it is built under the
@@ -448,7 +448,11 @@ class ShellRenderer:
         except HTTPException:
             # An entity re-typed more than once leaves URLs at a type that is
             # neither its id prefix nor its current type; send those on too.
-            moved_to = stale_entity_path(self._state, entity_type, slug)
+            # An entity merged into another (or folded by a QID dedupe) sends
+            # its URL to the keeper's page.
+            moved_to = stale_entity_path(self._state, entity_type, slug) or merged_entity_path(
+                self._state, entity_type, slug
+            )
             if moved_to:
                 return HeadTags(status_code=301, redirect_path=moved_to)
             return HeadTags(status_code=404)

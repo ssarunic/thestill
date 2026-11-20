@@ -775,7 +775,38 @@ Decided by the product owner on 2026-10-21.
    owner's Google account. Phase 0 submits the sitemap there and records
    the baseline.
 
-### Proposed entity rule (decision 3)
+### Entity rule (decision 3), revised 2026-11-20: people with a role only
+
+The rule below shipped in v1.30.0 and is now replaced. Only a **person
+with a role** (a host, a recurring voice or a guest of a public episode)
+is indexable. Topic, company and product pages, and people who are only
+talked about, keep working for readers but get `noindex` and leave the
+sitemap. The Wikidata human check and the `entity_noindex` list stay.
+
+Why:
+
+- On 2026-11-10 Google impressions fell about 95% overnight, site-wide.
+  The pages stayed indexed (118 of 120 former top pages "Submitted and
+  indexed" on 2026-11-20), so Google demoted the whole site rather than
+  dropping pages. There was no manual action and no deploy.
+- Entity pages were 4,940 of the 6,610 sitemap URLs (75%), but earned 49
+  of 200 Google clicks from 2026-10-20 to 2026-11-09. Topic, company and
+  product pages earned 7 of those. Person pages earned 42, and 31 of the
+  36 person pages with a click had a role.
+- 58% of a random sample of sitemap entity URLs were unknown to Google.
+  A small site with thousands of thin, auto-generated pages is the
+  pattern site-wide quality signals penalise.
+- A role is a better test than quotes said. In a 60-page sample, 33
+  people had a role, and none of the 27 without one had 5 quotes said.
+
+Expected size: about 1,270 person pages (55% of 2,315), down from 4,940
+entity URLs, so the sitemap goes from 6,610 to about 2,940.
+
+A merged entity's URL answers 301 to the keeper's page instead of 404
+(`entity_redirects`, alembic 0030; `thestill entity backfill-redirects`
+recovers audited merges made before it).
+
+### Original entity rule (decision 3), superseded
 
 Today an entity page is indexable (`index` robots meta and a sitemap
 entry) when its said plus about quotes reach 3. A random sample of 120

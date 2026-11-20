@@ -4053,7 +4053,7 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
             qid_merged += 1
             continue
         repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
-        repo.delete_entity(loser)
+        repo.delete_entity(loser, redirect_to=keeper)
         qid_merged += 1
     label = "would merge" if dry_run else "merge(s)"
     click.echo(f"QID dedupe: {qid_merged} {label}")
@@ -4099,7 +4099,7 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                     fuzzy_merged += 1
                     continue
                 repo.repoint_mentions(from_entity_id=loser.id, to_entity_id=keeper.id)
-                repo.delete_entity(loser.id)
+                repo.delete_entity(loser.id, redirect_to=keeper.id)
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
@@ -4373,7 +4373,7 @@ def repair_entity_types(ctx, min_mentions, min_majority_ratio, dry_run):
                 )
             )
         repo.repoint_mentions(from_entity_id=entity_id, to_entity_id=new_id)
-        repo.delete_entity(entity_id)
+        repo.delete_entity(entity_id, redirect_to=new_id)
         repaired += 1
         click.echo(f"  ✓ {entity_id} → {new_id} ({top_count}/{total})")
 
@@ -5623,6 +5623,36 @@ def entity_prune_orphans(ctx, apply, show):
         f"\n✓ {result.deleted} deleted"
         + (f" ({kept} gained a reference since the listing and were kept)" if kept else "")
     )
+
+
+@entity_group.command("backfill-redirects")
+@click.option("--apply", is_flag=True, help="Record the redirects (default: report only).")
+@click.option("--show", type=int, default=20, show_default=True, help="How many to list.")
+@click.pass_context
+@require_config
+@log_command
+def entity_backfill_redirects(ctx, apply, show):
+    """301s for entities merged before merges recorded a redirect.
+
+    A merge deletes the loser, so its public URL answered 404. Merges now
+    record where the loser went; this recovers the ones made earlier from
+    the ``entity.merge`` audit entries (oldest first, so chains end at the
+    last keeper). A loser id that exists again is skipped. Reports by
+    default; ``--apply`` writes.
+    """
+    result = _curate(ctx, lambda svc, actor: svc.backfill_merge_redirects(actor=actor, apply=apply))
+    click.echo(f"{len(result.redirects)} merged entit{'y' if len(result.redirects) == 1 else 'ies'} to redirect")
+    for loser, keeper in result.redirects[:show]:
+        click.echo(f"  {loser} → {keeper}")
+    if len(result.redirects) > show:
+        click.echo(f"  … and {len(result.redirects) - show} more")
+    if result.recreated:
+        click.echo(f"{len(result.recreated)} skipped: the loser id exists again ({', '.join(result.recreated[:5])})")
+    if not result.applied:
+        if result.redirects:
+            click.echo("\nReport only. Re-run with --apply to record them.")
+        return
+    click.echo(f"\n✓ {len(result.redirects)} recorded")
 
 
 # ---------------------------------------------------------------------------

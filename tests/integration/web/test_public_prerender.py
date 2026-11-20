@@ -660,7 +660,8 @@ def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_con
 
     app_state.abuse = build_abuse_services(app_config, make_repositories(app_config))
     _seed_people(app_state)
-    _add_quotes(app_state, 6)  # Scott Galloway now has 7 quotes said
+    # A host of the public show, so the rule indexes him.
+    app_state.entity_repository.set_podcast_hosts("11111111-1111-1111-1111-111111111111", ["person:scott-galloway"])
     head = site.get("/entities/person/scott-galloway").text.split("</head>", 1)[0]
     assert "noindex" not in head
     assert "/entities/person/scott-galloway</loc>" in site.get("/sitemap.xml").text
@@ -672,7 +673,7 @@ def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_con
     assert 'name="robots" content="noindex"' in head
     assert "/entities/person/scott-galloway</loc>" not in site.get("/sitemap.xml").text
     assert not entity_is_indexable(
-        EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, False), ["person:scott-galloway"]
+        EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, True), ["person:scott-galloway"]
     )
 
 

@@ -370,13 +370,48 @@ class PostgresEntityRepository(EntityRepository):
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_entity(r) for r in rows]
 
-    def delete_entity(self, entity_id: str) -> bool:
+    def delete_entity(self, entity_id: str, *, redirect_to: Optional[str] = None) -> bool:
         """Hard-delete an entity; ``ON DELETE CASCADE`` removes mentions
-        + cooccurrence rows pointing at it.
+        + cooccurrence rows pointing at it. ``redirect_to`` records where it
+        went, in the same transaction.
         """
         with connect(self.dsn) as conn:
             cursor = conn.execute("DELETE FROM entities WHERE id = %s", (entity_id,))
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+            if deleted and redirect_to:
+                self._record_redirect(conn, entity_id, redirect_to)
+            return deleted
+
+    def record_entity_redirect(self, from_entity_id: str, to_entity_id: str) -> None:
+        with connect(self.dsn) as conn:
+            self._record_redirect(conn, from_entity_id, to_entity_id)
+
+    @staticmethod
+    def _record_redirect(conn, from_entity_id: str, to_entity_id: str) -> None:
+        # A target that was itself folded away (and not recreated) leads on
+        # to where it went; chains are one hop, so one lookup is enough.
+        row = conn.execute(
+            "SELECT r.to_entity_id FROM entity_redirects r WHERE r.from_entity_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.from_entity_id)",
+            (to_entity_id,),
+        ).fetchone()
+        if row:
+            to_entity_id = str(row["to_entity_id"])
+        params = {"src": from_entity_id, "dst": to_entity_id}
+        conn.execute("UPDATE entity_redirects SET to_entity_id = %(dst)s WHERE to_entity_id = %(src)s", params)
+        conn.execute(
+            "INSERT INTO entity_redirects (from_entity_id, to_entity_id) VALUES (%(src)s, %(dst)s) "
+            "ON CONFLICT (from_entity_id) DO UPDATE SET to_entity_id = EXCLUDED.to_entity_id, created_at = now()",
+            params,
+        )
+        conn.execute("DELETE FROM entity_redirects WHERE from_entity_id = to_entity_id")
+
+    def get_entity_redirect(self, from_entity_id: str) -> Optional[str]:
+        with connect(self.dsn) as conn:
+            row = conn.execute(
+                "SELECT to_entity_id FROM entity_redirects WHERE from_entity_id = %s", (from_entity_id,)
+            ).fetchone()
+        return str(row["to_entity_id"]) if row else None
 
     def list_episode_ids_with_pending_mentions(
         self, *, podcast_id: Optional[str] = None, limit: Optional[int] = None

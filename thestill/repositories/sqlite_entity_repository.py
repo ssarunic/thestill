@@ -280,15 +280,52 @@ class SqliteEntityRepository(EntityRepository):
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_entity(r) for r in rows]
 
-    def delete_entity(self, entity_id: str) -> bool:
+    def delete_entity(self, entity_id: str, *, redirect_to: Optional[str] = None) -> bool:
         """Hard-delete an entity. ``ON DELETE CASCADE`` removes mentions
         + cooccurrence rows pointing at it. Returns True if a row was
         deleted (for use by the alias-merge job, which collapses the
         loser of a duplicate pair after re-pointing its mentions).
+        ``redirect_to`` records where it went, in the same transaction.
         """
         with self._get_connection() as conn:
             cursor = conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+            if deleted and redirect_to:
+                self._record_redirect(conn, entity_id, redirect_to)
+            return deleted
+
+    def record_entity_redirect(self, from_entity_id: str, to_entity_id: str) -> None:
+        with self._get_connection() as conn:
+            self._record_redirect(conn, from_entity_id, to_entity_id)
+
+    @staticmethod
+    def _record_redirect(conn, from_entity_id: str, to_entity_id: str) -> None:
+        # A target that was itself folded away (and not recreated) leads on
+        # to where it went; chains are one hop, so one lookup is enough.
+        row = conn.execute(
+            "SELECT r.to_entity_id FROM entity_redirects r WHERE r.from_entity_id = ? "
+            "AND NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.from_entity_id)",
+            (to_entity_id,),
+        ).fetchone()
+        if row:
+            to_entity_id = str(row[0])
+        conn.execute(
+            "UPDATE entity_redirects SET to_entity_id = ? WHERE to_entity_id = ?", (to_entity_id, from_entity_id)
+        )
+        conn.execute(
+            "INSERT INTO entity_redirects (from_entity_id, to_entity_id) VALUES (?, ?) "
+            "ON CONFLICT(from_entity_id) DO UPDATE SET to_entity_id = excluded.to_entity_id, "
+            "created_at = excluded.created_at",
+            (from_entity_id, to_entity_id),
+        )
+        conn.execute("DELETE FROM entity_redirects WHERE from_entity_id = to_entity_id")
+
+    def get_entity_redirect(self, from_entity_id: str) -> Optional[str]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT to_entity_id FROM entity_redirects WHERE from_entity_id = ?", (from_entity_id,)
+            ).fetchone()
+        return str(row[0]) if row else None
 
     def move_mentions(self, mention_ids: Sequence[int], *, from_entity_ids: Sequence[str], to_entity_id: str) -> int:
         ids, sources = list(mention_ids), list(from_entity_ids)
