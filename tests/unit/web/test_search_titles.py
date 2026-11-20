@@ -99,7 +99,8 @@ def test_a_long_title_is_cut_at_a_clause_and_the_show_shortened():
         "Google Invests $40B Into Anthropic, GPT 5.5 Drops, and Google Cloud Dominates | EP #252",
         "Moonshots with Peter Diamandis",
     )
-    assert title == "Google Invests $40B Into Anthropic — Moonshots summary"
+    # As many leading clauses as fit, with the show's shorter name.
+    assert title == "Google Invests $40B Into Anthropic, GPT 5.5 Drops — Moonshots"
     assert "…" not in title
 
 
@@ -260,3 +261,21 @@ def test_a_summary_led_by_a_first_name_gets_the_full_name():
     )
     # Not a guest's first name: unchanged.
     assert lead_with_full_name("The pair discuss chips.", ["Koray Kavukcuoglu"]) == "The pair discuss chips."
+
+
+def test_the_first_part_of_a_title_wins_over_a_later_one():
+    title = episode_search_title(
+        "I gave Clawdbot (now Moltbot) access to my computer, calendar, and emails: Here’s what happened",
+        "How I AI",
+    )
+    assert title.startswith("I gave Clawdbot (now Moltbot) access to my computer")
+
+
+def test_the_shows_own_name_is_not_a_topic():
+    title = episode_search_title(
+        "Cursor's $60B Deal, DeepSeek V4 & the Death of the AI Moat | This Week in AI E11",
+        "This Week in AI",
+        ["Matan Grinberg"],
+        description="With Matan Grinberg.",
+    )
+    assert "E11" not in title and "Cursor's $60B Deal" in title

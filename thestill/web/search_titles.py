@@ -69,7 +69,7 @@ _TRAILING_NUMBER_RE = re.compile(r"(?:\s+[–—-]\s+|\s*\|\s*)(?:ep(?:isode)?\.
 # Where an episode title can be cut without leaving half a phrase: after a
 # question or exclamation (kept), at a colon, a bar or a spaced dash; then,
 # inside a segment, at a comma.
-_SEGMENT_RE = re.compile(r"(?<=[?!])\s+|\s*[:|]\s+|\s+[–—-]\s+")
+_SEGMENT_RE = re.compile(r"(?<=[?!])\s+|\s*[:|]\s+|\s+[–—+-]\s+")
 _CLAUSE_END_RE = re.compile(r",\s")
 # A credit, not a topic: "with Chris Manning and Fan-yun Sun", "ft. Ray Madoff".
 _CREDIT_RE = re.compile(r"^(?:with|w/|ft\.?|feat\.?|featuring)\s", re.I)
@@ -126,16 +126,27 @@ def clean_episode_title(title: str) -> str:
     return cleaned or plain
 
 
-def _phrases(episode: str) -> List[str]:
-    """``episode``, then each segment between natural breaks (a question, a
-    colon, a bar, a dash) in order, then each segment's first clause; never
-    a fragment shorter than ``_MIN_PHRASE``."""
+def _phrases(episode: str, show: str = "") -> List[str]:
+    """``episode``, then, segment by segment in order (breaks: a question,
+    a colon, a bar, a dash, a plus), the segment and then its leading
+    clauses, longest first ("GPT-5.6, Government Staggers AI Model
+    Releases"). Earlier parts win: the first segment usually carries the
+    topic. Never a fragment shorter than ``_MIN_PHRASE``, a credit ("with
+    ...") or the show's own name ("This Week in AI E11")."""
     segments = [part.strip() for part in _SEGMENT_RE.split(episode) if part and part.strip()]
-    clauses = [_CLAUSE_END_RE.split(segment, maxsplit=1)[0].strip() for segment in segments]
+    show_key = _fold(show)[:12] if len(show) >= 6 else ""
     phrases = [episode]
-    for cut in segments + clauses:
-        if len(cut) >= _MIN_PHRASE and cut not in phrases and not _CREDIT_RE.match(cut):
-            phrases.append(cut)
+    for segment in segments:
+        clauses = [c.strip() for c in _CLAUSE_END_RE.split(segment) if c.strip()]
+        cuts = [segment] + [", ".join(clauses[:k]) for k in range(len(clauses) - 1, 0, -1)]
+        for cut in cuts:
+            if (
+                len(cut) >= _MIN_PHRASE
+                and cut not in phrases
+                and not _CREDIT_RE.match(cut)
+                and not (show_key and _fold(cut).startswith(show_key))
+            ):
+                phrases.append(cut)
     return phrases
 
 
@@ -223,7 +234,7 @@ def episode_search_title(
     not English gets no English words.
     """
     episode = clean_episode_title(episode_title)
-    phrases = _phrases(episode)
+    phrases = _phrases(episode, short_show_name(show_title))
     english = (language or "en").lower().startswith("en")
     guests = usable_guest_names(guest_names, evidence=f"{episode_title} {plain_text(description)}")
     groups = ([guests[:2], guests[:1]] if len(guests) >= 2 else [guests[:1]]) if guests else []
@@ -241,17 +252,17 @@ def episode_search_title(
 
     shows = _show_names(show_title)
     candidates: List[str] = []
-    # Guest, topic and show, with every show name, before anything drops one.
-    for show in shows:
-        for names in groups:
-            who = " & ".join(names)
-            # The whole title when it names them; a part of it that names
-            # them is usually a credential ("Dylan Patel of SemiAnalysis").
-            if all(_named_in(g, episode) for g in names) and says_more_than(episode, names):
-                candidates.append(f"{episode}{_sep(episode)}{show}")
-            for phrase in phrases:
-                if not any(_named_in(g, phrase) for g in names):
-                    candidates.append(f"{who}: {phrase}{_sep(phrase)}{show}")
+    # Guest, topic and show, before anything drops one. An earlier part of
+    # the title with a shorter show name beats a later part with the full one.
+    for names in groups:
+        who = " & ".join(names)
+        # The whole title when it names them; a part of it that names them
+        # is usually a credential ("Dylan Patel of SemiAnalysis").
+        if all(_named_in(g, episode) for g in names) and says_more_than(episode, names):
+            candidates += [f"{episode}{_sep(episode)}{show}" for show in shows]
+        for phrase in phrases:
+            if not any(_named_in(g, phrase) for g in names):
+                candidates += [f"{who}: {phrase}{_sep(phrase)}{show}" for show in shows]
     # Then guest and show: the guest's name is what most searches were.
     # Both guests with every show name before the second guest goes.
     for names in groups:
@@ -262,12 +273,15 @@ def episode_search_title(
                 candidates.append(f"{who} on {show}")
             else:
                 candidates.append(f"{who} — {show}")
-    # Then topic and show.
-    for show in shows:
-        for phrase in phrases:
+    # Then topic and show, earliest part of the title first.
+    for phrase in phrases:
+        for show in shows:
             if english:
                 candidates.append(f"{phrase}{_sep(phrase)}{show} summary")
             candidates.append(f"{phrase}{_sep(phrase)}{show}")
+    # Then the topic alone, when the show's name is too long to fit beside it.
+    for phrase in phrases[1:]:
+        candidates.append(f"{phrase} — summary" if english else phrase)
     for candidate in candidates:
         if len(candidate) <= limit:
             return candidate
