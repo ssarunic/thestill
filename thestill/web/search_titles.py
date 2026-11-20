@@ -409,7 +409,8 @@ def lead_with_full_name(description: str, guests: Sequence[str], *, limit: int =
     """The summary's first sentence, with a leading first name made the
     guest's full name: "Koray argues that ..." means nothing to someone
     searching; "Koray Kavukcuoglu argues that ..." does. Unchanged when the
-    first word is not a guest's first name, or the longer one does not fit."""
+    first word is not a guest's first name, the summary already leads with
+    the full name, or the longer one does not fit."""
     words = description.split(" ", 1)
     if len(words) < 2:
         return description
@@ -419,6 +420,9 @@ def lead_with_full_name(description: str, guests: Sequence[str], *, limit: int =
     for name in guests:
         parts = _HONORIFIC_RE.sub("", plain_text(name)).split()
         if len(parts) >= 2 and parts[0] == first_bare:
+            leading = description.split()[: len(parts)]
+            if leading[:-1] == parts[:-1] and re.match(rf"^{re.escape(parts[-1])}(’s|'s|,)?$", leading[-1]):
+                return description  # already the full name
             full = " ".join(parts) + ending
             longer = f"{full} {rest}"
             return longer if len(longer) <= limit else description

@@ -263,6 +263,20 @@ def test_a_summary_led_by_a_first_name_gets_the_full_name():
     assert lead_with_full_name("The pair discuss chips.", ["Koray Kavukcuoglu"]) == "The pair discuss chips."
 
 
+def test_a_summary_already_led_by_the_full_name_is_unchanged():
+    from thestill.web.search_titles import lead_with_full_name
+
+    assert lead_with_full_name("Koray Kavukcuoglu argues that usefulness beats benchmarks.", ["Koray Kavukcuoglu"]) == (
+        "Koray Kavukcuoglu argues that usefulness beats benchmarks."
+    )
+    assert lead_with_full_name("Koray Kavukcuoglu’s view is simple.", ["Koray Kavukcuoglu"]) == (
+        "Koray Kavukcuoglu’s view is simple."
+    )
+    assert lead_with_full_name("Chris Thompson explains gut health.", ["Dr. Chris Thompson"]) == (
+        "Chris Thompson explains gut health."
+    )
+
+
 def test_the_first_part_of_a_title_wins_over_a_later_one():
     title = episode_search_title(
         "I gave Clawdbot (now Moltbot) access to my computer, calendar, and emails: Here’s what happened",
