@@ -253,3 +253,36 @@ class TestSpec87TextScanners:
             ("episode", "0tkEdaVIsQNGKUGUKTPqeH"),
             ("show", "2MAi0BvDc6GTFvKFPXnkCL"),
         ]
+
+
+# ---------------------------------------------------------------------------
+# show_link_platform — a whole show, which "import episode" offers to follow
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        (
+            "https://open.spotify.com/show/0wjYlCNxLDgFUUjZMaP6Dx?si=POUxtrt0QjyRDmS7zphupQ&utm_source=copy-link",
+            "spotify",
+        ),
+        ("https://open.spotify.com/intl-de/show/0wjYlCNxLDgFUUjZMaP6Dx", "spotify"),
+        ("spotify:show:0wjYlCNxLDgFUUjZMaP6Dx", "spotify"),
+        ("https://open.spotify.com/episode/0wjYlCNxLDgFUUjZMaP6Dx", None),
+        ("https://spotify.link/abc123", None),  # short link: the resolver expands it
+        ("https://podcasts.apple.com/us/podcast/the-daily/id1200361736", "apple"),
+        ("https://podcasts.apple.com/us/podcast/the-daily/id1200361736?i=1000123456789", None),
+        ("https://www.youtube.com/@lexfridman", "youtube"),
+        ("https://www.youtube.com/channel/UCuAXFkgsw1L7xaCfnd5JJOw", "youtube"),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", None),
+        ("https://youtu.be/dQw4w9WgXcQ", None),
+        ("https://evil.example/?next=open.spotify.com/show/0wjYlCNxLDgFUUjZMaP6Dx", None),
+        ("https://example.com/foo.mp3", None),
+        ("", None),
+    ],
+)
+def test_show_link_platform(url, expected):
+    from thestill.utils.url_patterns import show_link_platform
+
+    assert show_link_platform(url) == expected

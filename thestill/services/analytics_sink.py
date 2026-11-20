@@ -43,8 +43,9 @@ PublicKind = Literal["landing", "top", "podcast", "episode", "entity", "share", 
 PageKindOrNone = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude", "none"]
 # Where a follow was made: the episode header's Follow (spec #117), or that
 # Follow pressed signed out and finished after sign-in; the show page (or its
-# follow carried through sign-in), the Top podcasts chart or the Add podcast
-# modal. ``episode_prompt`` was the retired first-follow panel; it stays so
+# follow carried through sign-in), the Top podcasts chart, the Add podcast
+# modal, or the Import episode dialog (a pasted show link it offered to
+# follow). ``episode_prompt`` was the retired first-follow panel; it stays so
 # past events keep their meaning.
 FollowSource = Literal[
     "episode_page",
@@ -54,6 +55,7 @@ FollowSource = Literal[
     "pending_follow",
     "top_podcasts",
     "add_podcast",
+    "import_dialog",
     "other",
 ]
 _FOLLOW_SOURCES = frozenset(FollowSource.__args__)

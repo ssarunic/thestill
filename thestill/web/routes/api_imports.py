@@ -22,13 +22,13 @@ row with ``outcome="already_in_inbox"`` (spec #88) and no second pipeline
 task.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from structlog import get_logger
 
 from ...models.user import User
 from ...services.import_service import ImportError as ImportServiceError
-from ...services.import_service import ResolverError, UnsupportedUrlError
+from ...services.import_service import ResolverError, ShowLinkError, UnsupportedUrlError
 from ..dependencies import AppState, get_app_state, require_auth
 from ..responses import api_response, bad_request
 
@@ -56,6 +56,12 @@ def create_import(
 
     try:
         result = app_state.import_service.import_url(user_id=user.id, url=url)
+    except ShowLinkError as exc:
+        # A show, not an episode: the client offers to follow ``url`` instead.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "show_link", "message": str(exc), "platform": exc.platform, "url": exc.url},
+        ) from exc
     except UnsupportedUrlError as exc:
         bad_request(str(exc))
     except ResolverError as exc:

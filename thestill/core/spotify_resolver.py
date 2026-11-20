@@ -78,6 +78,10 @@ class SpotifyResolutionError(Exception):
     never embeds exception text (spec #112); log the detail instead.
     """
 
+
+class SpotifyShowLinkError(SpotifyResolutionError):
+    """The link (perhaps behind a ``spotify.link`` short link) names a show, not an episode."""
+
     def __init__(self, message: str, *, status_code: Optional[int] = None) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -1066,9 +1070,9 @@ class SpotifyLinkResolver:
     def resolve_episode(self, url: str) -> ResolvedSpotifyEpisode:
         kind, entity_id = self.identify(url)
         if kind != "episode":
-            raise SpotifyResolutionError(
+            raise SpotifyShowLinkError(
                 "This is a Spotify show link, not an episode. To import one episode paste "
-                "its episode link; to follow the show, add it from the Podcasts page."
+                "its episode link, or follow the show instead."
             )
         meta = self._episode_metadata(entity_id, _canonical_page_url("episode", entity_id))
         logger.info(

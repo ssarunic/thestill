@@ -39,7 +39,7 @@ from structlog import get_logger
 from urllib3.util.retry import Retry
 
 from ..core.queue_manager import QueueManager, TaskStage
-from ..core.spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
+from ..core.spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError, SpotifyShowLinkError
 from ..models.inbox import InboxEntry
 from ..repositories.inbox_repository import InboxRepository
 from ..repositories.sqlite_podcast_repository import SqlitePodcastRepository
@@ -51,6 +51,7 @@ from ..utils.url_patterns import (
     is_apple_podcast_url,
     is_spotify_url,
     is_youtube_url,
+    show_link_platform,
 )
 from ..utils.youtube_errors import describe_youtube_failure
 from .abuse.access_guard import NULL_GUARD, AccessGuard
@@ -109,6 +110,26 @@ class UnsupportedUrlError(ImportError):
 
 class ResolverError(ImportError):
     """A resolver matched the URL but failed to build a CanonicalSource."""
+
+
+_SHOW_LINK_LABELS = {"spotify": "Spotify show", "apple": "Apple Podcasts show", "youtube": "YouTube channel"}
+
+
+class ShowLinkError(ResolverError):
+    """The URL names a whole show (Spotify show, Apple show page, YouTube channel), not one episode.
+
+    Callers can offer to follow ``url`` instead: "add podcast" accepts it.
+    """
+
+    def __init__(self, url: str, platform: str, message: Optional[str] = None) -> None:
+        label = _SHOW_LINK_LABELS.get(platform, "show")
+        super().__init__(
+            message
+            or f"This is a link to a {label}, not an episode. Paste one episode's link to import it, "
+            "or follow the show instead."
+        )
+        self.url = url
+        self.platform = platform
 
 
 @dataclass(frozen=True)
@@ -800,6 +821,8 @@ class SpotifyResolver:
     def resolve(self, url: str) -> CanonicalSource:
         try:
             resolved = self._resolver.resolve_episode(url)
+        except SpotifyShowLinkError as exc:
+            raise ShowLinkError(url, "spotify", str(exc)) from exc
         except SpotifyResolutionError as exc:
             raise ResolverError(str(exc)) from exc
         episode = resolved.episode
@@ -1042,6 +1065,9 @@ class ImportService:
         return episode.slug or episode.id, item.podcast.slug or item.podcast.id, state, episode.is_failed
 
     def _resolve(self, url: str) -> CanonicalSource:
+        platform = show_link_platform(url)
+        if platform is not None:
+            raise ShowLinkError(url, platform)
         for resolver in self._resolvers:
             if resolver.matches(url):
                 try:

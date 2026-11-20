@@ -76,7 +76,7 @@ import type {
   FollowSource,
 } from './types'
 
-import { ApiStatusError, apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import { ApiStatusError, ShowLinkError, apiErrorCode, apiErrorMessage, redirectIfAccountDisabled } from './errors'
 import type { DriftOutcomeBody } from '../drift/report'
 
 const API_BASE = '/api'
@@ -897,6 +897,12 @@ export async function importEpisode(request: ImportRequest): Promise<ImportRespo
   if (!response.ok) {
     const error = await response.json().catch(() => ({}))
     const message = apiErrorMessage(error, response.status)
+    if (apiErrorCode(error) === 'show_link') {
+      const detail = (error as { detail: { url?: unknown; platform?: unknown } }).detail
+      const url = typeof detail.url === 'string' && detail.url ? detail.url : request.url
+      const platform = typeof detail.platform === 'string' ? detail.platform : null
+      throw new ShowLinkError(message, url, platform)
+    }
     throw new Error(message)
   }
 

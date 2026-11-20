@@ -178,6 +178,22 @@ class TestSpotifyResolverUnit:
         assert source.pub_date == datetime(2026, 9, 8, 22, 2, tzinfo=timezone.utc)
         assert source.image_url == "https://art.example.com/sources-600.jpg"
 
+    def test_short_link_to_a_show_becomes_show_link_error(self):
+        """A ``spotify.link`` short link only shows it is a show once expanded;
+        the dialog still gets the code that lets it offer to follow."""
+        from thestill.core.spotify_resolver import SpotifyShowLinkError
+        from thestill.services.import_service import ShowLinkError
+
+        short = "https://spotify.link/AbC123"
+        resolver = SpotifyResolver(
+            link_resolver=_StubLinkResolver(SpotifyShowLinkError("This is a Spotify show link."))
+        )
+        with pytest.raises(ShowLinkError) as exc:
+            resolver.resolve(short)
+        assert exc.value.url == short
+        assert exc.value.platform == "spotify"
+        assert str(exc.value) == "This is a Spotify show link."
+
     def test_resolution_errors_become_resolver_errors_verbatim(self):
         resolver = SpotifyResolver(link_resolver=_StubLinkResolver(SpotifyResolutionError("Could not find “X”.")))
         with pytest.raises(ResolverError, match="Could not find “X”."):

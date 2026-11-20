@@ -11,10 +11,17 @@ vi.mock('../api/client', () => ({
   setInboxState: vi.fn(),
 }))
 
+vi.mock('../api/followPodcast', () => ({
+  followPodcast: vi.fn(),
+}))
+
 import { importEpisode, setInboxState } from '../api/client'
+import { followPodcast } from '../api/followPodcast'
+import { ShowLinkError } from '../api/errors'
 
 const mockImportEpisode = importEpisode as ReturnType<typeof vi.fn>
 const mockSetInboxState = setInboxState as ReturnType<typeof vi.fn>
+const mockFollowPodcast = followPodcast as ReturnType<typeof vi.fn>
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -319,5 +326,58 @@ describe('ImportEpisodeModal', () => {
     expect(await screen.findByText(/No resolver matched URL/)).toBeInTheDocument()
     // Form is back to interactive — Import button reads "Import" again.
     expect(screen.getByRole('button', { name: 'Import' })).toBeInTheDocument()
+  })
+
+  describe('a pasted show link', () => {
+    const SHOW_URL =
+      'https://open.spotify.com/show/0wjYlCNxLDgFUUjZMaP6Dx?si=POUxtrt0QjyRDmS7zphupQ&utm_source=copy-link'
+
+    async function pasteShow() {
+      mockImportEpisode.mockRejectedValue(
+        new ShowLinkError('This is a link to a Spotify show, not an episode.', SHOW_URL, 'spotify'),
+      )
+      const user = userEvent.setup()
+      const onClose = vi.fn()
+      render(<ImportEpisodeModal isOpen={true} onClose={onClose} />, { wrapper: createWrapper() })
+      await user.type(screen.getByRole('textbox'), SHOW_URL)
+      await user.click(screen.getByRole('button', { name: 'Import' }))
+      await screen.findByText('This link is a Spotify show, not an episode')
+      return { user, onClose }
+    }
+
+    it('offers to follow the show and follows it on yes', async () => {
+      mockFollowPodcast.mockResolvedValue(undefined)
+      const { user } = await pasteShow()
+
+      await user.click(screen.getByRole('button', { name: 'Follow show' }))
+
+      expect(mockFollowPodcast).toHaveBeenCalledWith(SHOW_URL, 'import_dialog')
+      expect(await screen.findByText(/following this show/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Go to Podcasts' })).toHaveAttribute('href', '/podcasts')
+    })
+
+    it('does not follow without being asked', async () => {
+      await pasteShow()
+      expect(mockFollowPodcast).not.toHaveBeenCalled()
+    })
+
+    it('keeps the offer open with the error when the follow fails', async () => {
+      mockFollowPodcast.mockRejectedValue(new Error('No public feed for this show.'))
+      const { user } = await pasteShow()
+
+      await user.click(screen.getByRole('button', { name: 'Follow show' }))
+
+      expect(await screen.findByText('No public feed for this show.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Follow show' })).toBeEnabled()
+    })
+
+    it('goes back to an empty form to paste an episode link instead', async () => {
+      const { user } = await pasteShow()
+
+      await user.click(screen.getByRole('button', { name: 'Paste an episode link' }))
+
+      expect(screen.getByRole('textbox')).toHaveValue('')
+      expect(mockFollowPodcast).not.toHaveBeenCalled()
+    })
   })
 })

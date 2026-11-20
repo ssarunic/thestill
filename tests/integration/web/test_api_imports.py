@@ -94,6 +94,31 @@ def test_post_imports_unsupported_url_returns_400(client):
     assert "No resolver" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "url, platform",
+    [
+        (
+            "https://open.spotify.com/show/0wjYlCNxLDgFUUjZMaP6Dx?si=POUxtrt0QjyRDmS7zphupQ&utm_source=copy-link",
+            "spotify",
+        ),
+        ("https://podcasts.apple.com/us/podcast/the-daily/id1200361736", "apple"),
+        ("https://www.youtube.com/@lexfridman", "youtube"),
+    ],
+)
+def test_post_imports_show_link_returns_show_link_code(client, app_state, url, platform):
+    """A show link is refused with a code and the URL, so the dialog can offer
+    to follow the show instead; nothing is written or queued."""
+    response = client.post("/api/imports", json={"url": url})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "show_link"
+    assert detail["platform"] == platform
+    assert detail["url"] == url
+    assert "not an episode" in detail["message"]
+    assert app_state.queue_manager.get_next_task(stage=TaskStage.TRANSCRIBE) is None
+
+
 def test_post_imports_empty_url_returns_400(client):
     response = client.post("/api/imports", json={"url": "   "})
     assert response.status_code == 400

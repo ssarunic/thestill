@@ -2,6 +2,8 @@ import { useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { importEpisode } from '../api/client'
+import { ShowLinkError } from '../api/errors'
+import { followPodcast } from '../api/followPodcast'
 import type { ImportPayload } from '../api/types'
 import Button, { CloseIcon } from './Button'
 import { ProgressPill } from './InboxProgress'
@@ -19,6 +21,11 @@ type ImportState =
   | { kind: 'submitting' }
   | { kind: 'success'; result: ImportPayload }
   | { kind: 'error'; message: string }
+  // The link names a whole show: offer to follow it instead of refusing.
+  | { kind: 'show_link'; url: string; platform: string | null }
+  | { kind: 'following'; url: string; platform: string | null }
+  | { kind: 'show_error'; url: string; platform: string | null; message: string }
+  | { kind: 'followed' }
 
 // The shell mounts the content only while open, so the form starts fresh on
 // every open.
@@ -48,6 +55,10 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
         // an auto-added channel appears once the user follows it.
         queryClient.invalidateQueries({ queryKey: ['inbox'] })
       } catch (err) {
+        if (err instanceof ShowLinkError) {
+          setState({ kind: 'show_link', url: err.url, platform: err.platform })
+          return
+        }
         setState({
           kind: 'error',
           message: err instanceof Error ? err.message : 'Import failed.',
@@ -56,6 +67,32 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
     },
     [url, queryClient],
   )
+
+  const handleFollow = useCallback(
+    async (showUrl: string, platform: string | null) => {
+      setState({ kind: 'following', url: showUrl, platform })
+      try {
+        await followPodcast(showUrl, 'import_dialog')
+        queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        queryClient.invalidateQueries({ queryKey: ['inbox'] })
+        setState({ kind: 'followed' })
+      } catch (err) {
+        setState({
+          kind: 'show_error',
+          url: showUrl,
+          platform,
+          message: err instanceof Error ? err.message : 'Failed to follow the show.',
+        })
+      }
+    },
+    [queryClient],
+  )
+
+  const pasteAnother = useCallback(() => {
+    setUrl('')
+    setState({ kind: 'idle' })
+  }, [])
 
 
   const submitting = state.kind === 'submitting'
@@ -85,6 +122,16 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
 
         {state.kind === 'success' ? (
           <ImportSuccess result={state.result} onClose={onClose} />
+        ) : state.kind === 'followed' ? (
+          <FollowedShow onClose={onClose} />
+        ) : state.kind === 'show_link' || state.kind === 'following' || state.kind === 'show_error' ? (
+          <ShowLinkOffer
+            platform={state.platform}
+            following={state.kind === 'following'}
+            error={state.kind === 'show_error' ? state.message : null}
+            onFollow={() => void handleFollow(state.url, state.platform)}
+            onPasteAnother={pasteAnother}
+          />
         ) : (
           <form onSubmit={handleSubmit}>
             <input
@@ -121,6 +168,67 @@ function ImportEpisodeModalContent({ onClose }: Pick<ImportEpisodeModalProps, 'o
             </div>
           </form>
         )}
+      </div>
+    </div>
+  )
+}
+
+const SHOW_LABELS: Record<string, string> = {
+  spotify: 'a Spotify show',
+  apple: 'an Apple Podcasts show',
+  youtube: 'a YouTube channel',
+}
+
+interface ShowLinkOfferProps {
+  platform: string | null
+  following: boolean
+  error: string | null
+  onFollow: () => void
+  onPasteAnother: () => void
+}
+
+// A pasted show link is most likely "I want this show": ask once, follow on
+// yes, rather than refusing and sending the reader to the Podcasts page.
+function ShowLinkOffer({ platform, following, error, onFollow, onPasteAnother }: ShowLinkOfferProps) {
+  const label = (platform && SHOW_LABELS[platform]) || 'a show'
+  return (
+    <div>
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+        <h3 className="text-sm font-medium text-gray-900">This link is {label}, not an episode</h3>
+        <p className="mt-1 text-sm text-gray-700">
+          Follow it to get its new episodes in your inbox, or paste a single episode&apos;s link
+          to import just that one.
+        </p>
+      </div>
+
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <Button variant="ghost" onClick={onPasteAnother} type="button" disabled={following}>
+          Paste an episode link
+        </Button>
+        <Button onClick={onFollow} type="button" disabled={following} autoFocus>
+          {following ? 'Following…' : 'Follow show'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function FollowedShow({ onClose }: { onClose: () => void }) {
+  return (
+    <div>
+      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+        <h3 className="text-sm font-medium text-green-900">You&apos;re following this show</h3>
+        <p className="mt-1 text-sm text-green-800">New episodes will arrive in your inbox.</p>
+      </div>
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+        <Link to="/podcasts" onClick={onClose} className={primaryLinkClass}>
+          Go to Podcasts
+        </Link>
       </div>
     </div>
   )

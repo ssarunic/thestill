@@ -320,6 +320,37 @@ def extract_spotify_entity(text: str) -> tuple[str, str] | None:
 
 
 # ---------------------------------------------------------------------------
+# Show (not episode) links
+# ---------------------------------------------------------------------------
+
+
+def show_link_platform(url: str) -> str | None:
+    """``"spotify"`` / ``"apple"`` / ``"youtube"`` when ``url`` names a whole show, else None.
+
+    A show link is one "add podcast" follows but "import episode" cannot use:
+    a Spotify ``/show/<id>``, an Apple show page with no ``?i=`` track id, or a
+    YouTube channel (``/@handle``, ``/channel/…``, ``/c/…``, ``/user/…``). By
+    shape alone, no network; ``spotify.link`` short links are left to the
+    resolver, which expands them.
+    """
+    text = (url or "").strip()
+    if not text:
+        return None
+    spotify = extract_spotify_entity(text)
+    if spotify is not None:
+        return "spotify" if spotify[0] == "show" else None
+    host = _url_host(text)
+    if host == "podcasts.apple.com" or host.endswith(".podcasts.apple.com"):
+        if APPLE_SHOW_LINK_RE.search(text) and not extract_apple_episode_id(text):
+            return "apple"
+        return None
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+        if YOUTUBE_CHANNEL_RE.search(text) and extract_youtube_video_id(text) is None:
+            return "youtube"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Audit helper
 # ---------------------------------------------------------------------------
 

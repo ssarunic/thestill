@@ -53,3 +53,17 @@ export class ApiStatusError extends Error {
     this.status = status
   }
 }
+
+// Spec #31 — an import of a whole show (Spotify show, Apple show page, YouTube
+// channel). ``url`` is what "add podcast" can follow instead.
+export class ShowLinkError extends Error {
+  readonly url: string
+  readonly platform: string | null
+
+  constructor(message: string, url: string, platform: string | null) {
+    super(message)
+    this.name = 'ShowLinkError'
+    this.url = url
+    this.platform = platform
+  }
+}

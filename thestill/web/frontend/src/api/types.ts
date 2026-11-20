@@ -668,6 +668,7 @@ export type FollowSource =
   | 'pending_follow'
   | 'top_podcasts'
   | 'add_podcast'
+  | 'import_dialog'
 
 export interface AddPodcastRequest {
   url: string
