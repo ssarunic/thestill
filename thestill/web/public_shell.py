@@ -408,7 +408,8 @@ class ShellRenderer:
             )
         guests = self._episode_guest_names(podcast, episode)
         return HeadTags(
-            title=episode_search_title(
+            title=self._show_titles(podcast).get(str(episode.id))
+            or episode_search_title(
                 episode.title,
                 podcast.title,
                 guests,
@@ -433,6 +434,17 @@ class ShellRenderer:
                 "partOfSeries": {"@type": "PodcastSeries", "name": podcast.title},
             },
         )
+
+    def _show_titles(self, podcast) -> Dict[str, str]:
+        """The show's episode titles, made unique across the show; empty when
+        they cannot be built, so the page falls back to its own title."""
+        from .routes.api_public import show_episode_titles
+
+        try:
+            return show_episode_titles(self._state, podcast)
+        except Exception:  # noqa: BLE001 - a per-episode title beats no page
+            logger.warning("public_shell.show_titles_failed", podcast_id=str(podcast.id), exc_info=True)
+            return {}
 
     def _episode_guest_names(self, podcast, episode) -> List[str]:
         """The episode's guests, as its page lists them (hosts left out), for

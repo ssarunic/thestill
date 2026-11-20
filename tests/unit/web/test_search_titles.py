@@ -279,3 +279,56 @@ def test_the_shows_own_name_is_not_a_topic():
         description="With Matan Grinberg.",
     )
     assert "E11" not in title and "Cursor's $60B Deal" in title
+
+
+# Titles are unique within a show.
+
+
+def test_a_recurring_guest_moves_on_to_the_topic():
+    from thestill.web.search_titles import assign_unique_titles, episode_title_candidates
+
+    def candidates(title):
+        return episode_title_candidates(
+            title, "Big Technology Podcast", ["Ranjan Roy"], description="Ranjan Roy of Margins joins."
+        )
+
+    titles = assign_unique_titles(
+        [
+            (
+                "old",
+                candidates("Apple After Tim Cook, OpenAI's New Mojo, Meta's Internal Tracking Escapade"),
+                "6 Nov 2026",
+            ),
+            ("new", candidates("Apple After Tim Cook, Nvidia's Wobble, and Google's Next Move"), "13 Nov 2026"),
+        ]
+    )
+    assert titles["old"] != titles["new"]
+    # The older episode keeps its title when a newer one arrives.
+    assert titles["old"] == candidates("Apple After Tim Cook, OpenAI's New Mojo, Meta's Internal Tracking Escapade")[0]
+
+
+def test_a_series_is_told_apart_by_its_part():
+    from thestill.web.search_titles import assign_unique_titles, episode_title_candidates
+
+    parts = [
+        "658. Dawn of the Samurai: The Shadow of the Sword (Part 1)",
+        "659. Dawn of the Samurai: Bloodbath at the Bridge (Part 2)",
+        "660. Dawn of the Samurai: Japan’s Greatest Warrior  (Part 3)",
+    ]
+    titles = assign_unique_titles([(t, episode_title_candidates(t, "The Rest Is History"), "") for t in parts])
+    assert len(set(titles.values())) == 3
+
+
+def test_when_every_candidate_is_taken_the_date_tells_them_apart():
+    from thestill.web.search_titles import assign_unique_titles
+
+    titles = assign_unique_titles([("a", ["Same"], "6 Nov 2026"), ("b", ["Same"], "13 Nov 2026"), ("c", ["Same"], "")])
+    assert titles == {"a": "Same", "b": "Same (13 Nov 2026)", "c": "Same (2)"}
+
+
+def test_titles_that_differ_only_by_the_wrapper_count_as_the_same():
+    from thestill.web.search_titles import assign_unique_titles
+
+    wrapped = ["X on Show — summary & key quotes", "X on Show — summary", "X on Show", "X: Topic — Show"]
+    titles = assign_unique_titles([("a", wrapped, "6 Nov 2026"), ("b", wrapped, "13 Nov 2026")])
+    assert titles == {"a": "X on Show — summary & key quotes", "b": "X: Topic — Show"}

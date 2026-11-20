@@ -632,3 +632,28 @@ def test_search_titles_name_the_guest_and_describe_the_person(site, app_state):
     description = re.search(r'<meta name="description" content="(.*?)"', head).group(1)
     assert description.startswith("Scott Galloway, host of Public Show.")
     assert "“" not in description  # no cut quote
+
+
+def test_two_episodes_with_the_same_guest_get_different_titles(site, app_state):
+    """A recurring guest without a topic that fits would give every episode
+    "<Guest> on <Show> — summary & key quotes"; within a show, titles are unique."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 1', description = 'Ed Elson joins.', summary_preview = 'A.' "
+            "WHERE id = '00000000-0000-0000-0000-000000000001'"
+        )
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 2', description = 'Ed Elson again.', summary_preview = 'B.', "
+            "summary_path = (SELECT summary_path FROM episodes WHERE id = '00000000-0000-0000-0000-000000000001') "
+            "WHERE id = '00000000-0000-0000-0000-000000000002'"
+        )
+    for episode_id in ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"):
+        repo.set_episode_guests(episode_id, ["person:ed-elson"])
+    first = _title(site.get("/podcasts/public-show/episodes/summarised").text)
+    second = _title(site.get("/podcasts/public-show/episodes/no-summary").text)
+    assert first.startswith("Ed Elson") and second.startswith("Ed Elson")
+    assert first != second

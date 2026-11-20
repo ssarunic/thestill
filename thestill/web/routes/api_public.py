@@ -359,6 +359,72 @@ def episode_guest_names(state: AppState, podcast, episode) -> List[str]:
     ]
 
 
+_show_titles_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_SHOW_TITLES_PAGE = 500
+
+
+def show_episode_titles(state: AppState, podcast) -> Dict[str, str]:
+    """``{episode_id: search title}`` for every public episode of a show,
+    no two alike (``assign_unique_titles``): a recurring guest or a series
+    would otherwise give several episodes one title. Three reads per show
+    (episodes, hosts, guest names), cached; no page payload is built."""
+    visibility = get_public_visibility(state)
+    return _show_titles_cache.get_or_compute(
+        (str(podcast.id), visibility.fingerprint()), lambda: _build_show_titles(state, visibility, podcast)
+    )
+
+
+def _date_label(moment: Optional[datetime]) -> str:
+    """ "12 Nov 2026": the last resort that tells two episodes apart."""
+    return f"{moment.day} {moment:%b %Y}" if moment else ""
+
+
+def _build_show_titles(state: AppState, visibility: PublicVisibility, podcast) -> Dict[str, str]:
+    from ..search_titles import assign_unique_titles, episode_title_candidates
+
+    rows: List[Dict[str, Any]] = []
+    while True:
+        page, total = state.repository.list_public_episode_rows(
+            podcast_id=str(podcast.id), limit=_SHOW_TITLES_PAGE, offset=len(rows)
+        )
+        rows.extend(page)
+        if not page or len(rows) >= total:
+            break
+    anchors = state.entity_repository.get_podcast_anchors(podcast.id)
+    hosts = set(anchors.get("hosts", [])) | set(anchors.get("recurring", []))
+    guest_ids = {str(r["id"]): [i for i in _json_list(r.get("guest_entity_ids")) if i not in hosts] for r in rows}
+    wanted = list(dict.fromkeys(i for ids in guest_ids.values() for i in ids))
+    hidden = visibility.hidden_entity_ids()
+    people = {
+        e.id: display_name(e.canonical_name)
+        for start in range(0, len(wanted), _SHOW_TITLES_PAGE)
+        for e in state.entity_repository.get_entities_by_ids(wanted[start : start + _SHOW_TITLES_PAGE])
+        if e.id not in hidden and _entity_type_str(e.type) == "person"
+    }
+
+    def when(row: Dict[str, Any]):
+        moment = _parse_date(row.get("pub_date"))
+        return (moment is None, moment or datetime.min.replace(tzinfo=timezone.utc), str(row["id"]))
+
+    ordered = sorted(rows, key=when)
+    return assign_unique_titles(
+        [
+            (
+                str(row["id"]),
+                episode_title_candidates(
+                    row.get("title") or "",
+                    podcast.title,
+                    [people[i] for i in guest_ids[str(row["id"])] if i in people],
+                    description=row.get("description") or "",
+                    language=getattr(podcast, "language", None),
+                ),
+                _date_label(_parse_date(row.get("pub_date"))),
+            )
+            for row in ordered
+        ]
+    )
+
+
 def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
     host_ids, guest_ids = _episode_people_ids(state, podcast, episode)
     refs = _entity_refs(state, visibility, [*host_ids, *guest_ids])

@@ -42,7 +42,7 @@ from __future__ import annotations
 import html
 import re
 import unicodedata
-from typing import Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 #: Google cuts a title at about 600 pixels: 60-65 characters of mixed case.
 TITLE_MAX = 65
@@ -214,7 +214,24 @@ def episode_search_title(
     language: Optional[str] = "en",
     limit: int = TITLE_MAX,
 ) -> str:
-    """The first of these that fits ``limit``, trying the show's full name
+    """The best title for one episode, ignoring the show's other episodes
+    (see :func:`assign_unique_titles` for those)."""
+    return episode_title_candidates(
+        episode_title, show_title, guest_names, description=description, language=language, limit=limit
+    )[0]
+
+
+def episode_title_candidates(
+    episode_title: str,
+    show_title: str,
+    guest_names: Iterable[Optional[str]] = (),
+    *,
+    description: str = "",
+    language: Optional[str] = "en",
+    limit: int = TITLE_MAX,
+) -> List[str]:
+    """Every title that fits ``limit``, best first, then the whole wording.
+    The order, trying the show's full name
     first and then its name without "with <host>":
 
     1. guest, topic and show: ``<Episode title> — <Show>`` when the whole
@@ -282,13 +299,47 @@ def episode_search_title(
     # Then the topic alone, when the show's name is too long to fit beside it.
     for phrase in phrases[1:]:
         candidates.append(f"{phrase} — summary" if english else phrase)
-    for candidate in candidates:
-        if len(candidate) <= limit:
-            return candidate
-    # Nothing fits: keep the publisher's whole wording with the shortest
-    # show name and let the result page cut it, rather than make a fragment.
-    show = shows[-1]
-    return f"{episode}{_sep(episode)}{show}"
+    fitting = [c for c in dict.fromkeys(candidates) if len(c) <= limit]
+    # Last: the publisher's whole wording with the shortest show name, over
+    # the limit, for the result page to cut, rather than a made-up fragment.
+    whole = f"{episode}{_sep(episode)}{shows[-1]}"
+    return fitting + ([whole] if whole not in fitting else [])
+
+
+def assign_unique_titles(episodes: Sequence[Tuple[str, Sequence[str], str]]) -> dict:
+    """``{key: title}`` with no two episodes of a show sharing a title.
+
+    ``episodes`` are ``(key, candidates, date_label)``, oldest first: each
+    takes its best candidate an older episode has not taken, so a title
+    stays put when newer episodes arrive. A recurring guest without a
+    topic that fits ("Ranjan Roy on Big Technology Podcast") or a series cut
+    to its shared name ("Dawn of the Samurai") moves on to its next
+    candidate; when every one is taken, the best is dated.
+    """
+    used: set = set()
+    titles = {}
+    for key, candidates, date_label in episodes:
+        title = next((c for c in candidates if _title_key(c) not in used), None)
+        if title is None:
+            base = candidates[0] if candidates else key
+            title = f"{base} ({date_label})" if date_label else base
+            suffix = 2
+            while _title_key(title) in used:
+                title = f"{base} ({date_label or ''} {suffix})".replace("( ", "(")
+                suffix += 1
+        used.add(_title_key(title))
+        titles[key] = title
+    return titles
+
+
+_BOILERPLATE_RE = re.compile(r"\b(?:summary|key quotes)\b|[—|&·:–-]")
+
+
+def _title_key(title: str) -> str:
+    """What makes two titles the same to a reader: the words, without the
+    "summary & key quotes" wrapper or separators. "Marc Andreessen on The
+    a16z Show — summary" and "... — summary & key quotes" are one title."""
+    return " ".join(_BOILERPLATE_RE.sub(" ", _fold(title)).split())
 
 
 def _usable_headline(headline: Optional[str]) -> str:
