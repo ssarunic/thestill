@@ -657,3 +657,27 @@ def test_two_episodes_with_the_same_guest_get_different_titles(site, app_state):
     second = _title(site.get("/podcasts/public-show/episodes/no-summary").text)
     assert first.startswith("Ed Elson") and second.startswith("Ed Elson")
     assert first != second
+
+
+@pytest.mark.parametrize("status", [None, "pending", "failed", "skipped_unavailable"])
+def test_an_episode_without_its_entities_is_readable_but_not_indexed(site, app_state, status):
+    """Summarised but entities not in: the page works, carries noindex and
+    is left out of the sitemap until extraction settles."""
+    _seed(app_state)
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute("UPDATE episodes SET entity_extraction_status = ? WHERE slug = 'summarised'", (status,))
+    response = site.get("/podcasts/public-show/episodes/summarised")
+    assert response.status_code == 200
+    assert 'name="robots" content="noindex"' in _head(response.text)
+    assert "/episodes/summarised" not in site.get("/sitemap.xml").text
+
+
+@pytest.mark.parametrize("status", ["complete", "linking_deferred", "skipped_legacy"])
+def test_an_episode_with_settled_entities_is_indexed(site, app_state, status):
+    _seed(app_state)
+    app_state.repository.update_entity_extraction_status(
+        episode_id="00000000-0000-0000-0000-000000000001", status=status
+    )
+    head = _head(site.get("/podcasts/public-show/episodes/summarised").text)
+    assert 'content="noindex"' not in head
+    assert "/episodes/summarised" in site.get("/sitemap.xml").text

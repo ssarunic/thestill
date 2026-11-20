@@ -2049,7 +2049,7 @@ class EpisodesMixin(CategoryCacheMixin):
             params.append(podcast_id)
         sql = f"""
         SELECT e.id, e.slug, e.title, e.description, e.pub_date, e.duration, e.image_url, e.summary_preview,
-               e.published_at, e.guest_entity_ids,
+               e.published_at, e.guest_entity_ids, e.entity_extraction_status,
                p.id AS podcast_id, p.slug AS podcast_slug, p.title AS podcast_title,
                p.image_url AS podcast_image_url,
                COUNT(*) OVER () AS total_count

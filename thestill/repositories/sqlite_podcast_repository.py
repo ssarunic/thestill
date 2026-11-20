@@ -151,6 +151,7 @@ def episode_from_row(row: sqlite3.Row, *, prefix: str = "") -> Episode:
         ),
         summary_path=col("summary_path"),
         summary_preview=(col("summary_preview") if has("summary_preview") else None),
+        entity_extraction_status=(col("entity_extraction_status") if has("entity_extraction_status") else None),
         published_at=(
             datetime.fromisoformat(col("published_at")) if has("published_at") and col("published_at") else None
         ),
@@ -6525,7 +6526,7 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             params.append(podcast_id)
         sql = f"""
         SELECT e.id, e.slug, e.title, e.description, e.pub_date, e.duration, e.image_url, e.summary_preview,
-               e.published_at, e.guest_entity_ids,
+               e.published_at, e.guest_entity_ids, e.entity_extraction_status,
                p.id AS podcast_id, p.slug AS podcast_slug, p.title AS podcast_title,
                p.image_url AS podcast_image_url,
                COUNT(*) OVER () AS total_count

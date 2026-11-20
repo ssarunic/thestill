@@ -47,6 +47,7 @@ from ..utils.user_agent import crawler_family
 from .middleware.rate_limit import allow_public_request
 from .public_access import (
     EntityIndexFacts,
+    PublicVisibility,
     TtlCache,
     entity_is_indexable,
     entity_noindex_ids,
@@ -447,7 +448,8 @@ class ShellRenderer:
             canonical_path=f"/podcasts/{parts[1]}/episodes/{parts[3]}",
             og_type="article",
             image=episode.image_url or podcast.image_url,
-            index=True,
+            # Readable at once; in search only once its entities are in.
+            index=PublicVisibility.episode_is_indexable(episode.entity_extraction_status),
             json_ld={
                 "@context": "https://schema.org",
                 "@type": "PodcastEpisode",
@@ -682,7 +684,8 @@ class SitemapBuilder:
                 lastmod_iso = (
                     lastmod.isoformat() if hasattr(lastmod, "isoformat") else (str(lastmod) if lastmod else None)
                 )
-                urls.append((f"/podcasts/{row['podcast_slug']}/episodes/{row['slug']}", lastmod_iso))
+                if PublicVisibility.episode_is_indexable(row.get("entity_extraction_status")):
+                    urls.append((f"/podcasts/{row['podcast_slug']}/episodes/{row['slug']}", lastmod_iso))
                 current = podcasts.get(row["podcast_slug"])
                 if lastmod_iso and (current is None or lastmod_iso > current):
                     podcasts[row["podcast_slug"]] = lastmod_iso

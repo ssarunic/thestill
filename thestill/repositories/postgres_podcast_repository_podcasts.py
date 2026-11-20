@@ -209,6 +209,7 @@ def _episode_from_row(row: dict) -> Episode:
         ),
         summary_path=row["summary_path"],
         summary_preview=row.get("summary_preview"),
+        entity_extraction_status=row.get("entity_extraction_status"),
         published_at=row.get("published_at"),
         failed_at_stage=row["failed_at_stage"],
         failure_reason=row["failure_reason"],

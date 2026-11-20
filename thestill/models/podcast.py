@@ -248,6 +248,10 @@ class Episode(BaseModel):
     # episodes summarized before the column existed (the web list lazily
     # backfills on first render).
     summary_preview: Optional[str] = None
+    # ``episodes.entity_extraction_status`` (EntityExtractionStatus values;
+    # NULL until the extract-entities task first runs). Read-only here: the
+    # task handler writes it through ``update_entity_extraction_status``.
+    entity_extraction_status: Optional[str] = None
 
     # Timestamp the episode crossed from "pipeline-incomplete" to delivered.
     # NULL gates the row out of all inbox queries; non-NULL means it has
