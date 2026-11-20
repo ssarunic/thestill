@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
@@ -110,6 +110,15 @@ class PruneResult:
     applied: bool
 
 
+@dataclass(frozen=True)
+class RedirectBackfillResult:
+    #: ``(loser, keeper)`` in merge order, for merges whose loser is still gone.
+    redirects: List[Tuple[str, str]]
+    #: Merges skipped because the loser id exists again (a live row wins).
+    recreated: List[str]
+    applied: bool
+
+
 class EntityCurationService:
     def __init__(
         self,
@@ -153,10 +162,14 @@ class EntityCurationService:
                 "qid_taken", f"{qid} already belongs to {holder.id}. Merge the two entities instead."
             )
 
-    def _delete_if_unreferenced(self, entity_ids: Sequence[str]) -> List[str]:
+    def _delete_if_unreferenced(self, entity_ids: Sequence[str], *, redirect_to: Optional[str] = None) -> List[str]:
+        """Delete each id nothing refers to. ``redirect_to`` is where its
+        mentions went, so its public URL answers 301 there."""
         deleted = []
         for entity_id in entity_ids:
-            if not self._repo.is_entity_referenced(entity_id) and self._repo.delete_entity(entity_id):
+            if not self._repo.is_entity_referenced(entity_id) and self._repo.delete_entity(
+                entity_id, redirect_to=redirect_to
+            ):
                 deleted.append(entity_id)
         return deleted
 
@@ -217,7 +230,8 @@ class EntityCurationService:
             # After the references, so a failed repoint leaves name lookups
             # as they were; ``upsert_entity`` unions the alias in.
             self._repo.upsert_entity(keeper.model_copy(update={"aliases": [*keeper.aliases, alias_added]}))
-        self._repo.delete_entity(loser.id)
+        # The loser's public URL answers 301 to the keeper's from now on.
+        self._repo.delete_entity(loser.id, redirect_to=keeper.id)
         self._audit.record(
             actor,
             "entity.merge",
@@ -251,7 +265,7 @@ class EntityCurationService:
         self._get(from_entity_id)
         self._get(to_entity_id)
         moved = self._repo.move_mentions(mention_ids, from_entity_ids=[from_entity_id], to_entity_id=to_entity_id)
-        deleted = self._delete_if_unreferenced([from_entity_id]) if delete_emptied else []
+        deleted = self._delete_if_unreferenced([from_entity_id], redirect_to=to_entity_id) if delete_emptied else []
         self._audit.record(
             actor,
             "entity.move_mentions",
@@ -295,7 +309,7 @@ class EntityCurationService:
             moved = self._repo.repoint_entity_references(from_entity_id=source.id, to_entity_id=new_id)["mentions"]
         else:
             moved = self._repo.move_mentions(mention_ids, from_entity_ids=[source.id], to_entity_id=new_id)
-        deleted = self._delete_if_unreferenced([source.id]) if delete_emptied else []
+        deleted = self._delete_if_unreferenced([source.id], redirect_to=new_id) if delete_emptied else []
         self._audit.record(
             actor,
             "entity.split",
@@ -376,6 +390,37 @@ class EntityCurationService:
         deleted = self._repo.delete_orphan_entities(orphans)
         self._audit.record(actor, "entity.prune_orphans", listed=len(orphans), deleted=deleted)
         return PruneResult(orphans, deleted, applied=True)
+
+    def backfill_merge_redirects(self, *, actor: Actor, apply: bool = False) -> RedirectBackfillResult:
+        """Redirects for merges made before ``entity_redirects`` existed,
+        read from the ``entity.merge`` audit entries, oldest first so a
+        chain (A into B, later B into C) ends at C. A merge whose loser id
+        exists again is skipped: a live row wins over a redirect. Only
+        audited merges can be recovered; the older QID and fuzzy dedupes
+        wrote no audit row. Reports by default; ``apply`` writes."""
+        entries = []
+        page = 500
+        while True:
+            batch = self._audit.entries(action="entity.merge", limit=page, offset=len(entries))
+            entries.extend(batch)
+            if len(batch) < page:
+                break
+        redirects: List[Tuple[str, str]] = []
+        recreated: List[str] = []
+        for entry in sorted(entries, key=lambda e: (e.created_at, e.id or 0)):
+            keeper, loser = entry.details.get("keeper"), entry.details.get("loser")
+            if not keeper or not loser:
+                continue
+            if self._repo.get_entity(str(loser)) is not None:
+                recreated.append(str(loser))
+                continue
+            redirects.append((str(loser), str(keeper)))
+        if not apply:
+            return RedirectBackfillResult(redirects, recreated, applied=False)
+        for loser, keeper in redirects:
+            self._repo.record_entity_redirect(loser, keeper)
+        self._audit.record(actor, "entity.backfill_redirects", recorded=len(redirects), skipped=len(recreated))
+        return RedirectBackfillResult(redirects, recreated, applied=True)
 
     # -- per-item curation (the CLI ``mention`` / ``podcast`` / ``episode``
     # commands and the admin correction endpoint). Each write is audited

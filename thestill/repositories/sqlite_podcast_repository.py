@@ -1848,6 +1848,17 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
             CREATE INDEX IF NOT EXISTS idx_user_messages_due
                 ON user_messages(next_attempt_at)
                 WHERE status IN ('pending','sending');
+
+            -- Where a deleted entity went, so its public URL answers 301
+            -- (alembic 0030 on Postgres). No foreign keys: the source row
+            -- is gone, and a target deleted later stops redirecting.
+            CREATE TABLE IF NOT EXISTS entity_redirects (
+                from_entity_id  TEXT PRIMARY KEY NOT NULL,
+                to_entity_id    TEXT NOT NULL,
+                created_at      TIMESTAMP NOT NULL
+                                DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_entity_redirects_to ON entity_redirects(to_entity_id);
             """
         )
 

@@ -80,6 +80,7 @@ thestill entity split FROM --name N --type T [--qid Q] [--mention ID]...
 thestill entity relink ID QID                 # wrong Wikidata item; blacklists the old one
 thestill entity set-type ID TYPE              # wrong type; pair with relink ID none if the link is wrong
 thestill entity prune-orphans [--apply]       # rows nothing refers to
+thestill entity backfill-redirects [--apply]  # 301s for entities merged before merges recorded one
 
 # Transcript editor op log (spec #110; admin-only, same service as the episode
 # page's "Edit transcript"). Edits never rewrite transcript files: every

@@ -276,11 +276,31 @@ class EntityRepository(ABC):
         """
 
     @abstractmethod
-    def delete_entity(self, entity_id: str) -> bool:
+    def delete_entity(self, entity_id: str, *, redirect_to: Optional[str] = None) -> bool:
         """Hard-delete an entity (cascades to mentions/cooccurrences).
 
-        Returns True if a row was deleted.
+        ``redirect_to`` is the entity the deleted one was folded into (a
+        merge, a QID dedupe, a re-type that changed the id). In the same
+        transaction it records ``entity_id → redirect_to`` in
+        ``entity_redirects`` (see :meth:`record_entity_redirect`), so the
+        deleted entity's public URL answers 301 instead of 404. Returns True
+        if a row was deleted; nothing is recorded when none was.
         """
+
+    @abstractmethod
+    def record_entity_redirect(self, from_entity_id: str, to_entity_id: str) -> None:
+        """Record that ``from_entity_id`` now lives at ``to_entity_id``.
+
+        Chains collapse: a redirect that pointed at ``from_entity_id`` now
+        points at ``to_entity_id``, so a lookup is one hop, and a redirect
+        that would point at itself is dropped. A later redirect for the
+        same id replaces the earlier one."""
+
+    @abstractmethod
+    def get_entity_redirect(self, from_entity_id: str) -> Optional[str]:
+        """Where a deleted entity lives now, or None. Callers consult this
+        only when ``from_entity_id`` is not a stored entity: a live row
+        always wins over a redirect."""
 
     @abstractmethod
     def move_mentions(self, mention_ids: Sequence[int], *, from_entity_ids: Sequence[str], to_entity_id: str) -> int:

@@ -191,7 +191,8 @@ class TestInlineAliasMerge:
             from_entity_id="person:musk",
             to_entity_id="person:elon-musk",
         )
-        state.entity_repository.delete_entity.assert_called_once_with("person:musk")
+        # The loser's URL answers 301 to the keeper's page.
+        state.entity_repository.delete_entity.assert_called_once_with("person:musk", redirect_to="person:elon-musk")
 
     def test_skips_duplicates_unrelated_to_this_episode(self):
         state = _build_state([_pending_mention(1, "Elon Musk")])

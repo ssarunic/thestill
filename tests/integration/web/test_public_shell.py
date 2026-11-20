@@ -463,6 +463,53 @@ def test_a_twice_retyped_entity_moves_a_url_at_neither_type(site, app_state):
     assert site.get("/entities/topic/twitter", follow_redirects=False).status_code == 404
 
 
+def _merge_titled_guest(app_state):
+    """``person:dr-sahar-yousef`` folded into ``person:sahar-yousef``, the
+    titled-guest merge of 2026-11-19 that left its URL answering 404."""
+    from tests.integration.web.test_public_api import _seed_people
+    from thestill.models.entities import EntityRecord, EntityType
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="person:sahar-yousef", type=EntityType.PERSON, canonical_name="Sahar Yousef"))
+    repo.upsert_entity(
+        EntityRecord(id="person:dr-sahar-yousef", type=EntityType.PERSON, canonical_name="Dr Sahar Yousef")
+    )
+    assert repo.delete_entity("person:dr-sahar-yousef", redirect_to="person:sahar-yousef")
+    return repo
+
+
+def test_a_merged_entity_moves_its_url_to_the_keeper(site, app_state):
+    _merge_titled_guest(app_state)
+    moved = site.get("/entities/person/dr-sahar-yousef?about=x", follow_redirects=False)
+    assert moved.status_code == 301
+    assert moved.headers["location"] == "/entities/person/sahar-yousef#about=x"
+    assert site.get("/entities/person/sahar-yousef", follow_redirects=False).status_code == 200
+
+
+def test_a_merged_entity_url_is_a_404_when_the_keeper_is_hidden_or_gone(site, app_state):
+    from thestill.web.public_access import get_public_visibility
+
+    repo = _merge_titled_guest(app_state)
+    repo.set_entity_public_hidden("person:sahar-yousef", True)
+    get_public_visibility(app_state).invalidate()
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 404
+    repo.set_entity_public_hidden("person:sahar-yousef", False)
+    repo.delete_entity("person:sahar-yousef")
+    get_public_visibility(app_state).invalidate()
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 404
+
+
+def test_a_live_row_wins_over_a_redirect(site, app_state):
+    from thestill.models.entities import EntityRecord, EntityType
+
+    repo = _merge_titled_guest(app_state)
+    repo.upsert_entity(
+        EntityRecord(id="person:dr-sahar-yousef", type=EntityType.PERSON, canonical_name="Dr Sahar Yousef")
+    )
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 200
+
+
 def test_a_retyped_entity_keeps_its_old_url_when_the_current_one_shows_another(site, app_state):
     """``product/nvidia`` belongs to a ``product:nvidia`` row with mentions of
     its own, so redirecting there would show a different entity."""

@@ -688,6 +688,15 @@ CREATE TABLE IF NOT EXISTS entities (
     public_hidden boolean NOT NULL DEFAULT false
 );
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS public_hidden boolean NOT NULL DEFAULT false;
+-- Where a deleted entity went (a merge, a QID dedupe, an id-changing re-type),
+-- so its public URL answers 301 instead of 404 (alembic 0030). No foreign keys:
+-- the source row is gone, and a target deleted later just stops redirecting.
+CREATE TABLE IF NOT EXISTS entity_redirects (
+    from_entity_id text PRIMARY KEY,
+    to_entity_id text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_entity_redirects_to ON entity_redirects(to_entity_id);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);

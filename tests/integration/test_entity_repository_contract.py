@@ -73,7 +73,7 @@ PUB_3 = datetime(2026, 6, 15, 8, 0, 0, tzinfo=timezone.utc)
 
 _ENTITY_TABLES = (
     "entities, entity_mentions, entity_cooccurrences, entity_enrichment, "
-    "mention_overrides, resolution_blacklist, episodes, podcasts"
+    "mention_overrides, resolution_blacklist, entity_redirects, episodes, podcasts"
 )
 
 
@@ -421,6 +421,42 @@ def test_delete_entity_cascades_mentions(repo):
     assert repo.get_entity("person:elon-musk") is None
     assert repo.count_mentions_for_episode(EP_1) == 0  # ON DELETE CASCADE
     assert repo.delete_entity("person:elon-musk") is False  # already gone
+
+
+def _person(entity_id):
+    return EntityRecord(id=entity_id, type=EntityType.PERSON, canonical_name=entity_id.split(":", 1)[1])
+
+
+def test_delete_entity_records_a_redirect_only_when_a_row_went(repo):
+    repo.upsert_entity(_person("person:keeper"))
+    repo.upsert_entity(_person("person:loser"))
+    assert repo.get_entity_redirect("person:loser") is None
+    assert repo.delete_entity("person:loser", redirect_to="person:keeper") is True
+    assert repo.get_entity_redirect("person:loser") == "person:keeper"
+    # Nothing deleted, nothing recorded.
+    assert repo.delete_entity("person:never-was", redirect_to="person:keeper") is False
+    assert repo.get_entity_redirect("person:never-was") is None
+
+
+def test_redirect_chains_collapse_to_one_hop_and_never_loop(repo):
+    for entity_id in ("person:a", "person:b", "person:c"):
+        repo.upsert_entity(_person(entity_id))
+    repo.delete_entity("person:a", redirect_to="person:b")
+    repo.delete_entity("person:b", redirect_to="person:c")
+    assert repo.get_entity_redirect("person:a") == "person:c"
+    assert repo.get_entity_redirect("person:b") == "person:c"
+    # c folded back into a recreated a: c → a, and a → c would loop, so it goes.
+    repo.upsert_entity(_person("person:a"))
+    repo.delete_entity("person:c", redirect_to="person:a")
+    assert repo.get_entity_redirect("person:c") == "person:a"
+    assert repo.get_entity_redirect("person:b") == "person:a"
+    assert repo.get_entity_redirect("person:a") is None
+
+
+def test_record_entity_redirect_replaces_an_earlier_one(repo):
+    repo.record_entity_redirect("person:old", "person:first")
+    repo.record_entity_redirect("person:old", "person:second")
+    assert repo.get_entity_redirect("person:old") == "person:second"
 
 
 def test_repoint_mentions(repo):

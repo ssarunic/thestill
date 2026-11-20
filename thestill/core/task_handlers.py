@@ -1802,7 +1802,7 @@ def _merge_qid_duplicates_for(repo, touched_entity_ids: set) -> int:
     merged = 0
     for _qid, keeper, loser in relevant:
         repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
-        repo.delete_entity(loser)
+        repo.delete_entity(loser, redirect_to=keeper)
         merged += 1
     return merged
 

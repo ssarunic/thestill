@@ -72,7 +72,7 @@ from ..public_access import (
     public_rate_limit,
 )
 from ..responses import api_response, etag_json_response
-from .api_entities import _entity_id_from_path, get_episode_entities, url_candidate_ids, url_owner
+from .api_entities import _entity_id_from_path, entity_page_path, get_episode_entities, url_candidate_ids, url_owner
 from .api_top_podcasts import _MAX_LIMIT as _TOP_MAX_LIMIT
 from .api_top_podcasts import _resolve_region
 
@@ -972,6 +972,36 @@ def stale_entity_path(state: AppState, entity_type: str, slug: str) -> Optional[
     except HTTPException:
         return None
     return f"/entities/{current_type}/{slug}"
+
+
+def merged_entity_path(state: AppState, entity_type: str, slug: str) -> Optional[str]:
+    """Where an entity folded into another lives now, when
+    ``entity_type/slug`` names nobody: a merge, a QID dedupe or an
+    id-changing re-type left an ``entity_redirects`` row
+    (``person:dr-sahar-yousef`` → ``person:sahar-yousef`` after the
+    titled-guest merge), so a URL Google indexed answers 301, not 404.
+
+    The URL's own id first; then the same slug under another type prefix
+    (an id minted as one type, re-typed, then merged), but only to a target
+    of the URL's type. ``None`` when no redirect leads to a public page.
+    """
+    if entity_type not in _ENTITY_TYPES:
+        return None
+    try:
+        _check_slug(slug, "Entity")
+    except HTTPException:
+        return None
+    repo = state.entity_repository
+    visibility = get_public_visibility(state)
+    own = f"{entity_type}:{slug}"
+    for candidate in [own, *(cid for cid in url_candidate_ids(slug) if cid != own)]:
+        target = repo.get_entity_redirect(candidate)
+        if not target or not visibility.entity_is_public(target):
+            continue
+        path = entity_page_path(repo, target)
+        if path and (candidate == own or path.startswith(f"/entities/{entity_type}/")):
+            return path
+    return None
 
 
 @router.get("/entities/{entity_type}/{slug}")

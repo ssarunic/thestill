@@ -46,6 +46,7 @@ AUDIT_ACTIONS = (
     "entity.set_type",
     "entity.blacklist",
     "entity.prune_orphans",
+    "entity.backfill_redirects",
     "entity.alias_add",
     "entity.set_visibility",
     "entity.correction",
