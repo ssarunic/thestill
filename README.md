@@ -2,6 +2,8 @@ You follow more podcasts than you'll ever hear, and the best things said on them
 
 thestill reads every episode for you. Each morning it briefs you on what matters. Behind that, it keeps a searchable library of who said what, about whom, across every show. Ask it through Claude and get the answer with a timestamp.
 
+**Live at [thestill.me](https://thestill.me)** · [Use it in Claude](https://thestill.me/claude)
+
 ## Get Started
 
 Under the hood, thestill downloads your podcasts, transcribes them with speaker identification, cleans up the messy speech-to-text output, and generates summaries.
