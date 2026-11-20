@@ -453,6 +453,22 @@ def test_redirect_chains_collapse_to_one_hop_and_never_loop(repo):
     assert repo.get_entity_redirect("person:a") is None
 
 
+def test_a_redirect_to_a_folded_target_leads_on_unless_it_is_back(repo):
+    """Backfilling A → B after B was folded into C by an unaudited path
+    (QID dedupe) must end at C, and rerunning it must not undo that."""
+    repo.upsert_entity(_person("person:b"))
+    repo.upsert_entity(_person("person:c"))
+    repo.delete_entity("person:b", redirect_to="person:c")
+    repo.record_entity_redirect("person:a", "person:b")
+    assert repo.get_entity_redirect("person:a") == "person:c"
+    repo.record_entity_redirect("person:a", "person:b")
+    assert repo.get_entity_redirect("person:a") == "person:c"
+    # B recreated: a live row wins, so a new redirect to B stops at B.
+    repo.upsert_entity(_person("person:b"))
+    repo.record_entity_redirect("person:x", "person:b")
+    assert repo.get_entity_redirect("person:x") == "person:b"
+
+
 def test_record_entity_redirect_replaces_an_earlier_one(repo):
     repo.record_entity_redirect("person:old", "person:first")
     repo.record_entity_redirect("person:old", "person:second")

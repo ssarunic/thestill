@@ -388,6 +388,15 @@ class PostgresEntityRepository(EntityRepository):
 
     @staticmethod
     def _record_redirect(conn, from_entity_id: str, to_entity_id: str) -> None:
+        # A target that was itself folded away (and not recreated) leads on
+        # to where it went; chains are one hop, so one lookup is enough.
+        row = conn.execute(
+            "SELECT r.to_entity_id FROM entity_redirects r WHERE r.from_entity_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.from_entity_id)",
+            (to_entity_id,),
+        ).fetchone()
+        if row:
+            to_entity_id = str(row["to_entity_id"])
         params = {"src": from_entity_id, "dst": to_entity_id}
         conn.execute("UPDATE entity_redirects SET to_entity_id = %(dst)s WHERE to_entity_id = %(src)s", params)
         conn.execute(
