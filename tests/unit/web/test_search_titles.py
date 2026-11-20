@@ -332,3 +332,33 @@ def test_titles_that_differ_only_by_the_wrapper_count_as_the_same():
     wrapped = ["X on Show — summary & key quotes", "X on Show — summary", "X on Show", "X: Topic — Show"]
     titles = assign_unique_titles([("a", wrapped, "6 Nov 2026"), ("b", wrapped, "13 Nov 2026")])
     assert titles == {"a": "X on Show — summary & key quotes", "b": "X: Topic — Show"}
+
+
+# Bing: "meta descriptions on many pages are too short".
+
+
+def test_an_initial_or_a_title_never_ends_the_description():
+    from thestill.web.search_titles import lead_sentences
+
+    text = "M.G. Siegler joins to talk about Apple's AI spending. He thinks it was right. More follows."
+    assert lead_sentences(text).startswith("M.G. Siegler joins to talk about Apple's AI spending.")
+    assert lead_sentences("Dr. Chris Thompson explains gut health in detail.").startswith("Dr. Chris Thompson explains")
+
+
+def test_a_short_first_sentence_takes_the_next_one_while_it_fits():
+    from thestill.web.search_titles import lead_sentences
+
+    text = (
+        "A short one. The second sentence carries the detail a searcher needs to decide whether to read on. "
+        + "Third " * 30
+    )
+    result = lead_sentences(text)
+    assert result.startswith("A short one. The second sentence") and len(result) <= 160
+    assert "Third" not in result
+
+
+def test_a_long_first_sentence_is_cut_at_a_word():
+    from thestill.web.search_titles import lead_sentences
+
+    result = lead_sentences("word " * 60)
+    assert len(result) <= 160 and result.endswith("…")

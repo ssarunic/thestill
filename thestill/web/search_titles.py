@@ -423,3 +423,39 @@ def lead_with_full_name(description: str, guests: Sequence[str], *, limit: int =
             longer = f"{full} {rest}"
             return longer if len(longer) <= limit else description
     return description
+
+
+# A sentence ends at . ! ? followed by a space and a capital, digit or
+# opening quote; not after an initial or a title ("M.G. Siegler", "Dr. Chris").
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+(?=[\"'“‘(]?[A-Z0-9])")
+_ABBREVIATION_END_RE = re.compile(
+    r"(?:\b(?:Dr|Mr|Mrs|Ms|Prof|St|Sr|Jr|vs|etc|Inc|Ltd|Co|No|Mt|Gen|Sen|Rep|Gov)|\b[A-Z](?:\.[A-Z])*)\.$"
+)
+#: Shorter than this reads as thin in a result (Bing flags "too short").
+DESCRIPTION_MIN = 110
+
+
+def lead_sentences(text: Optional[str], *, min_len: int = DESCRIPTION_MIN, limit: int = DESCRIPTION_MAX) -> str:
+    """Whole sentences from the start of ``text``: the first, then the next
+    while the result is under ``min_len`` and still fits ``limit``. An
+    initial or a title never ends a sentence, so "M.G. Siegler joins..."
+    is not cut to "M.G.". A first sentence longer than ``limit`` is cut at
+    a word."""
+    text = plain_text(text)
+    if not text:
+        return ""
+    sentences: List[str] = []
+    for piece in _SENTENCE_END_RE.split(text):
+        if sentences and _ABBREVIATION_END_RE.search(sentences[-1]):
+            sentences[-1] = f"{sentences[-1]} {piece}"
+        else:
+            sentences.append(piece)
+    result = ""
+    for sentence in sentences:
+        candidate = f"{result} {sentence}".strip()
+        if len(candidate) > limit:
+            break
+        result = candidate
+        if len(result) >= min_len:
+            break
+    return result or clip(sentences[0], limit)

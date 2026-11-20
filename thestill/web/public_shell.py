@@ -54,7 +54,15 @@ from .public_access import (
     has_valid_session,
     instance_of_list,
 )
-from .search_titles import episode_search_title, lead_with_full_name, person_search_description, plain_text
+from .search_titles import (
+    TITLE_MAX,
+    episode_search_title,
+    lead_sentences,
+    lead_with_full_name,
+    person_search_description,
+    plain_text,
+    short_show_name,
+)
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -65,7 +73,10 @@ logger = get_logger(__name__)
 
 SITE_NAME = "Thestill"
 DEFAULT_TITLE = "Thestill — read your podcasts"
-DEFAULT_DESCRIPTION = "Podcast summaries you can read in three minutes, with every quote attributed and timed."
+DEFAULT_DESCRIPTION = (
+    "Podcast episodes you can read in three minutes: the gist, the key takeaways and the best quotes, "
+    "each attributed and timed to the moment it was said."
+)
 # ``index.html`` marks the per-page head with these comments and says
 # nothing else there: every comment in the template ships in every page.
 MARKER_RE = re.compile(r"<!--thestill:head-->.*?<!--/thestill:head-->", re.S)
@@ -201,10 +212,16 @@ def _clip(text: Optional[str], limit: int = _DESCRIPTION_MAX) -> str:
     return text[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
+def _with_brand(title: str) -> str:
+    """``title · Thestill`` when that still fits a result line, else
+    ``title``: Google and Bing show the site name on its own line anyway."""
+    branded = f"{title} · {SITE_NAME}"
+    return branded if len(branded) <= TITLE_MAX else title
+
+
 def _first_sentence(text: Optional[str]) -> str:
-    text = (text or "").strip()
-    match = re.match(r"(.+?[.!?])(\s|$)", text)
-    return _clip(match.group(1) if match else text)
+    """Whole leading sentences, about 110-160 characters (``lead_sentences``)."""
+    return lead_sentences(text)
 
 
 def _drop_empty(value: Any) -> Any:
@@ -351,7 +368,10 @@ class ShellRenderer:
         if kind == "top":
             return HeadTags(
                 title=f"Top podcasts · {SITE_NAME}",
-                description="Today's Apple Podcasts chart by country, with summaries for the shows on thestill.",
+                description=(
+                    "Today's Apple Podcasts top charts by country, with a three-minute summary, key takeaways "
+                    "and quotes for every show Thestill covers."
+                ),
                 canonical_path="/top",
                 index=True,
             )
@@ -368,7 +388,14 @@ class ShellRenderer:
                 index=True,
             )
         name = "Terms of Service" if kind == "terms" else "Privacy Policy"
-        return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
+        description = (
+            "The terms for using Thestill: your account, what you may do with summaries and quotes, "
+            "the content we show, and our liability."
+            if kind == "terms"
+            else "How Thestill handles your data: what we collect and why, who processes it, how long we keep it, "
+            "and your rights."
+        )
+        return HeadTags(title=f"{name} · {SITE_NAME}", description=description, canonical_path=f"/{kind}", index=False)
 
     def _podcast_or_episode(self, parts: List[str]) -> HeadTags:
         """Head tags from the cached slug lookups the public API shares
@@ -391,7 +418,7 @@ class ShellRenderer:
             _, summarised = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=1)
             title = row.get("title") or ""
             return HeadTags(
-                title=f"{title} — episode summaries · {SITE_NAME}",
+                title=_with_brand(f"{short_show_name(title)} — episode summaries"),
                 # Publishers often send the show description as HTML.
                 description=_first_sentence(plain_text(row.get("description"))) or DEFAULT_DESCRIPTION,
                 canonical_path=f"/podcasts/{parts[1]}",
@@ -505,9 +532,9 @@ class ShellRenderer:
         featured = payload.get("featured_quote")
         is_person = entity_type == "person"
         if is_person:
-            title = f"{name} — podcast quotes and appearances · {SITE_NAME}"
+            title = _with_brand(f"{name} — podcast quotes and appearances")
         else:
-            title = f"{name} in podcasts — who's talking and what they said · {SITE_NAME}"
+            title = _with_brand(f"{name} in podcasts — who's talking about it")
         if is_person:
             # Who they are and where they're heard. A quote cut at 160
             # characters read as filler in a search result.
