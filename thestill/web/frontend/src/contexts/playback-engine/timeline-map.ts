@@ -276,7 +276,10 @@ export class TimelineMap {
     }
     if (at - a < MIN_SKIP_S) return null
     // Just past the boundary: at it, the time can still read as the ad's.
-    return this.toLogical(at + SKIP_PROBE_S)
+    const target = this.toLogical(at + SKIP_PROBE_S)
+    // Only to a place the map knows exactly, wherever the jump came from.
+    if (target === null || this.toAsset(target).approximate) return null
+    return target
   }
 
   /**

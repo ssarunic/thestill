@@ -261,6 +261,23 @@ describe('TimelineMap: skip ahead (spec §6.2)', () => {
     expect(map.skipAheadFrom(50, ourBreak)).toBeNull()
   })
 
+  it('never jumps to a place the map knows only approximately', () => {
+    // The copy's own ad ends where the transcript resumes in a stretch the
+    // aligner could not place (26–30).
+    const map = new TimelineMap(
+      [
+        { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+        { srcStartS: 30, srcEndS: 50, offsetS: 10 },
+      ],
+      [
+        { srcStartS: 20, srcEndS: 26, kind: 'confirmed' },
+        { srcStartS: 26, srcEndS: 30, kind: 'unresolved' },
+      ],
+    )
+    expect(map.listenerAdAt(25)).not.toBeNull()
+    expect(map.skipAheadFrom(25, ourBreak)).toBeNull()
+  })
+
   it('needs spans', () => {
     expect(new TimelineMap([]).skipAheadFrom(21, ourBreak)).toBeNull()
   })

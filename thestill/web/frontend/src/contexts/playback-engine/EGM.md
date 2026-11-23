@@ -17,7 +17,7 @@ The spec #62 engine adapter boundary under `PlayerContext`: a `PlaybackEngine` i
 
 ## Invariants
 
-- `skipAheadFrom(a, breaks)` returns a transcript time only inside an ad: one of the listener's own, or a break of `breaks` the copy plays. Ads back to back are skipped together; a break `classifyBreak` calls `unresolved`, an approximate end, a post-roll of the listener's own and under 2 s of ad left all give null [src/contexts/playback-engine/timeline-map.ts:skipAheadFrom]
+- `skipAheadFrom(a, breaks)` returns a transcript time only inside an ad: one of the listener's own, or a break of `breaks` the copy plays. Ads back to back are skipped together; a break `classifyBreak` calls `unresolved`, a destination `toAsset` maps only approximately, a post-roll of the listener's own and under 2 s of ad left all give null [src/contexts/playback-engine/timeline-map.ts:skipAheadFrom]
 - Engines hold no React state; exactly one engine is active at a time and both engines' DOM nodes coexist with at most one visible [src/contexts/playback-engine/types.ts:PlaybackEngine]
 - The `<video>` element is the one stable media node: `unload` detaches the source but keeps the element [src/contexts/playback-engine/native-engine.ts:NativeEngine]
 - hls.js is used wherever Media Source Extensions exist except on Apple WebKit; native HLS only there or where MSE is missing (Chromium's built-in HLS fails seeks) [src/contexts/playback-engine/hls.ts:needsHlsJs]
