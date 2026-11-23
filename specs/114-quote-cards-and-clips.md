@@ -187,9 +187,9 @@ CREATE TABLE quote_shares (
     podcast_id      uuid NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
     segment_id      bigint NOT NULL,
     start_ms        bigint NOT NULL,
-    end_ms          bigint NOT NULL,
+    end_ms          bigint NULL,                 -- filled from Phase 2
     text            text NOT NULL,               -- the gated sentence block
-    speaker_entity_id text NULL REFERENCES entities(id) ON DELETE SET NULL,
+    speaker_entity_id text NULL,                 -- re-resolved, see §7; no FK (merges delete rows)
     source          text NOT NULL,               -- 'gated' | 'custom'
     created_by      uuid NULL REFERENCES users(id) ON DELETE SET NULL,
     created_at      timestamptz NOT NULL DEFAULT now(),
@@ -568,6 +568,49 @@ rate limit suffices; video is never anonymous.
 Phase 0 is the launchable unit and the cheapest test of the whole thesis:
 if shared quote links do not get opened, nothing after it is worth
 building.
+
+### Phase 0 on today's code (checked 2026-11-23)
+
+A read of the code before building found places where the sections above
+describe spec #100's future gate, not the stand-in Phase 0 runs on. For
+Phase 0 these hold; the sections above describe the end state.
+
+- **What a quote is today.** The stand-in's quote is an entity mention's
+  `quote_excerpt`: up to about 200 characters around a name, snapped to
+  sentence ends where there are any (`_excerpt_around`). `_gate` checks
+  60 characters, the intro skip, sponsor terms and visibility. It has no
+  320-character cap, no ad-adjacency check and no whole-sentence rule.
+  Phase 0 therefore adds its own card test on top of `_gate`: the text
+  stands alone (`_stands_alone`: opens and ends a sentence) and is at
+  most 320 characters. A quote that fails it keeps today's `#t=` link
+  and gets no `share_id`.
+- **The speaker is always a named person** on this source (`_FROM`
+  requires it), so "a guest on *Show*" cannot occur until Phase 4.
+- **No end time.** Rows carry the mention's `start_ms` only.
+  `quote_shares.end_ms` is nullable in Phase 0 and filled from Phase 2,
+  which is the first phase to use it.
+- **Minting happens when a quote payload is built, not per response.**
+  Payloads are cached for 10 minutes and the prerender calls the same
+  builders, so the upsert runs once per cache build. This is the public
+  module's second write after the page-view counter; its "never writes"
+  note is corrected. Under `read_only` a fresh build mints nothing; a
+  payload cached before the switch keeps its ids, which is harmless (the
+  rows exist).
+- **The `/q` page writes its own head.** `render_head` always sets
+  `og:url` to the canonical, and D1 needs them to differ.
+- **A merged speaker is followed, not dropped.** `speaker_entity_id` has
+  no `ON DELETE SET NULL` shortcut to rely on: an entity merge deletes
+  the losing row, so the share re-resolves the speaker from the segment
+  (§7) and, failing that, through `entity_redirects`.
+- **Fonts live in the Python package** (`thestill/assets/fonts/`), not
+  under `thestill/web/static/`, which is the Vite build output and is
+  emptied on every build. Pillow becomes a direct dependency.
+- **The takedown command is `set-podcast-visibility --private`** (the
+  flag is `--public/--private`).
+- **Attribution.** `login_completed.next_kind` is a closed list and the
+  browser's event allowlist takes `share` with `kind` only; Phase 0 adds
+  `quote` to the first and `method` to the second. The `/analytics`
+  panel is Postgres-only, like the rest of `/analytics`.
 
 ### Acceptance criteria
 
