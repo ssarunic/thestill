@@ -180,7 +180,7 @@ export default function EntityBranchProgress({
 
   return (
     <div
-      className={`rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-2 ${className}`}
+      className={`min-w-0 max-w-full rounded-lg border border-gray-200 bg-gray-50/40 px-3 py-2 ${className}`}
       data-testid="entity-branch-progress"
     >
       <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-gray-500">
@@ -198,7 +198,7 @@ export default function EntityBranchProgress({
           </span>
         )}
       </div>
-      <div className="flex items-center">
+      <div className="flex items-center max-w-full overflow-x-auto overscroll-x-contain -m-1 p-1">
         {stageStatuses.map((stage, idx) => {
           const isLast = idx === stageStatuses.length - 1
           const colorByStatus: Record<StageStatus, string> = {
@@ -229,7 +229,7 @@ export default function EntityBranchProgress({
             : stage.status === 'failed' ? ' (failed)'
             : ''
           return (
-            <div key={stage.key} className="flex items-center">
+            <div key={stage.key} className="flex items-center shrink-0">
               <div className="flex flex-col items-center">
                 <div
                   className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${colorByStatus[stage.status]}`}
@@ -253,7 +253,7 @@ export default function EntityBranchProgress({
               </div>
               {!isLast && (
                 <div
-                  className={`w-6 h-1 mx-1 rounded transition-all duration-300 ${connectorColor[stage.status]}`}
+                  className={`w-3 sm:w-6 h-1 mx-0.5 sm:mx-1 shrink-0 rounded transition-all duration-300 ${connectorColor[stage.status]}`}
                   style={{ marginTop: '-1.25rem' }}
                 />
               )}
