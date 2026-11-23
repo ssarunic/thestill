@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft (2026-11-05)
 > **Created:** 2026-11-05
-> **Updated:** 2026-11-23 (the five open questions decided: D9–D12)
+> **Updated:** 2026-11-23 (open questions decided: D9–D12; follow hook reuses spec #117; Q6 opened on D6)
 > **Priority:** Medium-high. The first readers arrive from public pages and leave without following anything (spec #111); this is the first feature built to bring *more* of them, so it ships together with the hook that keeps them.
 > **Author:** Product & Engineering
 > **Related:** [#100 quote-ranking-and-featured-quotes](100-quote-ranking-and-featured-quotes.md) (the quote gate and candidates table this consumes), [#94 public-pages](94-public-pages.md) (the landing page, head injection, `public_pages` opt-out), [#105 server-rendered-public-pages](105-server-rendered-public-pages.md) (UA-blind rule, one URL per episode), [#104 abuse-prevention-and-user-admin](104-abuse-prevention-and-user-admin.md) (quotas, kill switches, audit), [#111 product-health-metrics](111-product-health-metrics.md) (the Scorecard this is read against), [#95 product-analytics](95-product-analytics.md) (events), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) (quote clip cutting, designed there, built here first), [#38 karaoke-word-highlighting](38-karaoke-word-highlighting.md) (word timestamps), [#45 entity-page-enrichment](45-entity-page-enrichment.md) (guest social handles), [#91 transcript-and-summary-export](91-transcript-and-summary-export.md) (Web Share with files), [#86 quality-feedback-loop](86-quality-feedback-loop.md) (reports), [#110 transcript-editor](110-transcript-editor.md) (speaker fixes invalidate cards), [#93 native-web-capabilities](93-native-web-capabilities.md) (permission rule), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md) (FM-6, FM-7)
@@ -409,13 +409,20 @@ This is the only anonymous playback and it plays only the quote. The
 public route serves the MP3 with `Range` support and the public cache
 helper; eligibility is re-checked at request time.
 
-**5.4 The follow hook.** The linked quote card ends with one line and one
-button for anonymous visitors: "Thestill summarises every episode of
-*Show*. **Follow** to get the next one." The button goes to
-`/login?next=/podcasts/{show}?from=quote`; after sign-in the show page
-focuses its Follow button. **No auto-follow** on landing (a URL is not
-consent, spec #80's rule; a forced follow also games spec #111's
-activation metric). Signed-in visitors see the existing Follow button.
+**5.4 The follow hook.** The public episode page already has it:
+spec #117 (v1.47.0) put a Follow button beside the show name for every reader
+who does not follow the show. Signed out, it goes through sign-in
+(`intent=follow`, the spec #102 pending follow) and comes back to the
+episode with the follow done and a toast that offers Undo. This spec adds
+no second button. The linked quote card ends with one line, "Thestill
+summarises every episode of *Show*.", and a Follow button that is the
+same component (`EpisodeFollow`), so the pending follow, the toast and
+the `follow` event's source are shared; the source value for this
+placement is `quote_card`. **No auto-follow** on landing: the pending
+follow is stored only by the visitor's click on Follow, never by the
+`/q` link (a URL is not consent, spec #80's rule; a forced follow also
+games spec #111's activation metric). Readers who already follow the
+show see no button on the card.
 
 ### 6. Measurement
 
@@ -657,4 +664,9 @@ columns, both ignorable.
 
 ## Open questions
 
-None. The five questions of the first draft are decisions D3 and D9–D12.
+The five questions of the first draft are decisions D3 and D9–D12. One
+question has opened since:
+
+| # | Question | Default if unanswered |
+|---|---|---|
+| Q6 | Decision D6 keeps the original audio until the entity stage because a re-fetched enclosure carries other ads and its timestamps drift. Spec #116 has since shipped sync tracks (v1.38.0) that map the transcribed copy onto another copy of the same episode. Could the clip be cut on demand from a re-fetched enclosure aligned on the server with the sync track, with no retention, no `audio_retained_for` column and no orphan sweep? It would also cover episodes whose original is already gone. Against it: the aligner runs in the browser today, a server port is new work, and a fetch per clip presents to the publisher as a download. | Settle before Phase 2 starts; Phases 0 and 1 use no audio. Until then D6 stands as written |
