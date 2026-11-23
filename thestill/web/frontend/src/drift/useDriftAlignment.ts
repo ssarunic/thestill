@@ -8,7 +8,8 @@ import { reportDriftOutcome } from '../api/client'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer } from '../contexts/PlayerContext'
 import type { AppliedTimeline } from '../contexts/playback-engine/native-engine'
-import { TimelineMap } from '../contexts/playback-engine/timeline-map'
+import { TimelineMap, type AdBreak } from '../contexts/playback-engine/timeline-map'
+import { skippableAdBreaks } from '../utils/adBreaks'
 import type { DriftWorkerMessage, DriftWorkerRequest } from '../workers/driftAlign.worker'
 import type { TranscriptInterval } from './classify'
 import { currentAudioLoad, setCorsVerdict } from './corsVerdict'
@@ -82,6 +83,9 @@ const attempts = new Map<string, DriftAlignmentState>()
 const listeners = new Map<string, Set<() => void>>()
 // The audio load (its start time) each attempt's check was made for.
 const checkedLoads = new Map<string, number>()
+// Spec #116 §6.2 — the transcript's skippable ad breaks, taken when each
+// attempt starts, so its map always goes in with its own episode's breaks.
+const adBreaksByAttempt = new Map<string, readonly AdBreak[]>()
 
 function publish(key: string, state: DriftAlignmentState): void {
   attempts.set(key, state)
@@ -93,6 +97,7 @@ export function resetDriftAttempts(): void {
   attempts.clear()
   listeners.clear()
   checkedLoads.clear()
+  adBreaksByAttempt.clear()
 }
 
 /** The transcript's segments on the transcribed copy's timeline. */
@@ -406,13 +411,22 @@ export function useDriftAlignment({
       },
       // The player refuses unless this episode's audio is still what it is
       // playing, so a late verdict can never touch another source.
-      apply: (timeline) => (episodeId ? applyTimeline(episodeId, audioUrl, timeline) : false),
+      // Spec #116 §6.2 — with the ad breaks of this attempt's transcript,
+      // so the player can offer Skip ahead wherever the listener goes next.
+      apply: (timeline) =>
+        episodeId
+          ? applyTimeline(
+              episodeId,
+              audioUrl,
+              timeline && { ...timeline, adBreaks: (key && adBreaksByAttempt.get(key)) || [] },
+            )
+          : false,
       release: () => {
         if (episodeId) releaseTimelineHold(episodeId, audioUrl)
       },
       reloadForCheck: () => (episodeId ? reloadHeldForCheck(episodeId, audioUrl) : false),
     }
-  }, [generation, audioUrl, podcastSlug, episodeSlug, episodeId, applyTimeline, releaseTimelineHold, reloadHeldForCheck])
+  }, [key, generation, audioUrl, podcastSlug, episodeSlug, episodeId, applyTimeline, releaseTimelineHold, reloadHeldForCheck])
 
   // A start is being held on a load that could not be checked when its map
   // was made: reload it now, checkable, and check it. Once per load.
@@ -461,6 +475,7 @@ export function useDriftAlignment({
     // Registered on the first play of an episode that has a track, never
     // at page load. It takes control of this page without a reload.
     void ensureDriftServiceWorker()
+    adBreaksByAttempt.set(key, skippableAdBreaks(transcript))
     startAttempt(
       key,
       {

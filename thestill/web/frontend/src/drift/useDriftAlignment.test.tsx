@@ -353,6 +353,39 @@ describe('a play is checked again as later ranges arrive', () => {
     expect(result.current).toMatchObject({ status: 'done', report, check: null })
   })
 
+  it('applies a map with the ad breaks of its own episode, even after the reader moved on', () => {
+    // Episode 1 has a mid-roll with content after it: skippable.
+    const withMidRoll = {
+      ...transcript,
+      segments: [...transcript.segments, { id: 2, start: 40, end: 60, kind: 'content' }],
+    } as unknown as AnnotatedTranscriptDump
+    vi.stubGlobal('navigator', {
+      userAgent: CHROME_UA,
+      serviceWorker: { controller: {}, addEventListener: vi.fn(), register: vi.fn(async () => null) },
+    })
+    setCorsVerdict(AUDIO, 'cors_ok')
+    beginAudioLoad(AUDIO, true)
+    const { rerender } = renderHook((p) => useDriftAlignment(p), { initialProps: props({ transcript: withMidRoll }) })
+    recordMediaReport(range())
+    // Before episode 1's alignment is done the reader shows episode 2, a
+    // transcript with other breaks; episode 1 keeps playing.
+    const other = {
+      ...transcript,
+      episode_id: 'ep-2',
+      segments: [
+        { id: 0, start: 0, end: 5, kind: 'ad_break' },
+        { id: 1, start: 5, end: 50, kind: 'content' },
+      ],
+    } as unknown as AnnotatedTranscriptDump
+    rerender(props({ episodeId: 'ep-2', episodeSlug: 'ep2', transcript: other }))
+    finish()
+    settle(1500)
+
+    const [episodeId, , timeline] = player.applyTimeline.mock.calls[0] as [string, string, { adBreaks: unknown }]
+    expect(episodeId).toBe('ep-1')
+    expect(timeline.adBreaks).toEqual([{ startS: 12, endS: 42 }])
+  })
+
   it('puts the map in force once the play is verified, and lifts it when a range stops matching', () => {
     const { result } = play()
     recordMediaReport(range())
@@ -369,6 +402,9 @@ describe('a play is checked again as later ranges arrive', () => {
     ]
     expect([episodeId, audioUrl, timeline.durationS]).toEqual(['ep-1', AUDIO, 20])
     expect(timeline.map.toAsset(5).time).toBe(13) // the report's one span plays 8 s later
+    // Spec §6.2: the transcript's ad breaks ride along; this one closes
+    // the episode, so there is nothing to skip ahead to.
+    expect((timeline as { adBreaks?: unknown }).adBreaks).toEqual([])
     expect((bodies()[0] as Body & { applied: boolean }).applied).toBe(true)
 
     act(() => recordMediaReport(range({ range: 'bytes=65536-', blockIndex: 1, crc: 999, adler: 44 })))

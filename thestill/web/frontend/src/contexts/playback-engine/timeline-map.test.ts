@@ -211,3 +211,74 @@ describe('TimelineMap: ads (spec §6.1)', () => {
     expect(preRoll.classifyBreak(0, 30)).toEqual({ kind: 'different', listenerAdS: 10 })
   })
 })
+
+describe('TimelineMap: skip ahead (spec §6.2)', () => {
+  const ourBreak = [{ startS: 20, endS: 26 }]
+
+  it('skips a break the listener’s copy plays as transcribed, to the content after it', () => {
+    // The same copy with an 8 s pre-roll of its own: the break plays at 28–34.
+    const map = new TimelineMap([{ srcStartS: 0, srcEndS: 46, offsetS: 8 }])
+    const target = map.skipAheadFrom(29, ourBreak)
+    expect(target).toBeCloseTo(26.05)
+    expect(map.toAsset(target as number).time).toBeCloseTo(34.05)
+    expect(map.skipAheadFrom(40, ourBreak)).toBeNull() // content
+  })
+
+  it('skips an ad of the listener’s own, pre-roll or mid-roll', () => {
+    const map = new TimelineMap(spans, [adInOurCopy]) // pre-roll 0–8, mid-roll 28–43
+    expect(map.skipAheadFrom(3, ourBreak)).toBeCloseTo(0.05)
+    const target = map.skipAheadFrom(30, ourBreak)
+    expect(target).toBeCloseTo(26.05)
+    expect(map.toAsset(target as number).time).toBeCloseTo(43.05)
+  })
+
+  it('skips ads back to back as one: a transcribed break, then one of the copy’s own', () => {
+    // The break plays as transcribed at 20–26, then the copy adds 10 s.
+    const map = new TimelineMap([
+      { srcStartS: 0, srcEndS: 26, offsetS: 0 },
+      { srcStartS: 26, srcEndS: 46, offsetS: 10 },
+    ])
+    const target = map.skipAheadFrom(21, ourBreak)
+    expect(target).toBeCloseTo(26.05)
+    expect(map.toAsset(target as number).time).toBeCloseTo(36.05)
+  })
+
+  it('offers nothing for the last moments of an ad', () => {
+    const map = new TimelineMap([{ srcStartS: 0, srcEndS: 46, offsetS: 8 }])
+    expect(map.skipAheadFrom(32.5, ourBreak)).toBeNull()
+    expect(map.skipAheadFrom(7, ourBreak)).toBeNull()
+  })
+
+  it('never skips a break the aligner could not place', () => {
+    const map = new TimelineMap(spans) // nothing says what 20–26 is
+    expect(map.skipAheadFrom(30, ourBreak)).toBeNull()
+  })
+
+  it('never skips a post-roll of the copy’s own: no episode follows it', () => {
+    // The transcribed copy closes on an ad (46–52) this copy replaced.
+    const map = new TimelineMap([{ srcStartS: 0, srcEndS: 46, offsetS: 0 }], [{ srcStartS: 46, srcEndS: 52, kind: 'confirmed' }])
+    expect(map.listenerAdAt(50)).not.toBeNull()
+    expect(map.skipAheadFrom(50, ourBreak)).toBeNull()
+  })
+
+  it('never jumps to a place the map knows only approximately', () => {
+    // The copy's own ad ends where the transcript resumes in a stretch the
+    // aligner could not place (26–30).
+    const map = new TimelineMap(
+      [
+        { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+        { srcStartS: 30, srcEndS: 50, offsetS: 10 },
+      ],
+      [
+        { srcStartS: 20, srcEndS: 26, kind: 'confirmed' },
+        { srcStartS: 26, srcEndS: 30, kind: 'unresolved' },
+      ],
+    )
+    expect(map.listenerAdAt(25)).not.toBeNull()
+    expect(map.skipAheadFrom(25, ourBreak)).toBeNull()
+  })
+
+  it('needs spans', () => {
+    expect(new TimelineMap([]).skipAheadFrom(21, ourBreak)).toBeNull()
+  })
+})

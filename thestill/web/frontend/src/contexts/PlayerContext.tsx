@@ -26,7 +26,7 @@ import {
   type NativeEngineState,
 } from './playback-engine/native-engine'
 import { elementAudioUrl } from '../utils/elementAudioUrl'
-import type { ListenerAd, TimelineMap } from './playback-engine/timeline-map'
+import type { AdBreak, ListenerAd, TimelineMap } from './playback-engine/timeline-map'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
 import { beginAudioLoad } from '../drift/corsVerdict'
 import { isTimelineExpected } from '../drift/expectation'
@@ -197,6 +197,13 @@ export interface PlayerContextValue {
   // transcript has no words for it, so the clock stands still meanwhile.
   // Changes only when an ad starts or ends.
   listenerAd: ListenerAd | null
+  // Spec #116 §6.2 — an ad is playing and the map knows where the episode
+  // resumes after it. Only ever true while a map is in force, on the
+  // native engine. Changes only when an ad starts or ends.
+  skipAheadAvailable: boolean
+  // Jump to where the episode resumes after the ad that is playing. The
+  // seconds of the listener's copy skipped, or null when there was none.
+  skipAhead: () => number | null
   // Where the audio element itself is (seconds on the listener's copy),
   // whatever map is in force. Stable; for counting down a `listenerAd`.
   getAssetTime: () => number
@@ -372,10 +379,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [timelineMap, setTimelineMapState] = useState<TimelineMap | null>(null)
   const timelineMapRef = useRef<TimelineMap | null>(null)
   const [listenerAd, setListenerAd] = useState<ListenerAd | null>(null)
-  const setTimelineMap = useCallback((map: TimelineMap | null) => {
+  // Spec #116 §6.2 — the transcript's ad breaks that came with the map.
+  const adBreaksRef = useRef<readonly AdBreak[]>([])
+  const [skipAheadAvailable, setSkipAheadAvailable] = useState(false)
+  const setTimelineMap = useCallback((map: TimelineMap | null, adBreaks: readonly AdBreak[] = []) => {
     timelineMapRef.current = map
+    adBreaksRef.current = map === null ? [] : adBreaks
     setTimelineMapState(map)
-    if (map === null) setListenerAd(null)
+    if (map === null) {
+      setListenerAd(null)
+      setSkipAheadAvailable(false)
+    }
   }, [])
   const [timelineHold, setTimelineHold] = useState(false)
   const [volume, setVolumeState] = useState(1)
@@ -449,10 +463,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         if (seconds > 0 && loadWatch.current !== undefined) stopLoadWatch()
         const map = timelineMapRef.current
         if (map !== null) {
-          const ad =
-            engineKindRef.current === 'native' ? map.listenerAdAt(nativeEngineRef.current?.getElementTime() ?? 0) : null
+          const native = engineKindRef.current === 'native'
+          const at = nativeEngineRef.current?.getElementTime() ?? 0
+          const ad = native ? map.listenerAdAt(at) : null
           // The same ad on every tick while it plays: keep the identity.
           setListenerAd((prev) => (prev?.startS === ad?.startS && prev?.endS === ad?.endS ? prev : ad))
+          setSkipAheadAvailable(native && map.skipAheadFrom(at, adBreaksRef.current) !== null)
         }
         persistenceRef.current?.onEngineEvent('timeupdate')
       },
@@ -619,9 +635,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     if (!native.setTimeline(audioUrl, timeline)) return false
     setTimelineApplied(timeline !== null)
     const map = timeline?.map ?? null
-    setTimelineMap(map)
+    setTimelineMap(map, timeline?.adBreaks)
     // The map may arrive in the middle of an ad; do not wait for a tick.
-    if (map !== null) setListenerAd(map.listenerAdAt(native.getElementTime()))
+    if (map !== null) {
+      setListenerAd(map.listenerAdAt(native.getElementTime()))
+      setSkipAheadAvailable(map.skipAheadFrom(native.getElementTime(), adBreaksRef.current) !== null)
+    }
     return true
   }, [setTimelineMap])
 
@@ -837,6 +856,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     },
     [currentEngine]
   )
+
+  const skipAhead = useCallback(() => {
+    const map = timelineMapRef.current
+    const native = nativeEngineRef.current
+    if (map === null || !native || engineKindRef.current !== 'native') return null
+    const from = native.getElementTime()
+    const to = map.skipAheadFrom(from, adBreaksRef.current)
+    if (to === null) return null
+    // Transcript time: the engine maps it onto this copy.
+    native.seekTo(to)
+    setSkipAheadAvailable(false)
+    return Math.max(0, native.getElementTime() - from)
+  }, [])
 
   const setRate = useCallback(
     (rate: number) => {
@@ -1269,6 +1301,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       timelineApplied,
       timelineMap: activeEngine === 'native' ? timelineMap : null,
       listenerAd: activeEngine === 'native' ? listenerAd : null,
+      skipAheadAvailable: activeEngine === 'native' && skipAheadAvailable,
+      skipAhead,
       getAssetTime,
       getAssetDuration,
       timelineHold,
@@ -1317,6 +1351,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       timelineApplied,
       timelineMap,
       listenerAd,
+      skipAheadAvailable,
+      skipAhead,
       getAssetTime,
       getAssetDuration,
       timelineHold,

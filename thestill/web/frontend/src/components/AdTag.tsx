@@ -2,7 +2,7 @@
  * Spec #116 §6.1 — shown beside the time in the mini player and the Now
  * Playing sheet while an ad that only the listener's copy carries is
  * playing. The transcript has no words for it, so the clock stands still;
- * the tag says why. It marks the ad and offers no skip.
+ * the tag says why. It only marks the ad; `SkipAheadButton` (§6.2) skips it.
  */
 export default function AdTag({ className = '' }: { className?: string }) {
   return (

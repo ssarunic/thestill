@@ -8,8 +8,8 @@ The spec #62 engine adapter boundary under `PlayerContext`: a `PlaybackEngine` i
 
 - `PlaybackEngine`, `EngineKind` (`'native' | 'youtube'`), `EngineEvents` (native-only `onTimelineHoldChange`), `EngineSource` (native-only `crossOrigin`, `elementUrl`), `LoadOptions` (native-only `holdForTimeline`) — the engine contract [src/contexts/playback-engine/types.ts:PlaybackEngine]
 - `NativeEngine`, `NativeEngineState` (also carries `elementUrl` and `timeline`) — `<video>` element engine; `load`, `unload`, `play`, `pause`, `seekTo(seconds, { holdForTimeline })`, `setPendingSeek`, `setTimeline`, `hasTimeline`, `releaseTimelineHold`, `isHoldingForTimeline`, `heldTranscriptTime`, `getElementTime`, `getElementDuration`, `canPlayNow`, `hasLoadedAnything`, … [src/contexts/playback-engine/native-engine.ts:NativeEngine]
-- `AppliedTimeline` (`map` + transcribed copy's `durationS`), `AUDIO_NOT_LOADED_MESSAGE`, `TIMELINE_HOLD_MAX_MS` (10 000) [src/contexts/playback-engine/native-engine.ts:AppliedTimeline]
-- `TimelineMap` (`spans`, `gaps`, `constant`, `isIdentity`, `toAsset`, `toLogical`, `toLogicalHeld`, `listenerAdAt`, `classifyBreak`), `MapSpan`, `SourceGap` (`confirmed|unresolved`), `AssetTime`, `ListenerAd`, `BreakState` (`same|different|absent|unresolved`) — spec #116 piecewise transcript ↔ listener-copy map [src/contexts/playback-engine/timeline-map.ts:TimelineMap]
+- `AppliedTimeline` (`map` + transcribed copy's `durationS` + the `adBreaks` Skip ahead may jump over; the engine ignores them), `AUDIO_NOT_LOADED_MESSAGE`, `TIMELINE_HOLD_MAX_MS` (10 000) [src/contexts/playback-engine/native-engine.ts:AppliedTimeline]
+- `TimelineMap` (`spans`, `gaps`, `constant`, `isIdentity`, `toAsset`, `toLogical`, `toLogicalHeld`, `listenerAdAt`, `classifyBreak`, `skipAheadFrom`), `AdBreak`, `MapSpan`, `SourceGap` (`confirmed|unresolved`), `AssetTime`, `ListenerAd`, `BreakState` (`same|different|absent|unresolved`) — spec #116 piecewise transcript ↔ listener-copy map [src/contexts/playback-engine/timeline-map.ts:TimelineMap]
 - `YouTubeEngine` — IFrame API engine with a polled, interpolated clock [src/contexts/playback-engine/youtube-engine.ts:YouTubeEngine]
 - `loadYouTubeIframeApi`, `YTPlayer`, `YTNamespace` — lazy, idempotent IFrame API loader [src/contexts/playback-engine/youtube-iframe-api.ts:loadYouTubeIframeApi]
 - `isHlsSource`, `canPlayHlsNatively`, `needsHlsJs`, `loadHls`, `preloadHls`, `HLS_ERROR_EVENT`, `HlsModule` — HLS routing and lazy hls.js loading [src/contexts/playback-engine/hls.ts:needsHlsJs]
@@ -17,6 +17,7 @@ The spec #62 engine adapter boundary under `PlayerContext`: a `PlaybackEngine` i
 
 ## Invariants
 
+- `skipAheadFrom(a, breaks)` returns a transcript time only inside an ad: one of the listener's own, or a break of `breaks` the copy plays. Ads back to back are skipped together; a break `classifyBreak` calls `unresolved`, a destination `toAsset` maps only approximately, a post-roll of the listener's own and under 2 s of ad left all give null [src/contexts/playback-engine/timeline-map.ts:skipAheadFrom]
 - Engines hold no React state; exactly one engine is active at a time and both engines' DOM nodes coexist with at most one visible [src/contexts/playback-engine/types.ts:PlaybackEngine]
 - The `<video>` element is the one stable media node: `unload` detaches the source but keeps the element [src/contexts/playback-engine/native-engine.ts:NativeEngine]
 - hls.js is used wherever Media Source Extensions exist except on Apple WebKit; native HLS only there or where MSE is missing (Chromium's built-in HLS fails seeks) [src/contexts/playback-engine/hls.ts:needsHlsJs]

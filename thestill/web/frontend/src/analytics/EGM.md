@@ -18,7 +18,7 @@ Browser side of spec #95 usage events. The signed-in app lazily loads posthog-js
 - Global Privacy Control: the SDK is never loaded [src/analytics/client.ts:gpcEnabled]
 - `persistence: 'memory'`, no autocapture, replay, surveys, flags, heatmaps or external script loads; events go to `/ingest` [src/analytics/client.ts:startAnalytics]
 - Stopping is an in-memory flag, never posthog-js opt-out (which writes to `localStorage` and mutes later sessions) [src/analytics/client.ts:stopAnalytics]
-- Only events in `EVENT_PROPS` (`$set`, `$pageview`, `share`, `entity_open`, `reader_tab`, `read_depth`, and spec #116 `ad_break_expanded` with `state`) leave the browser, each with its allowlisted props; unknown SDK props are dropped [src/analytics/sanitize.ts:EVENT_PROPS]
+- Only events in `EVENT_PROPS` (`$set`, `$pageview`, `share`, `entity_open`, `reader_tab`, `read_depth`, and spec #116 `ad_break_expanded` with `state`, `skip_ahead` with `seconds`) leave the browser, each with its allowlisted props; unknown SDK props are dropped [src/analytics/sanitize.ts:EVENT_PROPS]
 - The only person property is `is_admin`, only on `$set` [src/analytics/sanitize.ts:sanitizeEvent]
 - Page views report the route pattern, never the real URL; URL-valued SDK props are rewritten to a pattern or bare host [src/analytics/routes.ts:routePattern]
 - `APP_ROUTE_PATTERNS` must stay in step with `App.tsx` routes (checked by `routes.test.ts`) [src/analytics/routes.ts:APP_ROUTE_PATTERNS]

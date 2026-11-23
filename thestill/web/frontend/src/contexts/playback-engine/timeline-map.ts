@@ -65,9 +65,25 @@ export type BreakState =
   | { kind: 'absent' }
   | { kind: 'unresolved' }
 
+/**
+ * An ad break of the transcribed copy, in transcript time: a run of
+ * `ad_break` segments with content after it (spec §6.2).
+ */
+export interface AdBreak {
+  startS: number
+  endS: number
+}
+
 // Audio of the listener's own shorter than this is a seam between two
 // spans, not an ad.
 const MIN_LISTENER_AD_S = 1
+// Skip ahead is not offered for the last moments of an ad.
+const MIN_SKIP_S = 2
+// Ads back to back, the listener's own and the transcribed copy's, are
+// skipped together: at most this many pieces.
+const MAX_SKIP_HOPS = 8
+// Where one ad ends the next may begin: look just past the boundary.
+const SKIP_PROBE_S = 0.05
 // Two spans that meet may leave this much of a break uncovered.
 const SEAM_S = 0.5
 
@@ -228,6 +244,42 @@ export class TimelineMap {
     }
     const own = this.ownAudioBetween(before, after)
     return own !== null && own.startS <= a && a < own.endS ? own : null
+  }
+
+  /**
+   * Spec #116 §6.2 — Skip ahead. When audio time `a` is inside an ad, the
+   * transcript time where the episode resumes after it; otherwise null.
+   *
+   * An ad is either the listener's own (`listenerAdAt`) or one of the
+   * transcribed copy's `breaks` that this copy plays. Ads back to back are
+   * skipped together. A break the aligner could not place is never
+   * skipped, and neither is a post-roll of the listener's own: no episode
+   * follows it. Null too when less than `MIN_SKIP_S` of ad is left.
+   */
+  skipAheadFrom(a: number, breaks: readonly AdBreak[]): number | null {
+    if (this.spans.length === 0) return null
+    let at = a
+    for (let hop = 0; hop < MAX_SKIP_HOPS; hop += 1) {
+      const probe = hop === 0 ? at : at + SKIP_PROBE_S
+      const own = this.listenerAdAt(probe)
+      if (own !== null) {
+        if (!Number.isFinite(own.endS)) return null
+        at = own.endS
+        continue
+      }
+      const t = this.toLogical(probe)
+      const brk = t === null ? undefined : breaks.find((b) => b.startS <= t && t < b.endS)
+      if (brk === undefined || this.classifyBreak(brk.startS, brk.endS).kind === 'unresolved') break
+      const end = this.toAsset(brk.endS)
+      if (end.approximate || end.time <= at) break
+      at = end.time
+    }
+    if (at - a < MIN_SKIP_S) return null
+    // Just past the boundary: at it, the time can still read as the ad's.
+    const target = this.toLogical(at + SKIP_PROBE_S)
+    // Only to a place the map knows exactly, wherever the jump came from.
+    if (target === null || this.toAsset(target).approximate) return null
+    return target
   }
 
   /**

@@ -472,6 +472,92 @@ describe('spec #116 §6.1 — the map and the listener’s own ads, for the read
   })
 })
 
+describe('spec #116 §6.2 — Skip ahead', () => {
+  const tick = (video: HTMLVideoElement, seconds: number) =>
+    act(() => {
+      stateFor(video).currentTime = seconds
+      video.dispatchEvent(new Event('timeupdate'))
+    })
+
+  it('is offered during an ad of the listener’s own and jumps to where the episode resumes', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    tick(video, 22)
+    // No map, no offer.
+    expect(ctx.skipAheadAvailable).toBe(false)
+    expect(ctx.skipAhead()).toBeNull()
+
+    // The listener's copy carries a 15 s ad (20–35 s) where ours had 6 s.
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, {
+        map: new TimelineMap(
+          [
+            { srcStartS: 0, srcEndS: 20, offsetS: 0 },
+            { srcStartS: 26, srcEndS: 46, offsetS: 9 },
+          ],
+          [{ srcStartS: 20, srcEndS: 26, kind: 'confirmed' as const }],
+        ),
+        durationS: 46,
+        adBreaks: [{ startS: 20, endS: 26 }],
+      })
+    })
+    expect(ctx.skipAheadAvailable).toBe(true)
+    let skipped: number | null = null
+    act(() => {
+      skipped = ctx.skipAhead()
+    })
+    expect(skipped).toBeCloseTo(13.05)
+    expect(stateFor(video).currentTime).toBeCloseTo(35.05)
+    expect(ctx.skipAheadAvailable).toBe(false)
+
+    // Gone once the ad is over, and in its last moments.
+    tick(video, 40)
+    expect(ctx.skipAheadAvailable).toBe(false)
+    tick(video, 34)
+    expect(ctx.skipAheadAvailable).toBe(false)
+    tick(video, 25)
+    expect(ctx.skipAheadAvailable).toBe(true)
+  })
+
+  it('is offered during an ad break of the transcript that the copy plays as transcribed', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, {
+        map: new TimelineMap([{ srcStartS: 0, srcEndS: 46, offsetS: 4 }]),
+        durationS: 46,
+        adBreaks: [{ startS: 10, endS: 16 }],
+      })
+    })
+    tick(video, 12)
+    expect(ctx.skipAheadAvailable).toBe(false) // transcript 8 s: content
+    tick(video, 15)
+    expect(ctx.skipAheadAvailable).toBe(true)
+    act(() => {
+      ctx.skipAhead()
+    })
+    expect(stateFor(video).currentTime).toBeCloseTo(20.05)
+  })
+
+  it('is withdrawn with the map', () => {
+    const { video } = renderPlayer()
+    act(() => ctx.play(audioTrack))
+    tick(video, 15)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, {
+        map: new TimelineMap([{ srcStartS: 0, srcEndS: 46, offsetS: 4 }]),
+        durationS: 46,
+        adBreaks: [{ startS: 10, endS: 16 }],
+      })
+    })
+    expect(ctx.skipAheadAvailable).toBe(true)
+    act(() => {
+      ctx.applyTimeline('ep-audio', audioTrack.audioUrl, null)
+    })
+    expect(ctx.skipAheadAvailable).toBe(false)
+  })
+})
+
 describe('spec #116 — a start from a transcript time waits for its map', () => {
   const timeline = () => ({
     map: new TimelineMap([{ srcStartS: 0, srcEndS: 3000, offsetS: 9 }]),

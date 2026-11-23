@@ -16,6 +16,7 @@ import Button, { CloseIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon }
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
+import SkipAheadButton from './SkipAheadButton'
 
 interface NowPlayingSheetProps {
   isOpen: boolean
@@ -266,6 +267,13 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         <div className="mt-3 min-h-[2.875rem] text-center">
           <NowPlayingKaraokeLine track={track} enabled={active} />
         </div>
+
+        {/* Spec #116 §6.2 — only while an ad plays that the map can skip. */}
+        {player.skipAheadAvailable && (
+          <div className="mt-3 flex justify-center">
+            <SkipAheadButton size="md" />
+          </div>
+        )}
 
         {/* Transport */}
         <div className="mt-3 flex items-center justify-center gap-8">
