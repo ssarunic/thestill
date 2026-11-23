@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { addPodcast, resolvePodcast } from '../api/client'
+import { useQueryClient } from '@tanstack/react-query'
+import { resolvePodcast } from '../api/client'
+import { followPodcast } from '../api/followPodcast'
 import { useTopPodcasts } from '../hooks/useApi'
 import type { ArtworkHintState } from '../hooks/useArtworkHint'
 import type { TopPodcast } from '../api/types'
@@ -15,6 +17,7 @@ export default function TopPodcasts() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const queryClient = useQueryClient()
   // Restore scroll position on Back from a podcast detail page.
   // Filters live in the URL query string so the browser Back button restores
   // both them *and* the scroll position when returning from a podcast detail
@@ -96,10 +99,18 @@ export default function TopPodcasts() {
     const key = podcast.rss_url
     setAdding((prev) => ({ ...prev, [key]: 'pending' }))
     try {
-      await addPodcast({ url: podcast.rss_url, source: 'top_podcasts' })
+      // Queued behind any other Follow clicked on this page, and resolves
+      // only once the show is really followed.
+      await followPodcast(podcast.rss_url, 'top_podcasts')
       setAdding((prev) => ({ ...prev, [key]: 'done' }))
-    } catch {
+      queryClient.invalidateQueries({ queryKey: ['podcasts'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      // The chart's cached is_following / podcast_slug are stale now too.
+      queryClient.invalidateQueries({ queryKey: ['top-podcasts'] })
+    } catch (err) {
       setAdding((prev) => ({ ...prev, [key]: 'error' }))
+      const reason = err instanceof Error ? err.message : 'Failed to follow'
+      showToast(`Couldn't follow ${podcast.name}: ${reason}`, 'error')
     }
   }
 
@@ -132,8 +143,10 @@ export default function TopPodcasts() {
 
   return (
     <div className="max-w-4xl">
-      <div className="flex items-baseline justify-between mb-2 gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold text-gray-900">{headerLabel}</h1>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are, and the Region control shows the chart's region. */}
+      <h1 className="sr-only">{headerLabel}</h1>
+      <div className="mb-4">
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative">
             <input
@@ -196,18 +209,6 @@ export default function TopPodcasts() {
           </label>
         </div>
       </div>
-
-      <p className="text-gray-600 mb-6">
-        {user?.region_locked
-          ? 'Showing your region. '
-          : user?.region
-            ? 'Auto-detected from your IP. '
-            : ''}
-        <Link to="/settings" className="text-primary-700 hover:underline">
-          Change in settings
-        </Link>
-        .
-      </p>
 
       {showRegionHint && (
         <div className="mb-4 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-900">

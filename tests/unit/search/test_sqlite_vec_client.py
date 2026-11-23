@@ -465,3 +465,50 @@ class TestPerEpisodeCap:
         assert counts == {e1: 6, e3: 1}
         assert backend.count_lexical_matches("legora", [], None) == {}
         assert backend.count_lexical_matches("speaker:guest legora", [e1, e3], None) == {e3: 1}
+
+
+class TestExclusions:
+    """``-term`` excludes chunks on every leg, not only the lexical one."""
+
+    def _seed(self, tmp_path):
+        db_path, fixtures = _seed_db(tmp_path)
+        e1 = fixtures["episodes"]["e1"]["id"]
+        _populate_chunks(
+            db_path,
+            e1,
+            [
+                (0, 1.0, 5.0, "alpha text about quantum lasers", "Host"),
+                (1, 5.0, 10.0, "nvidia chips dominate the market", "Host"),
+                (2, 10.0, 15.0, "sovereign chips without nvidia", "Host"),
+            ],
+        )
+        return db_path
+
+    @pytest.mark.parametrize("mode", [SearchMode.LEXICAL, SearchMode.SEMANTIC, SearchMode.HYBRID])
+    def test_exclusion_only_query_returns_nothing(self, tmp_path, mode):
+        backend = SqliteVecBackend(db_path=self._seed(tmp_path), embedding_model=_StubEmbeddingModel())
+        assert backend.search("-nvidia", mode=mode, limit=10, filters=None) == []
+
+    def test_semantic_leg_drops_excluded_chunks(self, tmp_path):
+        # The query embeds exactly like segment 0, so without the
+        # exclusion filter the semantic leg returns it.
+        backend = SqliteVecBackend(db_path=self._seed(tmp_path), embedding_model=_StubEmbeddingModel())
+        assert backend.search("Host: alpha text about quantum lasers", mode=SearchMode.SEMANTIC, limit=5, filters=None)
+        hits = backend.search(
+            "Host: alpha text about quantum lasers -quantum", mode=SearchMode.SEMANTIC, limit=5, filters=None
+        )
+        assert hits == []
+
+    def test_hybrid_drops_excluded_chunks_from_every_leg(self, tmp_path):
+        backend = SqliteVecBackend(db_path=self._seed(tmp_path), embedding_model=_StubEmbeddingModel())
+        hits = backend.search("chips -nvidia", mode=SearchMode.HYBRID, limit=10, filters=None)
+        assert all("nvidia" not in h.text.lower() for h in hits)
+        hits = backend.search(
+            "Host: alpha text about quantum lasers -lasers", mode=SearchMode.HYBRID, limit=10, filters=None
+        )
+        assert all("lasers" not in h.text.lower() for h in hits)
+
+    def test_lexical_exclusion_still_works(self, tmp_path):
+        backend = SqliteVecBackend(db_path=self._seed(tmp_path), embedding_model=_StubEmbeddingModel())
+        hits = backend.search("chips -nvidia", mode=SearchMode.LEXICAL, limit=10, filters=None)
+        assert hits == []  # both "chips" chunks mention nvidia

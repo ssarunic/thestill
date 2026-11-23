@@ -32,12 +32,17 @@ export default function NowPlayingKaraokeLine({ track, enabled }: NowPlayingKara
   const { data: words } = useEpisodeTranscriptWords(track.podcastSlug, track.episodeSlug, enabled)
 
   const segments = transcriptData?.segments?.segments ?? null
+  const adPlaying = player.listenerAd != null
   const offset = transcriptData?.segments?.playback_time_offset_seconds ?? 0
   const segment = useMemo(() => {
     if (!segments || segments.length === 0) return null
-    const idx = findActiveSegmentIndex(segments, currentTime + HIGHLIGHT_LEAD_SECONDS, offset)
+    // During an ad of the listener's own (spec #116 §6.1) the clock is held
+    // on the boundary it interrupted: stay on the line before it, with no
+    // lead into what comes after (which may be an ad this copy lacks).
+    const at = adPlaying ? currentTime - 0.05 : currentTime + HIGHLIGHT_LEAD_SECONDS
+    const idx = findActiveSegmentIndex(segments, at, offset)
     return idx >= 0 ? segments[idx] : null
-  }, [segments, currentTime, offset])
+  }, [segments, currentTime, offset, adPlaying])
 
   const segmentWords = segment ? words?.wordsBySegmentId.get(segment.id) ?? null : null
   const cursor = useKaraokeActiveWordIdx(segmentWords, words?.offset ?? offset, player.getCurrentTime)

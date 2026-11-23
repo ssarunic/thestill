@@ -143,6 +143,7 @@ class TranscriptCleaningProcessor:
         *,
         language: str,
         refresh_episode_facts: bool = False,
+        sync_track_generation: Optional[str] = None,
     ) -> Dict:
         """
         Clean transcript using the two-pass facts-based approach.
@@ -317,6 +318,8 @@ class TranscriptCleaningProcessor:
         # viewer uses this to detect drift when the live URL later
         # returns a DAI-mutated file of a different length.
         cleaned_annotated.transcript_source_duration_s = transcript_model.get_duration()
+        # Spec #116 — which sync track described this raw transcript.
+        cleaned_annotated.sync_track_generation = sync_track_generation
         # Ads are tagged on the JSON sidecar (the canonical artefact)
         # and stripped from the Markdown projection — the summariser
         # has always read ads-free Markdown and continues to. The web

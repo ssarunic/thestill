@@ -45,6 +45,8 @@ interface EpisodeHeaderProps {
   onReprocess?: () => void
   /** Spec #110 — "Edit transcript" in the ⋯ menu for ``transcript.edit`` holders. */
   onEditTranscript?: () => void
+  /** Spec #117 — Follow beside the show name (the reader's ``EpisodeFollow``). */
+  follow?: ReactNode
 }
 
 /**
@@ -67,6 +69,7 @@ export default function EpisodeHeader({
   onMarkPlayed = () => Promise.resolve(),
   onReprocess,
   onEditTranscript,
+  follow,
 }: EpisodeHeaderProps) {
   const { isCurrent, isPlaying, isLoading, onToggle } = playback
   const minutes = formatMinutes(episode.duration)
@@ -85,7 +88,9 @@ export default function EpisodeHeader({
       : resumable
         ? `Resume episode${left ? `, ${left}` : ''}`
         : `Play episode${minutes ? `, ${minutes}` : ''}`
-  const busy = isLoading && !isPlaying
+  // Waiting for audio after a press, or buffering mid-play. The button
+  // stays pressable: a second press cancels the wait.
+  const busy = isLoading
   const description = episode.description_html || episode.description
 
   return (
@@ -115,18 +120,22 @@ export default function EpisodeHeader({
       title={episode.title}
       titleRef={titleRef}
       identity={
-        // Plain navigation, deliberately leaving any inbox overlay context
-        // (spec #52 interaction table).
-        <Link
-          to={`/podcasts/${podcastSlug}`}
-          className="inline-flex max-w-full items-center gap-2 text-base text-gray-700 hover:text-primary-700"
-        >
-          <Artwork role="inline" sources={[episode.podcast_image_url]} />
-          <span className="truncate">{episode.podcast_title}</span>
-          <span className="h-4 w-4 shrink-0 text-gray-400">
-            <ChevronRightIcon />
-          </span>
-        </Link>
+        // The show name truncates; Follow (spec #117) never wraps under it.
+        <div className="flex max-w-full items-center gap-3">
+          {/* Plain navigation, deliberately leaving any inbox overlay
+              context (spec #52 interaction table). */}
+          <Link
+            to={`/podcasts/${podcastSlug}`}
+            className="inline-flex min-w-0 items-center gap-2 text-base text-gray-700 hover:text-primary-700"
+          >
+            <Artwork role="inline" sources={[episode.podcast_image_url]} />
+            <span className="truncate">{episode.podcast_title}</span>
+            <span className="h-4 w-4 shrink-0 text-gray-400">
+              <ChevronRightIcon />
+            </span>
+          </Link>
+          {follow}
+        </div>
       }
     >
       <ActionRow
@@ -136,7 +145,7 @@ export default function EpisodeHeader({
             size="lg"
             pill
             onClick={onToggle}
-            isLoading={busy}
+            busy={busy}
             aria-label={primaryName}
             icon={isPlaying ? <PauseIcon /> : <PlayIcon />}
           >

@@ -194,3 +194,15 @@ def test_unfollowed_podcast_is_discover_only_until_followed(db_unfollowed: str):
     task = qm.get_next_task(stage=TaskStage.DOWNLOAD)
     assert task is not None
     assert task.episode_id == EPISODE_ID
+
+
+def test_dry_run_passes_dry_run_to_the_feed_refresh():
+    """``RefreshService.refresh(dry_run=True)`` must not let the feed refresh
+    persist what it discovered (``thestill refresh --dry-run`` used to save)."""
+    feed_manager = MagicMock()
+    feed_manager.refresh_feeds.return_value = SimpleNamespace(
+        episodes_by_podcast=[], podcasts_with_errors=0, total_podcasts=0, conditional_get_hits=0
+    )
+    service = RefreshService(feed_manager=feed_manager, podcast_service=MagicMock())
+    service.refresh(dry_run=True)
+    assert feed_manager.refresh_feeds.call_args.kwargs["dry_run"] is True

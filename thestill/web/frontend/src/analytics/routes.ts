@@ -31,6 +31,7 @@ export const APP_ROUTE_PATTERNS = [
   '/oauth/consent',
   '/terms',
   '/privacy',
+  '/claude',
 ] as const
 
 /** The pattern ``pathname`` matches, or ``/other`` for anything else. */

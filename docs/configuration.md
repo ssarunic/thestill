@@ -124,6 +124,8 @@ are optional.
 |----------|-------------|---------|
 | `MAX_EPISODES_PER_PODCAST` | Limit episodes tracked per podcast | - (no limit) |
 | `DELETE_AUDIO_AFTER_PROCESSING` | Delete audio after each stage | `false` |
+| `SYNC_TRACKS_ENABLED` | Write a sync track for each transcribed episode (see [spec #116](../specs/116-timestamp-drift-alignment.md)) | `true` |
+| `DRIFT_ALIGNMENT_ENABLED` | Browsers align a transcript with the copy of the audio they are served, correct seeks and karaoke with the result, and offer Skip ahead past ads (see [spec #116](../specs/116-timestamp-drift-alignment.md)). Who gets it is the `drift_alignment_audience` runtime setting: `users` (every signed-in user on desktop Chrome or Mac Safari, the default) or `admins` (`thestill settings set drift_alignment_audience admins`). On by default; set to `false` to turn it off for everyone | `true` |
 | `REFRESH_MAX_WORKERS` | Parallel workers for `thestill refresh` (see [spec #19](../specs/19-refresh-performance.md)) | `1` |
 | `REFRESH_MAX_PER_HOST` | Cap on concurrent HTTP fetches per host during refresh | `2` |
 | `REFRESH_QUARANTINE_PROBE_INTERVAL_SECONDS` | Spec #60: how long a `feed_gone`/`invalid_content` quarantine sits before one automatic re-probe (`auth_required`/`blocked_unsafe` are never auto-probed) | `604800` (weekly) |
@@ -143,6 +145,21 @@ Prevents database from becoming unmanageable for podcasts with hundreds of episo
 - First refresh: Discovers 50 most recent episodes
 - After processing 10: Next refresh keeps those 10 processed + 40 most recent unprocessed
 - Result: Always stays at ≤50 total episodes per podcast
+
+### SYNC_TRACKS_ENABLED
+
+A sync track is a small file (about 36 KB per hour of audio) of landmarks
+taken from the exact audio an episode was transcribed from. It lets the
+reader correct transcript timestamps when a listener's copy carries
+different ads. It is written when an episode is transcribed:
+
+- With local transcription, from the downloaded file.
+- With Dalston's URL fetch, from the original audio Dalston stores for the
+  job. This reads the audio once more from Dalston after each job.
+
+Only MP3 audio gets a track. A failure to write one is logged as
+`sync_track_failed` and never fails the episode. Set to `false` to stop
+writing new tracks; existing ones are kept.
 
 ### DELETE_AUDIO_AFTER_PROCESSING
 
@@ -516,6 +533,40 @@ A misconfigured provider (e.g. `EMAIL_PROVIDER=smtp` without
 Each briefing is emailed at most once — deliveries are tracked in the
 `briefing_deliveries` table with bounded retries, and a failed send never
 blocks briefing generation.
+
+### Welcome and product-tips email (spec #118)
+
+A short sequence for new accounts: a welcome email a day after signup,
+then a few tips (follow a show, connect Claude, search). It uses the same
+provider and `EMAIL_FROM` as briefing emails, and needs multi-user mode.
+Each message has a send window (days after signup), a condition (for
+example "has not followed a show yet") and is sent at most once, tracked
+in the `user_messages` table. A reader gets at most one every two days,
+none within 12 hours of a briefing email, and only between 09:00 and 19:00
+in their briefing time zone (UTC without one).
+
+Readers control it with **Product tips by email** in Settings, separate
+from the usage-events switch. It is on for accounts created while tips can
+be sent, because the sign-in page then tells new readers about them;
+accounts created before this feature, or while `EMAIL_PROVIDER` was
+`none`, stay off.
+Every tips email carries a one-click unsubscribe
+(`/unsubscribe/tips?token=…`) that turns tips off and leaves briefing
+emails alone.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LIFECYCLE_EMAIL_ENABLED` | Default for the `lifecycle_email_enabled` runtime switch; off means nothing is queued or sent | `false` |
+
+Before switching it on, read the copy and the plan:
+
+```bash
+thestill lifecycle status                           # the switch, the sequence, sends per message
+thestill lifecycle plan                             # dry run: who would get what now, and why
+thestill lifecycle preview welcome --follows 0 --out /tmp/preview
+thestill lifecycle send-test welcome --to you@example.com
+thestill settings set lifecycle_email_enabled true  # start (no restart needed)
+```
 
 ## Related Episodes (spec #46, #56)
 

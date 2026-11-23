@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """
-One-click briefing email unsubscribe (spec #51).
+One-click email unsubscribe: briefing emails (spec #51) and product tips
+(spec #118), each with its own signed token purpose.
 
 Unauthenticated by design: the link lives in an email and must work
 without login (CAN-SPAM/GDPR). Authorization comes from the HMAC-signed
@@ -40,7 +41,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
 from structlog import get_logger
 
-from ...utils.unsubscribe_token import verify_unsubscribe_token
+from ...utils.unsubscribe_token import BRIEFING_PURPOSE, TIPS_PURPOSE, verify_unsubscribe_token
 from ..dependencies import AppState, get_app_state
 
 logger = get_logger(__name__)
@@ -63,7 +64,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 _CONFIRM_FORM_TEMPLATE = (
-    '<form method="post" action="/unsubscribe/briefings?token={token}" style="margin:20px 0 0;">'
+    '<form method="post" action="{action}?token={token}" style="margin:20px 0 0;">'
     '<button type="submit" style="padding:10px 18px;background:#18181b;color:#ffffff;'
     'border:none;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;">'
     "Unsubscribe</button></form>"
@@ -75,19 +76,18 @@ def _page(title: str, body: str, status_code: int, extra_html: str = "") -> HTML
     return HTMLResponse(content=content, status_code=status_code)
 
 
-def _invalid_link_page() -> HTMLResponse:
+def _invalid_link_page(what: str = "briefing emails") -> HTMLResponse:
     return _page(
         "Link not valid",
-        "This unsubscribe link is invalid or was truncated. "
-        "You can also turn off briefing emails in the app under Settings.",
+        f"This unsubscribe link is invalid or was truncated. You can also turn off {what} in the app under Settings.",
         status_code=400,
     )
 
 
-def _verify(token: str, app_state: AppState):
+def _verify(token: str, app_state: AppState, purpose: str = BRIEFING_PURPOSE):
     config = app_state.config
     secret = config.unsubscribe_secret or config.jwt_secret_key
-    return verify_unsubscribe_token(token, secret)
+    return verify_unsubscribe_token(token, secret, purpose=purpose)
 
 
 @router.get("/unsubscribe/briefings")
@@ -108,7 +108,7 @@ def unsubscribe_briefings(
         "Your briefings keep generating on schedule — you can always read "
         "them in the app, or re-enable email any time in Settings.",
         status_code=200,
-        extra_html=_CONFIRM_FORM_TEMPLATE.format(token=html.escape(token, quote=True)),
+        extra_html=_CONFIRM_FORM_TEMPLATE.format(action="/unsubscribe/briefings", token=html.escape(token, quote=True)),
     )
 
 
@@ -130,5 +130,42 @@ def unsubscribe_briefings_one_click(
         "Briefing emails are switched off for your account. "
         "Your briefings keep generating on schedule — read them in the app, "
         "or re-enable email any time in Settings.",
+        status_code=200,
+    )
+
+
+@router.get("/unsubscribe/tips")
+def unsubscribe_tips(
+    token: str = "",
+    app_state: AppState = Depends(get_app_state),
+) -> HTMLResponse:
+    """Spec #118 — confirm before turning product tips off (read-only GET,
+    for the same prefetching gateways as the briefing link)."""
+    if _verify(token, app_state, TIPS_PURPOSE) is None:
+        return _invalid_link_page("product tips")
+    return _page(
+        "Unsubscribe from product tips?",
+        "Click the button to stop the welcome and product-tips emails. "
+        "Briefing emails have their own setting and aren't affected.",
+        status_code=200,
+        extra_html=_CONFIRM_FORM_TEMPLATE.format(action="/unsubscribe/tips", token=html.escape(token, quote=True)),
+    )
+
+
+@router.post("/unsubscribe/tips")
+def unsubscribe_tips_one_click(
+    token: str = "",
+    app_state: AppState = Depends(get_app_state),
+) -> HTMLResponse:
+    """Turn "Product tips by email" off: confirm-page button and RFC 8058
+    one-click. Idempotent, and a token for a deleted account confirms too."""
+    user_id = _verify(token, app_state, TIPS_PURPOSE)
+    if user_id is None:
+        return _invalid_link_page("product tips")
+    if app_state.user_repository is not None and app_state.user_repository.update_product_tips_email(user_id, False):
+        logger.info("product_tips_email_unsubscribed", user_id=user_id)
+    return _page(
+        "You're unsubscribed",
+        "You won't get welcome or product-tips emails any more. " "Turn them back on any time in Settings.",
         status_code=200,
     )

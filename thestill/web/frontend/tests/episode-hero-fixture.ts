@@ -46,11 +46,39 @@ export interface ListeningFixture {
   updated_at: string
 }
 
-export async function mockEpisodeApi(page: Page, { listening = null }: { listening?: ListeningFixture | null } = {}) {
+// Spec #116 — what the drift-alignment spec swaps in: real audio, a
+// transcript that names a sync track, and the permission to align.
+export interface EpisodeOverrides {
+  listening?: ListeningFixture | null
+  /** Replaces the unreachable default audio URL. */
+  audioUrl?: string
+  /** Replaces the `segments` object of the transcript payload. */
+  transcriptSegments?: Record<string, unknown>
+  /** Named permissions of the session (spec #110). */
+  permissions?: string[]
+  /** Episode duration in seconds. */
+  duration?: number
+  /** False: a signed-in listener who is not an admin (multi-user mode). */
+  isAdmin?: boolean
+}
+
+export async function mockEpisodeApi(
+  page: Page,
+  {
+    listening = null,
+    audioUrl = 'https://example.com/a.mp3',
+    transcriptSegments,
+    permissions,
+    duration = 3505,
+    isAdmin = true,
+  }: EpisodeOverrides = {},
+) {
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       json: {
-        multi_user: false,
+        // Single-user mode makes everyone the operator; a plain listener
+        // needs multi-user mode.
+        multi_user: !isAdmin,
         authenticated: true,
         email_delivery_available: false,
         user: {
@@ -62,8 +90,9 @@ export async function mockEpisodeApi(page: Page, { listening = null }: { listeni
           last_login_at: null,
           region: 'gb',
           region_locked: false,
-          is_admin: true,
+          is_admin: isAdmin,
         },
+        ...(permissions ? { permissions } : {}),
       },
     }),
   )
@@ -93,7 +122,7 @@ export async function mockEpisodeApi(page: Page, { listening = null }: { listeni
         content: '',
         available: true,
         transcript_type: 'cleaned',
-        segments: {
+        segments: transcriptSegments ?? {
           episode_id: 'ep-uuid-1',
           language: 'en',
           transcript_source_duration_s: 3505,
@@ -120,6 +149,10 @@ export async function mockEpisodeApi(page: Page, { listening = null }: { listeni
           podcast_title: 'Prof G Markets',
           podcast_author: 'Prof G Media',
           podcast_language: 'en',
+          // Spec #117 — an unfollowed show: the header carries Follow, the
+          // widest identity row the fold has to fit.
+          podcast_is_following: false,
+          podcast_followable: true,
           origin: 'feed',
           import_kind: null,
           title: EPISODE_TITLE,
@@ -127,18 +160,18 @@ export async function mockEpisodeApi(page: Page, { listening = null }: { listeni
           description_html: `<p>${DESCRIPTION}</p>`,
           slug: EPISODE,
           pub_date: '2026-09-06T07:00:00Z',
-          audio_url: 'https://example.com/a.mp3',
+          audio_url: audioUrl,
           // Audio kind with an episode-level YouTube link (spec #62 §6) so
           // the action row carries all four slots.
           playback: {
             kind: 'audio',
-            audio: { url: 'https://example.com/a.mp3', mime_type: 'audio/mpeg' },
+            audio: { url: audioUrl, mime_type: 'audio/mpeg' },
             video: null,
             youtube: { video_id: 'abc123', watch_url: 'https://www.youtube.com/watch?v=abc123' },
             poster_url: null,
           },
-          duration: 3505,
-          duration_formatted: '58:25',
+          duration,
+          duration_formatted: duration === 3505 ? '58:25' : `${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, '0')}`,
           external_id: 'ext-1',
           state: 'summarized',
           has_transcript: true,

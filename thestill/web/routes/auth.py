@@ -42,7 +42,7 @@ from ...utils.page_kind import public_page_kind, signup_source_for
 from ..analytics_request import capture_event, login_flow_key, may_measure
 from ..dependencies import AppState, get_app_state
 from ..middleware import AUTH_LIMIT, rate_limit_dependency, resolve_client_ip, trusted_proxy_set
-from ..permissions import permissions_for
+from ..permissions import permissions_for, runtime_settings
 from ..responses import api_response
 
 logger = get_logger(__name__)
@@ -202,7 +202,7 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             "user": user.model_dump(exclude=PRIVATE_USER_FIELDS) if user else None,
             # Spec #110: the named permissions this session holds; the
             # app's ``can(permission)`` reads this, never ``is_admin``.
-            "permissions": permissions_for(user, state.config) if user else [],
+            "permissions": permissions_for(user, state.config, runtime_settings(state)) if user else [],
             # Spec #51 capability flag: the settings UI only shows the
             # briefing email-delivery checkbox when a provider is
             # configured AND the briefing scheduler is running — the
@@ -211,6 +211,10 @@ async def auth_status(request: Request, state: AppState = Depends(get_app_state)
             "email_delivery_available": (
                 state.briefing_delivery_service is not None and state.briefing_scheduler is not None
             ),
+            # Spec #118: whether welcome and product-tips emails can be sent
+            # here (multi-user, an email provider). Shows the Settings switch
+            # and the sign-in page's line about tips.
+            "product_tips_email_available": bool(multi_user and state.lifecycle_email_service is not None),
             # Spec #95: whether usage events exist at all (shows the Settings
             # switch), and the key the signed-in app initialises its SDK
             # with. No key for an opted-out user or under GPC, so the
@@ -421,6 +425,13 @@ async def google_callback(
         # and self-limiting: a successful claim deletes the local row, so
         # later logins no-op. Never blocks login (claim_for_new_user
         # swallows all errors).
+        # Spec #118 — tips start on only for a signup the sign-in page told
+        # about them, which it does exactly when they can be sent. Without an
+        # email provider the account stays off, so configuring one later
+        # never emails readers who were never offered the chance to refuse.
+        if is_new_user and app_state.lifecycle_email_service is not None:
+            user = app_state.auth_service.set_product_tips_email(user, True)
+
         if is_new_user and app_state.legacy_claim_service is not None:
             app_state.legacy_claim_service.claim_for_new_user(user)
 
@@ -511,7 +522,7 @@ def get_current_user(request: Request, state: AppState = Depends(get_app_state))
     return api_response(
         {
             "user": user.model_dump(exclude=PRIVATE_USER_FIELDS),
-            "permissions": permissions_for(user, state.config),
+            "permissions": permissions_for(user, state.config, runtime_settings(state)),
         }
     )
 
@@ -529,6 +540,10 @@ class UpdateMeRequest(BaseModel):
         default=None,
         description="Spec #95: the Settings switch for usage events.",
     )
+    product_tips_email_enabled: Optional[bool] = Field(
+        default=None,
+        description='Spec #118: the Settings switch "Product tips by email".',
+    )
 
 
 @router.patch("/me")
@@ -541,7 +556,8 @@ def update_current_user(
 
     Setting ``region`` (even to null) locks future IP-based inference; the
     only way to re-enable inference is to clear region in the database.
-    ``usage_analytics_enabled`` is the spec #95 usage-events switch.
+    ``usage_analytics_enabled`` is the spec #95 usage-events switch and
+    ``product_tips_email_enabled`` the spec #118 tips-email switch.
     """
     token = _get_token_from_request(request)
     user = state.auth_service.get_current_user(token)
@@ -556,5 +572,7 @@ def update_current_user(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.usage_analytics_enabled is not None:
         updated = state.auth_service.set_usage_analytics(updated, payload.usage_analytics_enabled)
+    if payload.product_tips_email_enabled is not None:
+        updated = state.auth_service.set_product_tips_email(updated, payload.product_tips_email_enabled)
 
     return api_response({"user": updated.model_dump(exclude=PRIVATE_USER_FIELDS)})

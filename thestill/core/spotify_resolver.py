@@ -263,7 +263,10 @@ _TITLE_TAG_RE = re.compile(r"<title[^>]{0,200}>([^<]{0,1000})</title>", re.IGNOR
 _PUBLISHER_JSON_RE = re.compile(r'"publisher"\s*:\s*"([^"\\]{1,200})"')
 _LISTEN_TO_EPISODE_RE = re.compile(r"^Listen to this episode from (.+?) on Spotify\.?", re.IGNORECASE | re.DOTALL)
 _LISTEN_TO_SHOW_RE = re.compile(r"^Listen to (.+?) on Spotify\.?", re.IGNORECASE | re.DOTALL)
-_SPOTIFY_TITLE_SUFFIX_RE = re.compile(r"\s*[|\-–—]\s*(?:Podcast on Spotify|Spotify)\s*$", re.IGNORECASE)
+# "<…> | Podcast on Spotify" (2025) and "<…> | Listen to the Podcast on Spotify" (2026-11).
+_SPOTIFY_TITLE_SUFFIX_RE = re.compile(
+    r"\s*[|\-–—]\s*(?:Listen to the Podcast on Spotify|Podcast on Spotify|Spotify)\s*$", re.IGNORECASE
+)
 
 
 def parse_meta_tags(page_html: str) -> Dict[str, str]:
@@ -345,32 +348,36 @@ def parse_episode_page(page_html: str, episode_id: str) -> SpotifyEpisodeMetadat
     page_title = _strip_spotify_title_suffix(_page_title(page_html))
     og_description = tags.get("og:description") or tags.get("twitter:description") or ""
 
-    show_name = ""
-    # ``<title>`` is "<episode> - <show> | Podcast on Spotify".
-    if page_title:
-        if title and page_title.lower().startswith(title.lower()):
-            remainder = page_title[len(title) :].strip()
-            remainder = re.sub(r"^[\-–—|:]\s*", "", remainder).strip()
-            show_name = remainder
-        elif " - " in page_title:
-            head, _, tail = page_title.rpartition(" - ")
-            show_name = tail.strip()
-            title = title or head.strip()
-        elif not title:
-            title = page_title
     # ``og:description`` is "<show> · Episode" on episode pages, or the
     # older "Listen to this episode from <show> on Spotify. <description>".
+    # Both are structured, so they win over the ``<title>`` heuristic below —
+    # Spotify reworded the title suffix in 2026-11 and the title parse then
+    # read "Listen to the Podcast on Spotify" as the show name.
+    show_name = ""
     description = ""
     if og_description:
         listen = _LISTEN_TO_EPISODE_RE.match(og_description)
         parts = _split_dot_separated(og_description)
         if listen:
-            show_name = show_name or listen.group(1).strip()
+            show_name = listen.group(1).strip()
             description = og_description[listen.end() :].strip()
         elif len(parts) >= 2 and parts[-1].lower() == "episode":
-            show_name = show_name or parts[0]
+            show_name = " · ".join(parts[:-1])
         else:
             description = og_description
+    # ``<title>`` is "<episode> - <show> | Podcast on Spotify" (or, since
+    # 2026-11, "<episode> | Listen to the Podcast on Spotify" with no show).
+    if page_title:
+        if title and page_title.lower().startswith(title.lower()):
+            if not show_name:
+                remainder = page_title[len(title) :].strip()
+                show_name = re.sub(r"^[\-–—|:]\s*", "", remainder).strip()
+        elif " - " in page_title:
+            head, _, tail = page_title.rpartition(" - ")
+            show_name = show_name or tail.strip()
+            title = title or head.strip()
+        elif not title:
+            title = page_title
     plain_description = tags.get("description")
     if plain_description and (not description or len(plain_description) > len(description)):
         parts = _split_dot_separated(plain_description)

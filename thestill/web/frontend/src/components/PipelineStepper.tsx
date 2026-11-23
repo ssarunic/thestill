@@ -171,15 +171,15 @@ export default function PipelineStepper({
     : null
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* Stepper */}
-      <div className="flex items-center">
+    <div className="flex flex-col gap-2 min-w-0 max-w-full">
+      {/* Stepper: never wider than the page; scrolls sideways if it must (narrow phones) */}
+      <div className="flex items-center max-w-full overflow-x-auto overscroll-x-contain -m-1 p-1">
         {STAGES.map((stage, idx) => {
           const status = getStageStatus(stage.key, idx)
           const isLast = idx === STAGES.length - 1
 
           return (
-            <div key={stage.key} className="flex items-center">
+            <div key={stage.key} className="flex items-center shrink-0">
               {/* Stage circle */}
               <div className="flex flex-col items-center">
                 <div
@@ -207,7 +207,7 @@ export default function PipelineStepper({
                 {!compact && (
                   <span
                     className={`
-                      text-xs mt-1 font-medium whitespace-nowrap
+                      text-[11px] sm:text-xs mt-1 font-medium whitespace-nowrap
                       ${status === 'completed' ? 'text-green-600' : ''}
                       ${status === 'current' ? 'text-purple-600' : ''}
                       ${status === 'pending' ? 'text-gray-400' : ''}
@@ -223,7 +223,7 @@ export default function PipelineStepper({
               {!isLast && (
                 <div
                   className={`
-                    w-6 h-1 mx-1 rounded transition-all duration-300
+                    w-3 sm:w-6 h-1 mx-0.5 sm:mx-1 shrink-0 rounded transition-all duration-300
                     ${status === 'completed' || status === 'skipped' ? 'bg-green-400' : ''}
                     ${status === 'current' && isProcessing ? 'bg-gradient-to-r from-purple-400 to-gray-200' : ''}
                     ${status === 'current' && !isProcessing ? 'bg-gradient-to-r from-gray-400 to-gray-200' : ''}

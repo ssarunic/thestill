@@ -209,6 +209,7 @@ def _episode_from_row(row: dict) -> Episode:
         ),
         summary_path=row["summary_path"],
         summary_preview=row.get("summary_preview"),
+        entity_extraction_status=row.get("entity_extraction_status"),
         published_at=row.get("published_at"),
         failed_at_stage=row["failed_at_stage"],
         failure_reason=row["failure_reason"],
@@ -1361,6 +1362,15 @@ class PodcastsMixin(CategoryCacheMixin):
                 (podcast_id,),
             ).fetchone()
             return row is not None
+
+    def follow_started_at(self, podcast_id: str) -> Optional[datetime]:
+        """See interface."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(created_at) AS started FROM podcast_followers WHERE podcast_id = %s",
+                (podcast_id,),
+            ).fetchone()
+            return ensure_utc(row["started"]) if row else None
 
     def record_refresh_success(
         self,

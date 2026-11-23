@@ -224,6 +224,31 @@ class TestGetEpisodeBySlugs:
         data = self._get(client, mock_app_state, author=None)
         assert data["podcast_author"] is None
 
+    # Spec #117 — what the episode header's Follow needs.
+    def test_reports_whether_the_caller_follows_the_show(self, client, mock_app_state, mock_user):
+        mock_app_state.follower_repository.exists.return_value = False
+        data = self._get(client, mock_app_state)
+        assert data["podcast_is_following"] is False
+        assert data["podcast_followable"] is True
+        podcast_id = mock_app_state.repository.get_episode_by_slug.return_value[0].id
+        mock_app_state.follower_repository.exists.assert_called_once_with(mock_user.id, podcast_id)
+
+        mock_app_state.follower_repository.exists.return_value = True
+        assert self._get(client, mock_app_state)["podcast_is_following"] is True
+
+    def test_bare_audio_import_parent_is_not_followable(self, client, mock_app_state):
+        from thestill.repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID
+
+        podcast, episode = self._result(canonical_id="audio:abc")
+        podcast.id = SYNTHETIC_AUDIO_IMPORTS_ID
+        mock_app_state.follower_repository.exists.return_value = False
+        mock_app_state.repository.get_episode_by_slug.return_value = (podcast, episode)
+        mock_app_state.repository.get_alternate_enclosures.return_value = []
+        mock_app_state.repository.get_platform_links.return_value = []
+        response = client.get("/api/podcasts/audio-imports/episodes/why-nobody-trusts-the-news")
+        assert response.status_code == 200
+        assert response.json()["episode"]["podcast_followable"] is False
+
     def test_platform_links_expose_platform_and_url_only(self, client, mock_app_state):
         from thestill.models.podcast import PlatformLink
 

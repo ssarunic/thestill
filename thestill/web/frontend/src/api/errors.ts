@@ -41,3 +41,15 @@ export function redirectIfAccountDisabled(body: unknown): void {
     window.location.assign('/login?error=account_disabled')
   }
 }
+
+// A failed API call that keeps its HTTP status, for callers that treat one
+// status differently (a 409 "already in progress" is worth waiting out).
+export class ApiStatusError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiStatusError'
+    this.status = status
+  }
+}

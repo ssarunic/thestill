@@ -72,6 +72,17 @@ def test_landing_has_indexable_tags(site, app_state):
     assert head.count("<title>") == 1
 
 
+def test_claude_guide_is_indexable_and_in_the_sitemap(site, app_state):
+    """Spec #108 — /claude is the connector's public documentation."""
+    response = site.get("/claude")
+    assert response.status_code == 200
+    head = _head(response.text)
+    assert _title(response.text) == "Use Thestill in Claude · Thestill"
+    assert "noindex" not in head
+    assert '<link rel="canonical" href="https://thestill.test/claude" />' in head
+    assert "<loc>https://thestill.test/claude</loc>" in site.get("/sitemap.xml").text
+
+
 def test_head_request_is_allowed(site):
     assert site.head("/").status_code == 200
 
@@ -84,7 +95,8 @@ def test_public_show_and_episode_tags(site, app_state):
     episode = site.get("/podcasts/public-show/episodes/summarised")
     assert episode.status_code == 200
     head = _head(episode.text)
-    assert "Episode 1 · Public Show" in _title(episode.text)
+    # Spec #105 search titles: what the page is, then the show; no site name.
+    assert _title(episode.text) == "Episode 1 — Public Show summary"
     assert 'content="Two hosts argue about chips."' in head
     assert '"@type":"PodcastEpisode"' in head
     assert "noindex" not in head
@@ -119,7 +131,8 @@ def test_metadata_cannot_break_out_of_the_head(site, app_state):
         )
     head = _head(site.get("/podcasts/public-show/episodes/summarised").text)
     assert "<script>alert(1)" not in head
-    assert "&lt;/title&gt;&lt;script&gt;" in head
+    # The search title drops tags from the publisher's title altogether.
+    assert "<" not in _title(head) and "alert(1)" in _title(head)
     ld = re.search(r'<script type="application/ld\+json">(.*?)</script>', head, re.S).group(1)
     assert "</" not in ld and "\\u003c/script\\u003e" in ld
 
@@ -128,6 +141,22 @@ def test_root_files_are_served_as_files(site):
     response = site.get("/favicon.svg")
     assert response.status_code == 200
     assert response.text == "<svg/>"
+
+
+def test_service_worker_is_served_uncached_and_never_as_the_shell(site, static_dir):
+    """Spec #116 — a cached service worker cannot be withdrawn; and its URL
+    must not fall through to index.html when the build has none."""
+    assert site.get("/sw.js").status_code == 404
+    assert site.get("/sw.js").headers["cache-control"] == "no-cache"
+
+    (static_dir / "sw.js").write_text("// worker", encoding="utf-8")
+    response = site.get("/sw.js")
+    assert response.status_code == 200
+    assert response.text == "// worker"
+    assert response.headers["cache-control"] == "no-cache"
+    assert "javascript" in response.headers["content-type"]
+    # Other root files keep their day of caching.
+    assert site.get("/favicon.svg").headers["cache-control"] == "public, max-age=86400"
 
 
 def test_robots_allows_public_and_blocks_private(site):
@@ -161,6 +190,27 @@ def test_robots_blocks_training_crawlers_but_not_search_or_user_fetches(site):
     ):
         assert parser.can_fetch(agent, page), agent
         assert not parser.can_fetch(agent, "https://thestill.test/inbox"), agent
+
+
+def test_robots_keeps_entity_heavy_crawlers_off_entities_only(site):
+    """Their own group drops /entities/ but keeps every private block of ``*``."""
+    parser = urllib.robotparser.RobotFileParser()
+    parser.parse(site.get("/robots.txt").text.splitlines())
+    base = "https://thestill.test"
+    for agent in public_shell.ENTITY_HEAVY_CRAWLERS:
+        for blocked in (
+            "/entities/person/jane-doe",
+            "/api/public/entities/person/jane-doe",
+            "/inbox",
+            "/api/inbox",
+            "/login",
+            "/mcp",
+        ):
+            assert not parser.can_fetch(agent, base + blocked), (agent, blocked)
+        for allowed in ("/", "/top", "/podcasts/a/episodes/b", "/api/public/podcasts/a"):
+            assert parser.can_fetch(agent, base + allowed), (agent, allowed)
+    for agent in ("Googlebot", "Bingbot", "Applebot", "Amazonbot"):
+        assert parser.can_fetch(agent, base + "/entities/person/jane-doe"), agent
 
 
 def test_each_public_page_logs_one_served_line(site, app_state, monkeypatch):
@@ -204,39 +254,43 @@ def _facts(entity_id, entity_type, said=0, about=0, episodes=1, qid=None, instan
     }
 
 
+PUBLIC_SHOW_ID = "11111111-1111-1111-1111-111111111111"
+
+
 def test_sitemap_lists_a_retyped_entity_over_an_empty_row(site, app_state, monkeypatch):
-    """``company:mistral-ai`` is an empty leftover; the re-typed
-    ``topic:mistral-ai`` (now a company) has the mentions, so the page shows
-    it and the sitemap lists its URL."""
+    """``person:jane-doe`` is an empty leftover; the re-typed
+    ``company:jane-doe`` (now a person, the show's host) has the mentions,
+    so the page shows it and the sitemap lists its URL once."""
     from thestill.models.entities import EntityMention, EntityRecord, EntityType, MentionRole
     from thestill.repositories import public_quotes
 
     _seed(app_state)
     repo = app_state.entity_repository
-    repo.upsert_entity(EntityRecord(id="company:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI"))
+    repo.upsert_entity(EntityRecord(id="person:jane-doe", type=EntityType.PERSON, canonical_name="Jane Doe"))
     repo.upsert_entity(
-        EntityRecord(id="topic:mistral-ai", type=EntityType.COMPANY, canonical_name="Mistral AI", wikidata_qid="Q1")
+        EntityRecord(id="company:jane-doe", type=EntityType.PERSON, canonical_name="Jane Doe", wikidata_qid="Q1")
     )
     repo.insert_mentions(
         [
             EntityMention(
-                entity_id="topic:mistral-ai",
+                entity_id="company:jane-doe",
                 episode_id="00000000-0000-0000-0000-000000000001",
                 segment_id=1,
                 start_ms=100_000,
                 end_ms=104_000,
                 role=MentionRole.MENTIONED,
-                surface_form="Mistral",
-                quote_excerpt="Mistral shipped a model.",
+                surface_form="Jane",
+                quote_excerpt="Jane shipped a model.",
                 confidence=0.9,
                 extractor="gliner:test",
             )
         ]
     )
-    rows = [_facts("topic:mistral-ai", "company", about=12)]
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["company:jane-doe"])
+    rows = [_facts("company:jane-doe", "person", about=12)]
     monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
-    assert body.count("https://thestill.test/entities/company/mistral-ai</loc>") == 1
+    assert body.count("https://thestill.test/entities/person/jane-doe</loc>") == 1
 
 
 def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkeypatch):
@@ -245,24 +299,56 @@ def test_sitemap_skips_an_entity_whose_url_shows_another(site, app_state, monkey
     from thestill.models.entities import EntityRecord, EntityType
     from thestill.repositories import public_quotes
 
+    _seed(app_state)
     repo = app_state.entity_repository
     for entity_id, kind in (
-        ("topic:islam", EntityType.TOPIC),
-        ("person:islam", EntityType.TOPIC),  # a given name, re-typed to topic
+        ("person:ali", EntityType.PERSON),
+        ("topic:ali", EntityType.PERSON),  # re-typed to a person, a rival for person/ali
         ("company:abraham-pais", EntityType.PERSON),  # re-typed, no rival
     ):
         repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:ali", "topic:ali", "company:abraham-pais"])
     rows = [
-        _facts("person:islam", "topic", about=15),
-        _facts("topic:islam", "topic", about=10),
+        _facts("topic:ali", "person", said=15),
+        _facts("person:ali", "person", said=10),
         _facts("company:abraham-pais", "person", said=5),
     ]
     monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
     body = site.get("/sitemap.xml").text
-    assert body.count("https://thestill.test/entities/topic/islam</loc>") == 1
+    assert body.count("https://thestill.test/entities/person/ali</loc>") == 1
     assert "https://thestill.test/entities/person/abraham-pais</loc>" in body
     # The loser is dropped, not listed under its stale prefix either.
-    assert "/entities/person/islam" not in body
+    assert "/entities/topic/ali" not in body
+
+
+def test_sitemap_lists_only_people_with_a_role(site, app_state, monkeypatch):
+    """Spec #105 decision 3 (2026-11-20): topics, companies, products and
+    people only talked about stay out of the sitemap, however much they
+    are discussed; a host is listed."""
+    from thestill.models.entities import EntityRecord, EntityType
+    from thestill.repositories import public_quotes
+
+    _seed(app_state)
+    repo = app_state.entity_repository
+    for entity_id, kind in (
+        ("person:the-host", EntityType.PERSON),
+        ("person:only-mentioned", EntityType.PERSON),
+        ("topic:chips", EntityType.TOPIC),
+        ("company:nvidia", EntityType.COMPANY),
+    ):
+        repo.upsert_entity(EntityRecord(id=entity_id, type=kind, canonical_name=entity_id))
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:the-host"])
+    rows = [
+        _facts("person:the-host", "person", said=1),
+        _facts("person:only-mentioned", "person", said=20, about=40, episodes=9),
+        _facts("topic:chips", "topic", about=200, episodes=30),
+        _facts("company:nvidia", "company", about=90, episodes=12),
+    ]
+    monkeypatch.setattr(public_quotes.PublicQuoteQueries, "entity_index_facts", lambda self: rows)
+    body = site.get("/sitemap.xml").text
+    assert "https://thestill.test/entities/person/the-host</loc>" in body
+    for absent in ("only-mentioned", "/entities/topic/", "/entities/company/"):
+        assert absent not in body
 
 
 def test_sitemap_lists_exactly_the_public_pages(site, app_state):
@@ -379,6 +465,53 @@ def test_a_twice_retyped_entity_moves_a_url_at_neither_type(site, app_state):
     assert site.get("/entities/topic/twitter", follow_redirects=False).status_code == 404
 
 
+def _merge_titled_guest(app_state):
+    """``person:dr-sahar-yousef`` folded into ``person:sahar-yousef``, the
+    titled-guest merge of 2026-11-19 that left its URL answering 404."""
+    from tests.integration.web.test_public_api import _seed_people
+    from thestill.models.entities import EntityRecord, EntityType
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    repo.upsert_entity(EntityRecord(id="person:sahar-yousef", type=EntityType.PERSON, canonical_name="Sahar Yousef"))
+    repo.upsert_entity(
+        EntityRecord(id="person:dr-sahar-yousef", type=EntityType.PERSON, canonical_name="Dr Sahar Yousef")
+    )
+    assert repo.delete_entity("person:dr-sahar-yousef", redirect_to="person:sahar-yousef")
+    return repo
+
+
+def test_a_merged_entity_moves_its_url_to_the_keeper(site, app_state):
+    _merge_titled_guest(app_state)
+    moved = site.get("/entities/person/dr-sahar-yousef?about=x", follow_redirects=False)
+    assert moved.status_code == 301
+    assert moved.headers["location"] == "/entities/person/sahar-yousef#about=x"
+    assert site.get("/entities/person/sahar-yousef", follow_redirects=False).status_code == 200
+
+
+def test_a_merged_entity_url_is_a_404_when_the_keeper_is_hidden_or_gone(site, app_state):
+    from thestill.web.public_access import get_public_visibility
+
+    repo = _merge_titled_guest(app_state)
+    repo.set_entity_public_hidden("person:sahar-yousef", True)
+    get_public_visibility(app_state).invalidate()
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 404
+    repo.set_entity_public_hidden("person:sahar-yousef", False)
+    repo.delete_entity("person:sahar-yousef")
+    get_public_visibility(app_state).invalidate()
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 404
+
+
+def test_a_live_row_wins_over_a_redirect(site, app_state):
+    from thestill.models.entities import EntityRecord, EntityType
+
+    repo = _merge_titled_guest(app_state)
+    repo.upsert_entity(
+        EntityRecord(id="person:dr-sahar-yousef", type=EntityType.PERSON, canonical_name="Dr Sahar Yousef")
+    )
+    assert site.get("/entities/person/dr-sahar-yousef", follow_redirects=False).status_code == 200
+
+
 def test_a_retyped_entity_keeps_its_old_url_when_the_current_one_shows_another(site, app_state):
     """``product/nvidia`` belongs to a ``product:nvidia`` row with mentions of
     its own, so redirecting there would show a different entity."""
@@ -476,3 +609,75 @@ def test_legacy_query_deep_links_move_to_the_fragment(site, app_state):
     assert site.get(episode, follow_redirects=False).status_code == 200
     assert site.get(f"{episode}?view=transcript", follow_redirects=False).status_code == 200
     assert site.get("/podcasts/public-show/episodes/nope?t=1", follow_redirects=False).status_code == 404
+
+
+def test_search_titles_name_the_guest_and_describe_the_person(site, app_state):
+    """An episode is titled by its guest when the publisher names them; a
+    person's description says who they are, not a cut quote."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    repo.set_podcast_hosts(PUBLIC_SHOW_ID, ["person:scott-galloway"])
+    repo.set_episode_guests("00000000-0000-0000-0000-000000000001", ["person:scott-galloway", "person:ed-elson"])
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET title = ?, description = ? WHERE slug = 'summarised'",
+            ("Why chips are the new oil", "Ed Elson joins to argue about chips."),
+        )
+    title = _title(site.get("/podcasts/public-show/episodes/summarised").text)
+    # The host is not a guest; the guest and the topic lead.
+    assert title == "Ed Elson: Why chips are the new oil — Public Show"
+    head = _head(site.get("/entities/person/scott-galloway").text)
+    description = re.search(r'<meta name="description" content="(.*?)"', head).group(1)
+    assert description.startswith("Scott Galloway, host of Public Show.")
+    assert "“" not in description  # no cut quote
+
+
+def test_two_episodes_with_the_same_guest_get_different_titles(site, app_state):
+    """A recurring guest without a topic that fits would give every episode
+    "<Guest> on <Show> — summary & key quotes"; within a show, titles are unique."""
+    from tests.integration.web.test_public_api import _seed_people
+
+    _seed_people(app_state)
+    repo = app_state.entity_repository
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 1', description = 'Ed Elson joins.', summary_preview = 'A.' "
+            "WHERE id = '00000000-0000-0000-0000-000000000001'"
+        )
+        conn.execute(
+            "UPDATE episodes SET title = 'Ep 2', description = 'Ed Elson again.', summary_preview = 'B.', "
+            "summary_path = (SELECT summary_path FROM episodes WHERE id = '00000000-0000-0000-0000-000000000001') "
+            "WHERE id = '00000000-0000-0000-0000-000000000002'"
+        )
+    for episode_id in ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002"):
+        repo.set_episode_guests(episode_id, ["person:ed-elson"])
+    first = _title(site.get("/podcasts/public-show/episodes/summarised").text)
+    second = _title(site.get("/podcasts/public-show/episodes/no-summary").text)
+    assert first.startswith("Ed Elson") and second.startswith("Ed Elson")
+    assert first != second
+
+
+@pytest.mark.parametrize("status", [None, "pending", "failed", "skipped_unavailable"])
+def test_an_episode_without_its_entities_is_readable_but_not_indexed(site, app_state, status):
+    """Summarised but entities not in: the page works, carries noindex and
+    is left out of the sitemap until extraction settles."""
+    _seed(app_state)
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute("UPDATE episodes SET entity_extraction_status = ? WHERE slug = 'summarised'", (status,))
+    response = site.get("/podcasts/public-show/episodes/summarised")
+    assert response.status_code == 200
+    assert 'name="robots" content="noindex"' in _head(response.text)
+    assert "/episodes/summarised" not in site.get("/sitemap.xml").text
+
+
+@pytest.mark.parametrize("status", ["complete", "linking_deferred", "skipped_legacy"])
+def test_an_episode_with_settled_entities_is_indexed(site, app_state, status):
+    _seed(app_state)
+    app_state.repository.update_entity_extraction_status(
+        episode_id="00000000-0000-0000-0000-000000000001", status=status
+    )
+    head = _head(site.get("/podcasts/public-show/episodes/summarised").text)
+    assert 'content="noindex"' not in head
+    assert "/episodes/summarised" in site.get("/sitemap.xml").text

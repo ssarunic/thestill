@@ -23,10 +23,9 @@ export default function AdminAudit() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-ink">Audit log</h1>
-        <p className="text-muted mt-1">Every admin action, from the console, the CLI or automation. It can't be edited.</p>
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Audit log</h1>
       <div className="flex flex-wrap gap-2 items-center">
         <select
           value={action}

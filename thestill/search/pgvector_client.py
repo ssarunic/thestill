@@ -208,9 +208,14 @@ class PgVectorBackend:
     ) -> List[ResolvedHit]:
         """Run a search and return ranked hits (same contract as SqliteVecBackend)."""
         translated = translate_lexical_query(query)
+        if not translated.fts_match and not translated.embedding_text:
+            # Exclusion-only or operator-only input: nothing to search for.
+            return []
         effective_filters = filters or SearchFilters()
         if translated.speaker:
             effective_filters = replace(effective_filters, speaker=translated.speaker)
+        if translated.exclude_match:
+            effective_filters = replace(effective_filters, exclude_match=translated.exclude_match)
         if mode == SearchMode.LEXICAL:
             if not translated.fts_match:
                 return []
@@ -293,6 +298,10 @@ class PgVectorBackend:
             # Same substring semantics as SQLite's LOWER(...) LIKE.
             parts.append("c.speaker ILIKE %s")
             params.append(f"%{filters.speaker}%")
+        if filters.exclude_match:
+            # Mirrors the SQLite backend: every leg drops excluded chunks.
+            parts.append("NOT (c.text_tsv @@ websearch_to_tsquery('english', %s))")
+            params.append(_fts5_to_websearch(filters.exclude_match))
         if not parts:
             return "", []
         return " AND " + " AND ".join(parts), params

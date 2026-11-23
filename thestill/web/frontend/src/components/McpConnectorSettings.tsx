@@ -57,7 +57,7 @@ function OneTimeUrlModal({ url, onClose }: { url: string; onClose: () => void })
           Your connector URL
         </h2>
         <p className="text-sm text-gray-600">
-          Copy it now and paste it into claude.ai → Settings → Connectors → “Add custom connector”. It will
+          Copy it now and paste it into claude.ai → Customize → Connectors → “Add custom connector”. It will
           not be shown again; if you lose it, rotate.
         </p>
         <code
@@ -264,8 +264,11 @@ function AddressBlock({ address }: { address: string }) {
         </Button>
       </div>
       <p className="text-xs text-gray-500">
-        Paste this into Claude → Settings → Connectors → “Add custom connector”, then sign in and approve. It
-        works in Claude on the web, desktop and phone, and in other apps that support MCP.
+        Paste this into Claude → Customize → Connectors → “Add custom connector”, then sign in and approve. It
+        also works in other apps that support MCP.{' '}
+        <a href="/claude" className="text-primary-700 underline">
+          How it works and what you can ask
+        </a>
       </p>
     </div>
   )

@@ -4,11 +4,20 @@ Thestill measures use in two layers ([spec #95](../specs/95-product-analytics.md
 
 | Layer | Source | Where you read it |
 |---|---|---|
-| A. Product funnel | Product tables: signups, follows, reads, briefings | `/analytics` admin page, `thestill analytics` |
+| A. Product funnel | Product tables: signups, follows, reads, briefings, public page counters | `/analytics` admin page, `thestill analytics`, the `get_analytics` connector tool (admins) |
 | B. Usage events | PostHog Cloud (EU) | PostHog |
 
 Layer A needs no configuration: it works on any multi-user Postgres
 install. This page is mostly about Layer B, after the Scorecard.
+
+**From Claude.** An admin's Thestill connector has `get_analytics`
+([spec #115](../specs/115-admin-analytics-mcp.md)): the same report as
+`/analytics`, so "how are we doing" needs no production access. It also
+carries the **public traffic** section that `thestill analytics` prints:
+signed-out views per UTC day by page kind and the top public pages, from
+`public_page_daily_views`. Those counts include JS-running scrapers with
+browser user agents (a burst of no-referrer entity views is the tell);
+spec #115 Phase 2 proposes counting engaged views to filter them.
 
 ## Scorecard (Layer A, spec #111)
 
@@ -64,13 +73,16 @@ else.
 | `entity_open` | signed-in app, entity page | `entity_type` |
 | `reader_tab` | signed-in app, episode reader: once per tab shown per episode, the landing tab included | `tab`: `summary` or `transcript` |
 | `read_depth` | signed-in app, episode reader: once per tab and milestone per episode, on scroll, once the tab's content has loaded | `tab`, `percent`: 25, 50, 75 or 100 (the bottom of the viewport within 2% of the end) |
+| `ad_break_expanded` | signed-in app, episode reader: a reader opens an ad break's text with "Show ad text" (spec #116 §6.1); not sent when a search or a jump opens the row | `state`: what the row said: `plain` (no map for this audio), `same`, `different`, `absent` or `unresolved` |
+| `skip_ahead` | signed-in app, mini player or Now Playing sheet: a listener taps "Skip ahead", shown only while an ad plays and a timeline map is in force (spec #116 §6.2) | `seconds`: how much of the listener's copy it jumped over, rounded |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
 | `login_cancelled` | server, OAuth callback, when Google returns no code | `reason`: `access_denied` (Cancel on Google's screen), `admin_policy_enforced`, `server_error`, `temporarily_unavailable`, `other`, `missing_code` |
 | `login_failed` | server, OAuth callback, when Google signed the reader in but thestill did not | `reason`: `account_disabled`, `signups_closed`, `error` |
+| `drift_alignment_result` | server, `POST …/drift-outcome`: one per attempt to align a transcript with the listener's copy of the audio (spec #116) | `outcome`, `audio_host` (the hosting company's host name), `browser` (family and major version), `span_count`, `max_offset_s`, `coverage`, `anchors_total`, `anchors_hit`, `verify_length_ok`, `verify_ranges_checked`, `verify_ranges_matched`, `sw_state` (whether the service worker could check the playing audio, and if not why), `revision` (0 for a play's first report; count plays with `revision = 0`), `applied` (the map was put in force in the player), `fetch_ms`, `fit_ms`, `copy_source` (`element`: the copy the audio element plays, named by the service worker; `enclosure`: a fresh copy asked through the feed's URL); never the episode or the show |
 | `search` | server, `/api/search/corpus` (not in-episode expansion) | `result_count`, `mode` |
-| `follow` | server, when a follow is made (`POST /api/podcasts/{slug}/follow`, or an add from Top podcasts / Add podcast that created a new follow); never which show | `source`: `episode_prompt` (the reader's first-follow prompt), `show_page`, `pending_follow` (Follow pressed signed out, finished after sign-in), `top_podcasts`, `add_podcast`, `other` |
+| `follow` | server, when a follow is made (`POST /api/podcasts/{slug}/follow`, or an add from Top podcasts / Add podcast that created a new follow); never which show | `source`: `episode_page` (Follow beside the show name in the episode header, spec #117), `episode_pending_follow` (that Follow pressed signed out on a public episode page, finished after sign-in), `show_page`, `pending_follow` (the show page's Follow pressed signed out, finished after sign-in), `top_podcasts`, `add_podcast`, `other`; `episode_prompt` is the first-follow panel retired by spec #117 and appears only in events before it |
 | `unfollow` | server, `DELETE /api/podcasts/{slug}/follow` | none |
 | `mcp_tool_call` | server, remote MCP | `tool`, `ok` |
 

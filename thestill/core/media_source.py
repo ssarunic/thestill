@@ -34,6 +34,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple
+from urllib.parse import urlparse
 
 import defusedxml.ElementTree as ET  # Hardened against XXE / billion-laughs attacks in untrusted RSS feeds.
 import feedparser
@@ -44,13 +45,13 @@ from structlog import get_logger
 from urllib3.util.retry import Retry
 
 from ..models.podcast import AlternateEnclosure, Episode, TranscriptLink
-from ..utils.datetime_utils import ensure_utc, parse_struct_time_utc
+from ..utils.datetime_utils import ensure_utc, now_utc, parse_struct_time_utc, parse_struct_time_utc_or_none
 from ..utils.duration import parse_duration
 from ..utils.html_utils import resolve_description_variants
 from ..utils.http_text import decode_feed_body
 from ..utils.podcast_categories import validate_category
 from ..utils.timing import log_phase_timing
-from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, validate_public_url
+from ..utils.url_guard import UnsafeURLError, _GuardedHTTPAdapter, guarded_get, validate_public_url
 from ..utils.url_patterns import APPLE_PODCAST_ID_RE, extract_apple_podcast_id, is_spotify_url, looks_like_rss
 from .refresh_failure import RefreshFailureKind, classify_fetch_exception
 from .spotify_resolver import SpotifyLinkResolver, SpotifyResolutionError
@@ -60,6 +61,10 @@ if TYPE_CHECKING:
     from ..utils.path_manager import PathManager
 
 logger = get_logger(__name__)
+
+# Hosts whose pages the Apple-URL fallback may fetch (behind the SSRF guard).
+_APPLE_PODCAST_HOSTS = frozenset({"podcasts.apple.com", "itunes.apple.com"})
+_APPLE_PAGE_TIMEOUT_SECONDS = 15
 
 
 def _upgrade_image_url_to_https(url: Optional[str]) -> Optional[str]:
@@ -500,7 +505,12 @@ class RSSMediaSource(MediaSource):
         entries_skipped = 0
         for entry in parsed_feed.entries:
             try:
-                episode_date = self._parse_date(entry.get("published_parsed"))
+                # A missing/invalid date is stored as None, never as "now": the
+                # refresh sweep would read "now" as a release published after
+                # the follow and queue an undated catalog wholesale. The
+                # "now" fallback stays for the id fallback and discovery compare.
+                source_date = parse_struct_time_utc_or_none(entry.get("published_parsed"))
+                episode_date = source_date or now_utc()
                 episode_external_id = entry.get("guid", entry.get("id", str(episode_date)))
 
                 if episode_external_id in seen_ids:
@@ -543,7 +553,7 @@ class RSSMediaSource(MediaSource):
                     title=entry.get("title", "Unknown Episode"),
                     description=description,
                     description_html=description_html,
-                    pub_date=episode_date,
+                    pub_date=source_date,
                     audio_url=audio_url,  # type: ignore[arg-type]  # feedparser returns str, Pydantic validates to HttpUrl
                     duration=parse_duration(entry.get("itunes_duration")),
                     external_id=episode_external_id,
@@ -579,9 +589,11 @@ class RSSMediaSource(MediaSource):
 
         # Apply max_episodes limit if set. pub_date is tz-aware (Episode
         # validator); keep the None-fallback tz-aware too so the sort never
-        # mixes naive/aware datetimes.
+        # mixes naive/aware datetimes. An undated entry sorts as "now" (it
+        # was just discovered), as it did when its pub_date was stored as now.
         if episodes and max_episodes:
-            episodes.sort(key=lambda e: e.pub_date or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            discovered_at = now_utc()
+            episodes.sort(key=lambda e: e.pub_date or discovered_at, reverse=True)
             episodes = episodes[:max_episodes]
 
         return episodes
@@ -994,8 +1006,10 @@ class RSSMediaSource(MediaSource):
             RSS feed URL or None if not an Apple URL or extraction fails
         """
         try:
-            # Check if this is an Apple Podcast URL
-            if "podcasts.apple.com" not in url and "itunes.apple.com" not in url:
+            # Only a real Apple host: a substring test let any URL that merely
+            # mentions podcasts.apple.com (in a query, or as a subdomain
+            # prefix) through to the page fetch below.
+            if (urlparse(url).hostname or "").lower() not in _APPLE_PODCAST_HOSTS:
                 return None
 
             # Extract podcast ID from URL
@@ -1068,39 +1082,42 @@ class RSSMediaSource(MediaSource):
             RSS feed URL if found, None otherwise
         """
         try:
-            # Refuse to follow user-supplied Apple URLs into
-            # private / loopback / cloud-metadata space.
-            validate_public_url(url)
-            request = urllib.request.Request(url)
-            request.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+            # The page fetch goes through the SSRF guard: the URL and EVERY
+            # redirect hop must resolve to a public address (urllib's
+            # urlopen followed redirects without re-checking them).
+            response = guarded_get(
+                url,
+                timeout=_APPLE_PAGE_TIMEOUT_SECONDS,
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            )
+            response.raise_for_status()
+            page_content = response.text
 
-            with urllib.request.urlopen(request) as response:  # noqa: S310 — URL is SSRF-validated above
-                page_content = response.read().decode("utf-8", errors="ignore")
+            # Extract all potential IDs from the page content. Bound is
+            # 12 digits (Apple IDs are 10) — see utils.url_patterns.
+            id_matches = APPLE_PODCAST_ID_RE.findall(page_content)
 
-                # Extract all potential IDs from the page content. Bound is
-                # 12 digits (Apple IDs are 10) — see utils.url_patterns.
-                id_matches = APPLE_PODCAST_ID_RE.findall(page_content)
+            # Try each ID found on the page
+            for potential_id in set(id_matches):  # Use set to avoid duplicates
+                logger.debug(f"Trying podcast ID: {potential_id}")
 
-                # Try each ID found on the page
-                for potential_id in set(id_matches):  # Use set to avoid duplicates
-                    logger.debug(f"Trying podcast ID: {potential_id}")
+                # Fixed, trusted host; the id is digits only.
+                lookup_url = f"https://itunes.apple.com/lookup?id={potential_id}"
+                try:
+                    with urllib.request.urlopen(lookup_url) as api_response:
+                        data = json.load(api_response)
 
-                    lookup_url = f"https://itunes.apple.com/lookup?id={potential_id}"
-                    try:
-                        with urllib.request.urlopen(lookup_url) as api_response:
-                            data = json.load(api_response)
+                    if data.get("resultCount", 0) > 0:
+                        result = data["results"][0]
+                        feed_url = result.get("feedUrl")
+                        if feed_url:
+                            logger.info(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
+                            return str(feed_url)
+                except Exception as id_error:
+                    logger.debug(f"Failed to lookup ID {potential_id}: {id_error}")
+                    continue
 
-                        if data.get("resultCount", 0) > 0:
-                            result = data["results"][0]
-                            feed_url = result.get("feedUrl")
-                            if feed_url:
-                                logger.info(f"Successfully found RSS feed with ID {potential_id}: {feed_url}")
-                                return str(feed_url)
-                    except Exception as id_error:
-                        logger.debug(f"Failed to lookup ID {potential_id}: {id_error}")
-                        continue
-
-                return None
+            return None
 
         except Exception as e:
             logger.error(f"Error resolving Apple Podcast redirect {url}: {e}")

@@ -8,6 +8,7 @@ import FloatingVideoTile from './components/FloatingVideoTile'
 import { useBackgroundLocation } from './hooks/useBackgroundLocation'
 import { useAuth } from './contexts/AuthContext'
 import AnalyticsBridge from './analytics/AnalyticsBridge'
+import { useDriftSession } from './drift/useDriftSession'
 import { PublicApp } from './publicEntry'
 import { useScrollRestoration } from './hooks/useScrollRestoration'
 
@@ -35,6 +36,7 @@ const SearchResults = lazy(() => import('./pages/SearchResults'))
 const Entities = lazy(() => import('./pages/Entities'))
 const Login = lazy(() => import('./pages/Login'))
 const LegalPage = lazy(() => import('./pages/public/LegalPage'))
+const HelpPage = lazy(() => import('./pages/public/HelpPage'))
 const OAuthConsent = lazy(() => import('./pages/OAuthConsent'))
 // Spec #110 — the admin transcript editor, its own screen outside the layout.
 const TranscriptEditorPage = lazy(() => import('./pages/TranscriptEditorPage'))
@@ -68,6 +70,9 @@ function App() {
   // fall through to the standalone EpisodeDetail route as before.
   const backgroundLocation = useBackgroundLocation()
   const { isAnonymous } = useAuth()
+  // Spec #116 — crossorigin audio loading and the service worker follow
+  // the `drift.align` permission for the whole app.
+  useDriftSession()
 
   // Spec #94 — a signed-out visitor in multi-user mode gets the public site:
   // editorial pages for shows, episodes, people and entities, and sign-in
@@ -123,6 +128,13 @@ function App() {
           </Suspense>
         } />
       ))}
+
+      {/* Spec #108 — the Claude connector guide, readable signed in or not. */}
+      <Route path="/claude" element={
+        <Suspense fallback={<PageLoader />}>
+          <HelpPage doc="claude" />
+        </Suspense>
+      } />
 
       {/* Protected routes with layout */}
       <Route path="/" element={

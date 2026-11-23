@@ -36,7 +36,14 @@ from thestill.services.abuse.actor import Actor
 from thestill.web import public_prerender
 from thestill.web.dependencies import AUTH_COOKIE_NAME
 
-from .test_public_api import _fresh_buckets, _seed, _seed_people, _write_summary, app_config  # noqa: F401
+from .test_public_api import (  # noqa: F401
+    _anchor_people,
+    _fresh_buckets,
+    _seed,
+    _seed_people,
+    _write_summary,
+    app_config,
+)
 from .test_public_shell import site, static_dir  # noqa: F401
 
 EPISODE = "/podcasts/public-show/episodes/summarised"
@@ -195,6 +202,17 @@ def _add_quotes(app_state, count: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_episode_page_lists_who_takes_part_apart_from_who_is_mentioned(site, app_state):
+    _seed_people(app_state)
+    _anchor_people(app_state, host="person:scott-galloway", guest="person:ed-elson")
+    page = _parse(site.get(EPISODE, headers={"User-Agent": BING}).text)
+    texts = [_norm(t) for t in page.texts]
+    cast = texts.index("In this episode")
+    # Guest first, each with a role in place of a mention count.
+    assert [t for t in texts[cast + 1 : cast + 5] if t] == ["Ed Elson", "Guest", "Scott Galloway", "Host"]
+    assert "People in this episode" not in texts
+
+
 def test_episode_page_has_its_content_in_the_html(site, app_state):
     _seed_people(app_state)
     response = site.get(EPISODE, headers={"User-Agent": BING})
@@ -208,6 +226,8 @@ def test_episode_page_has_its_content_in_the_html(site, app_state):
     assert "I think Nvidia has built the deepest moat" in text
     assert "Scott Galloway" in text and "Companies mentioned" in text
     assert "Publisher notes." in text
+    # Nobody is anchored as host or guest here, so there is no cast list.
+    assert "In this episode" not in text
     bootstrap = _bootstrap(page)
     assert bootstrap["v"] == public_prerender.BOOTSTRAP_VERSION
     assert bootstrap["page"] == "episode" and bootstrap["viewer"] == "anonymous"
@@ -640,7 +660,8 @@ def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_con
 
     app_state.abuse = build_abuse_services(app_config, make_repositories(app_config))
     _seed_people(app_state)
-    _add_quotes(app_state, 6)  # Scott Galloway now has 7 quotes said
+    # A host of the public show, so the rule indexes him.
+    app_state.entity_repository.set_podcast_hosts("11111111-1111-1111-1111-111111111111", ["person:scott-galloway"])
     head = site.get("/entities/person/scott-galloway").text.split("</head>", 1)[0]
     assert "noindex" not in head
     assert "/entities/person/scott-galloway</loc>" in site.get("/sitemap.xml").text
@@ -652,7 +673,7 @@ def test_entity_noindex_list_keeps_a_page_out_of_search(site, app_state, app_con
     assert 'name="robots" content="noindex"' in head
     assert "/entities/person/scott-galloway</loc>" not in site.get("/sitemap.xml").text
     assert not entity_is_indexable(
-        EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, False), ["person:scott-galloway"]
+        EntityIndexFacts("person:scott-galloway", "person", 7, 0, 1, True), ["person:scott-galloway"]
     )
 
 

@@ -188,9 +188,16 @@ class SqliteVecBackend:
         ``OperationalError``.
         """
         translated = translate_lexical_query(query)
+        if not translated.fts_match and not translated.embedding_text:
+            # Exclusion-only (``-nvidia``) or operator-only input: there is
+            # nothing to search for, and nothing is better than the
+            # excluded term's own hits.
+            return []
         effective_filters = filters or SearchFilters()
         if translated.speaker:
             effective_filters = replace(effective_filters, speaker=translated.speaker)
+        if translated.exclude_match:
+            effective_filters = replace(effective_filters, exclude_match=translated.exclude_match)
         if mode == SearchMode.LEXICAL:
             if not translated.fts_match:
                 return []
@@ -290,6 +297,11 @@ class SqliteVecBackend:
             # episode is small.
             parts.append("LOWER(c.speaker) LIKE ?")
             params.append(f"%{filters.speaker.lower()}%")
+        if filters.exclude_match:
+            # ``-term`` exclusions, applied to every leg (the semantic and
+            # entity legs never see the FTS ``NOT`` tail).
+            parts.append("c.id NOT IN (SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?)")
+            params.append(filters.exclude_match)
         if not parts:
             return "", []
         return " AND " + " AND ".join(parts), params

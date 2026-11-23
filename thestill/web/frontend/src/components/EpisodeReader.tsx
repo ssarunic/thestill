@@ -9,7 +9,11 @@ import { usePlayer } from '../contexts/PlayerContext'
 import { useResolvedListening } from '../hooks/useListening'
 import { usePersistedBoolean } from '../hooks/useAutoScrollFollow'
 import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
+import { deepLinkSeconds } from '../hooks/useDeepLinkSeek'
 import { useIsSmUp } from '../hooks/useMediaQuery'
+import { useDriftAlignment } from '../drift/useDriftAlignment'
+import { driftAlignmentSupported } from '../drift/support'
+import DriftDebugStrip from '../drift/DriftDebugStrip'
 
 // Lazy load heavy markdown viewer components
 const TranscriptViewer = lazy(() => import('./TranscriptViewer'))
@@ -30,7 +34,7 @@ import { InboxActionButton } from './InboxStatus'
 import FailureBanner from './FailureBanner'
 import Panel from './Panel'
 import EpisodeHeader, { EpisodeHeaderSkeleton } from './episode-header/EpisodeHeader'
-import FollowPrompt from './FollowPrompt'
+import EpisodeFollow from './episode-header/EpisodeFollow'
 import People from './episode-header/People'
 import { buildEpisodeInformationRows } from './episode-header/episodeInformation'
 import DefinitionList from './DefinitionList'
@@ -59,7 +63,9 @@ import { buildPlayerTrack } from '../utils/playerTrack'
 import { needsHlsJs, preloadHls } from '../contexts/playback-engine/hls'
 
 type Tab = 'transcript' | 'summary'
-type SegmentScrollTarget = { segmentId: number; nonce: number }
+// `reveal`: a jump to something inside the segment opens an ad break that
+// holds it (spec #116 §6.1); a link to a moment leaves the row collapsed.
+type SegmentScrollTarget = { segmentId: number; nonce: number; reveal?: boolean }
 
 function normalizeLanguageCode(language: string | null | undefined): string | undefined {
   const primary = language?.trim().toLowerCase().split(/[-_]/, 1)[0]
@@ -109,7 +115,12 @@ export default function EpisodeReader({
   // returns to the summary the reader was on. Manual tab clicks replace (no
   // history spam); `location.state` is threaded through every navigation so
   // the spec #52 overlay's `backgroundLocation` survives the change.
-  const activeTab: Tab = searchParams.get('view') === 'transcript' ? 'transcript' : 'summary'
+  //
+  // A link to a moment (`?t=` / `#t=`) is a link into the transcript: it
+  // opens there without needing `view=transcript` beside it, so a shared
+  // quote link lands on its passage for a signed-in reader too.
+  const hasDeepLinkedMoment = deepLinkSeconds(location.search, location.hash) !== null
+  const activeTab: Tab = searchParams.get('view') === 'transcript' || hasDeepLinkedMoment ? 'transcript' : 'summary'
   const requestedSummaryLanguage = normalizeLanguageCode(searchParams.get('lang'))
   const defaultSummaryLanguage = getBrowserLanguage()
 
@@ -136,7 +147,13 @@ export default function EpisodeReader({
       if (activeTab === 'summary' && tab !== 'summary') summaryScrollRef.current = getScrollTop()
       const params = new URLSearchParams(searchParams)
       if (tab === 'transcript') params.set('view', 'transcript')
-      else params.delete('view')
+      else {
+        params.delete('view')
+        // The moment belongs to the transcript; left in the URL it would
+        // bring the reader straight back there. (A `#t=` goes with the
+        // fragment, which this navigation does not carry.)
+        params.delete('t')
+      }
       const search = params.toString()
       navigate(
         { pathname: location.pathname, search: search ? `?${search}` : '' },
@@ -343,18 +360,7 @@ export default function EpisodeReader({
     [reprocess],
   )
 
-  // The first-follow prompt sits above the tabs from `sm` up; a phone has
-  // no room there (spec #76 keeps the tabs in the first viewport), so it
-  // opens the tab panel instead.
   const isSmUp = useIsSmUp()
-  const followPrompt =
-    episode?.origin === 'feed' ? (
-      <FollowPrompt
-        podcastSlug={episode.podcast_slug}
-        podcastTitle={episode.podcast_title}
-        className={isSmUp ? '' : 'mx-4 mt-4'}
-      />
-    ) : null
 
   // Spec #28 §5.2 — episode-page entity UX. One fetch feeds the strip,
   // rail, inline highlights, filter bar, and timeline.
@@ -457,7 +463,8 @@ export default function EpisodeReader({
     (seconds: number) => {
       if (!episode || !playerTrack) return
       if (player.isCurrent(episode.id)) {
-        player.seek(seconds)
+        // A transcript time: the player corrects it for this copy (spec #116).
+        player.seek(seconds, { transcript: true })
         if (!player.isPlaying) player.resume()
         return
       }
@@ -518,6 +525,27 @@ export default function EpisodeReader({
 
   const transcriptSegments = transcriptData?.segments?.segments ?? null
 
+  // Spec #116 Phase 2 — align the transcript with this browser's copy of
+  // the audio once playback starts, and report the outcome. Who may is the
+  // `drift_alignment_audience` runtime setting; `?driftdebug=1` shows the
+  // result, to admins only.
+  const canAlignDrift = can('drift.align') && driftAlignmentSupported()
+  const driftAlignment = useDriftAlignment({
+    enabled: canAlignDrift,
+    podcastSlug,
+    episodeSlug,
+    episodeId: episode?.id,
+    transcript: transcriptData?.segments,
+  })
+  const showDriftDebug = canAlignDrift && isAdmin && searchParams.get('driftdebug') === '1'
+  // Spec #116 §6 — while a map is being built or checked, the drift banner
+  // says so. Once a map is applied the banner goes by itself: the player
+  // then reports the transcribed copy's duration.
+  const driftAligning =
+    canAlignDrift &&
+    (driftAlignment.status === 'running' ||
+      (driftAlignment.status === 'done' && driftAlignment.report?.outcome === 'aligned' && !driftAlignment.check))
+
   // Spec #72 §Deep link — `?t=` lands the reader on that segment regardless
   // of the follow toggle: once per history entry, fresh entries only. A POP
   // back to an entry already handled does nothing here, so the saved
@@ -554,7 +582,7 @@ export default function EpisodeReader({
     (segmentId: number) => {
       clearEntityFilter()
       if (activeTab !== 'transcript') setTab('transcript', { push: true })
-      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1 }))
+      setCitationScrollTarget((prev) => ({ segmentId, nonce: (prev?.nonce ?? 0) + 1, reveal: true }))
     },
     [clearEntityFilter, activeTab, setTab],
   )
@@ -575,6 +603,7 @@ export default function EpisodeReader({
       setCitationScrollTarget((prev) => ({
         segmentId,
         nonce: (prev?.nonce ?? 0) + 1,
+        reveal: true,
       }))
     },
     [activeTab, setTab, clearEntityFilter, handleSegmentSeek],
@@ -617,10 +646,15 @@ export default function EpisodeReader({
             onMarkPlayed={handleMarkPlayed}
             onReprocess={canReprocess ? () => openReprocess('clean') : undefined}
             onEditTranscript={canEditTranscript ? openTranscriptEditor : undefined}
+            follow={
+              <EpisodeFollow
+                podcastSlug={episode.podcast_slug}
+                podcastTitle={episode.podcast_title}
+                isFollowing={episode.podcast_is_following}
+                followable={episode.podcast_followable}
+              />
+            }
           />
-          {/* A reader who follows nothing yet is offered this show; an
-              imported file's synthetic show has nothing to follow. */}
-          {isSmUp && followPrompt}
           {canReprocess && (
             <ReprocessDialog
               isOpen={reprocessOpen}
@@ -677,22 +711,27 @@ export default function EpisodeReader({
           />
         )}
 
-      {/* Spec #28 §5.2 — Key entities strip, above the fold. Empty
-          state (zero entities) hides itself. */}
+      {/* Spec #28 §5.2 — Key entities strip, above the fold, below lg
+          only: it stands in for the rail, which is hidden there. From lg
+          up the rail lists the same entities beside the text, so the
+          strip would only repeat it. Empty state (zero entities) hides
+          itself. */}
       {entities.length > 0 && (
-        <KeyEntitiesStrip
-          entities={entities}
-          hiddenTypes={hiddenEntityTypes}
-          onToggleType={toggleEntityType}
-          episodeId={episode?.id ?? null}
-          onSeek={handleSegmentSeek}
-          onShowInTranscript={jumpToTranscriptSegment}
-          onFocusEntity={setFocusedEntityId}
-        />
+        <div className="lg:hidden">
+          <KeyEntitiesStrip
+            entities={entities}
+            hiddenTypes={hiddenEntityTypes}
+            onToggleType={toggleEntityType}
+            episodeId={episode?.id ?? null}
+            onSeek={handleSegmentSeek}
+            onShowInTranscript={jumpToTranscriptSegment}
+            onFocusEntity={setFocusedEntityId}
+          />
+        </div>
       )}
 
       {/* Content Tabs + right rail. lg+ becomes a 2-col grid; below lg
-          the rail wraps under the panel. */}
+          the rail is hidden and the strip above stands in for it. */}
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:gap-6">
         <Panel className="min-h-[400px]">
           {/* Tab Headers */}
@@ -756,8 +795,6 @@ export default function EpisodeReader({
             )}
           </div>
 
-          {!isSmUp && followPrompt}
-
           {/* Spec #76 §3.4 — the entity branch reports here as a one-line
               strip only while a task is running or failed. Spec #28
               "failure isolation": independent of the user chain. */}
@@ -810,12 +847,21 @@ export default function EpisodeReader({
                   onShowInTranscript={jumpToTranscriptSegment}
                 />
               ) : (
+                <>
+                {showDriftDebug && (
+                  <DriftDebugStrip
+                    state={driftAlignment}
+                    hasTrack={Boolean(transcriptData?.segments?.sync_track_generation)}
+                    onPlayAt={handleSegmentSeek}
+                  />
+                )}
                 <TranscriptPanel
                   transcriptData={transcriptData}
                   transcriptLoading={transcriptLoading}
                   episodeState={episode?.state}
                   episodeId={episode?.id ?? null}
                   audioUrl={episode?.audio_url ?? null}
+                  driftAligning={driftAligning}
                   onSegmentSeek={handleSegmentSeek}
                   entitiesById={entitiesById}
                   mentionsBySegmentId={mentionsBySegmentId}
@@ -839,13 +885,15 @@ export default function EpisodeReader({
                   karaokeChipDisabled={karaokeUnavailable}
                   onKaraokeToggle={handleKaraokeToggle}
                 />
+                </>
               )}
             </Suspense>
           </div>
         </Panel>
 
         {/* Right rail — only on lg+; collapses below the breakpoint
-            (the strip carries the gist on mobile). Always rendered on
+            (the strip carries the gist there, and is hidden from lg up
+            in turn; the type toggles live in whichever is shown). Always rendered on
             lg+ so the grid's rail column is never a blank gutter and the
             reading column keeps one width across episodes and across
             the related-episodes fetch; the rail supplies its own
@@ -859,6 +907,8 @@ export default function EpisodeReader({
               onSeek={handleSegmentSeek}
               onShowInTranscript={jumpToTranscriptSegment}
               onFocusEntity={setFocusedEntityId}
+              hiddenTypes={hiddenEntityTypes}
+              onToggleType={toggleEntityType}
               relatedEpisodes={relatedEpisodes}
               relatedLoading={relatedLoading}
               extractionPending={extractionPending}
@@ -895,6 +945,8 @@ interface TranscriptPanelProps {
   episodeState: string | undefined
   episodeId: string | null
   audioUrl: string | null
+  // Spec #116 — a timeline map for this copy is being built or checked.
+  driftAligning?: boolean
   onSegmentSeek: (seconds: number) => void
   // Spec #28 §5.2 — episode-page entity UX. All optional so a viewer
   // mounted without entity data (legacy episodes, tests) keeps working.
@@ -985,6 +1037,7 @@ function TranscriptPanel({
   episodeState,
   episodeId,
   audioUrl,
+  driftAligning,
   onSegmentSeek,
   entitiesById,
   mentionsBySegmentId,
@@ -1003,6 +1056,7 @@ function TranscriptPanel({
   // video on a video-first episode) once the native engine has reported
   // it; until then, and on the YouTube engine, probe the audio enclosure.
   const player = usePlayer()
+  const { key: locationKey } = useLocation()
   const loadedDuration =
     episodeId && player.isCurrent(episodeId) && player.activeEngine === 'native' ? player.nativeDuration : null
   const probedAudioDuration = useAudioDuration(loadedDuration == null ? audioUrl : null)
@@ -1041,6 +1095,7 @@ function TranscriptPanel({
               (likely dynamic ads inserted by the host). Clicking a segment will seek
               to the displayed time, but the audio at that position may not match.
             </p>
+            {driftAligning && <p className="mt-1 text-amber-800/90">Aligning…</p>}
           </div>
         </div>
       )}
@@ -1055,6 +1110,7 @@ function TranscriptPanel({
             mentionsBySegmentId={mentionsBySegmentId}
             visibleSegmentIds={visibleSegmentIds}
             scrollToSegmentId={scrollToSegment}
+            locationKey={locationKey}
             focusedEntityId={focusedEntityId}
             onFocusEntity={onFocusEntity}
             karaokeEnabled={karaokeEnabled}

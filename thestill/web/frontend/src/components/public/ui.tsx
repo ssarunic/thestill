@@ -10,6 +10,7 @@ import {
   formatTimestamp,
   type PublicEntityType,
   type PublicEpisodeListItem,
+  type PublicSpeakerRole,
   type PublicQuote,
 } from '../../api/public'
 import type { SignInIntent } from '../../utils/signIn'
@@ -38,8 +39,11 @@ export function Button({
   rel,
   children,
   type = 'button',
+  size = 'md',
 }: {
   variant?: 'primary' | 'secondary' | 'text'
+  /** ``sm`` fits a line of meta text (the episode hero's Follow). */
+  size?: 'md' | 'sm'
   google?: boolean
   onClick?: () => void
   /** Navigation (e.g. to /login): rendered as a link styled as a button. */
@@ -48,7 +52,7 @@ export function Button({
   children: ReactNode
   type?: 'button' | 'submit'
 }) {
-  const className = cx('ts-btn', `ts-btn-${variant}`)
+  const className = cx('ts-btn', `ts-btn-${variant}`, size === 'sm' && 'ts-btn-sm')
   const content = (
     <>
       {google && <GoogleG />}
@@ -411,6 +415,34 @@ export function EntityGroups<T extends { name: string; type: PublicEntityType; s
         )
       })}
     </>
+  )
+}
+
+const ROLE_LABEL: Record<PublicSpeakerRole, string> = { guest: 'Guest', host: 'Host', recurring: 'Recurring' }
+
+/** The people who speak in the episode, each with their role. Never folded:
+ * there are only a few and they are who the episode is. */
+export function TakingPart({
+  people,
+}: {
+  people: { name: string; type: PublicEntityType; slug: string; role: PublicSpeakerRole }[]
+}) {
+  if (people.length === 0) return null
+  return (
+    <section className="ts-rail-module">
+      <h3 className="ts-rail-label">In this episode</h3>
+      <ul className="ts-related">
+        {people.map((person) => (
+          <li key={person.slug}>
+            <Link to={entityPath(person)}>
+              <EntityDot type={person.type} />
+              <span>{person.name}</span>
+            </Link>
+            <span className="ts-related-count">{ROLE_LABEL[person.role]}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

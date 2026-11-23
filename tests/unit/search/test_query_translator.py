@@ -78,9 +78,35 @@ class TestTranslate:
         rows = conn.execute("SELECT text FROM doc WHERE doc MATCH ?", (t.fts_match,)).fetchall()
         assert rows == [("Host: alpha text",)]
 
-    def test_negative_only_falls_back_to_positive(self):
+    def test_negative_only_has_nothing_to_search_for(self):
+        # An exclusion is not a search term: ``-nvidia`` must never turn
+        # into a search *for* nvidia. Nothing is left to match or encode.
         t = translate_lexical_query("-nvidia")
-        assert t.fts_match == "nvidia"
+        assert t.fts_match == ""
+        assert t.embedding_text == ""
+        assert t.exclude_match == "nvidia"
+
+    def test_excluded_terms_are_not_encoded(self):
+        # The semantic leg must not be steered toward the excluded word.
+        t = translate_lexical_query("chips -nvidia")
+        assert t.embedding_text == "chips"
+        assert t.exclude_match == "nvidia"
+
+    def test_multiple_exclusions_or_joined(self):
+        t = translate_lexical_query('foo -bar -"baz qux"')
+        assert t.exclude_match == 'bar OR "baz qux"'
+        assert t.embedding_text == "foo"
+
+    def test_no_exclusions_leaves_exclude_match_empty(self):
+        assert translate_lexical_query("agentic engineering").exclude_match == ""
+
+    def test_speaker_with_exclusion_keeps_speaker_fallback(self):
+        # Speaker-only input still encodes the raw text, minus the exclusion.
+        t = translate_lexical_query("speaker:friedberg -nvidia")
+        assert t.fts_match == ""
+        assert t.speaker == "friedberg"
+        assert t.embedding_text == "speaker:friedberg"
+        assert t.exclude_match == "nvidia"
 
 
 class TestFts5Compatibility:

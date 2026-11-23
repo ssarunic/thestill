@@ -13,6 +13,8 @@ from pathlib import Path
 from thestill.models.entities import EntityRecord, EntityType
 from thestill.repositories.sqlite_entity_repository import SqliteEntityRepository
 from thestill.repositories.sqlite_podcast_repository import SqlitePodcastRepository
+from thestill.services.abuse.actor import Actor
+from thestill.services.entity_curation import EntityCurationService
 from thestill.services.role_linker import (
     backfill_all_roles,
     collect_host_evidence,
@@ -970,3 +972,353 @@ def test_link_uses_the_transcript_in_hand_over_a_storage_copy_it_lacks(tmp_path)
 
     assert result.guests == ["person:chris-hayes"]
     assert len(result.clip_voices) == 7
+
+
+# ---------------------------------------------------------------------------
+# Co-hosts: a host of this episode who is not one of the show's hosts
+# ---------------------------------------------------------------------------
+
+# 20VC's weekly trio: the extractor labels Lemkin and O'Driscoll host in
+# the mapping and, told to leave regular hosts out, lists no guests; the
+# show's host list names only Harry Stebbings.
+_TRIO_FACTS = """## Speaker Mapping
+- SPEAKER_00: Unknown Speaker
+- SPEAKER_01: Jason Lemkin (Host/SaaStr)
+- SPEAKER_02: Rory O'Driscoll (Host)
+- SPEAKER_03: Harry Stebbings (Host)
+- SPEAKER_04: Ad Narrator (Host/Ad Narrator)
+
+## Guest(s)
+
+## Topics/Keywords
+- OpenAI
+"""
+
+
+def _trio(tmp_path: Path, episode_facts: str = _TRIO_FACTS, show_hosts: str = "- Harry Stebbings - Host\n"):
+    db_path, podcast_id, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    storage = tmp_path / "storage"
+    pm = PathManager(str(storage))
+    pm.podcast_facts_dir().mkdir(parents=True, exist_ok=True)
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.podcast_facts_file(podcast_slug).write_text(f"## Hosts\n{show_hosts}")
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(episode_facts)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    link_podcast_roles(podcast_id=podcast_id, podcast_slug=podcast_slug, entity_repo=er, path_manager=pm)
+
+    def link(**kwargs):
+        return link_episode_roles(
+            episode_id=episode_id,
+            podcast_slug=podcast_slug,
+            episode_slug=episode_slug,
+            entity_repo=er,
+            path_manager=pm,
+            **kwargs,
+        )
+
+    return er, podcast_id, episode_id, link
+
+
+def test_parse_collects_the_names_the_speaker_mapping_labels_host(tmp_path):
+    f = tmp_path / "ep.facts.md"
+    f.write_text(_TRIO_FACTS + "\n## Speaker Mapping\n- SPEAKER_05: Jason Lemkin (Co-Host)\n")
+    roles = parse_facts_file(f)
+    # In mapping order, without repeats; an ad voice is no host.
+    assert roles.mapped_hosts == ["Jason Lemkin", "Rory O'Driscoll", "Harry Stebbings"]
+    assert roles.guests == []
+
+
+# Speaker rows on the 20VC trio episode of 2026-11-05.
+_TRIO_SPEAKERS = {"Rory O'Driscoll": (48, 5200), "Jason Lemkin": (45, 4900), "Harry Stebbings": (41, 3100)}
+
+
+def test_episode_cohosts_who_are_not_the_shows_hosts_become_its_guests(tmp_path):
+    er, podcast_id, episode_id, link = _trio(tmp_path)
+    harry = er.find_entity_by_name("Harry Stebbings")
+
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+
+    lemkin = er.find_entity_by_name("Jason Lemkin")
+    rory = er.find_entity_by_name("Rory O'Driscoll")
+    assert lemkin is not None and rory is not None
+    assert result.cohosts == ["Jason Lemkin", "Rory O'Driscoll"]
+    assert result.guests == [lemkin.id, rory.id]
+    assert harry.id not in result.guests
+    # Anchors are the show's hosts plus the episode's guests.
+    assert er.get_episode_anchors(episode_id) == [harry.id, lemkin.id, rory.id]
+
+
+class _NoAudit:
+    def record(self, *_args, **_kwargs) -> None:
+        pass
+
+
+def test_merging_a_misspelt_show_host_into_the_real_one_survives_a_relink(tmp_path):
+    """The Skip Podcast, 2026-11-13: the show file names the host "Nikhil
+    Singh", every episode names him "Nikhyl Singhal", so the real host was
+    a co-host, hence a guest. Merging the two rows and re-linking recreated
+    the misspelt host, because the merge kept nothing of its name."""
+    facts = (
+        "## Speaker Mapping\n- SPEAKER_01: Nikhyl Singhal (Host)\n- SPEAKER_02: Dana Ingraham (Guest)\n\n"
+        "## Guest(s)\n- Dana Ingraham - Recruiter\n"
+    )
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts, show_hosts="- Nikhil Singh - Host\n")
+    transcript = _transcript({"Nikhyl Singhal": (60, 6000), "Dana Ingraham": (50, 5000)})
+    before = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+    assert before.cohosts == ["Nikhyl Singhal"] and "person:nikhyl-singhal" in before.guests  # the incident
+
+    merged = EntityCurationService(er, _NoAudit()).merge(
+        "person:nikhyl-singhal", "person:nikhil-singh", actor=Actor.cli()
+    )
+    assert merged.alias_added == "Nikhil Singh"
+    podcast_slug = next(iter((tmp_path / "storage").glob("podcast_facts/*.facts.md"))).name[: -len(".facts.md")]
+    relinked = link_podcast_roles(
+        podcast_id=podcast_id,
+        podcast_slug=podcast_slug,
+        entity_repo=er,
+        path_manager=PathManager(str(tmp_path / "storage")),
+    )
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+
+    assert relinked.hosts == ["person:nikhyl-singhal"] and relinked.created_entities == []
+    assert er.get_entity("person:nikhil-singh") is None  # not recreated
+    assert after.cohosts == [] and after.guests == ["person:dana-ingraham"]
+    assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal", "person:dana-ingraham"]
+
+
+def test_a_merged_host_is_cleared_from_an_episode_that_names_no_other_guest(tmp_path):
+    """A solo episode: after the merge nothing in the facts file would
+    rewrite the guest list, so the host stored as its guest has to be
+    taken out explicitly."""
+    facts = "## Speaker Mapping\n- SPEAKER_01: Nikhyl Singhal (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts, show_hosts="- Nikhil Singh - Host\n")
+    transcript = _transcript({"Nikhyl Singhal": (60, 6000)})
+    link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+    assert er.get_episode_guests(episode_id) == ["person:nikhyl-singhal"]
+
+    EntityCurationService(er, _NoAudit()).merge("person:nikhyl-singhal", "person:nikhil-singh", actor=Actor.cli())
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=transcript)
+
+    assert after.cleared_host_guests == ["person:nikhyl-singhal"] and after.guests == []
+    assert er.get_episode_guests(episode_id) == []
+    assert er.get_episode_anchors(episode_id) == ["person:nikhyl-singhal"]
+
+
+def test_a_pinned_guest_who_is_not_a_host_is_left_alone_when_the_facts_name_nobody(tmp_path):
+    facts = "## Speaker Mapping\n- SPEAKER_01: Harry Stebbings (Host)\n\n## Guest(s)\n"
+    er, podcast_id, episode_id, link = _trio(tmp_path, episode_facts=facts)
+    er.upsert_entity(EntityRecord(id="person:pinned-guest", type=EntityType.PERSON, canonical_name="Pinned Guest"))
+    er.set_episode_guests(episode_id, ["person:pinned-guest"])
+
+    after = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript({"Harry Stebbings": (60, 6000)}))
+
+    assert after.cleared_host_guests == [] and er.get_episode_guests(episode_id) == ["person:pinned-guest"]
+
+
+def test_a_cohost_already_under_guests_is_not_added_twice(tmp_path):
+    facts = _TRIO_FACTS.replace("## Guest(s)\n", "## Guest(s)\n- Jason Lemkin - Founder/SaaStr\n")
+    er, podcast_id, _episode_id, link = _trio(tmp_path, episode_facts=facts)
+
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+
+    assert result.cohosts == ["Rory O'Driscoll"]
+    assert len(result.guests) == 2
+
+
+def test_cohosts_wait_for_the_show_to_have_a_linked_host(tmp_path):
+    # With no show host to tell apart, Harry himself would become a guest.
+    er, podcast_id, episode_id, link = _trio(tmp_path, show_hosts="")
+
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+
+    assert result.cohosts == []
+    assert result.guests == []
+    assert er.get_episode_anchors(episode_id) == []  # no show host, no guests
+
+
+def test_without_a_podcast_id_only_guests_count(tmp_path):
+    _er, _podcast_id, _episode_id, link = _trio(tmp_path)
+    result = link(clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+    assert result.cohosts == []
+    assert result.guests == []
+
+
+def test_without_a_transcript_no_cohost_is_added(tmp_path):
+    _er, podcast_id, _episode_id, link = _trio(tmp_path)
+    result = link(podcast_id=podcast_id)
+    assert result.cohosts == []
+    assert result.guests == []
+
+
+def test_a_sister_show_host_heard_in_a_promo_is_no_cohost(tmp_path):
+    # Prof G: a short episode (under the clip test's 40 rows) whose mapping
+    # labels a promo voice host of another show.
+    facts = """## Speaker Mapping
+- SPEAKER_01: Scott Galloway (Host)
+- SPEAKER_02: Ed Elson (Host)
+- SPEAKER_03: Jake Sullivan (Host - The Long Game)
+
+## Guest(s)
+"""
+    _er, podcast_id, _episode_id, link = _trio(
+        tmp_path, episode_facts=facts, show_hosts="- Scott Galloway - Host\n- Ed Elson - Co-host\n"
+    )
+    speakers = {"Scott Galloway": (18, 2400), "Ed Elson": (17, 2100), "Jake Sullivan": (1, 60)}
+
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(speakers))
+
+    assert result.cohosts == []
+    assert result.guests == []
+
+
+def test_a_show_host_spelt_differently_in_the_mapping_stays_a_host(tmp_path):
+    facts = _TRIO_FACTS.replace("Harry Stebbings (Host)", "Harry  STEBBINGS (Host)")
+    er, podcast_id, _episode_id, link = _trio(tmp_path, episode_facts=facts)
+    speakers = {**_TRIO_SPEAKERS, "Harry  STEBBINGS": (41, 3100)}
+
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(speakers))
+
+    assert result.cohosts == ["Jason Lemkin", "Rory O'Driscoll"]
+    assert er.find_entity_by_name("Harry Stebbings").id not in result.guests
+
+
+def test_a_cohost_the_transcript_now_refuses_is_cleared(tmp_path):
+    er, podcast_id, episode_id, link = _trio(tmp_path)
+    link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+    harry = er.find_entity_by_name("Harry Stebbings")
+    assert len(er.get_episode_anchors(episode_id)) == 3
+
+    # A corrected transcript: the pair were a clip in this one.
+    corrected = {"Harry Stebbings": (60, 6000), "Jason Lemkin": (2, 60), "Rory O'Driscoll": (1, 40)}
+    result = link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(corrected))
+
+    assert result.cohosts == []
+    assert result.refused_cohosts == ["Jason Lemkin", "Rory O'Driscoll"]
+    assert er.get_episode_anchors(episode_id) == [harry.id]
+
+
+def test_a_relink_without_a_transcript_leaves_cohosts_alone(tmp_path):
+    er, podcast_id, episode_id, link = _trio(tmp_path)
+    link(podcast_id=podcast_id, clean_transcript_markdown=_transcript(_TRIO_SPEAKERS))
+
+    result = link(podcast_id=podcast_id)
+
+    assert result.refused_cohosts == []
+    assert len(er.get_episode_anchors(episode_id)) == 3
+
+
+# ---------------------------------------------------------------------------
+# Titles: "Professor Mariam Jamal-Hanjani" is Mariam Jamal-Hanjani
+# ---------------------------------------------------------------------------
+
+
+def _write_guest_facts(storage: Path, podcast_slug: str, episode_slug: str, bullet: str) -> None:
+    pm = PathManager(str(storage))
+    (pm.episode_facts_dir() / podcast_slug).mkdir(parents=True, exist_ok=True)
+    pm.episode_facts_file(podcast_slug, episode_slug).write_text(f"## Guest(s)\n- {bullet}\n")
+
+
+def _link_guests(tmp_path: Path, db_path: Path, episode_id: str, podcast_slug: str, episode_slug: str):
+    return link_episode_roles(
+        episode_id=episode_id,
+        podcast_slug=podcast_slug,
+        episode_slug=episode_slug,
+        entity_repo=SqliteEntityRepository(db_path=str(db_path)),
+        path_manager=PathManager(str(tmp_path)),
+    )
+
+
+def test_a_titled_guest_adopts_the_row_the_wikidata_linker_made(tmp_path):
+    # The Rest Is Science, 2026-11-19: the facts file named the guest with
+    # her title, the linker had already made her row without it, and the
+    # role linker minted a second row beside it.
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:mariam-jamal-hanjani",
+            type=EntityType.PERSON,
+            canonical_name="Mariam Jamal-Hanjani",
+            wikidata_qid="Q117258018",
+        )
+    )
+    _write_guest_facts(
+        tmp_path,
+        podcast_slug,
+        episode_slug,
+        "Professor Mariam Jamal-Hanjani - Lung Cancer Specialist and Chief Clinician at Cancer Research UK",
+    )
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:mariam-jamal-hanjani"]
+    assert result.created_entities == []
+    assert er.get_entity("person:professor-mariam-jamal-hanjani") is None
+
+
+def test_a_titled_guest_with_no_row_is_minted_without_the_title(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Dr. Jane Doe - epidemiologist")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:jane-doe"]
+    entity = SqliteEntityRepository(db_path=str(db_path)).get_entity("person:jane-doe")
+    assert entity.canonical_name == "Jane Doe"
+    assert entity.aliases == ["Dr. Jane Doe"]
+    # A later run that finds the bare row by the titled name does not fork it.
+    again = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+    assert again.guests == ["person:jane-doe"]
+    assert again.created_entities == []
+
+
+def test_a_titled_row_that_is_another_person_is_still_a_candidate(tmp_path):
+    # Codex on #541: the untitled match must not win unseen when the
+    # titled name is a different row; the bio decides between them.
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    er.upsert_entity(
+        EntityRecord(
+            id="person:scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Scott Galloway",
+            description="Scottish footballer",
+        )
+    )
+    er.upsert_entity(
+        EntityRecord(
+            id="person:professor-scott-galloway",
+            type=EntityType.PERSON,
+            canonical_name="Professor Scott Galloway",
+            description="marketing professor at NYU Stern",
+        )
+    )
+    _write_guest_facts(
+        tmp_path, podcast_slug, episode_slug, "Professor Scott Galloway - marketing professor at NYU Stern"
+    )
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:professor-scott-galloway"]
+
+
+def test_a_titled_and_an_untitled_row_the_context_cannot_split_stay_unlinked(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    er = SqliteEntityRepository(db_path=str(db_path))
+    for entity_id, name in (("person:jane-doe", "Jane Doe"), ("person:dr-jane-doe", "Dr. Jane Doe")):
+        er.upsert_entity(EntityRecord(id=entity_id, type=EntityType.PERSON, canonical_name=name))
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Dr. Jane Doe - epidemiologist")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == []
+    assert result.created_entities == []
+
+
+def test_a_title_that_is_half_the_name_is_kept(tmp_path):
+    db_path, _, podcast_slug, episode_id, episode_slug = _seed_minimal_db(tmp_path)
+    _write_guest_facts(tmp_path, podcast_slug, episode_slug, "Professor Green - rapper")
+
+    result = _link_guests(tmp_path, db_path, episode_id, podcast_slug, episode_slug)
+
+    assert result.guests == ["person:professor-green"]

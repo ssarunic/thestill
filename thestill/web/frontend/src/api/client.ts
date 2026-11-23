@@ -76,7 +76,8 @@ import type {
   FollowSource,
 } from './types'
 
-import { apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import { ApiStatusError, apiErrorMessage, redirectIfAccountDisabled } from './errors'
+import type { DriftOutcomeBody } from '../drift/report'
 
 const API_BASE = '/api'
 
@@ -183,6 +184,22 @@ export async function followPodcast(podcastSlug: string, source?: FollowSource):
   }
 }
 
+// Spec #116 — what this browser made of aligning the transcript with its
+// copy of the audio. Fire and forget; see drift/useDriftAlignment.ts.
+export async function reportDriftOutcome(
+  podcastSlug: string,
+  episodeSlug: string,
+  body: DriftOutcomeBody,
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/episodes/${episodeSlug}/drift-outcome`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`drift-outcome: ${response.status}`)
+}
+
 // Unfollow a podcast
 export async function unfollowPodcast(podcastSlug: string): Promise<void> {
   const response = await fetch(`${API_BASE}/podcasts/${podcastSlug}/follow`, {
@@ -275,15 +292,21 @@ export async function addPodcast(request: AddPodcastRequest): Promise<AddPodcast
   })
 
   if (!response.ok) {
-    const error = await response.json()
-    throw new Error(apiErrorMessage(error, response.status))
+    const error = await response.json().catch(() => null)
+    redirectIfAccountDisabled(error)
+    // Keep the status: a 409 means another add is still running, which
+    // ``followPodcast`` waits out instead of failing the click.
+    throw new ApiStatusError(apiErrorMessage(error, response.status), response.status)
   }
 
   return response.json()
 }
 
-export async function getAddPodcastStatus(): Promise<AddPodcastTaskStatus> {
-  return fetchApi<AddPodcastTaskStatus>('/commands/add/status')
+// With the ``task_id`` the add POST returned, this add's own status; without
+// it, whichever add ran last on the server (possibly someone else's).
+export async function getAddPodcastStatus(taskId?: string | null): Promise<AddPodcastTaskStatus> {
+  const query = taskId ? `?task_id=${encodeURIComponent(taskId)}` : ''
+  return fetchApi<AddPodcastTaskStatus>(`/commands/add/status${query}`)
 }
 
 // Pipeline Task API (Queue-based)

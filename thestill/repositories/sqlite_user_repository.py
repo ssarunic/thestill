@@ -37,7 +37,8 @@ logger = get_logger(__name__)
 
 SELECT_COLS = (
     "id, email, name, picture, google_id, created_at, last_login_at, region, region_locked, is_admin, signup_source,"
-    " usage_analytics_enabled, status, status_reason, status_changed_at, status_changed_by, tokens_valid_after"
+    " usage_analytics_enabled, product_tips_email_enabled, status, status_reason, status_changed_at,"
+    " status_changed_by, tokens_valid_after"
 )
 
 
@@ -136,9 +137,9 @@ class SqliteUserRepository(UserRepository):
                 INSERT INTO users (
                     id, email, name, picture, google_id,
                     created_at, last_login_at, region, region_locked, is_admin,
-                    signup_source, usage_analytics_enabled
+                    signup_source, usage_analytics_enabled, product_tips_email_enabled
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(email) DO UPDATE SET
                     name = excluded.name,
                     picture = excluded.picture,
@@ -158,6 +159,7 @@ class SqliteUserRepository(UserRepository):
                     1 if user.is_admin else 0,
                     user.signup_source,
                     1 if user.usage_analytics_enabled else 0,
+                    1 if user.product_tips_email_enabled else 0,
                 ),
             )
 
@@ -176,6 +178,13 @@ class SqliteUserRepository(UserRepository):
                     "UPDATE user_episode_progress SET listened_at = NULL WHERE user_id = ? AND listened_at IS NOT NULL",
                     (user_id,),
                 )
+            return cursor.rowcount > 0
+
+    def update_product_tips_email(self, user_id: str, enabled: bool) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET product_tips_email_enabled = ? WHERE id = ?", (1 if enabled else 0, user_id)
+            )
             return cursor.rowcount > 0
 
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
@@ -354,6 +363,7 @@ def row_to_user(row: sqlite3.Row) -> User:
         is_admin=bool(row["is_admin"]),
         signup_source=row["signup_source"],
         usage_analytics_enabled=bool(row["usage_analytics_enabled"]),
+        product_tips_email_enabled=bool(row["product_tips_email_enabled"]),
         status=UserStatus(row["status"]),
         status_reason=row["status_reason"],
         status_changed_at=_parse(row["status_changed_at"]),

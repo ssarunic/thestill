@@ -47,12 +47,22 @@ from ..utils.user_agent import crawler_family
 from .middleware.rate_limit import allow_public_request
 from .public_access import (
     EntityIndexFacts,
+    PublicVisibility,
     TtlCache,
     entity_is_indexable,
     entity_noindex_ids,
     get_public_visibility,
     has_valid_session,
     instance_of_list,
+)
+from .search_titles import (
+    TITLE_MAX,
+    episode_search_title,
+    lead_sentences,
+    lead_with_full_name,
+    person_search_description,
+    plain_text,
+    short_show_name,
 )
 
 if TYPE_CHECKING:
@@ -64,7 +74,10 @@ logger = get_logger(__name__)
 
 SITE_NAME = "Thestill"
 DEFAULT_TITLE = "Thestill — read your podcasts"
-DEFAULT_DESCRIPTION = "Podcast summaries you can read in three minutes, with every quote attributed and timed."
+DEFAULT_DESCRIPTION = (
+    "Podcast episodes you can read in three minutes: the gist, the key takeaways and the best quotes, "
+    "each attributed and timed to the moment it was said."
+)
 # ``index.html`` marks the per-page head with these comments and says
 # nothing else there: every comment in the template ships in every page.
 MARKER_RE = re.compile(r"<!--thestill:head-->.*?<!--/thestill:head-->", re.S)
@@ -75,7 +88,7 @@ _LOOKUP_CACHE_MAX = 4096
 _DESCRIPTION_MAX = 160
 
 # Paths a crawler may index. Everything else gets ``noindex``.
-_PUBLIC_STATIC_PATHS = {"": "landing", "top": "top", "terms": "terms", "privacy": "privacy"}
+_PUBLIC_STATIC_PATHS = {"": "landing", "top": "top", "terms": "terms", "privacy": "privacy", "claude": "claude"}
 
 
 def shell_kind(path: str) -> Optional[str]:
@@ -200,10 +213,16 @@ def _clip(text: Optional[str], limit: int = _DESCRIPTION_MAX) -> str:
     return text[: limit - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
+def _with_brand(title: str) -> str:
+    """``title · Thestill`` when that still fits a result line, else
+    ``title``: Google and Bing show the site name on its own line anyway."""
+    branded = f"{title} · {SITE_NAME}"
+    return branded if len(branded) <= TITLE_MAX else title
+
+
 def _first_sentence(text: Optional[str]) -> str:
-    text = (text or "").strip()
-    match = re.match(r"(.+?[.!?])(\s|$)", text)
-    return _clip(match.group(1) if match else text)
+    """Whole leading sentences, about 110-160 characters (``lead_sentences``)."""
+    return lead_sentences(text)
 
 
 def _drop_empty(value: Any) -> Any:
@@ -239,6 +258,10 @@ def render_head(tags: HeadTags, base_url: Optional[str]) -> str:
     lines = [f"<title>{e(tags.title)}</title>", f'<meta name="description" content="{e(tags.description)}" />']
     if not tags.index:
         lines.append('<meta name="robots" content="noindex" />')
+    else:
+        # Let Google show a large thumbnail (and use the page in Discover);
+        # without it, results get a small image or none.
+        lines.append('<meta name="robots" content="max-image-preview:large" />')
     canonical = f"{base_url}{tags.canonical_path}" if base_url and tags.canonical_path is not None else None
     if canonical:
         lines.append(f'<link rel="canonical" href="{e(canonical)}" />')
@@ -346,12 +369,34 @@ class ShellRenderer:
         if kind == "top":
             return HeadTags(
                 title=f"Top podcasts · {SITE_NAME}",
-                description="Today's Apple Podcasts chart by country, with summaries for the shows on thestill.",
+                description=(
+                    "Today's Apple Podcasts top charts by country, with a three-minute summary, key takeaways "
+                    "and quotes for every show Thestill covers."
+                ),
                 canonical_path="/top",
                 index=True,
             )
+        if kind == "claude":
+            # Spec #108 — the connector guide; also the documentation URL of
+            # the connector's directory listing (spec #109 Phase 3).
+            return HeadTags(
+                title=f"Use {SITE_NAME} in Claude · {SITE_NAME}",
+                description=(
+                    "Connect Thestill to Claude to search podcast transcripts and summaries, "
+                    "find who said what, and follow shows. Setup, permissions and privacy."
+                ),
+                canonical_path="/claude",
+                index=True,
+            )
         name = "Terms of Service" if kind == "terms" else "Privacy Policy"
-        return HeadTags(title=f"{name} · {SITE_NAME}", canonical_path=f"/{kind}", index=False)
+        description = (
+            "The terms for using Thestill: your account, what you may do with summaries and quotes, "
+            "the content we show, and our liability."
+            if kind == "terms"
+            else "How Thestill handles your data: what we collect and why, who processes it, how long we keep it, "
+            "and your rights."
+        )
+        return HeadTags(title=f"{name} · {SITE_NAME}", description=description, canonical_path=f"/{kind}", index=False)
 
     def _podcast_or_episode(self, parts: List[str]) -> HeadTags:
         """Head tags from the cached slug lookups the public API shares
@@ -374,8 +419,9 @@ class ShellRenderer:
             _, summarised = state.repository.list_public_episode_rows(podcast_id=row["id"], limit=1)
             title = row.get("title") or ""
             return HeadTags(
-                title=f"{title} — episode summaries · {SITE_NAME}",
-                description=_first_sentence(row.get("description")) or DEFAULT_DESCRIPTION,
+                title=_with_brand(f"{short_show_name(title)} — episode summaries"),
+                # Publishers often send the show description as HTML.
+                description=_first_sentence(plain_text(row.get("description"))) or DEFAULT_DESCRIPTION,
                 canonical_path=f"/podcasts/{parts[1]}",
                 image=row.get("image_url"),
                 index=summarised > 0,
@@ -383,23 +429,33 @@ class ShellRenderer:
                     "@context": "https://schema.org",
                     "@type": "PodcastSeries",
                     "name": title,
-                    "description": _clip(row.get("description"), 300),
+                    "description": _clip(plain_text(row.get("description")), 300),
                     "image": row.get("image_url"),
                     "author": {"@type": "Person", "name": row.get("author")} if row.get("author") else None,
                 },
             )
+        guests = self._episode_guest_names(podcast, episode)
         return HeadTags(
-            title=f"{episode.title} · {podcast.title} · {SITE_NAME}",
-            description=_first_sentence(episode.summary_preview) or DEFAULT_DESCRIPTION,
+            title=self._show_titles(podcast).get(str(episode.id))
+            or episode_search_title(
+                episode.title,
+                podcast.title,
+                guests,
+                description=episode.description or "",
+                language=podcast.language,
+            ),
+            description=lead_with_full_name(_first_sentence(episode.summary_preview), guests) or DEFAULT_DESCRIPTION,
             canonical_path=f"/podcasts/{parts[1]}/episodes/{parts[3]}",
             og_type="article",
             image=episode.image_url or podcast.image_url,
-            index=True,
+            # Readable at once; in search only once its entities are in.
+            index=PublicVisibility.episode_is_indexable(episode.entity_extraction_status),
             json_ld={
                 "@context": "https://schema.org",
                 "@type": "PodcastEpisode",
                 "name": episode.title,
                 "description": _clip(episode.summary_preview, 300),
+                "image": episode.image_url or podcast.image_url,
                 "datePublished": episode.pub_date.isoformat() if episode.pub_date else None,
                 "associatedMedia": (
                     {"@type": "MediaObject", "contentUrl": str(episode.audio_url)} if episode.audio_url else None
@@ -408,12 +464,35 @@ class ShellRenderer:
             },
         )
 
+    def _show_titles(self, podcast) -> Dict[str, str]:
+        """The show's episode titles, made unique across the show; empty when
+        they cannot be built, so the page falls back to its own title."""
+        from .routes.api_public import show_episode_titles
+
+        try:
+            return show_episode_titles(self._state, podcast)
+        except Exception:  # noqa: BLE001 - a per-episode title beats no page
+            logger.warning("public_shell.show_titles_failed", podcast_id=str(podcast.id), exc_info=True)
+            return {}
+
+    def _episode_guest_names(self, podcast, episode) -> List[str]:
+        """The episode's guests, as its page lists them (hosts left out), for
+        the search title. Three small reads, no page payload: the head is
+        built even when the page body is shed (spec #105 §4)."""
+        from .routes.api_public import episode_guest_names
+
+        try:
+            return episode_guest_names(self._state, podcast, episode)
+        except Exception:  # noqa: BLE001 - a title without guests beats no page
+            logger.warning("public_shell.episode_guests_failed", episode_id=str(episode.id), exc_info=True)
+            return []
+
     def _entity(self, entity_type: str, slug: str) -> HeadTags:
         from fastapi import HTTPException
 
         from .public_access import CacheMiss, cache_only
         from .public_prerender import get_prerenderer
-        from .routes.api_public import current_entity_path, public_entity_payload, stale_entity_path
+        from .routes.api_public import current_entity_path, merged_entity_path, public_entity_payload, stale_entity_path
 
         # The entity payload (quote counts decide noindex) is the costly part
         # of this page. Cached, it is free; uncached, it is built under the
@@ -436,7 +515,11 @@ class ShellRenderer:
         except HTTPException:
             # An entity re-typed more than once leaves URLs at a type that is
             # neither its id prefix nor its current type; send those on too.
-            moved_to = stale_entity_path(self._state, entity_type, slug)
+            # An entity merged into another (or folded by a QID dedupe) sends
+            # its URL to the keeper's page.
+            moved_to = stale_entity_path(self._state, entity_type, slug) or merged_entity_path(
+                self._state, entity_type, slug
+            )
             if moved_to:
                 return HeadTags(status_code=301, redirect_path=moved_to)
             return HeadTags(status_code=404)
@@ -451,10 +534,22 @@ class ShellRenderer:
         featured = payload.get("featured_quote")
         is_person = entity_type == "person"
         if is_person:
-            title = f"{name} — podcast quotes and appearances · {SITE_NAME}"
+            title = _with_brand(f"{name} — podcast quotes and appearances")
         else:
-            title = f"{name} in podcasts — who's talking and what they said · {SITE_NAME}"
-        if featured:
+            title = _with_brand(f"{name} in podcasts — who's talking about it")
+        if is_person:
+            # Who they are and where they're heard. A quote cut at 160
+            # characters read as filler in a search result.
+            roles = payload.get("roles") or {}
+            description = person_search_description(
+                name,
+                headline=enrichment.get("headline") or entity.get("description"),
+                hosts=[r["title"] for r in roles.get("hosts", [])],
+                recurring=[r["title"] for r in roles.get("recurring", [])],
+                guest_on=[g["podcast_title"] for g in roles.get("guest_episodes", [])],
+                episodes=int((payload.get("stats") or {}).get("episodes") or 0),
+            )
+        elif featured:
             description = _clip(
                 f"\u201c{featured['text']}\u201d — {featured['speaker']['name']}, {featured['podcast']['title']}"
             )
@@ -499,29 +594,53 @@ TRAINING_CRAWLERS = (
     "Bytespider",
 )
 
+# Crawlers whose volume on entity pages costs more than they send back:
+# on 2026-11-16/17 Reflectionbot made ~6.1k and PetalBot ~1.2k entity
+# requests in 29 h, almost all cold builds that crowd the prerender cap
+# (spec #105 §4). They keep podcasts and episodes; only /entities/ and its
+# JSON go. Applebot, Amazonbot and the search/user-fetch agents are not here.
+ENTITY_HEAVY_CRAWLERS = (
+    "Reflectionbot",
+    "PetalBot",
+)
+
+# The ``*`` group's rules. A crawler that matches a named group ignores
+# ``*`` entirely, so a named group that only narrows access has to repeat
+# these, or it would open /inbox, /api/ and the rest to that crawler.
+_ROBOTS_RULES = (
+    "Allow: /$",
+    "Allow: /top",
+    "Allow: /podcasts/",
+    "Allow: /entities/",
+    "Allow: /api/auth/status",
+    "Allow: /api/public/",
+    "Disallow: /inbox",
+    "Disallow: /briefings",
+    "Disallow: /search",
+    "Disallow: /settings",
+    "Disallow: /episodes",
+    "Disallow: /status",
+    "Disallow: /queue",
+    "Disallow: /failed",
+    "Disallow: /login",
+    "Disallow: /api/",
+    "Disallow: /mcp",
+)
+# Disallow first: urllib.robotparser applies the first matching line, while
+# Google-style parsers take the longest match; this order agrees in both.
+_ENTITY_HEAVY_RULES = ("Disallow: /entities/", "Disallow: /api/public/entities/") + tuple(
+    rule for rule in _ROBOTS_RULES if rule != "Allow: /entities/"
+)
+
 ROBOTS_PUBLIC = (
     "".join(f"User-agent: {agent}\n" for agent in TRAINING_CRAWLERS)
     + "Disallow: /\n\n"
-    + """User-agent: *
-Allow: /$
-Allow: /top
-Allow: /podcasts/
-Allow: /entities/
-Allow: /api/auth/status
-Allow: /api/public/
-Disallow: /inbox
-Disallow: /briefings
-Disallow: /search
-Disallow: /settings
-Disallow: /episodes
-Disallow: /status
-Disallow: /queue
-Disallow: /failed
-Disallow: /login
-Disallow: /api/
-Disallow: /mcp
-Sitemap: {base}/sitemap.xml
-"""
+    + "".join(f"User-agent: {agent}\n" for agent in ENTITY_HEAVY_CRAWLERS)
+    + "".join(f"{rule}\n" for rule in _ENTITY_HEAVY_RULES)
+    + "\n"
+    + "User-agent: *\n"
+    + "".join(f"{rule}\n" for rule in _ROBOTS_RULES)
+    + "Sitemap: {base}/sitemap.xml\n"
 )
 
 ROBOTS_PRIVATE = "User-agent: *\nDisallow: /\n"
@@ -551,7 +670,7 @@ class SitemapBuilder:
 
     def _collect(self) -> List[Tuple[str, Optional[str]]]:
         repo = self._state.repository
-        urls: List[Tuple[str, Optional[str]]] = [("/", None), ("/top", None)]
+        urls: List[Tuple[str, Optional[str]]] = [("/", None), ("/top", None), ("/claude", None)]
         podcasts: Dict[str, Optional[str]] = {}
         podcast_ids: Set[str] = set()
         guest_ids: Set[str] = set()
@@ -565,7 +684,8 @@ class SitemapBuilder:
                 lastmod_iso = (
                     lastmod.isoformat() if hasattr(lastmod, "isoformat") else (str(lastmod) if lastmod else None)
                 )
-                urls.append((f"/podcasts/{row['podcast_slug']}/episodes/{row['slug']}", lastmod_iso))
+                if PublicVisibility.episode_is_indexable(row.get("entity_extraction_status")):
+                    urls.append((f"/podcasts/{row['podcast_slug']}/episodes/{row['slug']}", lastmod_iso))
                 current = podcasts.get(row["podcast_slug"])
                 if lastmod_iso and (current is None or lastmod_iso > current):
                     podcasts[row["podcast_slug"]] = lastmod_iso

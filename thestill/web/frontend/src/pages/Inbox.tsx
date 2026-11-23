@@ -161,31 +161,55 @@ function parseView(raw: string | null): InboxView {
 // pretending nothing is on its way.
 function ArrivingSoon() {
   const { data, isError } = useArrivingSoon()
+  // Folded to its one-line summary: the strip is news about the pipeline,
+  // not something to read, so it should not push the inbox off a phone.
+  const [open, setOpen] = useState(false)
   if (isError || !data || data.items.length === 0) return null
   const more = data.total - data.items.length
   return (
     <section aria-labelledby="arriving-soon-heading" data-testid="arriving-soon">
-      <h2 id="arriving-soon-heading" className="text-sm font-medium text-gray-500 mb-2">
-        Arriving soon <span className="text-gray-400">· {data.total}</span>
+      <h2 id="arriving-soon-heading" className="text-sm font-medium text-gray-500">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-controls="arriving-soon-list"
+          className="flex items-center gap-1 hover:text-gray-700"
+        >
+          Arriving soon <span className="text-gray-400">· {data.total}</span>
+          <svg
+            className={`w-4 h-4 text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
       </h2>
-      <ul className="space-y-1">
-        {data.items.map(({ episode, podcast, active_stage, active_status }) => (
-          <li key={episode.id}>
-            <Link
-              to={`/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`}
-              className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50"
-            >
-              <ListRowArtwork sources={[episode.image_url, podcast.image_url]} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs text-gray-500">{podcast.title}</span>
-                <span className="block truncate text-sm text-gray-700">{episode.title}</span>
-              </span>
-              <ProgressPill status={arrivingProgress(episode, active_stage, active_status)} />
-            </Link>
-          </li>
-        ))}
-      </ul>
-      {more > 0 && <p className="mt-1 px-2 text-xs text-gray-400">and {more} more</p>}
+      {open && (
+        <div id="arriving-soon-list" className="mt-2">
+          <ul className="space-y-1">
+            {data.items.map(({ episode, podcast, active_stage, active_status }) => (
+              <li key={episode.id}>
+                <Link
+                  to={`/podcasts/${podcast.slug || podcast.id}/episodes/${episode.slug || episode.id}`}
+                  className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50"
+                >
+                  <ListRowArtwork sources={[episode.image_url, podcast.image_url]} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-gray-500">{podcast.title}</span>
+                    <span className="block truncate text-sm text-gray-700">{episode.title}</span>
+                  </span>
+                  <ProgressPill status={arrivingProgress(episode, active_stage, active_status)} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {more > 0 && <p className="mt-1 px-2 text-xs text-gray-400">and {more} more</p>}
+        </div>
+      )}
     </section>
   )
 }
@@ -214,6 +238,10 @@ export default function Inbox() {
   const { value: searchInput, debouncedValue: q, setValue: setSearchInput } =
     useDebouncedSearchParam('q')
   const isFiltering = q.length > 0
+  // The phone search row shows once opened, and whenever there is a query
+  // (a Back to ``?q=…`` restores it open).
+  const [phoneSearchOpen, setPhoneSearchOpen] = useState(false)
+  const showPhoneSearch = phoneSearchOpen || searchInput.length > 0
   const searchBoxProps = {
     value: searchInput,
     onChange: setSearchInput,
@@ -255,23 +283,38 @@ export default function Inbox() {
     )
   }
 
+  // Phone budget: the controls share one row and the strips stay compact,
+  // so the inbox list itself starts above the fold (tests/inbox-phone-fold).
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Inbox</h1>
-          <p className="text-gray-500 mt-1">
-            {isLoading
-              ? 'Loading…'
-              : `${items.length}${hasNextPage ? '+' : ''} ${
-                  isFiltering ? 'matching' : view === 'all' ? 'delivered' : view
-                }`}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="space-y-3 sm:space-y-6">
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Inbox</h1>
+      <div className="flex items-center gap-3">
+        <SegmentedControl options={VIEWS} value={view} onChange={setView} ariaLabel="Inbox view" />
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
           <div className="hidden sm:block">
             <SearchBox {...searchBoxProps} inputClassName="py-1.5 w-56" testId="inbox-search-input" />
           </div>
+          {/* Phone: search hides behind an icon until it is wanted. Closing
+              it clears the search, so a hidden filter never lingers. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (showPhoneSearch) setSearchInput('')
+              setPhoneSearchOpen(!showPhoneSearch)
+            }}
+            aria-expanded={showPhoneSearch}
+            aria-controls="inbox-phone-search"
+            aria-label={showPhoneSearch ? 'Close search' : 'Open search'}
+            className={`sm:hidden h-10 w-10 p-2.5 rounded-lg transition-colors ${
+              showPhoneSearch ? 'bg-gray-100 text-ink' : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" className="w-full h-full" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+            </svg>
+          </button>
           <Button
             onClick={() => setIsImportModalOpen(true)}
             icon={<PlusIcon />}
@@ -282,12 +325,18 @@ export default function Inbox() {
         </div>
       </div>
 
-      {/* Mobile: full-width search below the header */}
-      <div className="sm:hidden">
-        <SearchBox {...searchBoxProps} inputClassName="py-2 w-full" />
-      </div>
+      {showPhoneSearch && (
+        <div className="sm:hidden" id="inbox-phone-search">
+          <SearchBox {...searchBoxProps} inputClassName="py-2 w-full" autoFocus={phoneSearchOpen} />
+        </div>
+      )}
 
-      <SegmentedControl options={VIEWS} value={view} onChange={setView} ariaLabel="Inbox view" />
+      {isFiltering && !isLoading && (
+        <p className="text-sm text-gray-500" role="status">
+          {items.length}
+          {hasNextPage ? '+' : ''} matching
+        </p>
+      )}
 
       {/* The briefing, Continue listening and the arriving strip belong to
           the whole inbox, not to a search result or a state-filtered view. */}
@@ -349,7 +398,7 @@ export default function Inbox() {
         </div>
       ) : (
         <>
-          <ListGroup>
+          <ListGroup data-testid="inbox-list">
             {items.map((item) => (
               <InboxRow key={item.entry.id} item={item} />
             ))}

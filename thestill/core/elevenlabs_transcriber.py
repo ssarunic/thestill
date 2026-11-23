@@ -341,18 +341,11 @@ class ElevenLabsTranscriber(Transcriber):
                 episode_slug=episode_slug,
             )
 
-        # Step 3: If waiting for webhook, register with tracker and return None
-        # The webhook handler will save the transcript when the callback arrives
+        # Step 3: If waiting for webhook, return None. The webhook handler saves
+        # the transcript and settles the pending operation saved above, which
+        # is what ``thestill transcribe`` waits on.
         if self.wait_for_webhook:
-            # Register this episode as pending so CLI can track completion
-            # Note: We use episode_id (not transcription_id) because ElevenLabs returns
-            # a different request_id in the webhook callback than the transcription_id
-            # from the submission response. episode_id is consistent in both.
-            from thestill.webhook import get_tracker
-
-            tracker = get_tracker()
             if episode_id:
-                tracker.add_pending(episode_id)
                 logger.info(
                     "Webhook mode transcription submitted",
                     transcription_id=transcription_id,
@@ -363,7 +356,7 @@ class ElevenLabsTranscriber(Transcriber):
                 logger.warning(
                     "Webhook mode transcription submitted without episode_id",
                     transcription_id=transcription_id,
-                    note="Cannot track completion - webhook callback may not trigger auto-exit",
+                    note="No pending operation to wait on; the CLI will not wait for this one",
                 )
             return None
 

@@ -55,6 +55,9 @@ Commands below).
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript` | GET | Get transcript content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary` | GET | Get summary content |
 | `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/transcript/words` | GET | Word-level transcript timings |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/audio` | GET | 302 to an `https` address of the episode's audio. The reader plays an `http` enclosure through this, since a browser will not load `http` media into an `https` page; the server follows the enclosure's redirects over `https` and answers with the file's address (remembered per listener until shortly before it expires, never stored). Used by Safari, where the browser's own retry over `https` fails. 502 when none can be reached |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}` | GET | Sync track binary for the transcript's `sync_track_generation` (spec #116) |
+| `/api/podcasts/{podcast_slug}/episodes/{episode_slug}/drift-outcome` | POST | The browser's report of one attempt to align the transcript with the listener's copy of the audio (spec #116); logged as `drift_map_reported`, at most 4 KB |
 | `/api/episodes/{id}/failure` | GET | Get failure details |
 | `/api/episodes/{id}/retry` | POST | Clear failure and retry |
 | `/api/episodes/{id}/reprocess` | POST | Re-run an episode from a stage onwards (spec #106) |
@@ -71,10 +74,10 @@ Commands below).
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/api/commands/refresh` | POST | Trigger feed refresh (all podcasts or one) |
-| `/api/commands/refresh/status` | GET | Status of the last refresh task |
-| `/api/commands/status` | GET | Status of all tracked command tasks |
+| `/api/commands/refresh/status` | GET | Status of the last refresh task (admins; others get `status: "none"`) |
+| `/api/commands/status` | GET | Status of the tracked command tasks: an admin sees all, anyone else only their own |
 | `/api/commands/add` | POST | Add new podcast `{url}` as a background task |
-| `/api/commands/add/status` | GET | Status of the last add-podcast task |
+| `/api/commands/add/status` | GET | Status of one add-podcast task (`?task_id=`), or of the caller's latest add. Another user's add is never returned (404 by id) |
 | `/api/commands/download` | POST | Queue audio download for an episode |
 | `/api/commands/downsample` | POST | Queue downsampling for an episode |
 | `/api/commands/transcribe` | POST | Queue transcription for an episode |
@@ -82,8 +85,8 @@ Commands below).
 | `/api/commands/summarize` | POST | Queue summarization for an episode |
 | `/api/commands/run-pipeline` | POST | Run full pipeline for episode |
 | `/api/commands/episode/{id}/cancel-pipeline` | POST | Cancel remaining pipeline stages for an episode |
-| `/api/commands/episode/{id}/tasks` | GET | List tasks for an episode |
-| `/api/commands/task/{id}` | GET | Get queued task status |
+| `/api/commands/episode/{id}/tasks` | GET | List tasks for an episode; empty unless the caller follows its podcast, has it in the inbox, or is an admin |
+| `/api/commands/task/{id}` | GET | Get queued task status (same access rule as the episode's tasks; 404 otherwise) |
 | `/api/commands/task/{id}/progress` | GET | Stream task progress via Server-Sent Events |
 | `/api/commands/task/{id}/progress/current` | GET | Latest progress snapshot for a task |
 | `/api/commands/queue/status` | GET | Queue counts by state |
@@ -302,12 +305,12 @@ public page calls any `/api` endpoint outside `/api/public` and
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95). A suspended or banned session reads as signed out with `account_disabled: true`; `admin_contact_email` comes from `ADMIN_CONTACT_EMAIL` (spec #104) |
+| `/api/auth/status` | GET | Get authentication mode and user info; also `usage_analytics_available` and `analytics` (`{key}` for a signed-in reader with usage events on, else null; spec #95), and `product_tips_email_available` (welcome and tips email can be sent here; spec #118). A suspended or banned session reads as signed out with `account_disabled: true`; `admin_contact_email` comes from `ADMIN_CONTACT_EMAIL` (spec #104) |
 | `/api/auth/google/login` | GET | Initiate Google OAuth flow |
 | `/api/auth/google/callback` | GET | OAuth callback handler. Redirects to `/login?error=account_disabled` or `/login?error=signups_closed` when spec #104 refuses the sign-in |
 | `/api/auth/logout` | POST | Clear authentication cookie |
 | `/api/auth/me` | GET | Get current user info (requires auth in multi-user mode) |
-| `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference) and/or `usage_analytics_enabled` (spec #95 Settings switch) |
+| `/api/auth/me` | PATCH | Update the fields sent: `region` (locks inference), `usage_analytics_enabled` (spec #95 Settings switch) and/or `product_tips_email_enabled` (spec #118 "Product tips by email") |
 | `/api/me/mcp-token` | GET | The caller's remote MCP connector token state (spec #78 Phase 2): `enabled`, `state` (`none`/`active`/`expiring`/`expired`/`revoked`), masked prefix, scopes, created/expires/last-used/revoked timestamps, diagnostic last-used IP — never the plaintext |
 | `/api/me/mcp-token` | POST | Create or rotate the caller's token with `{scopes: ["follows", "pipeline"]}` (`read` implicit; `pipeline` dropped for non-admins). Returns the full connector URL **once**; the old URL dies immediately |
 | `/api/me/mcp-token` | DELETE | Revoke the caller's token (204, idempotent) |
@@ -348,6 +351,8 @@ required).
 |----------|--------|-------------|
 | `/unsubscribe/briefings` | GET | Confirm page for a signed link (read-only; mail gateways prefetch GETs) |
 | `/unsubscribe/briefings` | POST | Perform the unsubscribe (confirm button and RFC 8058 one-click) |
+| `/unsubscribe/tips` | GET | Confirm page for a product-tips link (spec #118; read-only) |
+| `/unsubscribe/tips` | POST | Turn "Product tips by email" off (confirm button and RFC 8058 one-click); briefing emails are untouched |
 
 ## Project Structure
 

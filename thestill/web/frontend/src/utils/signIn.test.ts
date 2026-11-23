@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { consumePendingFollow, notNowPath, parseIntent, parseSignInFragment, rememberPendingFollow, showSlugFromNext, signInPath } from './signIn'
+import { consumePendingFollow, notNowPath, parseIntent, parseSignInFragment, rememberPendingFollow, followSlugFromNext, signInPath } from './signIn'
 
 describe('sign-in links (spec #102)', () => {
   it('builds the one /login URL with a validated next and an intent in the fragment', () => {
@@ -23,10 +23,15 @@ describe('sign-in links (spec #102)', () => {
   })
 
   it('recognises a show page as next', () => {
-    expect(showSlugFromNext('/podcasts/prof-g')).toBe('prof-g')
-    expect(showSlugFromNext('/podcasts/prof-g?x=1')).toBe('prof-g')
-    expect(showSlugFromNext('/podcasts/prof-g/episodes/a')).toBeNull()
-    expect(showSlugFromNext(null)).toBeNull()
+    expect(followSlugFromNext('/podcasts/prof-g')).toBe('prof-g')
+    expect(followSlugFromNext('/podcasts/prof-g?x=1')).toBe('prof-g')
+    // Spec #117 — an episode's Follow is for its show.
+    expect(followSlugFromNext('/podcasts/prof-g/episodes/a')).toBe('prof-g')
+    expect(followSlugFromNext('/podcasts/prof-g/episodes/a?view=transcript&t=90')).toBe('prof-g')
+    expect(followSlugFromNext('/podcasts/prof-g/episodes')).toBeNull()
+    expect(followSlugFromNext('/podcasts/prof-g/episodes/a/b')).toBeNull()
+    expect(followSlugFromNext('/entities/person/x')).toBeNull()
+    expect(followSlugFromNext(null)).toBeNull()
   })
 
   it('sends Not now back to public pages only', () => {

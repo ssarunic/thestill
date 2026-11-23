@@ -16,6 +16,7 @@ import Button, { CloseIcon, PauseIcon, PlayIcon, SkipBackIcon, SkipForwardIcon }
 import NowPlayingScrubber, { type ScrubberTick } from './NowPlayingScrubber'
 import NowPlayingSpeedControl from './NowPlayingSpeedControl'
 import NowPlayingKaraokeLine from './NowPlayingKaraokeLine'
+import SkipAheadButton from './SkipAheadButton'
 
 interface NowPlayingSheetProps {
   isOpen: boolean
@@ -113,7 +114,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
           at: seconds / duration,
           colorClass: entityStyle(item.entity.type).dot,
           label: `${item.entity.canonical_name} at ${formatClock(seconds)}`,
-          onSelect: () => seek(seconds),
+          onSelect: () => seek(seconds, { transcript: true }),
         }
       }),
     )
@@ -176,7 +177,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
   const { isPlaying, isLoading, playbackRate, availableRates, mediaError, volume, muted, videoPreference, pipSupported, pipActive } = player
   const hasVisualRendition = player.mediaKind === 'video' || player.activeEngine === 'youtube'
   const hasDuration = duration > 0 && Number.isFinite(duration)
-  const busy = isLoading && !isPlaying
+  const busy = isLoading
 
   const panel = (
     <div
@@ -250,7 +251,13 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
 
         {/* Scrubber */}
         <div className="mt-5">
-          <NowPlayingScrubber currentTime={currentTime} duration={duration} onSeek={player.seek} ticks={ticks} />
+          <NowPlayingScrubber
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={player.seek}
+            ticks={ticks}
+            adPlaying={player.listenerAd !== null}
+          />
         </div>
 
         {/* Current line (spec #72 §3) — what is being said right now, with the
@@ -260,6 +267,13 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
         <div className="mt-3 min-h-[2.875rem] text-center">
           <NowPlayingKaraokeLine track={track} enabled={active} />
         </div>
+
+        {/* Spec #116 §6.2 — only while an ad plays that the map can skip. */}
+        {player.skipAheadAvailable && (
+          <div className="mt-3 flex justify-center">
+            <SkipAheadButton size="md" />
+          </div>
+        )}
 
         {/* Transport */}
         <div className="mt-3 flex items-center justify-center gap-8">
@@ -280,7 +294,7 @@ export default function NowPlayingSheet({ isOpen, onClose }: NowPlayingSheetProp
             size="iconLg"
             variant="primary"
             icon={isPlaying ? <PauseIcon /> : <PlayIcon />}
-            isLoading={busy}
+            busy={busy}
             onClick={player.toggle}
             aria-label={isPlaying ? 'Pause' : 'Play'}
           >

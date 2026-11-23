@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { EpisodeEntity, MentionLite } from '../api/types'
 import { PlayerProvider } from '../contexts/PlayerContext'
 import SegmentedTranscriptViewer from './SegmentedTranscriptViewer'
+import { __resetDeepLinkSeekForTests } from '../hooks/useDeepLinkSeek'
 import { ToastProvider } from './Toast'
 
 function seg(overrides: Partial<AnnotatedSegment> & { id: number }): AnnotatedSegment {
@@ -107,6 +108,208 @@ describe('SegmentedTranscriptViewer', () => {
       expect(onSeek).toHaveBeenCalledWith(110)
     })
 
+    describe('a link to a moment (#t=)', () => {
+      const setActivation = (hasBeenActive: boolean | null) =>
+        Object.defineProperty(window.navigator, 'userActivation', {
+          configurable: true,
+          value: hasBeenActive === null ? undefined : { hasBeenActive, isActive: hasBeenActive },
+        })
+      const openAt = (url: string) => window.history.replaceState(null, '', url)
+
+      beforeEach(() => __resetDeepLinkSeekForTests())
+      afterEach(() => {
+        setActivation(null)
+        openAt('/')
+      })
+
+      it('opened cold: marks the passage and offers Play from, without starting audio', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12')
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+
+        expect(onSeek).not.toHaveBeenCalled()
+        expect(screen.getByTestId('segment-content-2')).toHaveAttribute('data-linked', 'true')
+        expect(screen.getByTestId('segment-content-1')).not.toHaveAttribute('data-linked')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:12' }))
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        expect(onSeek).toHaveBeenCalledWith(12)
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+        expect(screen.getByTestId('segment-content-2')).not.toHaveAttribute('data-linked')
+      })
+
+      it('followed inside the app: plays the moment, and keeps the offer in case the browser refuses', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(onSeek).toHaveBeenCalledWith(12)
+        // The stubbed handler starts no audio, as a browser refusing would.
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+      })
+
+      it('does not seek again on a return to the same history entry, but keeps an untaken offer', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        const props = { transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek, locationKey: 'entry-a' }
+        const first = renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        first.unmount()
+
+        // Back to the entry: the viewer mounts again with the same key.
+        const second = renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(1)
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:12' }))
+        expect(onSeek).toHaveBeenCalledTimes(2)
+        second.unmount()
+
+        // Taken up: a further return offers nothing.
+        renderViewer(props)
+        expect(onSeek).toHaveBeenCalledTimes(2)
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+
+      it('acts again for a new history entry on the same episode', () => {
+        setActivation(true)
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const onSeek = vi.fn()
+        const transcript = defaultTranscript()
+        const wrap = (locationKey: string) => (
+          <ToastProvider>
+            <PlayerProvider>
+              <SegmentedTranscriptViewer transcript={transcript} episodeId="ep1" onSeekRequest={onSeek} locationKey={locationKey} />
+            </PlayerProvider>
+          </ToastProvider>
+        )
+        const { rerender } = render(wrap('entry-a'))
+        expect(onSeek).toHaveBeenLastCalledWith(12)
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        expect(onSeek).toHaveBeenCalledTimes(2)
+        expect(onSeek).toHaveBeenLastCalledWith(3)
+      })
+
+      it('does not carry one entry\'s offer onto another entry of the same episode', () => {
+        setActivation(false)
+        const onSeek = vi.fn()
+        const transcript = defaultTranscript()
+        const wrap = (locationKey: string) => (
+          <ToastProvider>
+            <PlayerProvider>
+              <SegmentedTranscriptViewer transcript={transcript} episodeId="ep1" onSeekRequest={onSeek} locationKey={locationKey} />
+            </PlayerProvider>
+          </ToastProvider>
+        )
+        // Entry A: offer left pending.
+        openAt('/podcasts/show/episodes/ep?t=12')
+        const { rerender } = render(wrap('entry-a'))
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+
+        // Entry B: its own moment, taken up.
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:03' }))
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+
+        // Back to A (its offer returns), Forward to B (settled: no offer).
+        openAt('/podcasts/show/episodes/ep?t=12')
+        rerender(wrap('entry-a'))
+        expect(screen.getByRole('button', { name: 'Play from 00:12' })).toBeInTheDocument()
+        openAt('/podcasts/show/episodes/ep?t=3')
+        rerender(wrap('entry-b'))
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+
+      it('moves focus to Play from and ties the note to it', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12')
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        const play = screen.getByRole('button', { name: 'Play from 00:12' })
+        expect(play).toHaveFocus()
+        expect(play).toHaveAccessibleDescription('The moment this link points to')
+      })
+
+      it('takes focus on arrival only, not when a search moves the offer to another passage', async () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=5') // segment 1, "First segment"
+        const user = userEvent.setup()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        expect(screen.getByRole('button', { name: 'Play from 00:05' })).toHaveFocus()
+
+        // "shipping" hides segment 1 and matches segment 2: the offer moves there.
+        const search = screen.getByRole('searchbox', { name: 'Search transcript' })
+        await user.click(search)
+        await user.type(search, 'shipping')
+        await waitFor(() => expect(screen.getByTestId('segment-content-2')).toHaveAttribute('data-linked', 'true'))
+        expect(search).toHaveFocus()
+        expect(search).toHaveValue('shipping')
+      })
+
+      it('does not move the offer onto an unrelated match when a search hides the passage', async () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=12') // segment 2, "Second segment about shipping"
+        const user = userEvent.setup()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: vi.fn() })
+        await user.type(screen.getByRole('searchbox', { name: 'Search transcript' }), 'First')
+        await waitFor(() => expect(screen.queryByTestId('linked-moment')).toBeNull())
+      })
+
+      it('puts the button on the next visible passage when the linked one is hidden', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=22') // inside the hidden filler segment
+        const data = defaultTranscript()
+        data.segments.push(seg({ id: 4, start: 25, end: 30, speaker: 'Bob', text: 'After the filler' }))
+        renderViewer({ transcript: data, episodeId: 'ep1', onSeekRequest: vi.fn() })
+        expect(screen.getByRole('button', { name: 'Play from 00:22' })).toBeInTheDocument()
+        expect(screen.getByTestId('segment-content-4')).toHaveAttribute('data-linked', 'true')
+      })
+
+      it('puts the button on the first passage for a moment before the first segment', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=0')
+        const data = defaultTranscript()
+        data.playback_time_offset_seconds = 5 // the first segment starts at 00:05
+        const onSeek = vi.fn()
+        renderViewer({ transcript: data, episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(screen.getByTestId('segment-content-1')).toHaveAttribute('data-linked', 'true')
+        fireEvent.click(screen.getByRole('button', { name: 'Play from 00:00' }))
+        expect(onSeek).toHaveBeenCalledWith(0)
+      })
+
+      it('scrolls to the visible passage that carries the offer when the linked one is hidden', () => {
+        setActivation(false)
+        openAt('/podcasts/show/episodes/ep#t=22') // inside the hidden filler segment (id 3)
+        const scrolled: Element[] = []
+        const original = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = function (this: Element) {
+          scrolled.push(this)
+        }
+        try {
+          const data = defaultTranscript()
+          data.segments.push(seg({ id: 4, start: 25, end: 30, speaker: 'Bob', text: 'After the filler' }))
+          renderViewer({
+            transcript: data,
+            episodeId: 'ep1',
+            onSeekRequest: vi.fn(),
+            scrollToSegmentId: { segmentId: 3, nonce: 1 },
+          })
+          expect(scrolled).toEqual([screen.getByTestId('segment-content-4')])
+        } finally {
+          Element.prototype.scrollIntoView = original
+        }
+      })
+
+      it('shows nothing without a moment in the URL', () => {
+        setActivation(false)
+        const onSeek = vi.fn()
+        renderViewer({ transcript: defaultTranscript(), episodeId: 'ep1', onSeekRequest: onSeek })
+        expect(onSeek).not.toHaveBeenCalled()
+        expect(screen.queryByTestId('linked-moment')).toBeNull()
+      })
+    })
+
     it('fires onSeekRequest when Enter is pressed on a focused segment', () => {
       const onSeek = vi.fn()
       renderViewer({ transcript: defaultTranscript(), onSeekRequest: onSeek })
@@ -177,65 +380,9 @@ describe('SegmentedTranscriptViewer', () => {
   })
 
   describe('kind toggles', () => {
-    it('shows ad body text without a summary label when Ads is on', () => {
-      renderViewer({
-        transcript: makeTranscript([
-          seg({
-            id: 0,
-            kind: 'ad_break',
-            sponsor: 'Acme',
-            text: 'Support for the show comes from Acme. Visit acme.com.',
-          }),
-        ]),
-      })
-
-      // Full ad copy reads like body text.
-      expect(screen.getByText(/acme\.com/)).toBeInTheDocument()
-      // No "AD BREAK — …" chip above the body when expanded.
-      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
-    })
-
-    it('collapses ads to a compact "AD BREAK — Sponsor" chip when Ads is off', async () => {
-      const user = userEvent.setup()
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, text: 'before ad', speaker: 'Alice' }),
-          seg({ id: 1, kind: 'ad_break', sponsor: 'Acme', text: 'visit acme.com' }),
-          seg({ id: 2, text: 'after ad', speaker: 'Alice' }),
-        ]),
-      })
-
-      // Ads ON: body visible, no chip label.
-      expect(screen.getByText(/visit acme\.com/)).toBeInTheDocument()
-      expect(screen.queryByText(/Ad break/i)).not.toBeInTheDocument()
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      // Ads OFF: body gone, compact chip "Ad break — Acme" visible
-      // (uppercase is CSS-only, so the DOM text is "Ad break").
-      expect(screen.queryByText(/visit acme\.com/)).not.toBeInTheDocument()
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByText(/Acme/)).toBeInTheDocument()
-      // Surrounding content is unaffected.
-      expect(screen.getByText('before ad')).toBeInTheDocument()
-      expect(screen.getByText('after ad')).toBeInTheDocument()
-    })
-
-    it('only shows toggles for kinds actually present', () => {
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, text: 'pure content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'ad text' }),
-        ]),
-      })
-
-      expect(screen.getByRole('button', { name: 'Ads' })).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Music' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Intro' })).not.toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Outro' })).not.toBeInTheDocument()
-    })
-
-    it('renders toggles for every present non-content kind', () => {
+    // Ads have no pill (spec #116 §6.1): an ad break is always one collapsed
+    // row. Its own tests are in SegmentedTranscriptViewer.adBreaks.test.tsx.
+    it('shows a pill for music, intro and outro when present, and none for ads', () => {
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, kind: 'intro', text: 'welcome' }),
@@ -246,28 +393,33 @@ describe('SegmentedTranscriptViewer', () => {
         ]),
       })
 
-      expect(screen.getByRole('button', { name: 'Ads' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Ads' })).not.toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Music' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Intro' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Outro' })).toBeInTheDocument()
     })
 
-    it('loads the hidden-kinds preference from localStorage and starts collapsed', () => {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(['ad_break']))
+    it('only shows pills for kinds actually present', () => {
+      renderViewer({
+        transcript: makeTranscript([
+          seg({ id: 0, text: 'pure content' }),
+          seg({ id: 1, kind: 'ad_break', text: 'ad text' }),
+        ]),
+      })
+      expect(screen.queryByRole('group', { name: 'Segment kind filters' })).not.toBeInTheDocument()
+    })
 
+    it('loads the hidden-kinds preference and collapses that kind to a chip', () => {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(['music']))
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, text: 'content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'hidden ad', sponsor: 'Acme' }),
+          seg({ id: 1, kind: 'music', text: 'theme plays' }),
         ]),
       })
-
-      expect(screen.getByText('content')).toBeInTheDocument()
-      // Ad body is collapsed to the chip, so the body text is absent.
-      expect(screen.queryByText('hidden ad')).not.toBeInTheDocument()
-      // But the compact chip is still there so the reader sees the ad position.
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Ads' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.queryByText('theme plays')).not.toBeInTheDocument()
+      expect(screen.getByTestId('segment-music-1')).toHaveAttribute('data-collapsed', 'true')
+      expect(screen.getByRole('button', { name: 'Music' })).toHaveAttribute('aria-pressed', 'false')
     })
 
     it('persists the hidden-kinds preference to localStorage', async () => {
@@ -275,45 +427,23 @@ describe('SegmentedTranscriptViewer', () => {
       renderViewer({
         transcript: makeTranscript([
           seg({ id: 0, text: 'content' }),
-          seg({ id: 1, kind: 'ad_break', text: 'ad copy' }),
+          seg({ id: 1, kind: 'music', text: 'theme plays' }),
         ]),
       })
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      const stored = window.localStorage.getItem(STORAGE_KEY)
-      expect(stored).not.toBeNull()
-      expect(JSON.parse(stored!)).toEqual(['ad_break'])
+      await user.click(screen.getByRole('button', { name: 'Music' }))
+      expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual(['music'])
     })
 
-    it('falls back to defaults when localStorage has bogus values', () => {
-      window.localStorage.setItem(STORAGE_KEY, '{"not": "an array"}')
-
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, kind: 'ad_break', text: 'ad visible' }),
-        ]),
-      })
-
-      expect(screen.getByText('ad visible')).toBeInTheDocument()
-    })
-
-    it('keeps the chip visible even when every togglable kind is collapsed', async () => {
-      const user = userEvent.setup()
-      renderViewer({
-        transcript: makeTranscript([
-          seg({ id: 0, kind: 'ad_break', text: 'ad copy', sponsor: 'Acme' }),
-        ]),
-      })
-
-      await user.click(screen.getByRole('button', { name: 'Ads' }))
-
-      // Body hidden, but the reader still sees the ad marker.
-      expect(screen.queryByText('ad copy')).not.toBeInTheDocument()
-      expect(screen.getByText(/Ad break/)).toBeInTheDocument()
-      expect(screen.getByText(/Acme/)).toBeInTheDocument()
-      const block = screen.getByTestId('segment-ad_break-0')
-      expect(block).toHaveAttribute('data-collapsed', 'true')
+    it('ignores a stored ad_break entry and bogus values: an ad break is its one row either way', () => {
+      for (const stored of [JSON.stringify(['ad_break']), '{"not": "an array"}']) {
+        window.localStorage.setItem(STORAGE_KEY, stored)
+        const view = renderViewer({
+          transcript: makeTranscript([seg({ id: 0, kind: 'ad_break', text: 'ad copy', sponsor: 'Acme' })]),
+        })
+        expect(screen.getByTestId('ad-break-0')).toHaveAttribute('data-open', 'false')
+        expect(screen.queryByText('ad copy')).not.toBeInTheDocument()
+        view.unmount()
+      }
     })
 
     it('renders music, intro and outro with their own block style', () => {

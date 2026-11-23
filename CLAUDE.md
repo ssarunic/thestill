@@ -56,6 +56,11 @@ thestill link-platforms [--podcast-id X] [--dry-run] [--force]
 # Curate a show's Apple / YouTube / Spotify link (survives chart syncs and resolvers):
 thestill set-show-link --podcast-id X --platform spotify --url https://open.spotify.com/show/<id>
 
+# Sync tracks (spec #116): landmarks of the transcribed audio, written at
+# transcription and used to correct timestamps when a listener's ads differ.
+thestill sync-track show --podcast-id X --episode <slug> [--json]
+thestill sync-track backfill [--podcast-id X] [--since-days N] [--max-episodes N] [--dry-run]   # recent Dalston jobs only
+
 # Summary genre profiles (spec #98): override > Apple category > general;
 # genre profiles only apply once listed in SUMMARY_PROFILES_ENABLED.
 thestill summary-profiles                  # each show's profile and why
@@ -69,12 +74,13 @@ thestill narrate --briefing <briefing-id>
 
 # Entity curation (admin-only; same service as /api/admin/entities, audited).
 # Never fix entity data with SQL — use these:
-thestill entity merge KEEPER LOSER            # two rows, one thing
+thestill entity merge KEEPER LOSER            # two rows, one thing; LOSER's name stays as an alias if it resembles KEEPER's
 thestill entity move-mentions FROM TO ID...   # one name, two things
 thestill entity split FROM --name N --type T [--qid Q] [--mention ID]...
 thestill entity relink ID QID                 # wrong Wikidata item; blacklists the old one
 thestill entity set-type ID TYPE              # wrong type; pair with relink ID none if the link is wrong
 thestill entity prune-orphans [--apply]       # rows nothing refers to
+thestill entity backfill-redirects [--apply]  # 301s for entities merged before merges recorded one
 
 # Transcript editor op log (spec #110; admin-only, same service as the episode
 # page's "Edit transcript"). Edits never rewrite transcript files: every
@@ -102,6 +108,13 @@ thestill admin grant <email>                 # replaces hand-editing is_admin
 thestill settings set signup_mode closed     # settings get / reset; read_only = panic mode
 thestill user quota <email> imports_per_day 20   # per-user quota override; "default" reverts
 thestill alerts test                         # operator alert channels; alerts digest previews the daily digest
+
+# Welcome + product-tips email (spec #118). Ships off; preview, then switch on
+# with `thestill settings set lifecycle_email_enabled true`:
+thestill lifecycle status                  # the switch, the sequence, sends per message
+thestill lifecycle plan                    # dry run: who would get what now, and why
+thestill lifecycle preview <key> [--out DIR]
+thestill lifecycle send-test <key> --to <you>
 
 # Web server
 thestill server                     # Start on localhost:8000
@@ -217,6 +230,7 @@ These IDs enable tracing requests across all layers of the application.
 - [evals.md](docs/evals.md) - LLM-as-judge quality eval runs (`thestill eval`)
 - [analytics.md](docs/analytics.md) - Product analytics: the Scorecard (spec #111), the `/analytics` funnel and PostHog usage events (spec #95)
 - [experiments.md](docs/experiments.md) - Log of product changes aimed at a Scorecard metric, and how each was read (spec #111)
+- [claude-directory-listing.md](docs/claude-directory-listing.md) - Listing kit for Claude's connector directory, and the scripted connector check (`scripts/check_connector.py`)
 - [code-guidelines.md](docs/code-guidelines.md) - Development standards
 
 ### Technical Specs (`specs/`)

@@ -46,6 +46,19 @@ AUDIT_ACTIONS = (
     "entity.set_type",
     "entity.blacklist",
     "entity.prune_orphans",
+    "entity.backfill_redirects",
+    "entity.alias_add",
+    "entity.set_visibility",
+    "entity.correction",
+    "mention.drop",
+    "mention.repoint",
+    # Show and episode curation (entity_curation / podcast_curation)
+    "podcast.set_hosts",
+    "podcast.set_recurring",
+    "podcast.set_show_link",
+    "podcast.set_summary_profile",
+    "podcast.set_public_pages",
+    "episode.set_guests",
     # Transcript editor (spec #110 §7). Per-edit history is the op log;
     # the audit log gets one row per finished session and bulk revert.
     "transcript.edit_session",

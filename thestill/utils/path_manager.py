@@ -237,6 +237,21 @@ class PathManager:
         """
         return self.storage_path / self._narrations
 
+    def sync_tracks_dir(self) -> Path:
+        """Sync track artefacts root (spec #116)."""
+        return self.storage_path / "sync_tracks"
+
+    def sync_track_file(self, podcast_slug: str, episode_slug: str, generation: str) -> Path:
+        """Path of one sync track: ``sync_tracks/<podcast>/<episode>.<generation>.sync``.
+
+        The generation is in the name so a track file is never overwritten
+        in place: a new transcript gets a new file.
+        """
+        _validate_slug(podcast_slug, name="podcast_slug")
+        _validate_slug(episode_slug, name="episode_slug")
+        _validate_slug(generation, name="generation")
+        return self._assert_inside_root(self.sync_tracks_dir() / podcast_slug / f"{episode_slug}.{generation}.sync")
+
     # --- Spec #28 corpus paths -------------------------------------------------
     # The four entity-type subdirs are split because a rendered Markdown
     # entity page is itself just ``<type>/<slug>.md`` — keeping them in
@@ -502,6 +517,7 @@ class PathManager:
             self.debug_feeds_dir(),
             self.pending_operations_dir(),
             self.narrations_dir(),
+            self.sync_tracks_dir(),
             # Spec #28 corpus tree — entity pages only (Phase 2.10
             # removed the per-episode rendered Markdown projection).
             self.corpus_dir(),

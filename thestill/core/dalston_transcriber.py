@@ -53,6 +53,62 @@ POLL_INTERVAL = 5.0  # seconds between polls
 MAX_POLL_DURATION = 7200  # 2 hours max wait
 
 
+def iter_job_audio(
+    job_id: str,
+    *,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    max_bytes: Optional[int] = None,
+    timeout: float = 120.0,
+    chunk_size: int = 1 << 20,
+):
+    """Stream the original audio Dalston stored for a completed job.
+
+    Spec #116: with URL fetch, Thestill never sees the bytes that were
+    transcribed. Dalston keeps them (30 days by default) and hands out a
+    presigned URL at ``GET /v1/audio/transcriptions/{job_id}/audio``. The
+    presigned URL is fetched without the API key.
+
+    Raises ``httpx.HTTPError`` when Dalston refuses (404 unknown job, 410
+    audio purged), ``OSError`` when the download fails or ends before the
+    declared length, and ``ValueError`` when the audio exceeds ``max_bytes``.
+    """
+    import os
+    import urllib.request
+
+    import httpx
+
+    base = (base_url or os.getenv("DALSTON_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
+    key = api_key or os.getenv("DALSTON_API_KEY") or None
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        response = client.get(f"{base}/v1/audio/transcriptions/{job_id}/audio", headers=headers)
+        response.raise_for_status()
+        signed_url = response.json()["url"]
+
+    # The presigned URL's query string is a credential, valid for an hour.
+    # httpx logs every request URL at INFO (and urllib3 at DEBUG), so this
+    # one request goes through the standard library, which logs nothing.
+    # That needs no logger juggling and is safe with concurrent downloads.
+    if not signed_url.startswith(("https://", "http://")):
+        raise ValueError("Dalston returned a non-HTTP audio URL")
+    total = 0
+    with urllib.request.urlopen(signed_url, timeout=timeout) as audio:  # noqa: S310 — URL issued by our Dalston
+        declared = audio.headers.get("Content-Length") if getattr(audio, "headers", None) is not None else None
+        while True:
+            chunk = audio.read(chunk_size)
+            if not chunk:
+                break
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise ValueError(f"job audio exceeds {max_bytes} bytes")
+            yield chunk
+    # A connection cut short reads as a clean end of file here. A sync track
+    # built from part of the audio would look valid, so check the length.
+    if declared is not None and str(declared).isdigit() and total != int(declared):
+        raise OSError(f"job audio download ended early: got {total} of {declared} bytes")
+
+
 class DalstonTranscriber(Transcriber):
     """
     Dalston Speech-to-Text transcriber using the official SDK.

@@ -24,10 +24,10 @@ the OAuth callback that calls it turns any exception into a failed login.
 
 from typing import Final, Literal, Optional
 
-PublicPageKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal"]
+PublicPageKind = Literal["landing", "top", "podcast", "episode", "entity", "share", "legal", "claude"]
 
-# What ``users.signup_source`` may hold. Legal pages and every non-public
-# path collapse to "direct".
+# What ``users.signup_source`` may hold. Legal pages, the Claude guide and
+# every non-public path collapse to "direct".
 SIGNUP_SOURCES: Final = ("landing", "top", "podcast", "episode", "entity", "share", "direct")
 
 _ENTITY_TYPES: Final = frozenset({"person", "company", "product", "topic"})
@@ -52,6 +52,9 @@ def public_page_kind(path: Optional[str]) -> Optional[PublicPageKind]:
             return "top"
         if head in ("terms", "privacy") and n == 1:
             return "legal"
+        if head == "claude" and n == 1:
+            # Spec #108 — the connector guide.
+            return "claude"
         if head == "share":
             return "share"
         if head == "podcasts" and n == 2:

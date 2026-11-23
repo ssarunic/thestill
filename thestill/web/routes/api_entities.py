@@ -33,18 +33,19 @@ import math
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Dict, Iterable, List, Literal, Optional, Sequence, Set
+from typing import Annotated, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator
 from structlog import get_logger
 
-from ...core.entity_review import CorrectionError, apply_correction, scan_entities_for_review
+from ...core.entity_review import CorrectionError, scan_entities_for_review
 from ...core.wikidata_client import WikidataClient
 from ...models.enrichment import EnrichmentUnavailable, EntityAffiliation, EntityFact
 from ...models.entities import EntityRecord, MentionRole
 from ...models.user import User
 from ...repositories.entity_repository import MentionContext
+from ...services.abuse.actor import Actor
 from ..dependencies import AppState, get_app_state, require_admin
 from ..responses import api_response
 
@@ -118,6 +119,13 @@ class EpisodeEntity(BaseModel):
     # ``role`` field. Spec §1.13.1: host/guest is a property of the
     # entity↔podcast relationship, not the mention.
     speaker_kind: Literal["host", "guest", "recurring", "unknown"]
+    # True when the entity takes part in *this* episode. A guest anchor is
+    # per episode, so a guest always does. Host and recurring anchors are
+    # per show: they say who the person is to the podcast, not that they
+    # are on this episode, so those count only when a segment is theirs
+    # (a ``speaking`` mention). An absent host who is merely talked about
+    # stays among the people mentioned.
+    takes_part: bool = False
     # Spec #28 §5.2 — composite relevance score used to sort the rail.
     # Combines mention_count, speaker_kind weight, log(time_spread), and
     # average mention confidence so a 2× mention by a host across the
@@ -405,18 +413,21 @@ def get_episode_entities(
                 mention_count=len(mentions),
                 first_mention_ms=mentions[0].start_ms,
                 speaker_kind=kind,
+                takes_part=kind == "guest"
+                or (kind != "unknown" and any(m.role == MentionRole.SPEAKING.value for m in mentions)),
                 salience=_compute_salience(speaker_kind=kind, mentions=mentions),
                 mentions=mentions,
             )
         )
 
-    # Spec §5.2 right-rail sort: hosts/guests/recurring first
-    # (participants), mentioned-only after. Within each bucket sort by
+    # Spec §5.2 right-rail sort: participants first, mentioned-only
+    # after. Guests lead: the guest is what sets this episode apart, the
+    # host is the same on every episode of the show. Within each bucket sort by
     # salience descending — see ``_compute_salience`` for the formula.
     # Tiebreak by canonical_name for deterministic output. Replaces the
     # raw ``mention_count`` sort that let one-shot tangents outrank
     # broadly-referenced entities.
-    kind_priority = {"host": 0, "guest": 1, "recurring": 2, "unknown": 3}
+    kind_priority = {"guest": 0, "host": 1, "recurring": 2, "unknown": 3}
     items.sort(key=lambda i: (kind_priority[i.speaker_kind], -i.salience, i.entity.canonical_name))
 
     return EpisodeEntitiesResponse(
@@ -495,6 +506,37 @@ def url_owner(candidates: Sequence[str], with_mentions: Set[str]) -> str:
     resolver and the sitemap both decide through here (spec #42 FM-6).
     """
     return next((entity_id for entity_id in candidates if entity_id in with_mentions), candidates[0])
+
+
+def entity_path_resolver(entity_repository) -> Callable[[str], Optional[str]]:
+    """``entity_page_path`` bound to a repository, for ``AnalyticsService``."""
+    return lambda entity_id: entity_page_path(entity_repository, entity_id)
+
+
+def entity_page_path(entity_repository, entity_id: str) -> Optional[str]:
+    """The ``/entities/<type>/<slug>`` path that shows ``entity_id``, or None.
+
+    The current type's URL when this entity owns it, else the URL of the
+    type its id was minted with: a re-typed entity whose current-type URL
+    belongs to another row keeps its old one (``current_entity_path``).
+    None when neither shows it, or it no longer exists. Spec #115 links the
+    admin traffic report's entity pages through here.
+    """
+    records = entity_repository.get_entities_by_ids([entity_id])
+    if not records:
+        return None
+    prefix, _, bare_slug = entity_id.partition(":")
+    if not bare_slug:
+        prefix, bare_slug = "", entity_id
+    for entity_type in dict.fromkeys((records[0].type.value, prefix)):
+        if entity_type not in _VALID_TYPES:
+            continue
+        try:
+            if _entity_id_from_path(entity_repository, entity_type, bare_slug) == entity_id:
+                return f"/entities/{entity_type}/{bare_slug}"
+        except HTTPException:
+            continue
+    return None
 
 
 def _citation_row(ctx: MentionContext) -> CitationRow:
@@ -769,7 +811,7 @@ def get_review_queue(
 def post_correction(
     request: CorrectionRequest,
     state: AppState = Depends(get_app_state),
-    _: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
 ) -> dict:
     """Apply an admin correction (blacklist / override) and re-resolve.
 
@@ -779,12 +821,14 @@ def post_correction(
     lands on existing data. Returns a paste-ready golden-eval snippet so the
     correction can be locked in as a permanent regression guard.
     """
+    # Through the audited curation service, like every other curation write.
+    from .api_admin import _curation
+
     try:
-        result = apply_correction(
-            repo=state.entity_repository,
+        result = _curation(state).correct(
+            actor=Actor.web(admin.id),
             queue_manager=state.queue_manager,
             wikidata_client=WikidataClient(),
-            link_decisions=state.link_decision_repository,
             action=request.action,
             surface_form=request.surface_form,
             episode_id=request.episode_id,

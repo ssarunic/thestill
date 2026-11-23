@@ -329,6 +329,8 @@ class EntityMergeRequest(BaseModel):
     loser_id: str = Field(..., min_length=3, max_length=300)
     reason: Optional[str] = Field(None, max_length=500)
     dry_run: bool = False
+    #: Keep the loser's name as an alias of the keeper (off for a junk name).
+    keep_name: bool = True
 
 
 class EntityMoveMentionsRequest(BaseModel):
@@ -380,7 +382,12 @@ def merge_entities(
     body: EntityMergeRequest, state: AppState = Depends(get_app_state), admin: User = Depends(require_admin)
 ) -> dict:
     result = _curation(state).merge(
-        body.keeper_id, body.loser_id, actor=Actor.web(admin.id), reason=body.reason, dry_run=body.dry_run
+        body.keeper_id,
+        body.loser_id,
+        actor=Actor.web(admin.id),
+        reason=body.reason,
+        dry_run=body.dry_run,
+        keep_name=body.keep_name,
     )
     return api_response({**asdict(result), "dry_run": body.dry_run})
 

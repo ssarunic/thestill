@@ -26,40 +26,34 @@ def facts(entity_type="person", said=0, about=0, episodes=1, role=False, qid=Non
 @pytest.mark.parametrize(
     "case, expected",
     [
-        # Value: the entity speaks.
-        (facts(said=5), True),
-        (facts(said=4), False),
+        # A person who takes part: host, recurring voice or guest.
         (facts(role=True), True),  # a guest with no quotes yet
-        # Value: discussed in depth.
-        (facts("topic", about=10), True),
-        (facts("topic", about=9), False),
-        # Value: discussed widely.
-        (facts("company", about=5, episodes=2), True),
-        (facts("company", about=4, episodes=2), False),
-        (facts("company", about=9, episodes=1), False),
-        (facts(said=2, about=3, episodes=2), True),
-        # The old 3-quote bar alone is not enough.
-        (facts("topic", about=3, episodes=1), False),
+        (facts(role=True, said=40, about=12, episodes=9), True),
+        # A person only talked about, however much.
+        (facts(about=200, episodes=30), False),
+        (facts(said=50, about=10, episodes=5), False),  # quoted, but no role on record
+        # Things are never indexed, even with a role-like record.
+        (facts("topic", about=100, episodes=20), False),
+        (facts("company", about=50, episodes=10), False),
+        (facts("product", said=5, about=50, episodes=10, role=True), False),
     ],
 )
-def test_value_test(case, expected):
+def test_only_people_with_a_role_are_indexed(case, expected):
     assert entity_is_indexable(case) is expected
 
 
 def test_type_test_uses_wikidata_only_when_it_is_known():
     # A person page for something Wikidata says is not a human.
-    assert not entity_is_indexable(facts(said=20, qid="Q1", instance_of=["Q11424"]))
-    assert entity_is_indexable(facts(said=20, qid="Q1", instance_of=["Q5"]))
-    # instance_of not fetched yet: the value test decides.
-    assert entity_is_indexable(facts(said=20, qid="Q1", instance_of=[]))
-    # No Wikidata link at all (most guests): the value test decides.
+    assert not entity_is_indexable(facts(role=True, qid="Q1", instance_of=["Q11424"]))
+    assert entity_is_indexable(facts(role=True, qid="Q1", instance_of=["Q5"]))
+    # instance_of not fetched yet: the role decides.
+    assert entity_is_indexable(facts(role=True, qid="Q1", instance_of=[]))
+    # No Wikidata link at all (most guests): the role decides.
     assert entity_is_indexable(facts(role=True))
-    # A thing whose Wikidata item is a human fails the same way.
-    assert not entity_is_indexable(facts("company", about=20, qid="Q2", instance_of=["Q5"]))
 
 
 def test_the_noindex_list_wins():
-    assert not entity_is_indexable(facts(said=50), noindex={"person:x"})
+    assert not entity_is_indexable(facts(role=True), noindex={"person:x"})
 
 
 @pytest.mark.parametrize("stored", [["Q5", "Q215627"], '["Q5", "Q215627"]'])

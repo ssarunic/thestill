@@ -53,6 +53,7 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         *,
         default_limit: int,
         route_limits: Iterable[Tuple[str, int]] = (),
+        suffix_limits: Iterable[Tuple[str, int]] = (),
     ) -> None:
         """
         Args:
@@ -62,12 +63,27 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
                 match (longest-prefix-first) wins. Pass e.g.
                 ``[("/webhook/", 1 * 1024 * 1024)]`` to give webhooks a
                 tight cap independent of the default.
+            suffix_limits: ``(path_suffix, limit_bytes)`` pairs for routes
+                whose variable part comes first, e.g.
+                ``[("/drift-outcome", 4096)]``. A suffix match wins over a
+                prefix match, and such a route must declare its length: a
+                request without ``Content-Length`` is refused with 411,
+                because the cap could not otherwise be applied before the
+                body is read.
         """
         super().__init__(app)
         # Sort by prefix length descending so more-specific prefixes match
         # first regardless of call order.
         self._route_limits: list = sorted(route_limits, key=lambda pair: len(pair[0]), reverse=True)
+        self._suffix_limits: list = sorted(suffix_limits, key=lambda pair: len(pair[0]), reverse=True)
         self._default_limit = int(default_limit)
+
+    def _suffix_limit_for(self, path: str):
+        trimmed = path.rstrip("/")
+        for suffix, limit in self._suffix_limits:
+            if trimmed.endswith(suffix):
+                return limit
+        return None
 
     def _limit_for(self, path: str) -> int:
         for prefix, limit in self._route_limits:
@@ -79,8 +95,11 @@ class BodySizeLimitMiddleware(BaseHTTPMiddleware):
         if request.method not in _METHODS_WITH_BODY:
             return await call_next(request)
 
-        limit = self._limit_for(request.url.path)
+        suffix_limit = self._suffix_limit_for(request.url.path)
+        limit = suffix_limit if suffix_limit is not None else self._limit_for(request.url.path)
         length_header = request.headers.get("content-length")
+        if length_header is None and suffix_limit is not None:
+            return JSONResponse(status_code=411, content={"detail": "Content-Length required."})
         if length_header is not None:
             try:
                 advertised = int(length_header)

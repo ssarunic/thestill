@@ -19,8 +19,17 @@ import {
 import { usePlayerRatePreference } from '../hooks/usePlayerRatePreference'
 import { mediaLayerZIndex } from '../constants/layers'
 import { usePlaybackPersistence, type PlaybackPersistence, type PlayerPort } from './listening/usePlaybackPersistence'
-import { NativeEngine, type NativeEngineState } from './playback-engine/native-engine'
+import {
+  AUDIO_NOT_LOADED_MESSAGE,
+  NativeEngine,
+  type AppliedTimeline,
+  type NativeEngineState,
+} from './playback-engine/native-engine'
+import { elementAudioUrl } from '../utils/elementAudioUrl'
+import type { AdBreak, ListenerAd, TimelineMap } from './playback-engine/timeline-map'
 import type { EngineEvents, EngineKind } from './playback-engine/types'
+import { beginAudioLoad } from '../drift/corsVerdict'
+import { isTimelineExpected } from '../drift/expectation'
 import { YouTubeEngine } from './playback-engine/youtube-engine'
 
 // ---------------------------------------------------------------------------
@@ -43,6 +52,10 @@ import { YouTubeEngine } from './playback-engine/youtube-engine'
 
 export type MediaKind = 'audio' | 'video'
 type Presentation = 'hidden' | 'theater' | 'floating' | 'native-pip'
+// How long a press on Play may go without any of the audio arriving
+// before the player says it could not be loaded.
+export const LOAD_PATIENCE_MS = 15_000
+
 export type VideoPreference = 'shown' | 'audio-only'
 export type RenditionKind = 'audio' | 'video'
 export type { EngineKind } from './playback-engine/types'
@@ -98,7 +111,11 @@ export interface PlayerContextValue {
   pause: () => void
   resume: () => void
   toggle: () => void
-  seek: (seconds: number) => void
+  // `transcript` (spec #116): the time is a transcript time the listener
+  // picked (a paragraph, a citation, a chapter). If a timeline map is
+  // expected for this audio but not yet in force, the player goes silent
+  // and lands on the corrected position once the map arrives.
+  seek: (seconds: number, options?: { transcript?: boolean }) => void
   skip: (deltaSeconds: number) => void
   setRate: (rate: number) => void
   stop: () => void
@@ -162,6 +179,48 @@ export interface PlayerContextValue {
   pipSupported: boolean
   pipActive: boolean
   requestPip: () => void
+  // Spec #116 — put a verified timeline map in force for the audio now
+  // playing (or lift it with null). While one is set, every time this
+  // context takes or reports for that source is transcript time: `seek`
+  // lands on the words asked for, `usePlayerTime`/`getCurrentTime` follow
+  // the words being spoken, and saved positions mean the same sentence in
+  // any copy. Refused (false) unless `episodeId` and `audioUrl` are what
+  // the native engine is playing as the audio rendition.
+  applyTimeline: (episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => boolean
+  // True while a map is in force. Any change of source lifts it.
+  timelineApplied: boolean
+  // Spec #116 §6.1 — the map in force for the audio the native engine is
+  // playing (null without one, and on the YouTube engine): the reader asks
+  // it what became of each ad break in this copy.
+  timelineMap: TimelineMap | null
+  // The ad of the listener's own copy that is playing now, if any. The
+  // transcript has no words for it, so the clock stands still meanwhile.
+  // Changes only when an ad starts or ends.
+  listenerAd: ListenerAd | null
+  // Spec #116 §6.2 — an ad is playing and the map knows where the episode
+  // resumes after it. Only ever true while a map is in force, on the
+  // native engine. Changes only when an ad starts or ends.
+  skipAheadAvailable: boolean
+  // Jump to where the episode resumes after the ad that is playing. The
+  // seconds of the listener's copy skipped, or null when there was none.
+  skipAhead: () => number | null
+  // Where the audio element itself is (seconds on the listener's copy),
+  // whatever map is in force. Stable; for counting down a `listenerAd`.
+  getAssetTime: () => number
+  // How long the listener's copy itself is, or null until the element
+  // says. Stable. Not `duration` / `nativeDuration`: while a map is in
+  // force those are the transcribed copy's length.
+  getAssetDuration: () => number | null
+  // True while a transcript-time start is being held, silent, for its map.
+  timelineHold: boolean
+  // The reader's word that no map is coming for the held start: play from
+  // the asked-for time as it is.
+  releaseTimelineHold: (episodeId: string, audioUrl: string) => void
+  // Reload the held audio so that it can be checked (with `crossorigin`,
+  // now that its host is known to allow it, and under the service worker).
+  // The listener hears nothing of it: the start is still held. False when
+  // there is no held start for this audio.
+  reloadHeldForCheck: (episodeId: string, audioUrl: string) => boolean
   // Media error surface (§8). Cleared on the next successful source.
   mediaError: string | null
   // Volume / mute (§8).
@@ -249,6 +308,90 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [videoPreference, setVideoPreference] = useState<VideoPreference>('shown')
   const [pipActive, setPipActive] = useState(false)
   const [mediaError, setMediaError] = useState<string | null>(null)
+  // A press on Play is answered at once (the button shows it is loading)
+  // and never left hanging: if nothing of the audio has arrived after
+  // LOAD_PATIENCE_MS, the player says so. A browser that refuses a source
+  // outright does not always fire `error`.
+  const loadWatch = useRef<number | undefined>(undefined)
+  const stopLoadWatch = useCallback(() => {
+    window.clearTimeout(loadWatch.current)
+    loadWatch.current = undefined
+  }, [])
+  // Each press is one attempt. Its start can be refused long after another
+  // attempt has replaced it (assigning a new source aborts the old play()),
+  // and that late refusal must not touch the newer attempt's state.
+  const loadAttempt = useRef(0)
+  const armLoadWatch = useCallback(() => {
+    window.clearTimeout(loadWatch.current)
+    loadWatch.current = window.setTimeout(() => {
+      loadWatch.current = undefined
+      const native = nativeEngineRef.current
+      if (engineKindRef.current !== 'native' || !native || native.hasLoadedAnything()) return
+      // Withdraw the pending start: the audio must not begin later without
+      // a press, and the button, now Play again, must play when pressed.
+      native.pause()
+      setMediaError(AUDIO_NOT_LOADED_MESSAGE)
+      setIsLoading(false)
+      setIsPlaying(false)
+    }, LOAD_PATIENCE_MS)
+  }, [])
+  /**
+   * Begin waiting for audio, and follow the start to its outcome. `started`
+   * is the engine's play() promise.
+   * - Refused (no gesture, or the start was superseded): the wait ends,
+   *   unless a newer attempt has begun.
+   * - Accepted with audio already in hand (the source was playing, or is
+   *   buffered): the wait ends too. No `playing` or `canplay` follows a
+   *   play() on audio that is already flowing, so nothing else would end it.
+   * - Accepted with audio still to come: `playing`, an error or the timer
+   *   ends it.
+   */
+  const awaitAudio = useCallback(
+    (started: Promise<void> | undefined) => {
+      const attempt = ++loadAttempt.current
+      setIsLoading(true)
+      // A new attempt: whatever the last one ended on is no longer the news.
+      setMediaError(null)
+      armLoadWatch()
+      const settle = (accepted: boolean) => {
+        if (loadAttempt.current !== attempt) return
+        if (accepted) {
+          // The YouTube player reports its own buffering and playing.
+          const flowing = engineKindRef.current !== 'native' || nativeEngineRef.current?.canPlayNow() === true
+          if (!flowing) return
+        } else {
+          setIsPlaying(false)
+        }
+        setIsLoading(false)
+        stopLoadWatch()
+      }
+      started?.then(
+        () => settle(true),
+        () => settle(false),
+      )
+    },
+    [stopLoadWatch, armLoadWatch],
+  )
+  useEffect(() => stopLoadWatch, [stopLoadWatch])
+  const [timelineApplied, setTimelineApplied] = useState(false)
+  // Spec #116 §6.1 — the map itself, for the reader's ad rows, and the ad
+  // of the listener's own that is playing. The ref serves the time handler.
+  const [timelineMap, setTimelineMapState] = useState<TimelineMap | null>(null)
+  const timelineMapRef = useRef<TimelineMap | null>(null)
+  const [listenerAd, setListenerAd] = useState<ListenerAd | null>(null)
+  // Spec #116 §6.2 — the transcript's ad breaks that came with the map.
+  const adBreaksRef = useRef<readonly AdBreak[]>([])
+  const [skipAheadAvailable, setSkipAheadAvailable] = useState(false)
+  const setTimelineMap = useCallback((map: TimelineMap | null, adBreaks: readonly AdBreak[] = []) => {
+    timelineMapRef.current = map
+    adBreaksRef.current = map === null ? [] : adBreaks
+    setTimelineMapState(map)
+    if (map === null) {
+      setListenerAd(null)
+      setSkipAheadAvailable(false)
+    }
+  }, [])
+  const [timelineHold, setTimelineHold] = useState(false)
   const [volume, setVolumeState] = useState(1)
   const [muted, setMuted] = useState(false)
   const [theaterSlot, setTheaterSlot] = useState<{ episodeId: string; el: HTMLElement } | null>(null)
@@ -303,15 +446,30 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onPlaying: () => {
         setIsPlaying(true)
         setIsLoading(false)
+        stopLoadWatch()
         // Playback is flowing again, so any earlier error has been
         // recovered from (spec #113: hls.js recoverMediaError after the
         // element already reported MEDIA_ERR_DECODE).
         setMediaError(null)
       },
       onWaiting: () => setIsLoading(true),
-      onCanPlay: () => setIsLoading(false),
+      onCanPlay: () => {
+        setIsLoading(false)
+        stopLoadWatch()
+      },
       onTimeUpdate: (seconds: number) => {
         setCurrentTime(seconds)
+        // The clock is moving: audio has arrived, whatever else is known.
+        if (seconds > 0 && loadWatch.current !== undefined) stopLoadWatch()
+        const map = timelineMapRef.current
+        if (map !== null) {
+          const native = engineKindRef.current === 'native'
+          const at = nativeEngineRef.current?.getElementTime() ?? 0
+          const ad = native ? map.listenerAdAt(at) : null
+          // The same ad on every tick while it plays: keep the identity.
+          setListenerAd((prev) => (prev?.startS === ad?.startS && prev?.endS === ad?.endS ? prev : ad))
+          setSkipAheadAvailable(native && map.skipAheadFrom(at, adBreaksRef.current) !== null)
+        }
         persistenceRef.current?.onEngineEvent('timeupdate')
       },
       onDurationChange: (seconds: number) => {
@@ -333,15 +491,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       onError: (message: string) => {
         setMediaError(message)
         setIsLoading(false)
+        setIsPlaying(false)
+        stopLoadWatch()
       },
       onEnded: () => {
         persistenceRef.current?.onEngineEvent('ended')
         setIsPlaying(false)
         setCurrentTime(0)
+        // The audio may end inside a post-roll of the listener's own.
+        setListenerAd(null)
       },
       onAvailableRatesChange: (rates: number[] | null) => setAvailableRates(rates),
     }),
-    [syncPositionState]
+    [syncPositionState, stopLoadWatch]
   )
 
   const guardedEvents = useCallback(
@@ -365,6 +527,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         onError: (message) => active() && base.onError(message),
         onEnded: () => active() && base.onEnded(),
         onAvailableRatesChange: (rates) => active() && base.onAvailableRatesChange(rates),
+        onTimelineHoldChange: (holding) => kind === 'native' && setTimelineHold(holding),
       }
     },
     [engineEventBodies]
@@ -401,24 +564,104 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Assign a new native source and (optionally) carry seek/rate across
   // the transition (the engine defers the seek to loadedmetadata).
-  const beginSource = useCallback((source: ActiveSource, seekTo: number | null, rate: number | null) => {
-    nativeEngineRef.current?.load({ url: source.url, mimeType: source.mimeType }, { seekTo, rate })
+  const beginSource = useCallback(
+    (source: ActiveSource, seekTo: number | null, rate: number | null, holdForTimeline = false) => {
+    // Spec #116 — only the audio rendition of a plain file is ever aligned,
+    // so only that may load with `crossorigin` (and only for a host already
+    // known to allow it).
+    const eligible = source.rendition === 'audio' && !/mpegurl/i.test(source.mimeType ?? '')
+    const crossOrigin = beginAudioLoad(source.url, eligible)
+    // An http enclosure is loaded through our https redirect (it cannot be
+    // loaded into this page as it is); the source keeps its own address as
+    // its identity.
+    const elementUrl = source.rendition === 'audio' ? elementAudioUrl(source.url, trackRef.current) : source.url
+    nativeEngineRef.current?.load(
+      { url: source.url, mimeType: source.mimeType, crossOrigin, elementUrl },
+      { seekTo, rate, holdForTimeline: holdForTimeline && eligible },
+    )
     srcRef.current = source.url
+    // A wait already under way goes on for the new load, from the start
+    // (a held start is reloaded once so that it can be checked).
+    if (loadWatch.current !== undefined) armLoadWatch()
     setNativeDuration(null)
     setMediaError(null)
+    // The engine drops its map with the old source.
+    setTimelineApplied(false)
+    setTimelineMap(null)
+    },
+    [setTimelineMap, armLoadWatch],
+  )
+
+  // Spec #116 — a start or seek to a transcript time waits, silent, for the
+  // map when one is expected for this episode's audio and not yet in force.
+  const shouldHoldFor = useCallback((episodeId: string | undefined, rendition: RenditionKind) => {
+    return rendition === 'audio' && isTimelineExpected(episodeId) && !nativeEngineRef.current?.hasTimeline()
   }, [])
+
+  const releaseTimelineHold = useCallback((episodeId: string, audioUrl: string) => {
+    if (trackRef.current?.episodeId !== episodeId) return
+    nativeEngineRef.current?.releaseTimelineHold(audioUrl)
+  }, [])
+
+  const reloadHeldForCheck = useCallback(
+    (episodeId: string, audioUrl: string) => {
+      const native = nativeEngineRef.current
+      const current = trackRef.current
+      if (!native || !current || current.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+      if (engineKindRef.current !== 'native' || renditionRef.current !== 'audio') return false
+      const asked = native.heldTranscriptTime()
+      if (asked === null) return false
+      const source = selectSource(current, 'audio')
+      if (source.url !== audioUrl) return false
+      // A held seek made while paused stays paused: the reload must not
+      // turn it into a start.
+      const wantsPlay = native.isPlaying()
+      beginSource(source, asked, native.getRate(), true)
+      if (wantsPlay) native.play().catch(() => setIsPlaying(false))
+      return true
+    },
+    [beginSource],
+  )
+
+  const applyTimeline = useCallback((episodeId: string, audioUrl: string, timeline: AppliedTimeline | null) => {
+    const native = nativeEngineRef.current
+    if (!native) return false
+    if (trackRef.current?.episodeId !== episodeId || srcRef.current !== audioUrl) return false
+    // Lifting must always reach the source the map was set on, even while
+    // it is parked: after a switch to the YouTube player the native engine
+    // keeps its source, and a switch back reuses it. A map found invalid in
+    // the meantime must not come back with it.
+    if (timeline !== null && (engineKindRef.current !== 'native' || renditionRef.current !== 'audio')) return false
+    if (!native.setTimeline(audioUrl, timeline)) return false
+    setTimelineApplied(timeline !== null)
+    const map = timeline?.map ?? null
+    setTimelineMap(map, timeline?.adBreaks)
+    // The map may arrive in the middle of an ad; do not wait for a tick.
+    if (map !== null) {
+      setListenerAd(map.listenerAdAt(native.getElementTime()))
+      setSkipAheadAvailable(map.skipAheadFrom(native.getElementTime(), adBreaksRef.current) !== null)
+    }
+    return true
+  }, [setTimelineMap])
 
   // Spec #90 — the persistence layer reads and drives the player through
   // this port. Built over refs and stable callbacks, so it is created once.
   const port = useMemo<PlayerPort>(
     () => ({
       getTrack: () => trackRef.current,
+      // Spec #116 — the saved position is where the AUDIO is, also while a
+      // timeline map is in force (getElementTime): a resume seeks before
+      // any map exists, so only a position in the audio itself comes back
+      // to the same place when the copy is unchanged.
       getLogicalPosition: () => {
         if (engineKindRef.current === 'youtube') return Math.max(0, youtubeEngineRef.current?.getCurrentTime() ?? 0)
-        return Math.max(0, (nativeEngineRef.current?.getCurrentTime() ?? 0) - activeOffsetRef.current)
+        return Math.max(0, (nativeEngineRef.current?.getElementTime() ?? 0) - activeOffsetRef.current)
       },
       getLogicalDuration: () => {
-        const engineDuration = currentEngine()?.getDuration() ?? 0
+        const engineDuration =
+          (engineKindRef.current === 'youtube'
+            ? youtubeEngineRef.current?.getDuration()
+            : nativeEngineRef.current?.getElementDuration()) ?? 0
         if (!Number.isFinite(engineDuration) || engineDuration <= 0) return null
         const logical = engineKindRef.current === 'youtube' ? engineDuration : engineDuration - activeOffsetRef.current
         return logical > 0 ? logical : null
@@ -512,16 +755,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const rate = native.getRate()
         activeOffsetRef.current = desired.offset
         beginSource(desired, resumeAt, rate)
-        native.play().catch(() => setIsPlaying(false))
+        awaitAudio(native.play())
         return
       }
       if (options?.startAt !== undefined && Number.isFinite(options.startAt)) {
-        native.seekTo(Math.max(0, options.startAt))
+        native.seekTo(Math.max(0, options.startAt), {
+          holdForTimeline: shouldHoldFor(next.episodeId, desired.rendition),
+        })
       } else if (options?.restart) {
         native.seekTo(0)
       }
       // Still inside user-gesture stack.
-      native.play().catch(() => setIsPlaying(false))
+      awaitAudio(native.play())
       return
     }
     // New episode — always starts on the native engine (the YouTube
@@ -535,6 +780,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     // it, then resolves where this one starts: an explicit startAt, else the
     // stored position (logical → this asset's timeline), else the top.
     const seekTo = persistence.startTrack(next, options, desired.offset)
+    // Spec #116 — an explicit startAt is a transcript time the listener
+    // picked. When a map is expected, hold the start for it.
+    const asked = options?.startAt !== undefined && Number.isFinite(options.startAt) ? Math.max(0, options.startAt) : null
+    // The engine may still hold the previous episode's map at this point;
+    // it says nothing about this one, whose source is about to replace it.
+    const holdStart = asked !== null && desired.rendition === 'audio' && isTimelineExpected(next.episodeId)
     if (engineKindRef.current === 'youtube') {
       youtubeEngineRef.current?.pause()
       setEngineKind('native')
@@ -547,35 +798,53 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setCurrentTime(seekTo ?? 0)
     setDuration(next.durationHint ?? 0)
     // Spec #72 §5 — a fresh source starts at the persisted preference.
-    beginSource(desired, seekTo, preferredRateRef.current)
-    native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition])
+    beginSource(desired, holdStart ? (seekTo ?? asked) : seekTo, preferredRateRef.current, holdStart)
+    awaitAudio(native.play())
+  }, [beginSource, persistence, preferredRateRef, setEngineKind, setRendition, shouldHoldFor, awaitAudio])
+
+  // A pause the listener asked for ends the wait for audio too: the button
+  // must go back to Play, not stay on its spinner.
+  const stopWaiting = useCallback(() => {
+    setIsLoading(false)
+    stopLoadWatch()
+  }, [stopLoadWatch])
 
   const pause = useCallback(() => {
+    stopWaiting()
     currentEngine()?.pause()
-  }, [currentEngine])
+  }, [currentEngine, stopWaiting])
 
   const resume = useCallback(() => {
-    currentEngine()
-      ?.play()
-      .catch(() => setIsPlaying(false))
-  }, [currentEngine])
+    awaitAudio(currentEngine()?.play())
+  }, [currentEngine, awaitAudio])
 
   const toggle = useCallback(() => {
     const engine = currentEngine()
     if (!engine) return
-    if (engine.isPlaying()) {
+    // Also while a start is still on its way and the engine does not count
+    // as playing yet (an hls.js attach, the YouTube player buffering): a
+    // press on the spinning button withdraws it.
+    if (engine.isPlaying() || (isLoading && isPlaying)) {
+      stopWaiting()
       engine.pause()
     } else {
-      engine.play().catch(() => setIsPlaying(false))
+      awaitAudio(engine.play())
     }
-  }, [currentEngine])
+  }, [currentEngine, awaitAudio, stopWaiting, isLoading, isPlaying])
 
   const seek = useCallback(
-    (seconds: number) => {
+    (seconds: number, options?: { transcript?: boolean }) => {
+      if (
+        options?.transcript &&
+        engineKindRef.current === 'native' &&
+        shouldHoldFor(trackRef.current?.episodeId, renditionRef.current)
+      ) {
+        nativeEngineRef.current?.seekTo(seconds, { holdForTimeline: true })
+        return
+      }
       currentEngine()?.seekTo(seconds)
     },
-    [currentEngine]
+    [currentEngine, shouldHoldFor]
   )
 
   const skip = useCallback(
@@ -587,6 +856,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     },
     [currentEngine]
   )
+
+  const skipAhead = useCallback(() => {
+    const map = timelineMapRef.current
+    const native = nativeEngineRef.current
+    if (map === null || !native || engineKindRef.current !== 'native') return null
+    const from = native.getElementTime()
+    const to = map.skipAheadFrom(from, adBreaksRef.current)
+    if (to === null) return null
+    // Transcript time: the engine maps it onto this copy.
+    native.seekTo(to)
+    setSkipAheadAvailable(false)
+    return Math.max(0, native.getElementTime() - from)
+  }, [])
 
   const setRate = useCallback(
     (rate: number) => {
@@ -622,8 +904,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setDuration(0)
     setNativeDuration(null)
     setMediaError(null)
+    setIsLoading(false)
+    stopLoadWatch()
+    setTimelineApplied(false)
+    setTimelineMap(null)
+    setTimelineHold(false)
     setAvailableRates(null)
-  }, [persistence, setEngineKind, setRendition])
+  }, [persistence, setEngineKind, setRendition, setTimelineMap, stopLoadWatch])
 
   const isCurrent = useCallback(
     (episodeId: string) => track?.episodeId === episodeId,
@@ -638,6 +925,15 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const getCurrentTime = useCallback(() => {
     return currentEngine()?.getCurrentTime() ?? 0
   }, [currentEngine])
+
+  const getAssetTime = useCallback(() => {
+    return engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementTime() ?? 0) : 0
+  }, [])
+
+  const getAssetDuration = useCallback(() => {
+    const seconds = engineKindRef.current === 'native' ? (nativeEngineRef.current?.getElementDuration() ?? 0) : 0
+    return seconds > 0 ? seconds : null
+  }, [])
 
   // Spec #61 §5 — "Use audio rendition": a controlled source transition to
   // the other rendition preserving logical position/rate/play state
@@ -673,7 +969,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       } else {
         beginSource(desired, engineTime, rate)
       }
-      if (wasPlaying) native.play().catch(() => setIsPlaying(false))
+      if (wasPlaying) awaitAudio(native.play())
       else setIsPlaying(false)
       return
     }
@@ -690,8 +986,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const rate = native.getRate()
     activeOffsetRef.current = desired.offset
     beginSource(desired, resumeAt, rate)
-    if (wasPlaying) native.play().catch(() => setIsPlaying(false))
-  }, [beginSource, setEngineKind, setRendition])
+    if (wasPlaying) awaitAudio(native.play())
+  }, [beginSource, setEngineKind, setRendition, awaitAudio])
 
   // Spec #62 §6 — user-gesture entry into the YouTube rendition. Carries
   // the current logical position best-effort onto the YouTube timeline
@@ -963,7 +1259,11 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     () => ({
       track,
       isPlaying,
-      isLoading,
+      // A held start (spec #116) is a wait like buffering: same spinner.
+      // Waiting only counts while playback is wanted: a start that was
+      // refused or paused along the way (the engine reports it paused) must
+      // not leave the buttons spinning.
+      isLoading: (isLoading && isPlaying) || timelineHold,
       duration,
       nativeDuration,
       playbackRate,
@@ -997,6 +1297,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported: pipSupported && activeEngine !== 'youtube',
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
+      timelineMap: activeEngine === 'native' ? timelineMap : null,
+      listenerAd: activeEngine === 'native' ? listenerAd : null,
+      skipAheadAvailable: activeEngine === 'native' && skipAheadAvailable,
+      skipAhead,
+      getAssetTime,
+      getAssetDuration,
+      timelineHold,
+      releaseTimelineHold,
+      reloadHeldForCheck,
       mediaError,
       volume,
       muted,
@@ -1036,6 +1347,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       pipSupported,
       pipActive,
       requestPip,
+      applyTimeline,
+      timelineApplied,
+      timelineMap,
+      listenerAd,
+      skipAheadAvailable,
+      skipAhead,
+      getAssetTime,
+      getAssetDuration,
+      timelineHold,
+      releaseTimelineHold,
+      reloadHeldForCheck,
       mediaError,
       volume,
       muted,

@@ -152,12 +152,13 @@ function UpNext({
 }) {
   const parts: string[] = []
   if (upcoming.next_run_at) parts.push(formatUpcomingSlot(upcoming.next_run_at))
-  if (upcoming.new_episode_count > 0) parts.push(`${plural(upcoming.new_episode_count, 'new episode')} so far`)
-  if (upcoming.pending_count > 0) parts.push(`${upcoming.pending_count} still processing`)
+  // Short enough to stay one line on a phone, beside Generate now.
+  if (upcoming.new_episode_count > 0) parts.push(`${upcoming.new_episode_count} new so far`)
+  if (upcoming.pending_count > 0) parts.push(`${upcoming.pending_count} processing`)
   if (parts.length === 0) return null
 
   return (
-    <div role="status" className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600">
+    <div role="status" className="flex items-center gap-3 px-1 py-0.5 text-xs text-gray-500">
       <p className="flex-1 min-w-0">
         <span className="font-medium text-gray-700">Up next</span>
         {' • '}

@@ -2,6 +2,13 @@
 
 This document describes the REST API endpoints provided by the Thestill web server.
 
+> **Route list:** this spec is not kept complete. The current list of every
+> route is [docs/web-server.md](../docs/web-server.md), which
+> `tests/docs/test_api_route_drift.py` checks against the app. The guard each
+> router is mounted with is in
+> [thestill/web/routes/EGM.md](../thestill/web/routes/EGM.md). Use this spec
+> for request and response formats.
+
 ## Overview
 
 - **Base URL**: `http://localhost:8000` (development)
@@ -180,9 +187,11 @@ Get authentication status and configuration.
     "picture": "https://...",
     "created_at": "2026-01-01T...",
     "last_login_at": "2026-01-21T...",
-    "usage_analytics_enabled": true
+    "usage_analytics_enabled": true,
+    "product_tips_email_enabled": true
   },
   "usage_analytics_available": true,
+  "product_tips_email_available": true,
   "analytics": {"key": "phc_..."},
   "account_disabled": false,
   "admin_contact_email": "ops@example.com"
@@ -192,6 +201,9 @@ Get authentication status and configuration.
 `usage_analytics_available` is true when usage events are configured
 (spec #95); `analytics` carries the PostHog project key only for a signed-in
 user who has not opted out and whose request has no `Sec-GPC: 1`, else null.
+`product_tips_email_available` is true when welcome and product-tips email
+can be sent (multi-user mode with an email provider, spec #118); it shows
+the Settings switch backed by `user.product_tips_email_enabled`.
 
 Spec #104: for a suspended or banned account this endpoint answers
 `authenticated: false`, `user: null` and `account_disabled: true` rather
@@ -672,6 +684,20 @@ Get the transcript for an episode. Returns cleaned transcript if available, othe
   "transcript_type": "cleaned"
 }
 ```
+
+When a segmented transcript exists the response also carries `segments`
+(the annotated transcript) and `content` is empty. `segments.sync_track_generation`
+names the sync track the reader may use for this transcript
+([spec #116](116-timestamp-drift-alignment.md)), or is `null`.
+
+### GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}
+
+The episode's sync track as a binary file (`application/octet-stream`,
+`Cache-Control: private, max-age=31536000, immutable`). `generation` is
+`segments.sync_track_generation` from the transcript response. Returns
+404 when the episode has no track or `generation` is not its current
+one. The layout is defined by `SyncTrack.to_bytes` in
+[sync_track.py](../thestill/core/sync_track.py).
 
 ### GET /api/podcasts/{podcast_slug}/episodes/{episode_slug}/summary
 

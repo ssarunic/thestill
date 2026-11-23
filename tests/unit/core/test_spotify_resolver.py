@@ -133,6 +133,37 @@ class TestPageParsing:
         assert meta.show_name == "My Show"
         assert meta.description == "Notes here."
 
+    def test_episode_page_2026_11_title_suffix_is_not_the_show_name(self):
+        # Live markup from open.spotify.com/episode/3VwKfWiHfvTsQZd0sCblag
+        # (2026-11-05): the <title> no longer carries the show, and its new
+        # suffix used to be read as the show name.
+        html = (
+            "<title>Stop building AI wrappers. Start building agent harnesses. | "
+            "Listen to the Podcast on Spotify</title>"
+            '<meta property="og:title" content="Stop building AI wrappers. Start building agent harnesses.">'
+            '<meta property="og:description" content="The Startup Ideas Podcast · Episode">'
+        )
+        meta = parse_episode_page(html, _EPISODE_ID)
+        assert meta.title == "Stop building AI wrappers. Start building agent harnesses."
+        assert meta.show_name == "The Startup Ideas Podcast"
+
+    def test_episode_page_og_description_show_wins_over_title_tag(self):
+        html = (
+            "<title>Hello | Some Future Spotify Suffix</title>"
+            '<meta property="og:title" content="Hello">'
+            '<meta property="og:description" content="My Show · Episode">'
+        )
+        assert parse_episode_page(html, _EPISODE_ID).show_name == "My Show"
+
+    def test_episode_page_show_name_with_middle_dot_is_kept_whole(self):
+        html = '<meta property="og:title" content="Hello">' '<meta property="og:description" content="A · B · Episode">'
+        assert parse_episode_page(html, _EPISODE_ID).show_name == "A · B"
+
+    def test_episode_page_new_title_suffix_without_og_description_raises(self):
+        html = "<title>Hello | Listen to the Podcast on Spotify</title>" '<meta property="og:title" content="Hello">'
+        with pytest.raises(SpotifyResolutionError, match="did not expose the episode title and show name"):
+            parse_episode_page(html, _EPISODE_ID)
+
     def test_episode_page_without_show_name_raises_user_facing_error(self):
         with pytest.raises(SpotifyResolutionError, match="did not expose the episode title and show name"):
             parse_episode_page('<meta property="og:title" content="Only a title">', _EPISODE_ID)

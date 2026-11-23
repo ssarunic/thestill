@@ -90,13 +90,13 @@ def db(tmp_path: Path) -> str:
     return db_path
 
 
-def _add_follower(db_path: str, podcast_id: str) -> str:
+def _add_follower(db_path: str, podcast_id: str, *, followed_at: datetime | None = None) -> str:
     user_id = str(uuid.uuid4())
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA foreign_keys = OFF")
     con.execute(
         "INSERT INTO podcast_followers (id, user_id, podcast_id, created_at) VALUES (?, ?, ?, ?)",
-        (str(uuid.uuid4()), user_id, podcast_id, now_utc().isoformat()),
+        (str(uuid.uuid4()), user_id, podcast_id, (followed_at or now_utc()).isoformat()),
     )
     con.commit()
     con.close()
@@ -457,8 +457,10 @@ def test_handler_repairs_orphaned_discovered_episode(db: str) -> None:
     assert not repo.get_discovered_unqueued_episodes(PODCAST_ID)  # no longer orphaned
 
 
-def _add_discovered_episodes(repo, count: int, *, start_day: int = 2):
-    """Persist ``count`` extra discovered episodes (no tasks, no artifacts)."""
+def _add_discovered_episodes(repo, count: int, *, start_day: int = 2, base: datetime | None = None):
+    """Persist ``count`` extra discovered episodes (no tasks, no artifacts),
+    one day apart starting at ``base`` (default 2026-01-``start_day``)."""
+    first = base or datetime(2026, 1, start_day)
     eps = [
         Episode(
             id=f"aaaaaaaa-0000-0000-0000-{n:012d}",
@@ -466,7 +468,7 @@ def _add_discovered_episodes(repo, count: int, *, start_day: int = 2):
             external_id=f"bk-{n}",
             title=f"Backlog {n}",
             description="",
-            pub_date=datetime(2026, 1, start_day + n),
+            pub_date=first + timedelta(days=n),
             audio_url=f"https://example.com/bk{n}.mp3",
             duration=60,
         )
@@ -481,6 +483,30 @@ def _excluded_count(db: str) -> int:
     n = con.execute("SELECT COUNT(*) FROM episodes WHERE auto_process_excluded = 1").fetchone()[0]
     con.close()
     return n
+
+
+def _episodes_with_tasks(db: str) -> int:
+    con = sqlite3.connect(db)
+    n = con.execute("SELECT COUNT(DISTINCT episode_id) FROM tasks WHERE episode_id IS NOT NULL").fetchone()[0]
+    con.close()
+    return n
+
+
+def _queued_ids(db: str) -> set:
+    con = sqlite3.connect(db)
+    ids = {r[0] for r in con.execute("SELECT DISTINCT episode_id FROM tasks WHERE episode_id IS NOT NULL")}
+    con.close()
+    return ids
+
+
+def _refresh(state, letter: str) -> None:
+    from thestill.core.queue_manager import Task, TaskStatus
+    from thestill.core.task_handlers import handle_refresh_feed
+
+    handle_refresh_feed(
+        Task(id=letter * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
+        state,
+    )
 
 
 def test_handler_initial_backfill_caps_to_seed_and_marks_rest(db: str) -> None:
@@ -504,14 +530,14 @@ def test_handler_initial_backfill_caps_to_seed_and_marks_rest(db: str) -> None:
     handle_refresh_feed(task, state)
 
     # Exactly 2 enqueued (the most-recent), other 3 excluded → nothing left to sweep.
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
     assert _excluded_count(db) == 3
     assert repo.get_discovered_unqueued_episodes(PODCAST_ID) == []
 
     # Idempotent: a second tick (still no episode published) enqueues nothing more.
     task2 = Task(id="b" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
     handle_refresh_feed(task2, state)
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
 
 
 def test_handler_initial_backfill_counts_already_queued_toward_cap(db: str) -> None:
@@ -528,7 +554,7 @@ def test_handler_initial_backfill_counts_already_queued_toward_cap(db: str) -> N
         qm0.enqueue_full_pipeline(
             episode_id=eid, audio_url=url, transcription_provider="dalston", initiated_by="inbox-follow_seed"
         )
-    assert repo0.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     state, repo, qm, _ = _make_state(
@@ -540,38 +566,30 @@ def test_handler_initial_backfill_counts_already_queued_toward_cap(db: str) -> N
     handle_refresh_feed(task, state)
 
     # cap = 2 - 2 = 0 → refresh enqueues nothing more; remaining 3 excluded.
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
     assert _excluded_count(db) == 3
 
 
-def test_handler_established_podcast_skips_cap(db: str) -> None:
-    """Once a podcast has a processed episode, every newly-discovered episode is
-    auto-enqueued (no cap) — the subscribe-time backlog cap is first-add only."""
-    from thestill.core.queue_manager import Task, TaskStatus
-    from thestill.core.task_handlers import handle_refresh_feed
-
-    repo0 = SqlitePodcastRepository(db)
-    QueueManager(db)
-    # Mark the seed episode as processed → podcast is "established".
+def test_handler_releases_since_follow_skip_cap(db: str) -> None:
+    """Every episode published since the follow run began is enqueued, even
+    more than N in one refresh (a delayed refresh, a multi-episode day)."""
     con = sqlite3.connect(db)
-    con.execute(
-        "UPDATE episodes SET raw_transcript_path='raw/ep1.json', published_at='2026-01-01T00:00:00+00:00' WHERE id=?",
-        (EPISODE_ID,),
-    )
+    con.execute("DELETE FROM podcast_followers WHERE podcast_id = ?", (PODCAST_ID,))
     con.commit()
     con.close()
-    _add_discovered_episodes(repo0, 3)  # 3 brand-new episodes
-    assert repo0.has_processed_episodes(PODCAST_ID) is True
+    _add_follower(db, PODCAST_ID, followed_at=now_utc() - timedelta(days=30))
+    _mark_processed(db, EPISODE_ID)
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    _add_discovered_episodes(repo0, 3, base=(now_utc() - timedelta(days=3)).replace(tzinfo=None))
 
     podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
     state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
     state.config.inbox_seed_on_follow = 2
-    task = Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING)
+    _refresh(state, "d")
 
-    handle_refresh_feed(task, state)
-
-    # All 3 new episodes enqueued despite N=2; nothing excluded.
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 3
+    # All 3 new releases enqueued despite N=2; nothing excluded.
+    assert _episodes_with_tasks(db) == 3
     assert _excluded_count(db) == 0
 
 
@@ -584,9 +602,9 @@ def _mark_processed(db: str, episode_id: str) -> None:
 
 def test_handler_unfollowed_refresh_caps_backfill_before_follow(db: str) -> None:
     """A brand-new feed first refreshed while nobody follows it (refresh-on-open
-    from a chart page) still gets its back catalog excluded. Otherwise, once the
-    follow-seed episodes make the podcast "established", the next refresh would
-    enqueue the whole catalog instead of only the seeded N."""
+    from a chart page), then followed: the first refresh after the follow
+    enqueues only the seeded N, not the catalog, even once a seeded episode
+    has been transcribed."""
     from thestill.core.queue_manager import Task, TaskStatus
     from thestill.core.task_handlers import handle_refresh_feed
 
@@ -606,9 +624,9 @@ def test_handler_unfollowed_refresh_caps_backfill_before_follow(db: str) -> None
         state,
     )
 
-    # Unfollowed: nothing enqueued, but the back catalog is already excluded.
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 0
-    assert _excluded_count(db) == 3
+    # Unfollowed: nothing enqueued and nothing classified yet.
+    assert _episodes_with_tasks(db) == 0
+    assert _excluded_count(db) == 0
 
     # Follow → follow-seed enqueues the 2 most-recent, one finishes transcribing.
     _add_follower(db, PODCAST_ID)
@@ -617,15 +635,15 @@ def test_handler_unfollowed_refresh_caps_backfill_before_follow(db: str) -> None
     for eid, url in seeded:
         qm0.enqueue_full_pipeline(episode_id=eid, audio_url=url, transcription_provider="", initiated_by="seed")
     _mark_processed(db, seeded[0][0])
-    assert repo0.has_processed_episodes(PODCAST_ID) is True
 
     handle_refresh_feed(
         Task(id="b" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
         state,
     )
 
-    # Still only the 2 seeded episodes — the older 3 never enter the queue.
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    # Still only the 2 seeded episodes — the older 3 are back catalog.
+    assert _episodes_with_tasks(db) == 2
+    assert _excluded_count(db) == 3
 
 
 def test_handler_initial_backfill_excludes_catalog_beyond_orphan_page(db: str) -> None:
@@ -663,7 +681,7 @@ def test_handler_initial_backfill_excludes_catalog_beyond_orphan_page(db: str) -
         state,
     )
 
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
     assert _excluded_count(db) == 38
 
     # Established now → a later refresh finds no leftover backlog to enqueue.
@@ -672,7 +690,200 @@ def test_handler_initial_backfill_excludes_catalog_beyond_orphan_page(db: str) -
         Task(id="d" * 36, podcast_id=PODCAST_ID, stage=TaskStage.REFRESH_FEED, status=TaskStatus.PROCESSING),
         state,
     )
-    assert repo.count_episodes_with_tasks(PODCAST_ID) == 2
+    assert _episodes_with_tasks(db) == 2
+
+
+def _refollow(db: str, *, followed_at: datetime) -> None:
+    """Replace the fixture follower with one that followed at ``followed_at``."""
+    con = sqlite3.connect(db)
+    con.execute("DELETE FROM podcast_followers WHERE podcast_id = ?", (PODCAST_ID,))
+    con.commit()
+    con.close()
+    _add_follower(db, PODCAST_ID, followed_at=followed_at)
+
+
+def _naive_days_ago(days: float) -> datetime:
+    return (now_utc() - timedelta(days=days)).replace(tzinfo=None)
+
+
+def test_handler_refollowed_dormant_podcast_caps_gap_to_newest(db: str) -> None:
+    """The reported bug: a podcast transcribed long ago, left unfollowed, then
+    followed again. The refresh after the follow discovers everything published
+    in between. Only the newest N may be queued, not the whole gap back to the
+    old transcribed episode."""
+    _mark_processed(db, EPISODE_ID)  # Ep 1 (2026-01-01) transcribed long ago
+    _refollow(db, followed_at=now_utc() - timedelta(minutes=5))
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    gap = _add_discovered_episodes(repo0, 6, base=_naive_days_ago(40))  # published 40..35 days ago
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, new_episodes=[]))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "a")
+
+    assert _queued_ids(db) == {gap[-1].id, gap[-2].id}
+    assert _excluded_count(db) == 4
+
+    # A later refresh with a genuinely new release queues just that one.
+    fresh = Episode(
+        id="cccccccc-0000-0000-0000-000000000001",
+        podcast_id=PODCAST_ID,
+        external_id="fresh-1",
+        title="Fresh",
+        description="",
+        pub_date=_naive_days_ago(0),
+        audio_url="https://example.com/fresh.mp3",
+        duration=60,
+    )
+    repo0.save_refresh_batch([], [fresh])
+    _refresh(state, "b")
+    assert _queued_ids(db) == {gap[-1].id, gap[-2].id, fresh.id}
+
+
+def test_handler_stale_follow_seed_still_gets_newest(db: str) -> None:
+    """The follow seed reads the episodes already stored. On a dormant feed it
+    can only pick old ones; the refresh that then discovers the newer episodes
+    must still queue the newest N rather than exclude them as back catalog."""
+    repo0 = SqlitePodcastRepository(db)
+    qm0 = QueueManager(db)
+    _refollow(db, followed_at=now_utc() - timedelta(minutes=5))
+    # Seed ran against the stale list: only Ep 1 (2026-01-01) was known.
+    for eid, url in repo0.get_recent_unqueued_unprocessed_episodes(PODCAST_ID, 2):
+        qm0.enqueue_full_pipeline(episode_id=eid, audio_url=url, transcription_provider="", initiated_by="seed")
+    assert _queued_ids(db) == {EPISODE_ID}
+
+    gap = _add_discovered_episodes(repo0, 4, base=_naive_days_ago(20))
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "c")
+
+    assert _queued_ids(db) == {EPISODE_ID, gap[-1].id, gap[-2].id}
+    assert _excluded_count(db) == 2
+
+
+def test_handler_untrusted_pub_dates_are_back_catalog(db: str) -> None:
+    """A missing or far-future pub_date never counts as "released while
+    followed", so a feed full of them cannot flood the queue."""
+    _mark_processed(db, EPISODE_ID)
+    _refollow(db, followed_at=now_utc() - timedelta(days=30))
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    dated = Episode(
+        id="dddddddd-0000-0000-0000-000000000001",
+        podcast_id=PODCAST_ID,
+        external_id="dated",
+        title="Dated",
+        description="",
+        pub_date=_naive_days_ago(1),
+        audio_url="https://example.com/dated.mp3",
+        duration=60,
+    )
+    future = [
+        Episode(
+            id=f"dddddddd-0000-0000-0000-00000000010{n}",
+            podcast_id=PODCAST_ID,
+            external_id=f"future-{n}",
+            title=f"Future {n}",
+            description="",
+            pub_date=_naive_days_ago(-30 - n),
+            audio_url=f"https://example.com/future{n}.mp3",
+            duration=60,
+        )
+        for n in range(3)
+    ]
+    undated = [
+        Episode(
+            id=f"dddddddd-0000-0000-0000-00000000020{n}",
+            podcast_id=PODCAST_ID,
+            external_id=f"undated-{n}",
+            title=f"Undated {n}",
+            description="",
+            pub_date=None,
+            audio_url=f"https://example.com/undated{n}.mp3",
+            duration=60,
+        )
+        for n in range(3)
+    ]
+    repo0.save_refresh_batch([], [dated, *future, *undated])
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "e")
+
+    # The dated release is in; of the untrusted ones only the newest-N window
+    # (the two latest future-dated) gets through, the other four are excluded.
+    assert _queued_ids(db) == {dated.id, future[2].id, future[1].id}
+    assert _excluded_count(db) == 4
+
+
+def _undated(n: int, prefix: str = "eeeeeeee") -> Episode:
+    return Episode(
+        id=f"{prefix}-0000-0000-0000-{n:012d}",
+        podcast_id=PODCAST_ID,
+        external_id=f"{prefix}-{n}",
+        title=f"Undated {n}",
+        description="",
+        pub_date=None,
+        audio_url=f"https://example.com/{prefix}{n}.mp3",
+        duration=60,
+    )
+
+
+def test_handler_undated_release_on_followed_feed_is_queued(db: str) -> None:
+    """Steady state on a feed without dates: a newly discovered undated episode
+    ranks by discovery time, lands in the newest-N window and is queued."""
+    _refollow(db, followed_at=now_utc() - timedelta(days=30))
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    # The feed's existing episodes are already processed.
+    _add_discovered_episodes(repo0, 3, base=_naive_days_ago(20))
+    for n in range(3):
+        _mark_processed(db, f"aaaaaaaa-0000-0000-0000-{n:012d}")
+    _mark_processed(db, EPISODE_ID)
+
+    release = _undated(1)
+    repo0.save_refresh_batch([], [release])
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "f")
+
+    assert _queued_ids(db) == {release.id}
+    assert _excluded_count(db) == 0
+
+
+def test_handler_bulk_undated_catalog_is_capped(db: str) -> None:
+    """A whole undated catalog found in one refresh is back catalog: only N go
+    through, the rest are excluded."""
+    _refollow(db, followed_at=now_utc() - timedelta(minutes=5))
+    _mark_processed(db, EPISODE_ID)
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    repo0.save_refresh_batch([], [_undated(n) for n in range(6)])
+
+    podcast, _ = repo0.get_podcast_for_refresh(PODCAST_ID)
+    state, repo, qm, _ = _make_state(db, RefreshAttemptResult(podcast=podcast, conditional_hit=True))
+    state.config.inbox_seed_on_follow = 2
+    _refresh(state, "9")
+
+    assert _episodes_with_tasks(db) == 2
+    assert _excluded_count(db) == 4
+
+
+def test_follow_seed_ignores_refresh_exclusion(db: str) -> None:
+    """Excluded episodes stay out of the background sweep but not out of a
+    later follower's seed: the newest N are an explicit request."""
+    repo0 = SqlitePodcastRepository(db)
+    QueueManager(db)
+    eps = _add_discovered_episodes(repo0, 3)
+    repo0.mark_episodes_auto_process_excluded([e.id for e in eps])
+    assert [eid for eid, _ in repo0.get_recent_unqueued_unprocessed_episodes(PODCAST_ID, 2)] == [
+        eps[2].id,
+        eps[1].id,
+    ]
 
 
 def test_due_query_excludes_unfollowed_podcast(db: str) -> None:

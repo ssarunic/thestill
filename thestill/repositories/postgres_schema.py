@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin boolean NOT NULL DEFAULT false,
     signup_source text NULL,
     usage_analytics_enabled boolean NOT NULL DEFAULT true,
+    product_tips_email_enabled boolean NOT NULL DEFAULT false,
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'banned')),
     status_reason text NULL,
     status_changed_at timestamptz NULL,
@@ -75,6 +76,9 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_source text NULL;
 -- Spec #95 Layer B — per-user usage-events switch (alembic 0018).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_analytics_enabled boolean NOT NULL DEFAULT true;
+-- Spec #118 — "Product tips by email" (alembic 0029). Off by default; the
+-- sign-in callback turns it on for a new signup that was told about tips.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS product_tips_email_enabled boolean NOT NULL DEFAULT false;
 -- Spec #104 — account status + token revocation (alembic 0021).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'suspended', 'banned'));
@@ -519,6 +523,24 @@ CREATE TABLE IF NOT EXISTS user_connector_days (
 );
 CREATE INDEX IF NOT EXISTS idx_connector_days_day ON user_connector_days(day);
 
+-- Spec #116 — index of per-episode sync track files (alembic 0028). One
+-- 'current' track (describes the raw transcript) and one 'pending' track
+-- (audio whose transcript is not stored yet) per episode at most.
+CREATE TABLE IF NOT EXISTS episode_sync_tracks (
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    generation text NOT NULL,
+    state text NOT NULL CHECK (state IN ('pending', 'current')),
+    path text NOT NULL,
+    source text NOT NULL,
+    frames integer NOT NULL,
+    anchors integer NOT NULL,
+    audio_bytes bigint NOT NULL,
+    audio_duration_s double precision NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (episode_id, generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_tracks_one_per_state ON episode_sync_tracks(episode_id, state);
+
 -- Spec #103 Phase 2 — signed-out views per public page per UTC day, keyed
 -- by object id ('' for landing and top). No visitor id, IP or referrer.
 CREATE TABLE IF NOT EXISTS public_page_daily_views (
@@ -589,6 +611,27 @@ CREATE INDEX IF NOT EXISTS idx_briefing_deliveries_due
     ON briefing_deliveries(next_attempt_at)
     WHERE status IN ('pending','sending');
 
+-- Spec #118 — lifecycle message ledger (alembic 0029). One row per
+-- (user, message, channel): the UNIQUE constraint is the send-once anchor.
+-- ``next_attempt_at`` drives the due-scan while pending and is the claim
+-- lease while sending; NULL once terminal.
+CREATE TABLE IF NOT EXISTS user_messages (
+    id uuid PRIMARY KEY,
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    message_key text NOT NULL,
+    channel text NOT NULL DEFAULT 'email' CHECK (channel IN ('email')),
+    status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','failed','skipped')),
+    attempts bigint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at timestamptz NULL,
+    sent_at timestamptz NULL,
+    last_error text NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, message_key, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_user_messages_due
+    ON user_messages(next_attempt_at)
+    WHERE status IN ('pending','sending');
+
 -- ===== task queue =========================================================
 CREATE TABLE IF NOT EXISTS tasks (
     id uuid PRIMARY KEY,
@@ -645,6 +688,15 @@ CREATE TABLE IF NOT EXISTS entities (
     public_hidden boolean NOT NULL DEFAULT false
 );
 ALTER TABLE entities ADD COLUMN IF NOT EXISTS public_hidden boolean NOT NULL DEFAULT false;
+-- Where a deleted entity went (a merge, a QID dedupe, an id-changing re-type),
+-- so its public URL answers 301 instead of 404 (alembic 0030). No foreign keys:
+-- the source row is gone, and a target deleted later just stops redirecting.
+CREATE TABLE IF NOT EXISTS entity_redirects (
+    from_entity_id text PRIMARY KEY,
+    to_entity_id text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_entity_redirects_to ON entity_redirects(to_entity_id);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);

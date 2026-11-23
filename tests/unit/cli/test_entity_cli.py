@@ -209,9 +209,32 @@ class TestEntityMergeCli:
         assert result.exit_code == 0
         assert "deleted" in result.output
 
+        # "Tesla" does not resemble "SpaceX": reported, never stored.
+        assert "'Tesla' was not kept as an alias" in result.output
+
         repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
         assert repo.get_entity("company:tesla") is None
-        assert repo.get_entity("company:spacex") is not None
+        assert "Tesla" not in repo.get_entity("company:spacex").aliases
+
+    def _misspelt_spacex(self, tmp_db_with_entities) -> SqliteEntityRepository:
+        repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
+        repo.upsert_entity(EntityRecord(id="company:space-x", type=EntityType.COMPANY, canonical_name="Space X"))
+        return repo
+
+    def test_a_merge_keeps_a_spelling_of_the_keepers_name_as_an_alias(self, tmp_db_with_entities):
+        repo = self._misspelt_spacex(tmp_db_with_entities)
+        preview = _run(["entity", "merge", "company:spacex", "company:space-x", "--dry-run"])
+        assert "would keep 'Space X' as an alias" in preview.output
+        assert "Space X" not in repo.get_entity("company:spacex").aliases
+        result = _run(["entity", "merge", "company:spacex", "company:space-x"])
+        assert result.exit_code == 0 and "'Space X' is now an alias of company:spacex" in result.output
+        assert "Space X" in repo.get_entity("company:spacex").aliases
+
+    def test_no_alias_keeps_the_losers_name_out(self, tmp_db_with_entities):
+        repo = self._misspelt_spacex(tmp_db_with_entities)
+        result = _run(["entity", "merge", "company:spacex", "company:space-x", "--no-alias"])
+        assert result.exit_code == 0 and "alias" not in result.output
+        assert "Space X" not in repo.get_entity("company:spacex").aliases
 
     def test_refuses_cross_type(self, tmp_db_with_entities):
         result = _run(["entity", "merge", "person:elon-musk", "company:tesla"])
@@ -328,8 +351,60 @@ class TestPodcastSetHostsCli:
             conn.close()
         assert row[0] == '["person:elon-musk"]'
 
+    def test_set_hosts_is_audited_as_the_cli(self, tmp_db_with_entities):
+        pid = self._podcast_id(tmp_db_with_entities)
+        assert _run(["podcast", "set-hosts", pid, "person:elon-musk"]).exit_code == 0
+        conn = sqlite3.connect(str(tmp_db_with_entities / "podcasts.db"))
+        try:
+            rows = conn.execute("SELECT actor, action FROM admin_audit_log").fetchall()
+        finally:
+            conn.close()
+        assert ("cli", "podcast.set_hosts") in rows
+
     def test_set_hosts_unknown_entity_exits_nonzero(self, tmp_db_with_entities):
         pid = self._podcast_id(tmp_db_with_entities)
         result = _run(["podcast", "set-hosts", pid, "person:nobody"])
         assert result.exit_code == 1
         assert "Unknown entity ids" in result.output
+
+
+class TestEntityGetJsonCap:
+    def test_json_recent_mentions_capped_at_five(self, tmp_db_with_entities):
+        repo = SqliteEntityRepository(db_path=str(tmp_db_with_entities / "podcasts.db"))
+        ep1 = (
+            sqlite3.connect(str(tmp_db_with_entities / "podcasts.db")).execute("SELECT id FROM episodes").fetchone()[0]
+        )
+        repo.insert_mentions(
+            [
+                EntityMention(
+                    episode_id=ep1,
+                    segment_id=seg,
+                    start_ms=seg * 10_000,
+                    end_ms=seg * 10_000 + 8_000,
+                    speaker="Scott Galloway",
+                    role=MentionRole.MENTIONED,
+                    surface_form="Musk",
+                    quote_excerpt="… Musk …",
+                    confidence=0.95,
+                    extractor="gliner:test",
+                )
+                for seg in range(10, 17)
+            ]
+        )
+        for m in repo.list_pending_mentions():
+            repo.resolve_mention(mention_id=m.id, entity_id="person:elon-musk", status="resolved")
+
+        result = _run(["entity", "get", "Elon Musk", "--json"])
+        idx = result.output.find('{\n  "entity":')
+        payload, _ = json.JSONDecoder().raw_decode(result.output[idx:])
+        assert len(payload["recent_mentions"]) == 5
+
+
+class TestPodcastDetectHostsCli:
+    def test_no_speaker_data_hint_names_a_real_command_with_the_id(self, tmp_db_with_entities):
+        missing = str(uuid.uuid4())
+        result = _run(["podcast", "detect-hosts", missing])
+        assert result.exit_code == 0
+        assert "{podcast_id}" not in result.output
+        assert "extract-entities" not in result.output
+        assert f"thestill rebuild-entities --podcast-id {missing}" in result.output

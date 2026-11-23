@@ -223,7 +223,7 @@ export default function Entities() {
     if (!row.audio_url || !row.podcast_slug || !row.episode_slug) return
     const startAt = row.start_ms / 1000
     if (player.isCurrent(row.episode_id)) {
-      player.seek(startAt)
+      player.seek(startAt, { transcript: true })
       if (!player.isPlaying) player.resume()
       return
     }

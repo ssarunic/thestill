@@ -82,3 +82,11 @@ updates:
     labels:
       - dependencies
       - docker
+    ignore:
+      # Prod runs python:3.13-slim on purpose (v1.36.0). A newer minor lacks
+      # prebuilt wheels at first (3.15: grpcio/pydantic-core built from
+      # source until the Docker job timed out, #521), and the pinned torch
+      # 2.10 predates it. Move the interpreter as its own
+      # change; 3.13 digest (security) updates still come through.
+      - dependency-name: "python"
+        versions: [">=3.14"]

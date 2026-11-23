@@ -16,6 +16,12 @@ const EVENT_PROPS: Record<string, readonly string[]> = {
   entity_open: ['entity_type'],
   reader_tab: ['tab'],
   read_depth: ['tab', 'percent'],
+  // Spec #116 §6.1: a reader opened an ad break's text. `state` is what the
+  // row said (plain, same, different, absent, unresolved).
+  ad_break_expanded: ['state'],
+  // Spec #116 §6.2: a listener tapped Skip ahead; `seconds` of their copy
+  // it jumped over, rounded.
+  skip_ahead: ['seconds'],
 }
 
 // SDK props kept as they are: device and browser class, ids, timing.

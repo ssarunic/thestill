@@ -7,6 +7,7 @@ import {
   Avatar,
   Button,
   EntityGroups,
+  TakingPart,
   FilterChip,
   ListenOn,
   QuoteCard,
@@ -26,9 +27,10 @@ import {
 import NotFound, { ModuleError } from './NotFound'
 
 
-// The signed-in reader's section names (EntityRail).
+// The signed-in reader's section names (EntityRail). The people who take
+// part are listed apart, under "In this episode" (TakingPart).
 const MENTIONED_TITLES = {
-  person: 'People in this episode',
+  person: 'People mentioned',
   company: 'Companies mentioned',
   product: 'Products',
   topic: 'Topics',
@@ -53,16 +55,22 @@ export default function Episode() {
   // the summary is behind sign-in and comes back to this episode.
   const episodeHref = episodePath(podcastSlug, episodeSlug)
   const readFullSummary = useSignIn('summary', episodeHref)
+  // Spec #117 — Follow signs in and comes back to this episode, where the
+  // follow completes (the pending follow set on /login).
+  const signInToFollow = useSignIn('follow', episodeHref)
   // A response cached from before the cut has no ``more_sections``.
   const moreSections = summary.data?.more_sections ?? []
   // The signed-in reader opens on the transcript with ?view=transcript; a
   // visitor who came from a quote lands on its line (?t=, see
   // episodeTimestampPath).
   const transcriptPath = `${episodeHref}?view=transcript${linkedSeconds != null ? `&t=${linkedSeconds}` : ''}`
-  const readTranscript = useSignIn('transcript', transcriptPath)
   const quotes = usePublicEpisodeQuotes(podcastSlug, episodeSlug, linkedSeconds, speaker)
   const firstPage = quotes.data?.pages[0]
   const more = usePublicPodcastEpisodes(podcastSlug)
+
+  const mentioned = firstPage?.mentioned ?? []
+  const takingPart = mentioned.flatMap((entity) => (entity.role ? [{ ...entity, role: entity.role }] : []))
+  const onlyMentioned = mentioned.filter((entity) => !entity.role)
 
   const linked = firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
@@ -113,6 +121,9 @@ export default function Episode() {
             <>
               <span className="ts-eyebrow">
                 <Link to={`/podcasts/${episode.podcast.slug}`}>{episode.podcast.title}</Link>
+                <Button to={signInToFollow} rel="nofollow" variant="secondary" size="sm">
+                  Follow
+                </Button>
                 {episode.pub_date && <span>· {formatDate(episode.pub_date)}</span>}
                 {episode.duration_formatted && <span>· {episode.duration_formatted}</span>}
               </span>
@@ -154,17 +165,17 @@ export default function Episode() {
               <button type="button" role="tab" aria-selected={tab === 'summary'} className={`ts-tab ${tab === 'summary' ? 'ts-tab-active' : ''}`} onClick={() => setTab('summary')}>
                 Summary
               </button>
-              {/* Spec #102 — the tab works as it does signed in; signed out it
-                  asks for sign-in and comes back to the transcript. */}
-              <Link role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} to={readTranscript} rel="nofollow">
+              {/* Spec #102 — the tab opens in place and shows the sign-in card;
+                  its button signs in and comes back to the transcript. */}
+              <button type="button" role="tab" aria-selected={tab === 'transcript'} className={`ts-tab ${tab === 'transcript' ? 'ts-tab-active' : ''}`} onClick={() => setTab('transcript')}>
                 Transcript
-              </Link>
+              </button>
             </div>
           </div>
 
           {tab === 'transcript' ? (
             <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
-              Sign in to read every word, search across every show, and get each new episode summarised in your inbox.
+              Sign in to read every word, with speaker names and timestamps.
             </SignInCard>
           ) : (
             <article className="ts-summary ts-fade-in">
@@ -250,21 +261,18 @@ export default function Episode() {
               </div>
             </section>
           )}
-
-          {tab === 'summary' && (
-            <SignInCard title="The full transcript, with speaker names and timestamps, is one sign-in away." buttonLabel="Read the transcript" intent="transcript" next={transcriptPath}>
-              Sign in to read every word, with speaker names and timestamps.
-            </SignInCard>
-          )}
         </div>
 
         <aside className="ts-rail" aria-label="About this episode">
           {firstPage && (
-            <EntityGroups
-              items={firstPage.mentioned}
-              titles={MENTIONED_TITLES}
-              count={(entity) => `${entity.count}×`}
-            />
+            <>
+              <TakingPart people={takingPart} />
+              <EntityGroups
+                items={onlyMentioned}
+                titles={MENTIONED_TITLES}
+                count={(entity) => `${entity.count}×`}
+              />
+            </>
           )}
           {episode?.description && (
             <section className="ts-rail-module">

@@ -16,7 +16,7 @@ import functools
 import json
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -28,7 +28,6 @@ import click
 # 2. Module mode (development): `python -m thestill.cli` (uses __main__ guard at bottom)
 from .core.audio_downloader import AudioDownloader
 from .core.audio_preprocessor import AudioPreprocessor
-from .core.entity_linking.cache import invalidate_link_decisions
 from .core.external_transcript_downloader import ExternalTranscriptDownloader
 from .core.feed_manager import PodcastFeedManager
 from .core.google_transcriber import GoogleCloudTranscriber
@@ -38,7 +37,7 @@ from .evals.compare import compare_runs
 from .evals.rubrics import ENTITY_LINKING, RUBRICS, get_rubric
 from .evals.runner import EvalError, EvalRunner, list_manifests, load_manifest, resolve_judge, summarize_run
 from .logging import configure_structlog
-from .models.analytics import COHORT_ROWS, SMALL_GROUP, ContentReport
+from .models.analytics import COHORT_ROWS, SMALL_GROUP, ContentReport, TrafficReport
 from .models.podcast import EpisodeState
 from .models.transcription import TranscribeOptions
 from .repositories.briefing_repository import BriefingRepository
@@ -100,12 +99,15 @@ class CLIContext:
         analytics_service=None,
         abuse=None,
         transcript_edit_repository=None,
+        user_message_repository=None,
     ):
         self.config = config
         self.path_manager = path_manager
         # Spec #110 — the transcript editor's op log (``thestill transcript``
         # and every CLI path that reads a cleaned sidecar).
         self.transcript_edit_repository = transcript_edit_repository
+        # Spec #118 — the lifecycle message ledger (``thestill lifecycle``).
+        self.user_message_repository = user_message_repository
         self.repository = repository
         self.podcast_service = podcast_service
         self.stats_service = stats_service
@@ -306,9 +308,12 @@ def main(ctx, config, quiet):
             follower_service=follower_service,
             legacy_claim_service=legacy_claim_service,
             link_decision_repository=repos.link_decision,
-            analytics_service=AnalyticsService(repos.analytics, enabled=config_obj.multi_user),
+            analytics_service=AnalyticsService(
+                repos.analytics, enabled=config_obj.multi_user, entity_path=_lazy_entity_path(entity_repository)
+            ),
             abuse=abuse,
             transcript_edit_repository=repos.transcript_edit,
+            user_message_repository=repos.user_message,
         )
 
     except Exception as e:
@@ -418,7 +423,11 @@ def set_show_link(ctx, podcast_id, platform, url, clear):
     ):
         click.echo(f"❌ That does not look like a {platform} show link: {url}", err=True)
         ctx.exit(2)
-    ctx.obj.repository.set_podcast_platform_url(str(podcast.id), platform, None if clear else url, source="curated")
+    _curate(
+        ctx,
+        lambda svc, actor: svc.set_show_link(str(podcast.id), platform, None if clear else url, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     if clear:
         click.echo(f"✓ Cleared the curated {platform} link for {podcast.title}.")
     else:
@@ -448,8 +457,11 @@ def set_summary_profile(ctx, podcast_id, profile):
         click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
         ctx.exit(1)
     override = None if profile == "auto" else profile
-    ctx.obj.repository.set_podcast_summary_profile(str(podcast.id), override)
-    podcast.summary_profile = override
+    podcast = _curate(
+        ctx,
+        lambda svc, actor: svc.set_summary_profile(str(podcast.id), override, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     click.echo(f"✓ {podcast.title}: summary profile {resolve_summary_profile(podcast).describe()}.")
 
 
@@ -495,7 +507,11 @@ def set_podcast_visibility(ctx, podcast_id, public):
 
     indexnow = IndexNow(ctx.obj.config)
     before = _public_page_paths(ctx.obj.repository, podcast) if indexnow.enabled and not public else []
-    ctx.obj.repository.set_podcast_public_pages(str(podcast.id), public)
+    _curate(
+        ctx,
+        lambda svc, actor: svc.set_public_pages(str(podcast.id), public, actor=actor),
+        service=_podcast_curation(ctx),
+    )
     click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
     if indexnow.enabled:
         paths = _public_page_paths(ctx.obj.repository, podcast) if public else before
@@ -562,12 +578,7 @@ def set_entity_visibility(ctx, entity_id, public):
     signed-out surfaces. Use it for a person who asks to be removed, or
     at once when a quote is attributed to the wrong person.
     """
-    repo = ctx.obj.entity_repository
-    entity = repo.get_entity(entity_id)
-    if entity is None:
-        click.echo(f"❌ Entity not found: {entity_id}", err=True)
-        ctx.exit(1)
-    repo.set_entity_public_hidden(entity.id, not public)
+    entity = _curate(ctx, lambda svc, actor: svc.set_visibility(entity_id, public=public, actor=actor))
     click.echo(f"✓ {entity.canonical_name} ({entity.id}): public page {'on' if public else 'hidden'}.")
 
 
@@ -1869,6 +1880,67 @@ def cleanup(ctx, dry_run):
         click.echo(f"\n✓ Cleanup complete - deleted {total_files} file(s), updated {db_updates} episode(s)")
 
 
+def _raw_transcript_written_since(repository, path_manager, episode_id: str, since: float) -> bool:
+    """True when the episode's raw transcript file exists and was written at
+    or after ``since`` (epoch seconds). The webhook writes it to the same
+    deterministic path on a re-transcription, so a changed path is no signal."""
+    found = repository.get_episode(episode_id)
+    raw_path = found[1].raw_transcript_path if found else None
+    if not raw_path:
+        return False
+    path = path_manager.raw_transcript_file(raw_path)
+    return path.exists() and path.stat().st_mtime >= since
+
+
+def _wait_for_webhook_transcripts(
+    *,
+    pending_ops_repository,
+    submitted: dict,
+    transcript_written,
+    echo=click.echo,
+    sleep=time.sleep,
+    poll_seconds: float = 2.0,
+) -> tuple:
+    """Wait until every submitted ElevenLabs job has called back.
+
+    Waits on stored state rather than an in-process tracker, so it finishes
+    whichever process receives the callback: this CLI's own webhook server or
+    an already running ``thestill server``. An episode is settled when the
+    webhook has removed its ElevenLabs pending operation, or when a raw
+    transcript was written after submission (a callback that beat the
+    pending-operation write).
+
+    Args:
+        submitted: episode_id -> submission time (epoch seconds).
+        transcript_written: ``(episode_id, since) -> bool``, see
+            ``_raw_transcript_written_since``.
+
+    Returns:
+        (delivered, failed) episode-id lists; failed means the callback came
+        but no transcript was written.
+    """
+
+    def settled(episode_id):
+        if transcript_written(episode_id, submitted[episode_id]):
+            return True
+        return not any(op.provider == "elevenlabs" for op in pending_ops_repository.list_by_episode(episode_id))
+
+    waiting = list(submitted)
+    delivered, failed = [], []
+    last_reported = None
+    while waiting:
+        for episode_id in list(waiting):
+            if settled(episode_id):
+                waiting.remove(episode_id)
+                (delivered if transcript_written(episode_id, submitted[episode_id]) else failed).append(episode_id)
+        if waiting:
+            if len(waiting) != last_reported:
+                echo(f"   {len(waiting)} webhook callback(s) still pending...")
+                last_reported = len(waiting)
+            sleep(poll_seconds)
+    return delivered, failed
+
+
 @main.command()
 @click.argument("audio_path", type=click.Path(exists=True), required=False)
 @click.option("--downsample", is_flag=True, help="Enable audio downsampling (16kHz, mono, 16-bit)")
@@ -2204,6 +2276,8 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
     # Transcribe episodes
     transcribed_count = 0
     total_audio_seconds = 0  # Track total audio duration for speed calculation
+    # episode_id -> submission time, epoch seconds (webhook mode)
+    submitted_for_webhook: dict = {}
     start_time = time.time()
 
     # Progress bar wrapper (episodes already flat and sorted)
@@ -2290,6 +2364,10 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
 
                 episode_language = convert_language_for_transcriber(podcast.language, config.transcription_provider)
 
+                # Taken before submitting: an ElevenLabs callback can write the
+                # transcript while transcribe_audio is still returning. One second
+                # of slack absorbs filesystem mtime granularity.
+                submitted_at = time.time() - 1.0
                 # Pass episode context for Google Cloud operation persistence
                 # This allows resuming transcriptions if the app is restarted
                 transcript_data = transcriber.transcribe_audio(
@@ -2336,6 +2414,7 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
                     # In webhook mode, None means "submitted, waiting for callback"
                     # The webhook handler will save the transcript and update the database
                     click.echo("📤 Transcription submitted - waiting for webhook callback")
+                    submitted_for_webhook[episode.id] = submitted_at
                     transcribed_count += 1  # Count as submitted (will complete async)
                 else:
                     click.echo("❌ Transcription failed")
@@ -2355,36 +2434,30 @@ def transcribe(ctx, audio_path, downsample, podcast_id, episode_id, max_episodes
         click.echo(f"✓ {transcribed_count} episode(s) submitted in {format_duration(total_time)} ({total_time:.0f}s)")
         click.echo("")
 
-        # Wait for all webhook callbacks to complete
-        from thestill.webhook import get_tracker
-
-        tracker = get_tracker()
-
-        if tracker.pending_count > 0:
-            click.echo(f"   Waiting for {tracker.pending_count} webhook callback(s)...")
+        # Wait for every callback, whichever process receives it.
+        if submitted_for_webhook:
+            click.echo(f"   Waiting for {len(submitted_for_webhook)} webhook callback(s)...")
             click.echo("   (Press Ctrl+C to exit early)")
             click.echo("")
-
             try:
-                # Wait for all callbacks with progress updates
-                while not tracker.is_all_done:
-                    remaining = tracker.pending_count
-                    if remaining > 0:
-                        # Show progress every second
-                        if tracker.wait_for_all(timeout=1.0):
-                            break
-                    else:
-                        break
-
-                # All done!
+                delivered, failed = _wait_for_webhook_transcripts(
+                    pending_ops_repository=ctx.obj.pending_ops_repository,
+                    submitted=submitted_for_webhook,
+                    transcript_written=functools.partial(
+                        _raw_transcript_written_since, ctx.obj.repository, ctx.obj.path_manager
+                    ),
+                )
                 click.echo("🎉 All webhook callbacks received!")
-                click.echo(f"✓ {tracker.completed_count} transcript(s) delivered via webhook")
+                click.echo(f"✓ {len(delivered)} transcript(s) delivered via webhook")
+                if failed:
+                    click.echo(f"⚠️  {len(failed)} callback(s) arrived without a transcript", err=True)
             except KeyboardInterrupt:
                 click.echo("\n")
-                remaining = tracker.pending_count
-                if remaining > 0:
-                    click.echo(f"⚠️  Exiting with {remaining} pending callback(s)")
+                if getattr(ctx.obj, "started_webhook_server", False):
+                    click.echo("⚠️  Exiting with callbacks still pending")
                     click.echo("   Run 'thestill server' to continue receiving callbacks")
+                else:
+                    click.echo("⚠️  Exiting; the running thestill server will receive the pending callbacks")
         else:
             click.echo("   No pending callbacks to wait for.")
     else:
@@ -3980,7 +4053,7 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
             qid_merged += 1
             continue
         repo.repoint_mentions(from_entity_id=loser, to_entity_id=keeper)
-        repo.delete_entity(loser)
+        repo.delete_entity(loser, redirect_to=keeper)
         qid_merged += 1
     label = "would merge" if dry_run else "merge(s)"
     click.echo(f"QID dedupe: {qid_merged} {label}")
@@ -4026,7 +4099,7 @@ def merge_aliases(ctx, levenshtein_threshold, dry_run):
                     fuzzy_merged += 1
                     continue
                 repo.repoint_mentions(from_entity_id=loser.id, to_entity_id=keeper.id)
-                repo.delete_entity(loser.id)
+                repo.delete_entity(loser.id, redirect_to=keeper.id)
                 fuzzy_merged += 1
     click.echo(f"Fuzzy merge: {fuzzy_merged} {label}")
     click.echo(f"\n🎉 Total: {qid_merged + fuzzy_merged} {label}")
@@ -4300,7 +4373,7 @@ def repair_entity_types(ctx, min_mentions, min_majority_ratio, dry_run):
                 )
             )
         repo.repoint_mentions(from_entity_id=entity_id, to_entity_id=new_id)
-        repo.delete_entity(entity_id)
+        repo.delete_entity(entity_id, redirect_to=new_id)
         repaired += 1
         click.echo(f"  ✓ {entity_id} → {new_id} ({top_count}/{total})")
 
@@ -4451,6 +4524,191 @@ def reprocess(ctx, episode_id, podcast_id, episode_slug, from_stage, refresh_epi
         f"✓ Queued {queued.episode_title} from {from_stage}, starting at {queued.starting_stage.value} "
         f"(task {queued.task_id}). The web server's worker runs it."
     )
+
+
+def _sync_track_service(ctx):
+    """The sync track service for CLI commands (spec #116)."""
+    from .repositories.factory import make_repositories
+    from .services.sync_track_service import SyncTrackService
+
+    return SyncTrackService(ctx.obj.config, make_repositories(ctx.obj.config).sync_track)
+
+
+@main.group("sync-track")
+def sync_track_group():
+    """Sync tracks (spec #116): landmarks of the audio an episode was transcribed from."""
+
+
+@sync_track_group.command("show")
+@click.option("--episode-id", help="Episode UUID.")
+@click.option("--podcast-id", help="Podcast UUID or slug (with --episode).")
+@click.option("--episode", "episode_slug", help="Episode slug (with --podcast-id).")
+@click.option("--json", "json_output", is_flag=True, help="Emit a single JSON object.")
+@click.pass_context
+@require_config
+@log_command
+def sync_track_show(ctx, episode_id, podcast_id, episode_slug, json_output):
+    """Show one episode's sync track and whether the reader may use it."""
+    repository = ctx.obj.repository
+    if episode_id:
+        found = repository.get_episode(episode_id)
+    elif podcast_id and episode_slug:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        found = repository.get_episode_by_slug(podcast.slug, episode_slug) if podcast else None
+    else:
+        raise click.UsageError("Pass --episode-id, or --podcast-id with --episode.")
+    if not found:
+        click.echo("❌ Episode not found", err=True)
+        ctx.exit(1)
+    _podcast, episode = found
+
+    config = ctx.obj.config
+    service = _sync_track_service(ctx)
+    record = service.current(episode.id)
+
+    stamp = None
+    if episode.clean_transcript_json_path:
+        sidecar_key = config.path_manager.to_relative(
+            config.path_manager.clean_transcript_file(episode.clean_transcript_json_path)
+        )
+        try:
+            stamp = json.loads(config.file_storage.read_text(sidecar_key)).get("sync_track_generation")
+        except FileNotFoundError:
+            stamp = None
+
+    info = {
+        "episode_id": episode.id,
+        "title": episode.title,
+        "has_track": record is not None,
+        "cleaned_transcript_stamp": stamp,
+        "usable_by_reader": bool(record and stamp and record.generation == stamp),
+    }
+    if record is not None:
+        track = service.load(record)
+        minutes = max(track.duration_s / 60.0, 1e-9)
+        info.update(
+            {
+                "generation": record.generation,
+                "source": record.source,
+                "path": record.path,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+                "audio_duration_s": round(track.duration_s, 3),
+                "audio_bytes": track.audio_bytes,
+                "frames": track.frame_count,
+                "anchors": len(track.anchors),
+                "anchors_per_minute": round(len(track.anchors) / minutes, 1),
+                "base_spans": len(track.base_spans),
+            }
+        )
+
+    if json_output:
+        click.echo(json.dumps(info, ensure_ascii=False))
+        return
+    click.echo(f"{episode.title}")
+    if record is None:
+        click.echo("  no sync track")
+    else:
+        click.echo(f"  generation   {info['generation']} ({info['source']}, {info['created_at']})")
+        click.echo(f"  audio        {info['audio_duration_s']} s, {info['audio_bytes']} bytes, {info['frames']} frames")
+        click.echo(f"  anchors      {info['anchors']} ({info['anchors_per_minute']} per minute)")
+        click.echo(f"  file         {info['path']}")
+    click.echo(f"  cleaned transcript stamp  {stamp or 'none'}")
+    click.echo(f"  usable by the reader      {'yes' if info['usable_by_reader'] else 'no'}")
+
+
+@sync_track_group.command("backfill")
+@click.option("--podcast-id", help="Only this podcast (UUID or slug).")
+@click.option("--max-episodes", "-m", type=int, help="Stop after this many episodes were attempted.")
+@click.option(
+    "--stop-after-gone",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Stop after this many episodes in a row whose audio Dalston no longer has (0 = never stop).",
+)
+@click.option(
+    "--since-days",
+    type=int,
+    default=45,
+    show_default=True,
+    help="Only episodes transcribed within this many days (0 = no limit).",
+)
+@click.option("--dry-run", "-d", is_flag=True, help="Show what would be built without fetching audio or writing.")
+@click.pass_context
+@require_config
+@log_command
+def sync_track_backfill(ctx, podcast_id, max_episodes, stop_after_gone, since_days, dry_run):
+    """Build sync tracks for episodes transcribed before spec #116.
+
+    Works for episodes transcribed through Dalston while Dalston still
+    stores the job's audio: the track is cut from that audio, so nothing is
+    re-transcribed. Most recently transcribed first (Dalston's retention
+    runs from the job, not from the publication date); older jobs' audio is
+    gone, so the run stops after a row of those. Episodes with a task in
+    flight are skipped.
+    """
+    from collections import Counter
+
+    from .services import sync_track_backfill as backfill
+
+    if podcast_id:
+        podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+        if not podcast:
+            click.echo(f"❌ Podcast not found: {podcast_id}", err=True)
+            ctx.exit(1)
+        podcasts = [podcast]
+    else:
+        podcasts = ctx.obj.repository.get_all()
+
+    service = _sync_track_service(ctx)
+    if not service.enabled and not dry_run:
+        click.echo("❌ SYNC_TRACKS_ENABLED is false — nothing to do.", err=True)
+        ctx.exit(1)
+
+    # Order by when the raw transcript was written, i.e. by job age.
+    config = ctx.obj.config
+    cutoff = time.time() - since_days * 86400 if since_days else None
+    candidates = []
+    for podcast in podcasts:
+        for episode in podcast.episodes:
+            if not episode.raw_transcript_path:
+                continue
+            raw_key = config.path_manager.to_relative(
+                config.path_manager.raw_transcript_file(episode.raw_transcript_path)
+            )
+            try:
+                transcribed_at = config.file_storage.get_modified_time(raw_key)
+            except FileNotFoundError:
+                continue
+            if cutoff is None or transcribed_at >= cutoff:
+                candidates.append((transcribed_at, podcast, episode))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    queue_manager = make_queue_manager(config)
+
+    counts: Counter = Counter()
+    stamped = 0
+    attempted = 0
+    gone_in_a_row = 0
+    for _transcribed_at, podcast, episode in candidates:
+        result = backfill.backfill_episode(
+            config, service, podcast, episode, dry_run=dry_run, queue_manager=queue_manager
+        )
+        counts[result.outcome] += 1
+        stamped += int(result.stamped)
+        if result.outcome in (backfill.HAS_TRACK, backfill.NO_TRANSCRIPT, backfill.NOT_DALSTON, backfill.BUSY):
+            continue
+        attempted += 1
+        click.echo(f"  {result.outcome:<18} {podcast.slug}/{episode.slug}")
+        gone_in_a_row = gone_in_a_row + 1 if result.outcome == backfill.AUDIO_GONE else 0
+        if stop_after_gone and gone_in_a_row >= stop_after_gone:
+            click.echo(f"Stopping: Dalston no longer has the audio of {gone_in_a_row} episodes in a row.")
+            break
+        if max_episodes and attempted >= max_episodes:
+            break
+
+    summary = ", ".join(f"{name} {count}" for name, count in sorted(counts.items())) or "nothing to do"
+    stamp_verb = "would be stamped" if dry_run else "stamped"
+    click.echo(f"✓ {summary}; cleaned transcripts {stamp_verb}: {stamped}")
 
 
 @main.command("rebuild-entities")
@@ -5075,15 +5333,14 @@ def entity_get(ctx, id_or_name, entity_type, json_output):
                 }
                 for c in summary["cooccurring"]
             ],
-            "recent_mentions": summary["recent_mentions"][0:5]
-            and [
+            "recent_mentions": [
                 {
                     "episode_id": ctx_.episode_id,
                     "episode_title": ctx_.episode_title,
                     "start_ms": ctx_.mention.start_ms,
                     "speaker": ctx_.mention.speaker,
                 }
-                for ctx_ in summary["recent_mentions"]
+                for ctx_ in summary["recent_mentions"][:5]
             ],
         }
         click.echo(json.dumps(payload, indent=2, default=str))
@@ -5123,13 +5380,22 @@ def _entity_curation(ctx):
     )
 
 
-def _curate(ctx, action):
-    """Run ``action(service, actor)``; a refused action exits 1 with its message."""
+def _podcast_curation(ctx):
+    """The audited show-settings service; the CLI is the operator."""
+    from .services.podcast_curation import PodcastCurationService
+
+    return PodcastCurationService(ctx.obj.repository, ctx.obj.abuse.audit)
+
+
+def _curate(ctx, action, *, service=None):
+    """Run ``action(service, actor)`` on an audited curation service (the
+    entity one unless ``service`` is given); a refused action exits 1 with
+    its message. Every curation write goes through here, so it is audited."""
     from .services.abuse.actor import Actor
     from .services.abuse.errors import AdminActionError
 
     try:
-        return action(_entity_curation(ctx), Actor.cli())
+        return action(service or _entity_curation(ctx), Actor.cli())
     except AdminActionError as exc:
         click.echo(f"❌ {exc}", err=True)
         ctx.exit(1)
@@ -5140,10 +5406,15 @@ def _curate(ctx, action):
 @click.argument("loser")
 @click.option("--dry-run", "-d", is_flag=True, help="Report without writing.")
 @click.option("--reason", default=None, help="Recorded in the admin audit log.")
+@click.option(
+    "--no-alias",
+    is_flag=True,
+    help="Do not keep LOSER's name as an alias of KEEPER (for a name that is not a name of the thing).",
+)
 @click.pass_context
 @require_config
 @log_command
-def entity_merge(ctx, keeper, loser, dry_run, reason):
+def entity_merge(ctx, keeper, loser, dry_run, reason, no_alias):
     """Move everything that refers to LOSER onto KEEPER and delete LOSER.
 
     For two rows that are one thing. Both are entity ids
@@ -5151,15 +5422,44 @@ def entity_merge(ctx, keeper, loser, dry_run, reason):
     recurring / guest lists and mention candidates all move. Use
     ``entity move-mentions`` or ``entity split`` when they are different
     things.
+
+    LOSER's name stays as an alias of KEEPER when it resembles KEEPER's
+    name, so a facts file or a transcript that still uses it finds KEEPER
+    instead of creating LOSER again. A name that does not resemble it, and
+    LOSER's own aliases, are listed and not carried over; add the right
+    ones with ``thestill entity-alias-add``.
     """
-    result = _curate(ctx, lambda svc, actor: svc.merge(keeper, loser, actor=actor, reason=reason, dry_run=dry_run))
+    result = _curate(
+        ctx,
+        lambda svc, actor: svc.merge(
+            keeper, loser, actor=actor, reason=reason, dry_run=dry_run, keep_name=not no_alias
+        ),
+    )
+    dropped = ", ".join(repr(a) for a in result.dropped_aliases)
     if dry_run:
         click.echo(f"  [dry-run] would repoint every reference {result.loser_id!r} → {result.keeper_id!r}")
+        if result.alias_added:
+            click.echo(f"  [dry-run] would keep {result.alias_added!r} as an alias of {result.keeper_id!r}")
+        if result.alias_skipped:
+            click.echo(f"  [dry-run] would not keep {result.alias_skipped!r}: it does not resemble the keeper's name")
+        if dropped:
+            click.echo(f"  [dry-run] would drop {result.loser_id!r}'s aliases: {dropped}")
         click.echo(f"  [dry-run] would delete {result.loser_id!r}")
         click.echo("\n🎉 1 would merge (dry-run)")
         return
     moved = ", ".join(f"{kind} {count}" for kind, count in result.moved.items() if count) or "nothing"
     click.echo(f"✓ moved {moved}; {result.loser_id} deleted")
+    if result.alias_added:
+        click.echo(f"✓ {result.alias_added!r} is now an alias of {result.keeper_id}")
+    if result.alias_skipped:
+        click.echo(
+            f"⚠ {result.alias_skipped!r} was not kept as an alias: it does not resemble the keeper's name, so "
+            "clean-aliases would remove it and unlink its mentions. If it is a real name of "
+            f"{result.keeper_id}, run: thestill entity-alias-add {result.keeper_id} {result.alias_skipped!r} "
+            "and add it to the alias allowlist."
+        )
+    if dropped:
+        click.echo(f"⚠ aliases not carried over: {dropped} (thestill entity-alias-add {result.keeper_id} <alias>)")
     click.echo("\n🎉 1 merged")
 
 
@@ -5325,6 +5625,36 @@ def entity_prune_orphans(ctx, apply, show):
     )
 
 
+@entity_group.command("backfill-redirects")
+@click.option("--apply", is_flag=True, help="Record the redirects (default: report only).")
+@click.option("--show", type=int, default=20, show_default=True, help="How many to list.")
+@click.pass_context
+@require_config
+@log_command
+def entity_backfill_redirects(ctx, apply, show):
+    """301s for entities merged before merges recorded a redirect.
+
+    A merge deletes the loser, so its public URL answered 404. Merges now
+    record where the loser went; this recovers the ones made earlier from
+    the ``entity.merge`` audit entries (oldest first, so chains end at the
+    last keeper). A loser id that exists again is skipped. Reports by
+    default; ``--apply`` writes.
+    """
+    result = _curate(ctx, lambda svc, actor: svc.backfill_merge_redirects(actor=actor, apply=apply))
+    click.echo(f"{len(result.redirects)} merged entit{'y' if len(result.redirects) == 1 else 'ies'} to redirect")
+    for loser, keeper in result.redirects[:show]:
+        click.echo(f"  {loser} → {keeper}")
+    if len(result.redirects) > show:
+        click.echo(f"  … and {len(result.redirects) - show} more")
+    if result.recreated:
+        click.echo(f"{len(result.recreated)} skipped: the loser id exists again ({', '.join(result.recreated[:5])})")
+    if not result.applied:
+        if result.redirects:
+            click.echo("\nReport only. Re-run with --apply to record them.")
+        return
+    click.echo(f"\n✓ {len(result.redirects)} recorded")
+
+
 # ---------------------------------------------------------------------------
 # Spec #28 §1.13 — host / guest / recurring anchor metadata + override layer
 # ---------------------------------------------------------------------------
@@ -5347,12 +5677,7 @@ def podcast_set_hosts(ctx, podcast_id, entity_ids):
     The extractor's anchor pass uses this list to short-circuit
     resolution for host name mentions in the body text.
     """
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_podcast_hosts(podcast_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_hosts(podcast_id, entity_ids, actor=actor))
     click.echo(f"✓ {podcast_id}: hosts = {', '.join(entity_ids)}")
 
 
@@ -5364,12 +5689,7 @@ def podcast_set_hosts(ctx, podcast_id, entity_ids):
 @log_command
 def podcast_set_recurring(ctx, podcast_id, entity_ids):
     """Pin recurring voices (regular co-hosts who aren't the lead host)."""
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_podcast_recurring(podcast_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_recurring(podcast_id, entity_ids, actor=actor))
     click.echo(f"✓ {podcast_id}: recurring = {', '.join(entity_ids)}")
 
 
@@ -5391,8 +5711,8 @@ def podcast_detect_hosts(ctx, podcast_id, limit):
     rows = repo.detect_top_speakers(podcast_id, limit=limit)
     if not rows:
         click.echo(
-            f"No speaker data for {podcast_id} yet — run "
-            "``thestill extract-entities --podcast-id {podcast_id}`` first."
+            f"No speaker data for {podcast_id} yet — re-extract its entities with "
+            f"`thestill rebuild-entities --podcast-id {podcast_id}` first."
         )
         return
     click.echo(f"Top {len(rows)} speakers for {podcast_id}:")
@@ -5456,12 +5776,7 @@ def episode_set_guests(ctx, episode_id, entity_ids):
     The extractor's anchor pass adds these to the host/recurring set
     for this one episode only — guests rotate, hosts don't.
     """
-    repo = ctx.obj.entity_repository
-    missing = [eid for eid in entity_ids if repo.get_entity(eid) is None]
-    if missing:
-        click.echo(f"❌ Unknown entity ids: {', '.join(missing)}", err=True)
-        ctx.exit(1)
-    repo.set_episode_guests(episode_id, list(entity_ids))
+    _curate(ctx, lambda svc, actor: svc.pin_guests(episode_id, entity_ids, actor=actor))
     click.echo(f"✓ {episode_id}: guests = {', '.join(entity_ids)}")
 
 
@@ -5521,6 +5836,7 @@ def backfill_roles(ctx, podcast_slug):
                 context_text=role_context(podcast, episode),
                 clean_transcript_path=episode.clean_transcript_path,
                 file_storage=state.config.file_storage,
+                podcast_id=podcast.id,
             )
             if ep_result.guests:
                 eps_with_guests += 1
@@ -5874,6 +6190,171 @@ def admin_revoke(ctx, email):
     click.echo(f"✓ {user.email} is no longer an admin.")
 
 
+@main.group("lifecycle")
+def lifecycle_group():
+    """Welcome and product-tips emails (spec #118)."""
+
+
+class _NoEmailSender:
+    """The CLI's planner never sends; only ``send-test`` builds a real sender."""
+
+    def send(self, **_kwargs) -> None:
+        raise RuntimeError("this command does not send email")
+
+
+def _lifecycle_service(ctx, sender=None):
+    from .services.lifecycle.renderer import LifecycleEmailRenderer
+    from .services.lifecycle.service import LifecycleEmailService
+
+    config = ctx.obj.config
+    renderer = LifecycleEmailRenderer(
+        public_base_url=config.public_base_url or "http://localhost:8000",
+        secret=config.unsubscribe_secret or config.jwt_secret_key or "preview-only",
+    )
+    return LifecycleEmailService(ctx.obj.user_message_repository, renderer, sender or _NoEmailSender()), renderer
+
+
+def _lifecycle_facts(ctx, service, user_email: Optional[str], follows: int, connected: bool):
+    """Real facts for ``user_email`` (who must have tips on), else a sample reader."""
+    from .models.user_message import LifecycleFacts
+
+    now = datetime.now(timezone.utc)
+    if user_email:
+        user = ctx.obj.auth_service.user_repository.get_by_email(user_email)
+        if user is None:
+            raise click.ClickException(f"No user with email {user_email}")
+        rows = ctx.obj.user_message_repository.candidates(
+            created_from=datetime.min.replace(tzinfo=timezone.utc),
+            created_to=now,
+            channel="email",
+            limit=1,
+            user_id=user.id,
+        )
+        if not rows:
+            raise click.ClickException(f"{user_email} is not eligible: tips are off or the account is not active")
+        return rows[0]
+    return LifecycleFacts(
+        user_id="00000000-0000-0000-0000-000000000000",
+        email="reader@example.com",
+        name="Alex Reader",
+        created_at=now,
+        timezone_name="Europe/London",
+        briefing_enabled=True,
+        briefing_hour_local=8,
+        follow_count=follows,
+        connector_connected=connected,
+    )
+
+
+@lifecycle_group.command("status")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_status(ctx):
+    """The switch, the sequence and what the ledger holds per message."""
+    service, _ = _lifecycle_service(ctx)
+    enabled = ctx.obj.abuse.settings.get("lifecycle_email_enabled") if ctx.obj.abuse else False
+    click.echo(f"lifecycle_email_enabled: {enabled}")
+    counts = ctx.obj.user_message_repository.status_counts()
+    for message in service.sequence:
+        per_status = {status: n for (key, status), n in counts.items() if key == message.key}
+        summary = ", ".join(f"{status}={n}" for status, n in sorted(per_status.items())) or "none yet"
+        click.echo(
+            f"  {message.key:<20} day {message.send_after.total_seconds() / 86400:g}"
+            f"–{message.expires_after.total_seconds() / 86400:g}  {summary}"
+        )
+
+
+@lifecycle_group.command("plan")
+@click.option("--json", "json_output", is_flag=True, help="One JSON object per candidate.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_plan(ctx, json_output):
+    """Dry run: what the next tick would queue for each candidate, and why. Writes nothing."""
+    service, _ = _lifecycle_service(ctx)
+    now = datetime.now(timezone.utc)
+    rows = list(service.candidates(now))
+    if not rows and not json_output:
+        click.echo("No candidates: no recent signups with Product tips by email on.")
+    for facts in rows:
+        message, reason = service.next_message(facts, now)
+        entry = {
+            "user_id": facts.user_id,
+            "email": facts.email,
+            "signed_up": facts.created_at.isoformat(),
+            "would_queue": message.key if message else None,
+            "reason": reason,
+            "already": sorted(facts.message_keys),
+        }
+        if json_output:
+            click.echo(json.dumps(entry))
+        else:
+            click.echo(f"{facts.email:<40} {entry['would_queue'] or '-':<20} {reason}")
+
+
+@lifecycle_group.command("preview")
+@click.argument("message_key")
+@click.option("--user", "user_email", help="Render with this user's real facts (tips must be on).")
+@click.option("--follows", type=int, default=0, show_default=True, help="Sample reader: shows followed.")
+@click.option("--connected", is_flag=True, help="Sample reader: Claude connector already connected.")
+@click.option("--out", "out_dir", type=click.Path(file_okay=False), help="Write <key>.html and <key>.txt here.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_preview(ctx, message_key, user_email, follows, connected, out_dir):
+    """Render one message (subject + text; HTML with --out). Sends nothing."""
+    service, renderer = _lifecycle_service(ctx)
+    try:
+        message = service.message(message_key)
+    except KeyError:
+        raise click.ClickException(
+            f"Unknown message {message_key!r}; known: {', '.join(m.key for m in service.sequence)}"
+        )
+    facts = _lifecycle_facts(ctx, service, user_email, follows, connected)
+    if not message.applies(facts):
+        click.echo(f"note: {message_key} does not apply to this reader; it would be skipped.", err=True)
+    email = renderer.render(message, facts)
+    click.echo(f"Subject: {email.subject}\n")
+    click.echo(email.text)
+    if out_dir:
+        out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{message_key}.html").write_text(email.html, encoding="utf-8")
+        (out / f"{message_key}.txt").write_text(email.text, encoding="utf-8")
+        click.echo(f"Wrote {out / (message_key + '.html')}", err=True)
+
+
+@lifecycle_group.command("send-test")
+@click.argument("message_key")
+@click.option("--to", "to_address", required=True, help="Where to send the test (yours). Not recorded in the ledger.")
+@click.option("--user", "user_email", help="Render with this user's real facts (tips must be on).")
+@click.option("--follows", type=int, default=0, show_default=True, help="Sample reader: shows followed.")
+@click.option("--connected", is_flag=True, help="Sample reader: Claude connector already connected.")
+@click.pass_context
+@require_config
+@log_command
+def lifecycle_send_test(ctx, message_key, to_address, user_email, follows, connected):
+    """Send one rendered message to --to through the configured provider."""
+    from .services.email_sender import make_email_sender
+
+    sender = make_email_sender(ctx.obj.config)
+    if sender is None:
+        raise click.ClickException("No email provider configured (EMAIL_PROVIDER=none)")
+    service, renderer = _lifecycle_service(ctx, sender)
+    try:
+        message = service.message(message_key)
+    except KeyError:
+        raise click.ClickException(
+            f"Unknown message {message_key!r}; known: {', '.join(m.key for m in service.sequence)}"
+        )
+    email = renderer.render(message, _lifecycle_facts(ctx, service, user_email, follows, connected))
+    sender.send(
+        to=to_address, subject=f"[test] {email.subject}", html=email.html, text=email.text, headers=email.headers
+    )
+    click.echo(f"✓ Sent {message_key} to {to_address}")
+
+
 @main.group("alerts")
 def alerts_group():
     """Operator alerts and the daily digest (spec #104)."""
@@ -6028,23 +6509,9 @@ def mention_drop(ctx, mention_id, reason, scope_episode):
     """Soft-delete a mention. Stores a ``mention_overrides`` row so the
     drop survives a future reindex.
     """
-    repo = ctx.obj.entity_repository
-    mention = repo.get_mention(mention_id)
-    if mention is None:
-        click.echo(f"❌ No mention with id={mention_id}", err=True)
-        ctx.exit(1)
-    repo.add_override(
-        surface_form=mention.surface_form,
-        episode_id=mention.episode_id if scope_episode else None,
-        kind="drop",
-        reason=reason,
-    )
-    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
-    repo.resolve_mention(
-        mention_id=mention_id,
-        entity_id=None,
-        status="dropped",
-        method="override",
+    mention = _curate(
+        ctx,
+        lambda svc, actor: svc.drop_mention(mention_id, actor=actor, reason=reason, scope_episode=scope_episode),
     )
     click.echo(f"✓ Dropped mention id={mention_id} (surface={mention.surface_form!r})")
 
@@ -6061,28 +6528,11 @@ def mention_drop(ctx, mention_id, reason, scope_episode):
 @log_command
 def mention_repoint(ctx, mention_id, entity_id, reason, scope_global):
     """Override a mention's resolution to point at a specific entity."""
-    repo = ctx.obj.entity_repository
-    mention = repo.get_mention(mention_id)
-    if mention is None:
-        click.echo(f"❌ No mention with id={mention_id}", err=True)
-        ctx.exit(1)
-    target = repo.get_entity(entity_id)
-    if target is None:
-        click.echo(f"❌ No entity with id={entity_id}", err=True)
-        ctx.exit(1)
-    repo.add_override(
-        surface_form=mention.surface_form,
-        episode_id=None if scope_global else mention.episode_id,
-        kind="force_entity",
-        entity_id=entity_id,
-        reason=reason,
-    )
-    invalidate_link_decisions(ctx.obj.link_decision_repository, mention.surface_form)
-    repo.resolve_mention(
-        mention_id=mention_id,
-        entity_id=entity_id,
-        status="resolved",
-        method="override",
+    mention, target = _curate(
+        ctx,
+        lambda svc, actor: svc.repoint_mention(
+            mention_id, entity_id, actor=actor, reason=reason, scope_global=scope_global
+        ),
     )
     click.echo(
         f"✓ Repointed mention id={mention_id} ({mention.surface_form!r}) " f"→ {entity_id} ({target.canonical_name})"
@@ -6139,16 +6589,9 @@ def entity_alias_add(ctx, entity_id, alias):
     etc.) and by the anchor expander (so e.g. "Karpathy" maps to
     person:andrej-karpathy when he's on the show).
     """
-    repo = ctx.obj.entity_repository
-    entity = repo.get_entity(entity_id)
-    if entity is None:
-        click.echo(f"❌ No entity with id={entity_id}", err=True)
-        ctx.exit(1)
-    if alias in entity.aliases:
-        click.echo(f"(alias already present)")
+    if not _curate(ctx, lambda svc, actor: svc.add_alias(entity_id, alias, actor=actor)):
+        click.echo("(alias already present)")
         return
-    entity.aliases = sorted(set(entity.aliases) | {alias})
-    repo.upsert_entity(entity)
     click.echo(f"✓ {entity_id}: aliases += {alias!r}")
 
 
@@ -6645,6 +7088,19 @@ def _grade_one(repo, question: dict, limit: int) -> dict:
     }
 
 
+def _lazy_entity_path(entity_repository):
+    """``api_entities.entity_page_path`` for the analytics report (spec
+    #115), imported on first use so the CLI doesn't load the web routes
+    at startup."""
+
+    def resolve(entity_id: str):
+        from .web.routes.api_entities import entity_page_path
+
+        return entity_page_path(entity_repository, entity_id)
+
+    return resolve
+
+
 def _pct_cell(numerator: int, denominator: int, pct, width: int = 0) -> str:
     """``42.0% (21/50)`` right-aligned to ``width``, dimmed when the group is
     too small to read into. Pads before styling: ANSI codes would otherwise
@@ -6706,6 +7162,23 @@ def _render_content(content: ContentReport, top: int = 10) -> None:
         click.echo(click.style(f"Note: {note}", dim=True))
 
 
+def _render_traffic(traffic: TrafficReport, top: int = 10) -> None:
+    """Spec #115: signed-out public views, per kind, and the top pages."""
+    click.echo(f"\nPublic traffic: {traffic.total} views (previous window {traffic.total_previous})")
+    click.echo("  " + "  ".join(f"{kind} {n}" for kind, n in traffic.by_kind.items()))
+    days = "  ".join(f"{d.day:%m-%d} {d.total}" for d in traffic.days[-14:])
+    click.echo(click.style(f"  per day: {days}", dim=True))
+    if not traffic.top_pages:
+        click.echo("  No public views in this window.")
+    for page in traffic.top_pages[:top]:
+        label = page.title or f"(gone) {page.kind} {page.object_id}"
+        if page.parent_title:
+            label = f"{page.parent_title} — {label}"
+        click.echo(f"  {page.views:>6} ({page.views_previous:>5} before)  {page.kind:<8} {_fit(label, 60)}")
+    for note in traffic.notes:
+        click.echo(click.style(f"Note: {note}", dim=True))
+
+
 def _render_scorecard(scorecard) -> None:
     """The spec #111 Scorecard: each metric's newest graded week, then the
     last weeks oldest first, then the guardrails."""
@@ -6764,6 +7237,7 @@ def _render_analytics(report) -> None:
     click.echo(f"  Follows: {e.follows}")
 
     _render_content(report.content)
+    _render_traffic(report.traffic)
 
     click.echo("")
     for note in report.notes:

@@ -58,9 +58,7 @@ class TestBodySizeCap:
     def test_route_specific_limit_wins(self):
         """Webhook cap is tighter than the default; a 10-byte webhook body
         over the webhook cap must 413 even if it fits the default."""
-        client = TestClient(
-            _make_app(default_limit=10_000, route_limits=[("/webhook/", 50)])
-        )
+        client = TestClient(_make_app(default_limit=10_000, route_limits=[("/webhook/", 50)]))
         resp = client.post("/webhook/x", data=b"x" * 200)
         assert resp.status_code == 413
         # Same body on /any (no prefix match) goes through under default.
@@ -83,3 +81,35 @@ class TestBodySizeCap:
         # so this path is exercised only if a raw client sends it.
         # Either the middleware rejects with 400 or httpx silently fixes it.
         assert resp.status_code in (200, 400)
+
+
+def test_suffix_limit_caps_a_route_whose_variable_part_comes_first():
+    """Spec #116 — ``…/episodes/{slug}/drift-outcome`` cannot be named by a prefix."""
+    app = FastAPI()
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        default_limit=1000,
+        route_limits=[("/api/", 500)],
+        suffix_limits=[("/drift-outcome", 50)],
+    )
+
+    @app.post("/api/podcasts/{podcast}/episodes/{episode}/drift-outcome")
+    async def report(podcast: str, episode: str):
+        return {"ok": True}
+
+    @app.post("/api/other")
+    async def other():
+        return {"ok": True}
+
+    client = TestClient(app)
+    url = "/api/podcasts/show/episodes/ep/drift-outcome"
+
+    assert client.post(url, content=b"x" * 50).status_code == 200
+    # The suffix cap wins over the looser prefix cap.
+    assert client.post(url, content=b"x" * 51).status_code == 413
+    assert client.post(url + "/", content=b"x" * 51, follow_redirects=False).status_code == 413
+    # A route capped by suffix must declare its length.
+    assert client.post(url, content=iter([b"x" * 10])).status_code == 411
+    # Other routes are untouched: prefix cap, and chunked bodies still pass.
+    assert client.post("/api/other", content=b"x" * 51).status_code == 200
+    assert client.post("/api/other", content=iter([b"x" * 10])).status_code == 200

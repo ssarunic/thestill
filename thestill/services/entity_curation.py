@@ -27,12 +27,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 from structlog import get_logger
 
+from ..core.entity_alias_hygiene import is_alias_of, lookup_key
 from ..core.entity_linking.cache import invalidate_link_decisions
 from ..core.entity_linking.shared import _build_entity_id
+from ..core.entity_review import CorrectionResult, apply_correction
 from ..models.entities import EntityRecord, EntityType
 from ..repositories.entity_repository import EntityRepository
 from .abuse.actor import Actor
@@ -53,6 +55,21 @@ class MergeResult:
     loser_id: str
     #: Rows moved per reference kind (``mentions``, ``overrides``, ``hosts``, ...).
     moved: Dict[str, int]
+    #: The loser's name, kept as an alias of the keeper. ``None`` when the
+    #: keeper already answers to it, the caller asked to keep nothing, or
+    #: the name was refused (``alias_skipped``).
+    alias_added: Optional[str] = None
+    #: The loser's name when it was not kept because it does not resemble
+    #: the keeper's ("Ye" for "Kanye West"). ``clean-aliases`` takes such an
+    #: alias for pollution: it would strip it and unlink every mention the
+    #: merge just moved. Vouch for it by hand: ``entity-alias-add`` plus a
+    #: line in the alias allowlist.
+    alias_skipped: Optional[str] = None
+    #: The loser's own aliases, deleted with it. They are not carried over:
+    #: stored aliases can be wrong (``entity_alias_hygiene``) and an alias
+    #: is taken as a name of the keeper by the role linker and the anchors.
+    #: Add the right ones by hand with ``thestill entity-alias-add``.
+    dropped_aliases: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -90,6 +107,15 @@ class SetTypeResult:
 class PruneResult:
     orphans: List[str]
     deleted: int
+    applied: bool
+
+
+@dataclass(frozen=True)
+class RedirectBackfillResult:
+    #: ``(loser, keeper)`` in merge order, for merges whose loser is still gone.
+    redirects: List[Tuple[str, str]]
+    #: Merges skipped because the loser id exists again (a live row wins).
+    recreated: List[str]
     applied: bool
 
 
@@ -136,22 +162,46 @@ class EntityCurationService:
                 "qid_taken", f"{qid} already belongs to {holder.id}. Merge the two entities instead."
             )
 
-    def _delete_if_unreferenced(self, entity_ids: Sequence[str]) -> List[str]:
+    def _delete_if_unreferenced(self, entity_ids: Sequence[str], *, redirect_to: Optional[str] = None) -> List[str]:
+        """Delete each id nothing refers to. ``redirect_to`` is where its
+        mentions went, so its public URL answers 301 there."""
         deleted = []
         for entity_id in entity_ids:
-            if not self._repo.is_entity_referenced(entity_id) and self._repo.delete_entity(entity_id):
+            if not self._repo.is_entity_referenced(entity_id) and self._repo.delete_entity(
+                entity_id, redirect_to=redirect_to
+            ):
                 deleted.append(entity_id)
         return deleted
 
     # -- operations ------------------------------------------------------
 
     def merge(
-        self, keeper_id: str, loser_id: str, *, actor: Actor, reason: Optional[str] = None, dry_run: bool = False
+        self,
+        keeper_id: str,
+        loser_id: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        dry_run: bool = False,
+        keep_name: bool = True,
     ) -> MergeResult:
         """Move everything that refers to ``loser_id`` onto ``keeper_id`` (two
         rows for one thing), then delete the loser. Both must have the same
         type; move mentions or split when they are different things.
-        ``dry_run`` checks the rules and writes nothing."""
+        ``dry_run`` checks the rules and writes nothing.
+
+        The loser's name stays as an alias of the keeper: two rows for one
+        thing means two names for it, and whatever wrote the loser's name
+        will write it again. Without the alias the next ``backfill-roles``
+        finds nobody by that name and creates the loser afresh (a show's
+        host under a misheard spelling came back this way, and the real host
+        became a guest of every episode). Only a name that resembles the
+        keeper's is kept (``is_alias_of``: related, or the same name up to
+        accents): any other is what ``clean-aliases`` removes, together with
+        the mentions under it, so it is reported in ``alias_skipped`` for a
+        human to vouch for. ``keep_name=False`` is for a loser whose name is
+        not a name of the thing at all.
+        """
         if keeper_id == loser_id:
             raise AdminActionError("same_entity", "Keeper and loser are the same entity.")
         keeper = self._repo.get_entity(keeper_id)
@@ -164,12 +214,36 @@ class EntityCurationService:
             raise AdminActionError(
                 "type_mismatch", f"Cannot merge across types: {keeper.type.value} ≠ {loser.type.value}."
             )
+        keeper_names = {lookup_key(name) for name in (keeper.canonical_name, *keeper.aliases)}
+        alias = loser.canonical_name.strip()
+        alias_added = alias_skipped = None
+        if keep_name and alias and lookup_key(alias) not in keeper_names:
+            if is_alias_of(alias, keeper.canonical_name):
+                alias_added = alias
+            else:
+                alias_skipped = alias
+        dropped = sorted(a for a in loser.aliases if lookup_key(a) not in keeper_names | {lookup_key(alias)})
         if dry_run:
-            return MergeResult(keeper.id, loser.id, {})
+            return MergeResult(keeper.id, loser.id, {}, alias_added, alias_skipped, dropped)
         moved = self._repo.repoint_entity_references(from_entity_id=loser.id, to_entity_id=keeper.id)
-        self._repo.delete_entity(loser.id)
-        self._audit.record(actor, "entity.merge", keeper=keeper.id, loser=loser.id, moved=moved, reason=reason)
-        return MergeResult(keeper.id, loser.id, moved)
+        if alias_added:
+            # After the references, so a failed repoint leaves name lookups
+            # as they were; ``upsert_entity`` unions the alias in.
+            self._repo.upsert_entity(keeper.model_copy(update={"aliases": [*keeper.aliases, alias_added]}))
+        # The loser's public URL answers 301 to the keeper's from now on.
+        self._repo.delete_entity(loser.id, redirect_to=keeper.id)
+        self._audit.record(
+            actor,
+            "entity.merge",
+            keeper=keeper.id,
+            loser=loser.id,
+            moved=moved,
+            alias_added=alias_added,
+            alias_skipped=alias_skipped,
+            dropped_aliases=dropped,
+            reason=reason,
+        )
+        return MergeResult(keeper.id, loser.id, moved, alias_added, alias_skipped, dropped)
 
     def move_mentions(
         self,
@@ -191,7 +265,7 @@ class EntityCurationService:
         self._get(from_entity_id)
         self._get(to_entity_id)
         moved = self._repo.move_mentions(mention_ids, from_entity_ids=[from_entity_id], to_entity_id=to_entity_id)
-        deleted = self._delete_if_unreferenced([from_entity_id]) if delete_emptied else []
+        deleted = self._delete_if_unreferenced([from_entity_id], redirect_to=to_entity_id) if delete_emptied else []
         self._audit.record(
             actor,
             "entity.move_mentions",
@@ -235,7 +309,7 @@ class EntityCurationService:
             moved = self._repo.repoint_entity_references(from_entity_id=source.id, to_entity_id=new_id)["mentions"]
         else:
             moved = self._repo.move_mentions(mention_ids, from_entity_ids=[source.id], to_entity_id=new_id)
-        deleted = self._delete_if_unreferenced([source.id]) if delete_emptied else []
+        deleted = self._delete_if_unreferenced([source.id], redirect_to=new_id) if delete_emptied else []
         self._audit.record(
             actor,
             "entity.split",
@@ -316,3 +390,186 @@ class EntityCurationService:
         deleted = self._repo.delete_orphan_entities(orphans)
         self._audit.record(actor, "entity.prune_orphans", listed=len(orphans), deleted=deleted)
         return PruneResult(orphans, deleted, applied=True)
+
+    def backfill_merge_redirects(self, *, actor: Actor, apply: bool = False) -> RedirectBackfillResult:
+        """Redirects for merges made before ``entity_redirects`` existed,
+        read from the ``entity.merge`` audit entries, oldest first so a
+        chain (A into B, later B into C) ends at C. A merge whose loser id
+        exists again is skipped: a live row wins over a redirect. Only
+        audited merges can be recovered; the older QID and fuzzy dedupes
+        wrote no audit row. Reports by default; ``apply`` writes."""
+        entries = []
+        page = 500
+        while True:
+            batch = self._audit.entries(action="entity.merge", limit=page, offset=len(entries))
+            entries.extend(batch)
+            if len(batch) < page:
+                break
+        redirects: List[Tuple[str, str]] = []
+        recreated: List[str] = []
+        for entry in sorted(entries, key=lambda e: (e.created_at, e.id or 0)):
+            keeper, loser = entry.details.get("keeper"), entry.details.get("loser")
+            if not keeper or not loser:
+                continue
+            if self._repo.get_entity(str(loser)) is not None:
+                recreated.append(str(loser))
+                continue
+            redirects.append((str(loser), str(keeper)))
+        if not apply:
+            return RedirectBackfillResult(redirects, recreated, applied=False)
+        for loser, keeper in redirects:
+            self._repo.record_entity_redirect(loser, keeper)
+        self._audit.record(actor, "entity.backfill_redirects", recorded=len(redirects), skipped=len(recreated))
+        return RedirectBackfillResult(redirects, recreated, applied=True)
+
+    # -- per-item curation (the CLI ``mention`` / ``podcast`` / ``episode``
+    # commands and the admin correction endpoint). Each write is audited
+    # here, so no entry point can skip it.
+
+    def _mention(self, mention_id: int):
+        mention = self._repo.get_mention(mention_id)
+        if mention is None:
+            raise AdminActionError("not_found", f"No mention {mention_id}.")
+        return mention
+
+    def _require_entities(self, entity_ids: Sequence[str]) -> List[str]:
+        ids = list(entity_ids)
+        missing = [eid for eid in ids if self._repo.get_entity(eid) is None]
+        if missing:
+            raise AdminActionError("not_found", f"Unknown entity ids: {', '.join(missing)}.")
+        return ids
+
+    def drop_mention(self, mention_id: int, *, actor: Actor, reason: Optional[str] = None, scope_episode: bool = False):
+        """Soft-delete a mention and store a ``drop`` override so a reindex
+        keeps it dropped. The override is global by surface form unless
+        ``scope_episode``."""
+        mention = self._mention(mention_id)
+        self._repo.add_override(
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id if scope_episode else None,
+            kind="drop",
+            reason=reason,
+        )
+        invalidate_link_decisions(self._link_decisions, mention.surface_form)
+        self._repo.resolve_mention(mention_id=mention_id, entity_id=None, status="dropped", method="override")
+        self._audit.record(
+            actor,
+            "mention.drop",
+            mention_id=mention_id,
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id,
+            scope="episode" if scope_episode else "global",
+            reason=reason,
+        )
+        return mention
+
+    def repoint_mention(
+        self,
+        mention_id: int,
+        entity_id: str,
+        *,
+        actor: Actor,
+        reason: Optional[str] = None,
+        scope_global: bool = False,
+    ):
+        """Force a mention to resolve to ``entity_id`` and store a
+        ``force_entity`` override (per episode unless ``scope_global``).
+
+        Returns ``(mention, target_entity)``."""
+        mention = self._mention(mention_id)
+        target = self._get(entity_id)
+        self._repo.add_override(
+            surface_form=mention.surface_form,
+            episode_id=None if scope_global else mention.episode_id,
+            kind="force_entity",
+            entity_id=entity_id,
+            reason=reason,
+        )
+        invalidate_link_decisions(self._link_decisions, mention.surface_form)
+        self._repo.resolve_mention(mention_id=mention_id, entity_id=entity_id, status="resolved", method="override")
+        self._audit.record(
+            actor,
+            "mention.repoint",
+            mention_id=mention_id,
+            surface_form=mention.surface_form,
+            episode_id=mention.episode_id,
+            from_entity_id=mention.entity_id,
+            to_entity_id=entity_id,
+            scope="global" if scope_global else "episode",
+            reason=reason,
+        )
+        return mention, target
+
+    def add_alias(self, entity_id: str, alias: str, *, actor: Actor) -> bool:
+        """Add ``alias`` to the entity's aliases. Returns False (and audits
+        nothing) when it is already there."""
+        entity = self._get(entity_id)
+        alias = alias.strip()
+        if not alias:
+            raise AdminActionError("no_surface", "Give the alias to add.")
+        if alias in entity.aliases:
+            return False
+        entity.aliases = sorted(set(entity.aliases) | {alias})
+        self._repo.upsert_entity(entity)
+        self._audit.record(actor, "entity.alias_add", entity_id=entity_id, alias=alias)
+        return True
+
+    def set_visibility(
+        self, entity_id: str, *, public: bool, actor: Actor, reason: Optional[str] = None
+    ) -> EntityRecord:
+        """Show or hide the entity's public page (spec #94 takedown switch)."""
+        entity = self._get(entity_id)
+        self._repo.set_entity_public_hidden(entity.id, not public)
+        self._audit.record(actor, "entity.set_visibility", entity_id=entity.id, public=public, reason=reason)
+        return entity
+
+    def pin_hosts(self, podcast_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin a podcast's canonical hosts (the extractor's anchor pass)."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_podcast_anchors(podcast_id).get("hosts", [])
+        self._repo.set_podcast_hosts(podcast_id, ids)
+        self._audit.record(actor, "podcast.set_hosts", podcast_id=podcast_id, old=old, new=ids)
+        return ids
+
+    def pin_recurring(self, podcast_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin a podcast's recurring voices (regular co-hosts)."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_podcast_anchors(podcast_id).get("recurring", [])
+        self._repo.set_podcast_recurring(podcast_id, ids)
+        self._audit.record(actor, "podcast.set_recurring", podcast_id=podcast_id, old=old, new=ids)
+        return ids
+
+    def pin_guests(self, episode_id: str, entity_ids: Sequence[str], *, actor: Actor) -> List[str]:
+        """Pin an episode's guests."""
+        ids = self._require_entities(entity_ids)
+        old = self._repo.get_episode_guests(episode_id)
+        self._repo.set_episode_guests(episode_id, ids)
+        self._audit.record(actor, "episode.set_guests", episode_id=episode_id, old=old, new=ids)
+        return ids
+
+    def correct(self, *, actor: Actor, queue_manager, wikidata_client=None, **correction) -> CorrectionResult:
+        """Apply an admin correction (blacklist / override) and queue the
+        re-resolution (``core.entity_review.apply_correction``), audited.
+
+        ``CorrectionError`` and ``EnrichmentUnavailable`` propagate; nothing
+        is audited when the correction is refused."""
+        result = apply_correction(
+            repo=self._repo,
+            queue_manager=queue_manager,
+            wikidata_client=wikidata_client,
+            link_decisions=self._link_decisions,
+            **correction,
+        )
+        self._audit.record(
+            actor,
+            "entity.correction",
+            correction=result.action,
+            surface_form=result.surface_form,
+            episode_id=correction.get("episode_id"),
+            wrong_qid=correction.get("wrong_qid"),
+            target_entity_id=result.target_entity_id,
+            created_entity_id=result.created_entity_id,
+            affected_mentions=result.affected_mentions,
+            reason=correction.get("reason"),
+        )
+        return result

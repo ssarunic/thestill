@@ -88,7 +88,7 @@ def test_key_file_is_served_only_when_configured(app_config, app_state, static_d
     assert TestClient(app).get(f"/{KEY}.txt").text != KEY
 
 
-def test_a_newly_published_episode_is_pinged_with_its_show(app_config, app_state, monkeypatch):  # noqa: F811
+def test_an_episode_with_its_entities_in_is_pinged_with_its_show(app_config, app_state, monkeypatch):  # noqa: F811
     from thestill.core import task_handlers
 
     _seed(app_state)
@@ -100,6 +100,12 @@ def test_a_newly_published_episode_is_pinged_with_its_show(app_config, app_state
     assert sent == [["/podcasts/public-show/episodes/summarised", "/podcasts/public-show"]]
     # No public page (an N/A summary stores an empty preview): no ping.
     task_handlers._ping_indexnow_on_publish(app_state, podcast, "00000000-0000-0000-0000-000000000003")
+    assert len(sent) == 1
+    # Entities not in yet: the page is noindex, so no ping.
+    app_state.repository.update_entity_extraction_status(
+        episode_id="00000000-0000-0000-0000-000000000001", status="pending"
+    )
+    task_handlers._ping_indexnow_on_publish(app_state, podcast, "00000000-0000-0000-0000-000000000001")
     assert len(sent) == 1
 
 

@@ -27,15 +27,24 @@ from thestill.models.entities import EntityRecord, EntityType
 class _ScanRepo:
     """Repo stub exposing the two read-only scans the queue consumes."""
 
-    def __init__(self, rows: List[dict], collisions: Optional[List[dict]] = None):
+    def __init__(
+        self,
+        rows: List[dict],
+        collisions: Optional[List[dict]] = None,
+        persons: Optional[List[EntityRecord]] = None,
+    ):
         self._rows = rows
         self._collisions = collisions or []
+        self._persons = persons or []
 
     def fetch_resolution_review_rows(self) -> List[dict]:
         return self._rows
 
     def find_name_collisions(self) -> List[dict]:
         return self._collisions
+
+    def list_entities_by_type(self, entity_type: str) -> List[EntityRecord]:
+        return [p for p in self._persons if p.type.value == entity_type]
 
 
 def _row(entity_id, type_, canonical, qid, surface, count, p31=()):
@@ -159,6 +168,39 @@ class TestScan:
             _row(f"company:c{i}", "company", f"Thing {i} institute", f"Q{i}", f"Thing {i}", i + 1) for i in range(10)
         ]
         assert len(scan_entities_for_review(_ScanRepo(rows), limit=3)) == 3
+
+    def test_a_titled_row_beside_its_untitled_twin_is_flagged(self):
+        keeper = EntityRecord(
+            id="person:mariam-jamal-hanjani",
+            type=EntityType.PERSON,
+            canonical_name="Mariam Jamal-Hanjani",
+            wikidata_qid="Q117258018",
+            aliases=["Mariam"],
+        )
+        titled = EntityRecord(
+            id="person:professor-mariam-jamal-hanjani",
+            type=EntityType.PERSON,
+            canonical_name="Professor Mariam Jamal-Hanjani",
+        )
+        rows = [_row(keeper.id, "person", keeper.canonical_name, "Q117258018", "Mariam", 9, ["Q5"])]
+        flags = scan_entities_for_review(_ScanRepo(rows, persons=[keeper, titled]))
+        assert [f.entity_id for f in flags] == [titled.id]
+        flag = flags[0]
+        assert flag.kinds == ["titled_duplicate"]
+        assert flag.evidence["titled_duplicate"]["untitled_name"] == "Mariam Jamal-Hanjani"
+        assert [o["entity_id"] for o in flag.evidence["titled_duplicate"]["others"]] == [keeper.id]
+        assert flag.score == pytest.approx(10.0)
+
+    def test_a_titled_row_whose_untitled_name_is_its_own_alias_is_not_flagged(self):
+        own = EntityRecord(
+            id="person:dr-jane-doe",
+            type=EntityType.PERSON,
+            canonical_name="Dr. Jane Doe",
+            aliases=["Jane Doe"],
+        )
+        stage_name = EntityRecord(id="person:dr-dre", type=EntityType.PERSON, canonical_name="Dr. Dre")
+        dre = EntityRecord(id="person:dre", type=EntityType.PERSON, canonical_name="Dre")
+        assert scan_entities_for_review(_ScanRepo([], persons=[own, stage_name, dre])) == []
 
 
 # ----------------------------------------------------------------------

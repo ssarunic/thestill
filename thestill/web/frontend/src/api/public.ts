@@ -3,6 +3,7 @@
 // response from an allowlist: no pipeline state, feed URLs or per-user flags.
 
 export type PublicEntityType = 'person' | 'company' | 'product' | 'topic'
+export type PublicSpeakerRole = 'guest' | 'host' | 'recurring'
 
 interface PublicEntityRef {
   name: string
@@ -138,7 +139,9 @@ export interface PublicEpisodeQuotes {
   linked: PublicQuote | null
   /** Everyone quoted in the episode, most quotes first (ignores the filter). */
   speakers: { name: string; slug: string; quotes: number }[]
-  mentioned: (PublicEntityRef & { count: number })[]
+  // ``role`` is set on the people who take part in the episode; absent in
+  // a response cached from before the field existed.
+  mentioned: (PublicEntityRef & { count: number; role?: PublicSpeakerRole | null })[]
 }
 
 export interface PublicTopChart {

@@ -81,7 +81,9 @@ describe('EpisodeReaderOverlay (spec #52)', () => {
   it('insets above the mini player instead of covering it (spec #71)', () => {
     renderOverlay()
     const overlay = screen.getByTestId('reader-overlay')
-    expect(overlay).toHaveStyle({ bottom: 'var(--player-h, 0px)' })
+    // The authored value, not the computed one: jsdom 31 resolves var() in
+    // computed styles (to 0px here, where no player sets the property).
+    expect(overlay.style.bottom).toBe('var(--player-h, 0px)')
     expect(overlay).toHaveClass('z-[45]')
     expect(overlay).not.toHaveClass('inset-0')
   })

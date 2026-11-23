@@ -34,7 +34,7 @@ export default function CollapsedEpisodeBar({ state, className = '' }: Collapsed
         size="iconSm"
         variant="primary"
         icon={isPlaying ? <PauseIcon /> : <PlayIcon />}
-        isLoading={isLoading && !isPlaying}
+        busy={isLoading}
         onClick={onTogglePlay}
         aria-label={isPlaying ? 'Pause' : 'Play'}
       >

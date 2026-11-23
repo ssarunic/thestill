@@ -47,9 +47,11 @@ from .podcast_follower_repository import PodcastFollowerRepository
 from .public_page_view_repository import PublicPageViewRepository
 from .settings_repository import SettingsRepository
 from .suspended_follow_repository import SuspendedFollowRepository
+from .sync_track_repository import SyncTrackRepository
 from .transcript_edit_repository import TranscriptEditRepository
 from .usage_event_repository import UsageEventRepository
 from .user_directory_repository import UserDirectoryRepository
+from .user_message_repository import UserMessageRepository
 from .user_repository import UserRepository
 
 if TYPE_CHECKING:
@@ -136,6 +138,8 @@ class RepositoryBundle:
     briefing: BriefingRepository
     briefing_schedule: BriefingScheduleRepository
     briefing_delivery: BriefingDeliveryRepository
+    # Spec #118 — lifecycle message ledger.
+    user_message: UserMessageRepository
     mcp_token: McpTokenRepository
     oauth: OAuthRepository
     listening_progress: ListeningProgressRepository
@@ -151,6 +155,8 @@ class RepositoryBundle:
     public_page_view: PublicPageViewRepository
     # Spec #111: reader-local days with a successful connector call.
     connector_day: ConnectorDayRepository
+    # Spec #116: which sync track file describes each episode's transcript.
+    sync_track: SyncTrackRepository
     # Spec #104: runtime switches, the admin audit log, a banned user's
     # follows moved aside, and the operator's cross-user listing.
     settings: SettingsRepository
@@ -191,9 +197,11 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
         from .postgres_settings_repository import PostgresSettingsRepository
         from .postgres_suspended_follow_repository import PostgresSuspendedFollowRepository
+        from .postgres_sync_track_repository import PostgresSyncTrackRepository
         from .postgres_transcript_edit_repository import PostgresTranscriptEditRepository
         from .postgres_usage_event_repository import PostgresUsageEventRepository
         from .postgres_user_directory_repository import PostgresUserDirectoryRepository
+        from .postgres_user_message_repository import PostgresUserMessageRepository
         from .postgres_user_repository import PostgresUserRepository
 
         return RepositoryBundle(
@@ -205,6 +213,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             briefing=PostgresBriefingRepository(dsn),
             briefing_schedule=PostgresBriefingScheduleRepository(dsn),
             briefing_delivery=PostgresBriefingDeliveryRepository(dsn),
+            user_message=PostgresUserMessageRepository(dsn),
             mcp_token=PostgresMcpTokenRepository(dsn),
             oauth=PostgresOAuthRepository(dsn),
             listening_progress=PostgresListeningProgressRepository(dsn),
@@ -217,6 +226,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             episode_view=PostgresEpisodeViewRepository(dsn),
             public_page_view=PostgresPublicPageViewRepository(dsn),
             connector_day=PostgresConnectorDayRepository(dsn),
+            sync_track=PostgresSyncTrackRepository(dsn),
             settings=PostgresSettingsRepository(dsn),
             audit_log=PostgresAuditLogRepository(dsn),
             suspended_follow=PostgresSuspendedFollowRepository(dsn),
@@ -246,9 +256,11 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
     from .sqlite_settings_repository import SqliteSettingsRepository
     from .sqlite_suspended_follow_repository import SqliteSuspendedFollowRepository
+    from .sqlite_sync_track_repository import SqliteSyncTrackRepository
     from .sqlite_transcript_edit_repository import SqliteTranscriptEditRepository
     from .sqlite_usage_event_repository import SqliteUsageEventRepository
     from .sqlite_user_directory_repository import SqliteUserDirectoryRepository
+    from .sqlite_user_message_repository import SqliteUserMessageRepository
     from .sqlite_user_repository import SqliteUserRepository
 
     return RepositoryBundle(
@@ -260,6 +272,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         briefing=SqliteBriefingRepository(db_path=db_path),
         briefing_schedule=SqliteBriefingScheduleRepository(db_path=db_path),
         briefing_delivery=SqliteBriefingDeliveryRepository(db_path=db_path),
+        user_message=SqliteUserMessageRepository(db_path=db_path),
         mcp_token=SqliteMcpTokenRepository(db_path=db_path),
         oauth=SqliteOAuthRepository(db_path=db_path),
         listening_progress=SqliteListeningProgressRepository(db_path=db_path),
@@ -272,6 +285,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
         public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
         connector_day=SqliteConnectorDayRepository(db_path=db_path),
+        sync_track=SqliteSyncTrackRepository(db_path=db_path),
         settings=SqliteSettingsRepository(db_path=db_path),
         audit_log=SqliteAuditLogRepository(db_path=db_path),
         suspended_follow=SqliteSuspendedFollowRepository(db_path=db_path),

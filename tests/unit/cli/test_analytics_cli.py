@@ -42,7 +42,9 @@ def available(cli_env, monkeypatch):
     monkeypatch.setattr(
         cli_module,
         "AnalyticsService",
-        lambda repository, enabled: AnalyticsService(FakeAnalyticsRepository(), enabled=True, clock=lambda: NOW),
+        lambda repository, enabled, **kwargs: AnalyticsService(
+            FakeAnalyticsRepository(), enabled=True, clock=lambda: NOW
+        ),
     )
 
 
@@ -107,3 +109,20 @@ def test_scorecard_only(available):
         "retention_w4",
         "weekly_return",
     ]
+
+
+def test_text_report_traffic_block(available):
+    """Spec #115: totals, per-kind counts, top pages; a page whose object is
+    gone still shows with its count."""
+    out = CliRunner().invoke(main, ["-q", "analytics"]).output
+    assert "Public traffic: 50 views (previous window 40)" in out
+    assert "episode 30" in out and "entity 9" in out
+    assert "Hard Fork — The AI Episode" in out.split("Public traffic:")[1]
+    assert "(gone) entity person:gone" in out
+    assert "Note: JS-running scrapers" in out
+
+
+def test_json_report_carries_traffic(available):
+    payload = json.loads(CliRunner().invoke(main, ["-q", "analytics", "--json"]).output)
+    assert payload["traffic"]["total"] == 50
+    assert payload["traffic"]["top_pages"][1]["title"] is None

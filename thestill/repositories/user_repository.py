@@ -103,6 +103,11 @@ class UserRepository(ABC):
         Positions and completions stay; the service needs them."""
 
     @abstractmethod
+    def update_product_tips_email(self, user_id: str, enabled: bool) -> bool:
+        """Set the user's "Product tips by email" switch (spec #118).
+        Returns True if a row was updated."""
+
+    @abstractmethod
     def update_region(self, user_id: str, region: Optional[str], locked: bool) -> bool:
         """
         Update the user's region and lock flag.

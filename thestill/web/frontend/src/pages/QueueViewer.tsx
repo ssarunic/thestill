@@ -475,14 +475,10 @@ export default function QueueViewer() {
 
   return (
     <div className="max-w-5xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Task Queue</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Each pipeline stage runs on its own worker pool — slow stages no longer block fast ones.
-          </p>
-        </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Task Queue</h1>
+      <div className="flex items-center justify-end mb-6">
         <div className="flex items-center gap-2">
           <span
             className={`px-3 py-1 rounded-full text-sm font-medium ${

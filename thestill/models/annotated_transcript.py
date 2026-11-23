@@ -148,6 +148,14 @@ class AnnotatedTranscript(BaseModel):
     either we never recorded it (legacy artefacts) or the transcriber
     didn't surface it.
 
+    ``sync_track_generation`` names the sync track (spec #116) that
+    described the raw transcript this was cleaned from. Readers only use a
+    sync track whose generation equals this value, so a cleaned transcript
+    is never corrected with landmarks of some other download of the audio
+    (during a reprocess the old cleaned transcript stays visible while the
+    episode's current track already belongs to the new raw transcript).
+    ``None`` means no track existed when it was cleaned.
+
     ``cleaning`` is the provenance of the LLM cleanup run. ``None`` on
     legacy sidecars written before provenance recording, and on
     ``from_raw`` wrappers (no LLM ever ran).
@@ -158,6 +166,7 @@ class AnnotatedTranscript(BaseModel):
     playback_time_offset_seconds: float = 0.0
     algorithm_version: str = "v1"
     transcript_source_duration_s: Optional[float] = None
+    sync_track_generation: Optional[str] = None
     cleaning: Optional[CleaningProvenance] = None
 
     @classmethod

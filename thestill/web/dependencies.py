@@ -71,12 +71,14 @@ if TYPE_CHECKING:
     from ..services.import_service import ImportService
     from ..services.inbox_service import InboxService
     from ..services.legacy_claim_service import LegacyClaimService
+    from ..services.lifecycle.service import LifecycleEmailService
     from ..services.listening_progress_service import ListeningProgressService
     from ..services.mcp_oauth_service import McpOAuthService
     from ..services.mcp_token_service import McpTokenService
     from ..services.narration import NarrationRunner
     from ..services.platform_link_service import PlatformLinkService
     from ..services.refresh_on_open import RefreshOnOpenService
+    from ..services.sync_track_service import SyncTrackService
     from ..services.transcript_edit_service import TranscriptEditService
     from ..utils.config import Config
     from ..utils.path_manager import PathManager
@@ -141,6 +143,9 @@ class AppState:
     # ``Optional`` only so legacy test fixtures that construct AppState by
     # hand don't have to update yet; production paths always pass a repo.
     pending_ops_repository: "Optional[PendingOperationsRepository]" = None
+    # Spec #116 — sync tracks. ``None`` (hand-built test states) means the
+    # pipeline writes no tracks.
+    sync_track_service: "Optional[SyncTrackService]" = None
     # Spec #48 — background refresh scheduler (set at startup when enabled).
     refresh_scheduler: "Optional[RefreshScheduler]" = None
     # Spec #87 — per-episode platform links; None disables the refresh hook.
@@ -155,6 +160,10 @@ class AppState:
     # capability flag the API/UI key off).
     briefing_delivery_repository: "Optional[BriefingDeliveryRepository]" = None
     briefing_delivery_service: "Optional[BriefingDeliveryService]" = None
+    # Spec #118 — welcome and product-tips emails. ``None`` without an email
+    # sender or in single-user mode (the ``product_tips_email_available``
+    # capability flag keys off it).
+    lifecycle_email_service: "Optional[LifecycleEmailService]" = None
     entity_extractor: "Optional[EntityExtractor]" = None
     # Spec #28 §1.5 — same lazy-init pattern as ``entity_extractor``.
     # ReFinED is several GB on disk + ~4-6GB RAM, so we don't pay the

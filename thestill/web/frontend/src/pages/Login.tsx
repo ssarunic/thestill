@@ -19,7 +19,7 @@ import {
   parseIntent,
   parseSignInFragment,
   rememberPendingFollow,
-  showSlugFromNext,
+  followSlugFromNext,
   type SignInIntent,
 } from '../utils/signIn'
 import '../styles/public.css'
@@ -62,8 +62,16 @@ function parseNotice(raw: string | null, accountDisabled: boolean): Notice | nul
 }
 
 export default function Login() {
-  const { accountDisabled, adminContactEmail, isAnonymous, isAuthenticated, isLoading, isMultiUser, login } =
-    useAuth()
+  const {
+    accountDisabled,
+    adminContactEmail,
+    isAnonymous,
+    isAuthenticated,
+    isLoading,
+    isMultiUser,
+    login,
+    productTipsEmailAvailable,
+  } = useAuth()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const linked = parseSignInFragment(useLocation().hash)
@@ -82,7 +90,7 @@ export default function Login() {
   if (isLoading || !isMultiUser) return null
 
   const start = (provider: Provider) => {
-    const show = intent === 'follow' ? showSlugFromNext(next) : null
+    const show = intent === 'follow' ? followSlugFromNext(next) : null
     if (show) rememberPendingFollow(show)
     if (provider.id === 'google') login(next ?? undefined)
   }
@@ -130,6 +138,14 @@ export default function Login() {
           </Link>
           .
         </p>
+        {/* Spec #118 — the chance to refuse tips email, given where the
+            address is collected (PECR soft opt-in). */}
+        {productTipsEmailAvailable && (
+          <p className="ts-login-consent">
+            New accounts get a welcome email and a few product tips. Turn them off any time in Settings or from any
+            tips email.
+          </p>
+        )}
         {/* With public pages off there is nothing to go back to. */}
         {isAnonymous && (
           <Link to={notNowPath(next)} className="ts-login-back">

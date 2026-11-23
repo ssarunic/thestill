@@ -23,8 +23,9 @@ distinct format guarantees the two can never be confused for one another
 in either direction.
 
 No expiry: a dead unsubscribe link is a CAN-SPAM violation, and the token
-grants exactly one narrow capability (flip ``email_enabled`` off), so a
-long-lived token is the correct trade-off.
+grants exactly one narrow capability (turn one kind of email off: briefing
+``email_enabled``, or spec #118's product tips), so a long-lived token is
+the correct trade-off.
 """
 
 import base64
@@ -33,9 +34,13 @@ import hmac
 import json
 from typing import Optional
 
-# Versioned purpose tag: scopes the signature so this token can never be
-# replayed against any other signed-token surface added later.
-_PURPOSE = "briefing-email-unsubscribe.v1"
+# Versioned purpose tags: each scopes the signature, so a token for one
+# kind of email can never be replayed against another (or any other
+# signed-token surface added later). Already-delivered briefing links carry
+# the original tag, so it never changes.
+BRIEFING_PURPOSE = "briefing-email-unsubscribe.v1"
+#: Spec #118 — the "Product tips by email" switch.
+TIPS_PURPOSE = "product-tips-unsubscribe.v1"
 
 
 def _b64encode(raw: bytes) -> str:
@@ -47,19 +52,20 @@ def _b64decode(encoded: str) -> bytes:
     return base64.urlsafe_b64decode(encoded + padding)
 
 
-def _signature(payload: bytes, secret: str) -> bytes:
-    return hmac.new(secret.encode("utf-8"), _PURPOSE.encode("ascii") + b"." + payload, hashlib.sha256).digest()
+def _signature(payload: bytes, secret: str, purpose: str) -> bytes:
+    return hmac.new(secret.encode("utf-8"), purpose.encode("ascii") + b"." + payload, hashlib.sha256).digest()
 
 
-def make_unsubscribe_token(user_id: str, secret: str) -> str:
-    """Return a signed token identifying ``user_id`` for unsubscribe."""
+def make_unsubscribe_token(user_id: str, secret: str, *, purpose: str = BRIEFING_PURPOSE) -> str:
+    """Return a signed token identifying ``user_id`` for unsubscribing
+    from the kind of email ``purpose`` names."""
     if not secret:
         raise ValueError("A non-empty secret is required to sign unsubscribe tokens")
     payload = json.dumps({"u": user_id}, separators=(",", ":")).encode("utf-8")
-    return f"{_b64encode(payload)}.{_b64encode(_signature(payload, secret))}"
+    return f"{_b64encode(payload)}.{_b64encode(_signature(payload, secret, purpose))}"
 
 
-def verify_unsubscribe_token(token: str, secret: str) -> Optional[str]:
+def verify_unsubscribe_token(token: str, secret: str, *, purpose: str = BRIEFING_PURPOSE) -> Optional[str]:
     """Return the embedded user id, or ``None`` for any invalid token.
 
     All failure modes (malformed, tampered, wrong secret) collapse to
@@ -74,7 +80,7 @@ def verify_unsubscribe_token(token: str, secret: str) -> Optional[str]:
         signature = _b64decode(signature_b64)
     except (ValueError, TypeError):
         return None
-    if not hmac.compare_digest(signature, _signature(payload, secret)):
+    if not hmac.compare_digest(signature, _signature(payload, secret, purpose)):
         return None
     try:
         data = json.loads(payload)

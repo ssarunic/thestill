@@ -25,11 +25,49 @@ Plus five enums (``EntityType``, ``ResolutionStatus``,
 the ``CHECK``-constrained string columns in SQLite.
 """
 
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+_DISAMBIGUATION = re.compile(r"\s*\([^)]*\)$")
+
+
+def display_name(name: Optional[str]) -> str:
+    """``Amazon (company)`` → ``Amazon``: the name without its Wikidata-style
+    disambiguation. The qualifier tells two namesakes apart in the entities
+    table; it is not part of the name anyone says or reads."""
+    return _DISAMBIGUATION.sub("", name or "").strip() or (name or "")
+
+
+# Courtesy and academic titles: said before a name, never part of it.
+# Royal and office titles stay out ("King Charles" is not "Charles", and
+# "President" belongs to the office); entity_coref adds those for its own,
+# narrower purpose of never matching on a title word.
+HONORIFICS = frozenset(
+    {
+        "mr", "mrs", "ms", "mx", "miss", "dr", "doctor", "prof", "professor",
+        "sir", "dame", "lord", "lady", "rev", "reverend",
+    }
+)  # fmt: skip
+
+
+def strip_honorifics(name: Optional[str]) -> str:
+    """``Professor Mariam Jamal-Hanjani`` → ``Mariam Jamal-Hanjani``.
+
+    Leading titles go, with or without a full stop ("Prof. Dr. Jane Doe" →
+    "Jane Doe"), but only while two words of name remain: "Dr. Dre", "Lady
+    Gaga" and "Professor Green" are the whole name, not a title on one. A
+    name with no title comes back exactly as given.
+    """
+    name = name or ""
+    tokens = name.split()
+    stripped = 0
+    while len(tokens) - stripped > 2 and tokens[stripped].rstrip(".").casefold() in HONORIFICS:
+        stripped += 1
+    return " ".join(tokens[stripped:]) if stripped else name
 
 
 class EntityType(str, Enum):

@@ -21,11 +21,11 @@ of its own; the route caches.
 """
 
 from datetime import datetime, time, timedelta, timezone
-from typing import Callable, Dict, Final, List
+from typing import Callable, Dict, Final, List, Optional
 
 from structlog import get_logger
 
-from ..models.analytics import AnalyticsReport, AnalyticsWindow, ScorecardReport
+from ..models.analytics import AnalyticsReport, AnalyticsWindow, ScorecardReport, TrafficReport
 from ..repositories.analytics_repository import AnalyticsRepository, AnalyticsUnavailableError
 
 logger = get_logger(__name__)
@@ -45,6 +45,9 @@ NOTES: Final[List[str]] = [
 # Rows per ranked content table (spec #103); the CLI prints the first 10.
 CONTENT_LIMIT: Final = 20
 
+# Top public pages in the traffic section (spec #115 D5).
+TRAFFIC_LIMIT: Final = 20
+
 
 class InvalidRangeError(ValueError):
     """Range is not one of ``ALLOWED_RANGES``."""
@@ -63,6 +66,7 @@ class AnalyticsService:
         *,
         enabled: bool,
         clock: Callable[[], datetime] = _utc_now,
+        entity_path: Optional[Callable[[str], Optional[str]]] = None,
     ):
         """
         Args:
@@ -70,10 +74,15 @@ class AnalyticsService:
             enabled: ``config.multi_user``; a single-user install has
                 nobody to measure even on Postgres.
             clock: injectable "now" for deterministic tests.
+            entity_path: entity id → the public path that shows it
+                (``api_entities.entity_page_path``). The repository's path
+                assumes the entity owns its current-type URL; a re-typed
+                entity may not (spec #115). None keeps that path.
         """
         self._repository = repository
         self._enabled = enabled
         self._clock = clock
+        self._entity_path = entity_path
 
     @property
     def available(self) -> bool:
@@ -114,6 +123,7 @@ class AnalyticsService:
             cohorts=self._repository.cohorts(now),
             engagement=self._repository.engagement(window),
             content=self._repository.content(window, self.previous_window(window), limit=CONTENT_LIMIT),
+            traffic=self._resolve_entity_paths(self._repository.traffic(window, limit=TRAFFIC_LIMIT)),
             notes=NOTES,
         )
         logger.info("analytics_report_built", range=range_, signups=report.signups.total)
@@ -127,6 +137,19 @@ class AnalyticsService:
         """
         self._require_available()
         return self._repository.scorecard(self._clock())
+
+    def _resolve_entity_paths(self, traffic: TrafficReport) -> TrafficReport:
+        """Point each listed entity page at the URL that actually shows it."""
+        if self._entity_path is None:
+            return traffic
+        for page in traffic.top_pages:
+            if page.kind != "entity" or page.title is None:
+                continue
+            try:
+                page.path = self._entity_path(page.object_id)
+            except Exception:  # noqa: BLE001 - a link never breaks the report
+                logger.warning("analytics_entity_path_failed", entity_id=page.object_id, exc_info=True)
+        return traffic
 
     def _require_available(self) -> None:
         if not self.available:

@@ -537,6 +537,19 @@ class PodcastRepository(ABC):
         pass
 
     @abstractmethod
+    def follow_started_at(self, podcast_id: str) -> Optional[datetime]:
+        """When the podcast's current run of being followed began, or ``None``
+        if nobody follows it.
+
+        Derived as the earliest ``created_at`` among the CURRENT followers, so
+        it resets after the follower count drops to zero and a new follow
+        arrives, whichever path removed the old follow rows (unfollow, ban,
+        account deletion). The refresh sweep treats episodes published since
+        then as new releases and everything older as back catalog.
+        """
+        pass
+
+    @abstractmethod
     def record_refresh_success(
         self,
         podcast_id: str,

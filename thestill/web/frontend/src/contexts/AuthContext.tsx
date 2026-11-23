@@ -16,6 +16,8 @@ export interface User {
   is_admin: boolean
   // Spec #95 — the Settings switch for usage events.
   usage_analytics_enabled?: boolean
+  // Spec #118 — the Settings switch "Product tips by email".
+  product_tips_email_enabled?: boolean
 }
 
 // Auth status response from /auth/status
@@ -32,6 +34,9 @@ interface AuthStatus {
   // this reader's app initialises with — null when off, opted out or GPC.
   usage_analytics_available?: boolean
   analytics?: { key: string } | null
+  // Spec #118: welcome and product-tips emails can be sent here (shows the
+  // Settings switch and the sign-in page's line about tips).
+  product_tips_email_available?: boolean
   // Spec #104: the session belongs to a suspended or banned account — it
   // reads as signed out, and /login says why (with the operator contact).
   account_disabled?: boolean
@@ -43,7 +48,7 @@ interface AuthStatus {
 }
 
 /** Spec #110 — the named permissions the app knows about. */
-export type Permission = 'transcript.edit'
+export type Permission = 'transcript.edit' | 'drift.align'
 
 interface AuthContextType {
   user: User | null
@@ -60,6 +65,8 @@ interface AuthContextType {
   // Spec #95 — see AuthStatus.
   usageAnalyticsAvailable: boolean
   analyticsKey: string | null
+  // Spec #118 — see AuthStatus.
+  productTipsEmailAvailable: boolean
   // Spec #104 — see AuthStatus.
   accountDisabled: boolean
   adminContactEmail: string | null
@@ -69,6 +76,7 @@ interface AuthContextType {
   refreshAuth: () => Promise<void>
   updateRegion: (region: string | null) => Promise<void>
   updateUsageAnalytics: (enabled: boolean) => Promise<void>
+  updateProductTipsEmail: (enabled: boolean) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -93,6 +101,7 @@ export function AuthProvider({
   const [publicPages, setPublicPages] = useState(anonymous)
   const [usageAnalyticsAvailable, setUsageAnalyticsAvailable] = useState(false)
   const [analyticsKey, setAnalyticsKey] = useState<string | null>(null)
+  const [productTipsEmailAvailable, setProductTipsEmailAvailable] = useState(false)
   const [accountDisabled, setAccountDisabled] = useState(false)
   const [adminContactEmail, setAdminContactEmail] = useState<string | null>(null)
   const [permissions, setPermissions] = useState<string[]>([])
@@ -111,6 +120,7 @@ export function AuthProvider({
       setPublicPages(authStatus.public_pages === true)
       setUsageAnalyticsAvailable(authStatus.usage_analytics_available === true)
       setAnalyticsKey(authStatus.analytics?.key ?? null)
+      setProductTipsEmailAvailable(authStatus.product_tips_email_available === true)
       setAccountDisabled(authStatus.account_disabled === true)
       setAdminContactEmail(authStatus.admin_contact_email ?? null)
       setPermissions(Array.isArray(authStatus.permissions) ? authStatus.permissions : [])
@@ -154,6 +164,12 @@ export function AuthProvider({
       await refreshAuth()
     },
     [patchMe, refreshAuth],
+  )
+
+  // Spec #118 — PATCH returns the updated user, so no status re-read.
+  const updateProductTipsEmail = useCallback(
+    (enabled: boolean) => patchMe({ product_tips_email_enabled: enabled }, 'product tips'),
+    [patchMe],
   )
 
   // Check auth status on mount
@@ -212,6 +228,7 @@ export function AuthProvider({
         emailDeliveryAvailable,
         usageAnalyticsAvailable,
         analyticsKey,
+        productTipsEmailAvailable,
         accountDisabled,
         adminContactEmail,
         login,
@@ -219,6 +236,7 @@ export function AuthProvider({
         refreshAuth,
         updateRegion,
         updateUsageAnalytics,
+        updateProductTipsEmail,
       }}
     >
       {children}

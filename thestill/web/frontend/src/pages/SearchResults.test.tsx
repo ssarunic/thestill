@@ -157,7 +157,7 @@ describe('SearchResults — quote rows play inline (spec #28 §4.2)', () => {
     fireEvent.click(quoteRow)
 
     expect(playMock).not.toHaveBeenCalled()
-    expect(seekMock).toHaveBeenCalledWith(187)
+    expect(seekMock).toHaveBeenCalledWith(187, { transcript: true })
     expect(resumeMock).toHaveBeenCalled()
     expect(navigateMock).not.toHaveBeenCalled()
   })

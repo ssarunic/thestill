@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import anyio
@@ -45,6 +45,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from structlog import get_logger
 
+from ...models.entities import display_name
 from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.analytics_sink import PublicPageView
 from ...services.podcast_service import PodcastWithIndex
@@ -71,7 +72,7 @@ from ..public_access import (
     public_rate_limit,
 )
 from ..responses import api_response, etag_json_response
-from .api_entities import _entity_id_from_path, get_episode_entities, url_candidate_ids, url_owner
+from .api_entities import _entity_id_from_path, entity_page_path, get_episode_entities, url_candidate_ids, url_owner
 from .api_top_podcasts import _MAX_LIMIT as _TOP_MAX_LIMIT
 from .api_top_podcasts import _resolve_region
 
@@ -160,15 +161,6 @@ def _json_list(value: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 # Entity references
 # ---------------------------------------------------------------------------
-
-
-_DISAMBIGUATION = re.compile(r"\s*\([^)]*\)$")
-
-
-def display_name(name: Optional[str]) -> str:
-    """``Amazon (company)`` → ``Amazon``: Wikidata-style disambiguation reads
-    as noise on a page; the type is already shown beside the name."""
-    return _DISAMBIGUATION.sub("", name or "").strip() or (name or "")
 
 
 def entity_slug(entity_id: str) -> str:
@@ -341,11 +333,100 @@ def public_podcast_episodes_payload(
     return _podcast_episodes_cache.get_or_compute((str(row["id"]), limit, offset, visibility.fingerprint()), build)
 
 
-def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+def _episode_people_ids(state: AppState, podcast, episode) -> Tuple[List[str], List[str]]:
+    """``(host_ids, guest_ids)`` for an episode: the show's hosts and
+    recurring voices, and the episode's own people who are neither."""
     anchors = state.entity_repository.get_podcast_anchors(podcast.id)
     host_ids = list(anchors.get("hosts", [])) + list(anchors.get("recurring", []))
-    episode_ids = state.entity_repository.get_episode_anchors(episode.id)
-    guest_ids = [i for i in episode_ids if i not in set(host_ids)]
+    hosts = set(host_ids)
+    guest_ids = [i for i in state.entity_repository.get_episode_anchors(episode.id) if i not in hosts]
+    return host_ids, guest_ids
+
+
+def episode_guest_names(state: AppState, podcast, episode) -> List[str]:
+    """The names of an episode's public guests who are people, in order:
+    what its page lists as guests, without building the page payload (the
+    search title needs them even when the page is shed)."""
+    _, guest_ids = _episode_people_ids(state, podcast, episode)
+    if not guest_ids:
+        return []
+    hidden = get_public_visibility(state).hidden_entity_ids()
+    by_id = {e.id: e for e in state.entity_repository.get_entities_by_ids(list(dict.fromkeys(guest_ids)))}
+    return [
+        display_name(by_id[i].canonical_name)
+        for i in dict.fromkeys(guest_ids)
+        if i in by_id and i not in hidden and _entity_type_str(by_id[i].type) == "person"
+    ]
+
+
+_show_titles_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
+_SHOW_TITLES_PAGE = 500
+
+
+def show_episode_titles(state: AppState, podcast) -> Dict[str, str]:
+    """``{episode_id: search title}`` for every public episode of a show,
+    no two alike (``assign_unique_titles``): a recurring guest or a series
+    would otherwise give several episodes one title. Three reads per show
+    (episodes, hosts, guest names), cached; no page payload is built."""
+    visibility = get_public_visibility(state)
+    return _show_titles_cache.get_or_compute(
+        (str(podcast.id), visibility.fingerprint()), lambda: _build_show_titles(state, visibility, podcast)
+    )
+
+
+def _date_label(moment: Optional[datetime]) -> str:
+    """ "12 Nov 2026": the last resort that tells two episodes apart."""
+    return f"{moment.day} {moment:%b %Y}" if moment else ""
+
+
+def _build_show_titles(state: AppState, visibility: PublicVisibility, podcast) -> Dict[str, str]:
+    from ..search_titles import assign_unique_titles, episode_title_candidates
+
+    rows: List[Dict[str, Any]] = []
+    while True:
+        page, total = state.repository.list_public_episode_rows(
+            podcast_id=str(podcast.id), limit=_SHOW_TITLES_PAGE, offset=len(rows)
+        )
+        rows.extend(page)
+        if not page or len(rows) >= total:
+            break
+    anchors = state.entity_repository.get_podcast_anchors(podcast.id)
+    hosts = set(anchors.get("hosts", [])) | set(anchors.get("recurring", []))
+    guest_ids = {str(r["id"]): [i for i in _json_list(r.get("guest_entity_ids")) if i not in hosts] for r in rows}
+    wanted = list(dict.fromkeys(i for ids in guest_ids.values() for i in ids))
+    hidden = visibility.hidden_entity_ids()
+    people = {
+        e.id: display_name(e.canonical_name)
+        for start in range(0, len(wanted), _SHOW_TITLES_PAGE)
+        for e in state.entity_repository.get_entities_by_ids(wanted[start : start + _SHOW_TITLES_PAGE])
+        if e.id not in hidden and _entity_type_str(e.type) == "person"
+    }
+
+    def when(row: Dict[str, Any]):
+        moment = _parse_date(row.get("pub_date"))
+        return (moment is None, moment or datetime.min.replace(tzinfo=timezone.utc), str(row["id"]))
+
+    ordered = sorted(rows, key=when)
+    return assign_unique_titles(
+        [
+            (
+                str(row["id"]),
+                episode_title_candidates(
+                    row.get("title") or "",
+                    podcast.title,
+                    [people[i] for i in guest_ids[str(row["id"])] if i in people],
+                    description=row.get("description") or "",
+                    language=getattr(podcast, "language", None),
+                ),
+                _date_label(_parse_date(row.get("pub_date"))),
+            )
+            for row in ordered
+        ]
+    )
+
+
+def _build_episode_payload(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+    host_ids, guest_ids = _episode_people_ids(state, podcast, episode)
     refs = _entity_refs(state, visibility, [*host_ids, *guest_ids])
     platform_links = [
         {"platform": link.platform, "url": link.url} for link in state.repository.get_platform_links(episode.id)
@@ -982,6 +1063,36 @@ def stale_entity_path(state: AppState, entity_type: str, slug: str) -> Optional[
     return f"/entities/{current_type}/{slug}"
 
 
+def merged_entity_path(state: AppState, entity_type: str, slug: str) -> Optional[str]:
+    """Where an entity folded into another lives now, when
+    ``entity_type/slug`` names nobody: a merge, a QID dedupe or an
+    id-changing re-type left an ``entity_redirects`` row
+    (``person:dr-sahar-yousef`` → ``person:sahar-yousef`` after the
+    titled-guest merge), so a URL Google indexed answers 301, not 404.
+
+    The URL's own id first; then the same slug under another type prefix
+    (an id minted as one type, re-typed, then merged), but only to a target
+    of the URL's type. ``None`` when no redirect leads to a public page.
+    """
+    if entity_type not in _ENTITY_TYPES:
+        return None
+    try:
+        _check_slug(slug, "Entity")
+    except HTTPException:
+        return None
+    repo = state.entity_repository
+    visibility = get_public_visibility(state)
+    own = f"{entity_type}:{slug}"
+    for candidate in [own, *(cid for cid in url_candidate_ids(slug) if cid != own)]:
+        target = repo.get_entity_redirect(candidate)
+        if not target or not visibility.entity_is_public(target):
+            continue
+        path = entity_page_path(repo, target)
+        if path and (candidate == own or path.startswith(f"/entities/{entity_type}/")):
+            return path
+    return None
+
+
 @router.get("/entities/{entity_type}/{slug}")
 def get_public_entity(
     entity_type: str,
@@ -1061,7 +1172,9 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
     hidden = visibility.hidden_entity_ids()
     # Grouped by type on the page (people, companies, products, topics, as
     # in the signed-in reader), so the cap is per type, in the reader's
-    # order: hosts and guests first, then by mentions.
+    # order: guests and hosts first, then by mentions. ``role`` marks the
+    # people who take part in this episode (``takes_part``), so the page lists them apart from the people
+    # who are only talked about.
     mentioned = []
     per_type: Dict[str, int] = {}
     for row in get_episode_entities(episode.id, min_confidence=0.0, state=state).entities:
@@ -1075,6 +1188,7 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
                 "type": kind,
                 "slug": entity_slug(row.entity.id),
                 "count": row.mention_count,
+                "role": row.speaker_kind if kind == "person" and row.takes_part else None,
             }
         )
     return {"every": [_quote_item(r) for r in rows], "mentioned": mentioned}

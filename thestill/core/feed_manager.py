@@ -622,6 +622,7 @@ class PodcastFeedManager:
         max_episodes_per_podcast: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         podcast_id: Optional[str] = None,
+        dry_run: bool = False,
     ) -> RefreshOutcome:
         """
         Check feeds for new episodes and report batch-level health.
@@ -636,6 +637,9 @@ class PodcastFeedManager:
                               Called with (current_index, total_count, podcast_title).
             podcast_id: Optional podcast ID or RSS URL to filter. If provided, only
                        this podcast's feed will be checked.
+            dry_run: Fetch and report what would be discovered, but persist
+                     nothing: no batch write (episodes, cache headers, URL
+                     re-syncs) and no transcript links.
 
         Returns:
             A :class:`RefreshOutcome` with the (Podcast, List[Episode]) pairs
@@ -782,7 +786,13 @@ class PodcastFeedManager:
         # Single-transaction batch persist (spec #19). Runs even when
         # `new_episode_rows` is empty, because podcasts that saw a 200
         # response still need their refreshed cache headers saved.
-        if (
+        if dry_run:
+            logger.info(
+                "feed_refresh_dry_run_skipped_persist",
+                podcasts=len(changed_podcasts),
+                new_episodes=len(new_episode_rows),
+            )
+        elif (
             changed_podcasts
             or new_episode_rows
             or episode_image_updates
@@ -808,7 +818,7 @@ class PodcastFeedManager:
         # Transcript links rely on the debug RSS file that was written
         # during the fetch; do them after the main batch so a failure
         # here never rolls back the refresh state. Non-critical work.
-        for podcast_tl, eps_tl, src_tl in transcript_link_work:
+        for podcast_tl, eps_tl, src_tl in [] if dry_run else transcript_link_work:
             try:
                 self._save_transcript_links_for_episodes(podcast_tl, eps_tl, src_tl)
             except Exception as e:

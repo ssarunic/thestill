@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import BriefingScheduleSettings from '../components/BriefingScheduleSettings'
 import McpConnectorSettings from '../components/McpConnectorSettings'
+import ProductTipsSettings from '../components/ProductTipsSettings'
 import UsageEventsSettings from '../components/UsageEventsSettings'
 
 // Region dropdown options. The data layer ships top-podcast rankings for
@@ -87,14 +88,15 @@ export default function Settings() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Settings</h1>
-        <p className="text-gray-600">Manage your account preferences.</p>
-      </div>
+      {/* Top-level pages carry no visible title: the nav already says where
+          you are. The heading stays for screen readers. */}
+      <h1 className="sr-only">Settings</h1>
 
       <BriefingScheduleSettings />
 
       <McpConnectorSettings />
+
+      <ProductTipsSettings />
 
       <UsageEventsSettings />
 

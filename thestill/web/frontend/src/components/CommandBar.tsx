@@ -502,7 +502,7 @@ function handleActivate(
     // having a global ⌘K.
     if (item.audio_url) {
       if (player.isCurrent(item.episode_id)) {
-        player.seek(seconds)
+        player.seek(seconds, { transcript: true })
         if (!player.isPlaying) player.resume()
         return
       }

@@ -468,12 +468,15 @@ def _chunked(items: Sequence[str], size: int) -> List[List[str]]:
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
 
-# Upper bound on how many of a brand-new podcast's discovered episodes one
-# refresh inspects for the initial-backfill cap. Far above any real back
-# catalog, so the whole catalog is excluded in a single pass; the default
-# orphan-query limit (25) would leak everything past the first page once the
-# podcast stops counting as brand-new.
-_INITIAL_BACKFILL_SCAN_LIMIT = 10_000
+# Upper bound on how many discovered-but-unqueued episodes one refresh
+# classifies. Far above any real back catalog, so a newly discovered catalog is
+# classified (and its excluded part marked) in a single pass; the default
+# orphan-query page (25) would leave the rest for a later sweep.
+_CANDIDATE_SCAN_LIMIT = 10_000
+
+# A pub_date further ahead than this is not trusted as "released while
+# followed" — feeds sometimes carry bogus future dates.
+_FUTURE_PUB_DATE_SLACK = timedelta(days=1)
 
 
 def _discovered_episodes_to_enqueue(
@@ -483,41 +486,63 @@ def _discovered_episodes_to_enqueue(
 
     Shared by both queue managers' ``enqueue_discovered_episodes``.
 
-    Initial-backfill cap: a brand-new podcast (no processed episode yet)
-    discovers its ENTIRE back catalog in one refresh, but only the most-recent
-    ``inbox_seed_on_follow`` should ever auto-process; the remainder are marked
-    ``auto_process_excluded``. The cap runs BEFORE the follower gate on purpose:
-    an unfollowed feed is still refreshed for browsing (refresh-on-open, chart
-    pages), and if that first refresh skipped the marking, the back catalog
-    stayed eligible — so the first refresh after a follow (once the
-    follow-seed episodes made the podcast "established") enqueued all of it.
-
     Spec #74 — spec #63's "processed = followed" invariant: an unfollowed feed
-    never drives the paid pipeline, so nothing is returned for it.
-    """
-    if repository.has_processed_episodes(podcast_id):
-        to_enqueue = repository.get_discovered_unqueued_episodes(podcast_id)
-    else:
-        discovered = repository.get_discovered_unqueued_episodes(podcast_id, limit=_INITIAL_BACKFILL_SCAN_LIMIT)
-        cap = max(
-            0,
-            getattr(config, "inbox_seed_on_follow", 2) - repository.count_episodes_with_tasks(podcast_id),
-        )
-        to_enqueue = discovered[:cap]  # discovered is ordered pub_date DESC → most-recent
-        skipped = [eid for eid, _ in discovered[cap:]]
-        if skipped:
-            for chunk in _chunked(skipped, _SQL_PARAM_CHUNK):
-                repository.mark_episodes_auto_process_excluded(chunk)
-            logger.info(
-                "refresh_feed_initial_backfill_capped",
-                podcast_id=podcast_id,
-                cap=cap,
-                excluded=len(skipped),
-            )
+    never drives the paid pipeline, so nothing is returned for it (and nothing
+    is classified: the first followed refresh does that).
 
-    if not repository.has_followers(podcast_id):
+    Otherwise each candidate is either:
+
+    - a **new release** — published since the podcast's current run of being
+      followed began (``follow_started_at``). All of these are enqueued, however
+      many arrived since the last refresh.
+    - **back catalog** — published before that, or with no trustworthy date.
+      Only those among the podcast's newest ``inbox_seed_on_follow`` episodes are
+      enqueued (the same window the follow seed uses); the rest are marked
+      ``auto_process_excluded`` so later sweeps skip them.
+
+    The split hangs off the follow, not off processing history. A podcast
+    transcribed months ago and then left unfollowed is back catalog again when
+    someone re-follows it: the episodes that came out in between are not
+    queued wholesale, only the newest few. Doing the newest-N pick here, after
+    discovery, also covers a follow seed that ran against a stale episode list
+    before this refresh found the newer episodes.
+    """
+    follow_start = repository.follow_started_at(podcast_id)
+    if follow_start is None:
         logger.info("refresh_enqueue_skipped_unfollowed", podcast_id=podcast_id, initiated_by=initiated_by)
         return []
+
+    candidates = repository.get_discovered_unqueued_candidates(podcast_id, limit=_CANDIDATE_SCAN_LIMIT)
+    if not candidates:
+        return []
+
+    newest_window = {
+        episode_id
+        for episode_id, _ in repository.get_recent_unqueued_unprocessed_episodes(
+            podcast_id, getattr(config, "inbox_seed_on_follow", 2)
+        )
+    }
+    latest_trusted = now_utc() + _FUTURE_PUB_DATE_SLACK
+
+    to_enqueue: List[Tuple[str, Optional[str]]] = []
+    excluded: List[str] = []
+    for episode_id, audio_url, pub_date in candidates:
+        released_while_followed = pub_date is not None and follow_start <= pub_date <= latest_trusted
+        if released_while_followed or episode_id in newest_window:
+            to_enqueue.append((episode_id, audio_url))
+        else:
+            excluded.append(episode_id)
+
+    if excluded:
+        for chunk in _chunked(excluded, _SQL_PARAM_CHUNK):
+            repository.mark_episodes_auto_process_excluded(chunk)
+        logger.info(
+            "refresh_back_catalog_excluded",
+            podcast_id=podcast_id,
+            follow_started_at=follow_start.isoformat(),
+            enqueued=len(to_enqueue),
+            excluded=len(excluded),
+        )
     return to_enqueue
 
 
@@ -1159,18 +1184,17 @@ class QueueManager:
         prior run that died before enqueuing are repaired on the next refresh)
         for free.
 
-        Initial-backfill cap: a brand-new podcast discovers its ENTIRE back
-        catalog in one refresh, but only the most-recent few should auto-process
-        on subscribe; the remainder are marked ``auto_process_excluded`` so this
-        sweep never enqueues them — even while nobody follows the feed yet. An
-        established podcast skips the cap, so every genuinely-new episode (and
-        any real crash-orphan) flows through. See
-        ``_discovered_episodes_to_enqueue``.
+        Back-catalog cap: episodes published since the podcast's current
+        follow run began are all enqueued; older ones (a newly added feed's
+        catalog, or what came out while nobody followed) only within the newest
+        ``inbox_seed_on_follow``, and the rest are marked
+        ``auto_process_excluded``. See ``_discovered_episodes_to_enqueue``.
 
         Args:
             podcast_id: Feed whose discovered episodes to enqueue.
-            repository: Podcast repository (``get_discovered_unqueued_episodes``,
-                ``has_processed_episodes``, ``count_episodes_with_tasks``,
+            repository: Podcast repository (``follow_started_at``,
+                ``get_discovered_unqueued_candidates``,
+                ``get_recent_unqueued_unprocessed_episodes``,
                 ``mark_episodes_auto_process_excluded``).
             config: App config (``transcription_provider``, ``inbox_seed_on_follow``).
             initiated_by: Provenance tag stored in task metadata for tracing.

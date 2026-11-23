@@ -38,6 +38,12 @@ client are passed in) so they unit-test without a network or an
     both called "Scott Galloway", each with a row, the hosts' speaker
     labels anchored to whichever was created first — and only a human can
     say which side the mentions belong to.
+  - ``titled_duplicate`` — a person row named with a leading title
+    ("Professor Mariam Jamal-Hanjani") whose name without it is another
+    person row's name or alias. The role linker used to mint guest rows
+    straight from the facts file, title and all, next to the row the
+    Wikidata linker made for the same person; usually one ``entity merge``
+    away, but namesakes exist, so it is flagged, not merged.
 
   Ranked by mentions poisoned (blast radius). The separate "P31 unsupported
   by the stored type but classify can't retype it" class is deliberately
@@ -58,7 +64,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from structlog import get_logger
 
-from ..models.entities import EntityRecord, EntityType
+from ..models.entities import EntityRecord, EntityType, display_name, strip_honorifics
+from .entity_alias_hygiene import lookup_key
 from .entity_linking.cache import invalidate_link_decisions
 from .entity_linking.shared import _build_entity_id
 from .entity_type_rules import (
@@ -229,6 +236,7 @@ def scan_entities_for_review(
         )
 
     _flag_name_collisions(repo, flags)
+    _flag_titled_duplicates(repo, flags, {eid: sum(n for _, n in rec["surfaces"]) for eid, rec in by_entity.items()})
     flags.sort(key=lambda f: f.score, reverse=True)
     return flags[:limit]
 
@@ -271,6 +279,62 @@ def _flag_name_collisions(repo: "SqliteEntityRepository", flags: List[ReviewFlag
             suggested_action="review",
         )
         by_entity[eid] = flag
+        flags.append(flag)
+
+
+def _flag_titled_duplicates(
+    repo: "SqliteEntityRepository", flags: List[ReviewFlag], mention_counts: Dict[str, int]
+) -> None:
+    """Signal 4 — flag each titled person row whose untitled name another
+    person row already answers to (see the module docstring), on the
+    titled row: it is the one a merge would fold into the other.
+    ``mention_counts`` covers resolved, QID-bearing rows; a titled row
+    usually has no QID, so it counts as one mention at least."""
+    persons = repo.list_entities_by_type(EntityType.PERSON.value)
+    by_name: Dict[str, List[EntityRecord]] = {}
+    for entity in persons:
+        for name in {entity.canonical_name, display_name(entity.canonical_name), *(entity.aliases or [])}:
+            by_name.setdefault(lookup_key(name), []).append(entity)
+    by_entity = {f.entity_id: f for f in flags}
+    for entity in persons:
+        name = display_name(entity.canonical_name)
+        bare = strip_honorifics(name)
+        if bare == name:
+            continue
+        others = {o.id: o for o in by_name.get(lookup_key(bare), []) if o.id != entity.id}
+        if not others:
+            continue
+        mentions = max(mention_counts.get(entity.id, 0), 1)
+        evidence = {
+            "untitled_name": bare,
+            "others": [
+                {
+                    "entity_id": o.id,
+                    "canonical_name": o.canonical_name,
+                    "qid": o.wikidata_qid,
+                    "mentions": mention_counts.get(o.id, 0),
+                }
+                for o in sorted(others.values(), key=lambda o: o.id)
+            ],
+        }
+        score = float(mentions + sum(item["mentions"] for item in evidence["others"]))
+        flag = by_entity.get(entity.id)
+        if flag is not None:
+            flag.kinds.append("titled_duplicate")
+            flag.evidence["titled_duplicate"] = evidence
+            flag.score = round(max(flag.score, score), 2)
+            continue
+        flag = ReviewFlag(
+            entity_id=entity.id,
+            type=entity.type.value,
+            canonical_name=entity.canonical_name,
+            qid=entity.wikidata_qid,
+            score=round(score, 2),
+            kinds=["titled_duplicate"],
+            evidence={"titled_duplicate": evidence},
+            suggested_action="review",
+        )
+        by_entity[entity.id] = flag
         flags.append(flag)
 
 

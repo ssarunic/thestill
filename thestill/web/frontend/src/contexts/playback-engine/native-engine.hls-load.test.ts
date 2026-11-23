@@ -67,4 +67,26 @@ describe('NativeEngine — hls.js chunk load failure', () => {
     expect(FakeHls.instances[0].config.startPosition).toBe(300)
     expect(el.play).toHaveBeenCalledTimes(1)
   })
+
+  it('never holds an HLS stream for a timeline map (spec #116)', async () => {
+    // No map can be made for a stream, so a hold would only be silence.
+    const el = document.createElement('video')
+    el.canPlayType = () => ''
+    el.play = vi.fn(() => Promise.resolve())
+    el.load = vi.fn()
+    const onTimelineHoldChange = vi.fn()
+    const events = new Proxy({} as EngineEvents, {
+      get: (_t, key) => (key === 'onTimelineHoldChange' ? onTimelineHoldChange : vi.fn()),
+    })
+    const engine = new NativeEngine(el, events)
+    loadHls.mockResolvedValue({ Hls: FakeHls, workerPath: '/assets/hls.worker.js' })
+
+    engine.load({ url: HLS_URL, mimeType: 'application/x-mpegURL' }, { seekTo: 30, holdForTimeline: true })
+    expect(el.muted).toBe(false)
+    await flush()
+    engine.seekTo(60, { holdForTimeline: true })
+    expect(el.muted).toBe(false)
+    expect(engine.isHoldingForTimeline()).toBe(false)
+    expect(onTimelineHoldChange).not.toHaveBeenCalled()
+  })
 })

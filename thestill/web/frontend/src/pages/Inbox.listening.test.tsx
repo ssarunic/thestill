@@ -90,6 +90,7 @@ function renderPage(initialEntry = '/inbox') {
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/inbox" element={<Inbox />} />
+          <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug" element={<div data-testid="episode-page" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -112,7 +113,7 @@ beforeEach(() => {
 describe('Inbox rows (spec #90)', () => {
   it('show time left or Played in the meta line', async () => {
     renderPage()
-    const halfway = (await screen.findByText('Halfway')).closest('li')!
+    const halfway = within(await screen.findByTestId('inbox-list')).getByText('Halfway').closest('li')!
     expect(within(halfway).getByText('32 min left')).toBeInTheDocument()
     const finished = screen.getByText('Finished').closest('li')!
     expect(within(finished).getByText('Played')).toBeInTheDocument()
@@ -130,6 +131,16 @@ describe('Continue listening strip (spec #90)', () => {
     expect(play).toHaveBeenCalledWith(expect.objectContaining({ episodeId: 'ep-Halfway', podcastSlug: '20vc' }))
     // play() reads the position synchronously: the cache knew it first.
     expect(listeningCache.get('ep-Halfway')?.position_seconds).toBe(1680)
+  })
+
+  it('opens the episode page when the row is clicked', async () => {
+    renderPage()
+    const strip = await screen.findByTestId('continue-listening')
+    const link = within(strip).getByRole('link', { name: /Halfway/ })
+    expect(link).toHaveAttribute('href', '/podcasts/20vc/episodes/halfway')
+    await userEvent.setup().click(link)
+    expect(await screen.findByTestId('episode-page')).toBeInTheDocument()
+    expect(play).not.toHaveBeenCalled()
   })
 
   it('is hidden when nothing is in progress', async () => {

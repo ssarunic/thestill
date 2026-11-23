@@ -16,6 +16,7 @@ vi.mock('./pages/Login', () => ({
 }))
 
 vi.mock('./pages/public/Landing', () => ({ default: () => <div>LANDING</div> }))
+vi.mock('./pages/public/Help', () => ({ default: ({ doc }: { doc: string }) => <div>HELP {doc}</div> }))
 vi.mock('./pages/public/NotFound', () => ({ default: () => <div>NOT_FOUND</div> }))
 
 describe('PublicApp (spec #94)', () => {
@@ -26,6 +27,15 @@ describe('PublicApp (spec #94)', () => {
       </MemoryRouter>,
     )
     expect(await screen.findByText('LANDING')).toBeInTheDocument()
+  })
+
+  it('serves the Claude connector guide signed out (spec #108)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/claude']}>
+        <PublicApp />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('HELP claude')).toBeInTheDocument()
   })
 
   it('sends signed-in areas to sign-in and remembers where the visitor was', async () => {

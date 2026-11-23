@@ -397,6 +397,10 @@ export interface EpisodeDetail {
   // Spec #76 §3.6 — show facts and provenance for the Information list.
   podcast_author: string | null
   podcast_language: string | null
+  // Spec #117 — the header's Follow: the caller follows this show, and the
+  // show can be followed (not the synthetic parent of bare audio imports).
+  podcast_is_following: boolean
+  podcast_followable: boolean
   origin: 'feed' | 'import'
   import_kind: ImportKind | null
   // Spec #87 — this episode's page on other platforms (resolved links only).
@@ -541,6 +545,10 @@ export interface AnnotatedTranscriptDump {
   // the live audio element's duration to detect DAI-induced drift.
   // `null` for legacy transcripts cleaned before we recorded this.
   transcript_source_duration_s: number | null
+  // Spec #116 — the sync track the reader may use to correct drifted
+  // timestamps: fetch `.../sync-track/{generation}`. `null` (or absent on
+  // older payloads) when the episode has none that matches this transcript.
+  sync_track_generation?: string | null
   // Provenance of the LLM cleaning run (provider, model, prompt
   // revision). `null` for sidecars written before provenance recording.
   cleaning: CleaningProvenance | null
@@ -653,7 +661,13 @@ export interface RefreshTaskStatus {
 // Add Podcast API Types
 // Spec #95 usage event: where in the app a follow was made. The server maps
 // anything else to ``other``.
-export type FollowSource = 'episode_prompt' | 'show_page' | 'pending_follow' | 'top_podcasts' | 'add_podcast'
+export type FollowSource =
+  | 'episode_page'
+  | 'episode_pending_follow'
+  | 'show_page'
+  | 'pending_follow'
+  | 'top_podcasts'
+  | 'add_podcast'
 
 export interface AddPodcastRequest {
   url: string
@@ -664,10 +678,13 @@ export interface AddPodcastResponse {
   status: string
   message: string
   task_type: string
+  /** Poll ``/commands/add/status?task_id=`` with this for this add's outcome. */
+  task_id?: string | null
 }
 
 export interface AddPodcastTaskStatus {
   task_type: string
+  task_id?: string | null
   status: 'none' | 'pending' | 'running' | 'completed' | 'failed'
   started_at: string | null
   completed_at: string | null
@@ -678,6 +695,8 @@ export interface AddPodcastTaskStatus {
     podcast_id: string
     rss_url: string
     episodes_count: number
+    /** False when the add worked but the follow itself did not. */
+    is_following?: boolean
   } | null
   error: string | null
 }
@@ -1258,6 +1277,10 @@ export interface EpisodeEntity {
   mention_count: number
   first_mention_ms: number
   speaker_kind: SpeakerKind
+  // On this episode (a guest, or a host / recurring voice with a segment
+  // of their own), not merely the show's host being talked about. Absent
+  // from a payload cached before the field existed.
+  takes_part?: boolean
   // Spec #28 §5.2 — composite relevance score; see backend
   // ``_compute_salience``. Used to sort the rail; the frontend can
   // also use it to filter very-low-salience entries.
