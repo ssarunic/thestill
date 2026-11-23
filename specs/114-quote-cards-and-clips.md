@@ -335,6 +335,22 @@ it needs the speaker resolved to a person, which happens in
   noticing) and clears the marker, logging each with `episode_id`. Spec
   #49's healer can retry the branch before then.
 
+**The Dalston direct-URL path has no original to retain.** With
+`transcription_provider = dalston`, an RSS episode skips download and
+downsample (`_get_starting_stage` in `api_commands.py`): Dalston fetches
+the enclosure itself, so the downsample hook above never runs. This is
+production's path, for new episodes too and whatever
+`DELETE_AUDIO_AFTER_PROCESSING` says. For these episodes the retained
+audio is **Dalston's own job audio**, the exact bytes that were
+transcribed: the transcribe handler already streams it through
+`iter_job_audio` to write the sync track (`_publish_sync_track`), and for
+a clip-eligible episode the same pass also writes it to the retained
+original's place and sets `audio_retained_for = 'clips'`. Fetching the
+enclosure separately is not an option: it is another copy with other
+ads, the drift D6 rejects. The cut, the deletion after it and the 7-day
+sweep are then the same as above. Q6 asks whether cutting on demand
+through the sync track should replace all of this.
+
 Cost: one original (50–150 MB) lives for the hours between downsample
 and the entity branch instead of minutes, only for clip-eligible shows.
 Deployments with the flag off keep every original and need none of this.
@@ -534,7 +550,7 @@ rate limit suffices; video is never anonymous.
 |---|---|---|
 | 0 | `quote_shares` + `quote_share_hits` tables; deterministic ids; `GET /q/{id}` and `/q/{id}.png` with the `og` card; `QuoteCardRenderer`; share menu on public `QuoteCard`; `ts_ref` attribution; `/analytics` panel; revoke CLI and show-opt-out revocation | — (works on the #94 stand-in quotes) |
 | 1 | `square` and `story` variants; download and Web Share with files; caption with the X handle chip; *Quote this* in the transcript (gate's block only); follow hook on the linked card | Phase 0; spec #91 §7's files path (small, can be built here) |
-| 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
+| 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on, and of Dalston's job audio on the direct-URL path (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
 | 3 | Video clips: queued render, `clips_per_day`, `clips_enabled`, QR, `GET /q/{id}/{variant}.mp4` | Phase 2; libass probe |
 | 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules | Phase 1; the use of *Quote this* in Phases 0–1 (D11) |
 
@@ -609,6 +625,9 @@ building.
   handler keeps the original for a clip-eligible episode and deletes it
   for an ineligible one; the candidates step deletes it after the cut; the
   sweep deletes an 8-day-old retained original and clears the marker.
+- **Retention, Dalston path**: a clip-eligible episode transcribed through
+  the direct-URL path has the job audio retained and marked by the
+  transcribe handler; an ineligible one writes nothing.
 - **Clip cutting**: a synthetic 60 s tone with known word timestamps cuts
   to the expected length ± 50 ms; the ASS track has one event per word;
   the ffmpeg filtergraph is a pure function with a unit test, and one
@@ -669,4 +688,4 @@ question has opened since:
 
 | # | Question | Default if unanswered |
 |---|---|---|
-| Q6 | Decision D6 keeps the original audio until the entity stage because a re-fetched enclosure carries other ads and its timestamps drift. Spec #116 has since shipped sync tracks (v1.38.0) that map the transcribed copy onto another copy of the same episode. Could the clip be cut on demand from a re-fetched enclosure aligned on the server with the sync track, with no retention, no `audio_retained_for` column and no orphan sweep? It would also cover episodes whose original is already gone. Against it: the aligner runs in the browser today, a server port is new work, and a fetch per clip presents to the publisher as a download. | Settle before Phase 2 starts; Phases 0 and 1 use no audio. Until then D6 stands as written |
+| Q6 | Decision D6 keeps the original audio until the entity stage because a re-fetched enclosure carries other ads and its timestamps drift. Spec #116 has since shipped sync tracks (v1.38.0) that map the transcribed copy onto another copy of the same episode. Could the clip be cut on demand from a re-fetched enclosure aligned on the server with the sync track, with no retention, no `audio_retained_for` column and no orphan sweep? It would also cover episodes whose original is already gone. For it, too: production transcribes through Dalston's direct-URL path, where retention means a second copy of every job's audio (§4.1). Against it: the aligner runs in the browser today, a server port is new work, and a fetch per clip presents to the publisher as a download. | Settle before Phase 2 starts; Phases 0 and 1 use no audio. Until then D6 stands as written |
