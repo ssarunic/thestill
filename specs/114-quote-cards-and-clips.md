@@ -543,6 +543,17 @@ rate limit suffices; video is never anonymous.
 - **MCP tool `share_quote`** returning the short link, so connector users
   share from chat; counts as a value day.
 - **Genre card styles** keyed off the spec #98 profile.
+- **Video as the Instagram format, in place of the `story` image.** Raised
+  2026-11-23, not decided. On Instagram a Reel with the quote's audio and
+  karaoke captions reaches people a static image does not, and hearing
+  the speaker is proof where a card is a claim. If Phase 0 shows that
+  quotes get shared, Phase 1 could drop the `story` image and leave
+  Instagram to the Phase 3 video; the `square` image stays for LinkedIn
+  and downloads. Against moving video earlier: links in Instagram
+  captions are not clickable, so a Reel can get views and send almost
+  nobody back, and video carries the audio, allowlist and render-queue
+  weight (Q6). Rendering in the browser was considered and set aside:
+  video export is unreliable on phones, where Instagram sharing happens.
 
 ## Phases
 
