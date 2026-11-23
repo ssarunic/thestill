@@ -480,16 +480,23 @@ landing hook, not the cards, is what to change next.
   refresh completes** (a hook at the end of the entity branch for a
   reprocessed episode; an entity relink via `thestill entity relink`
   triggers the same), and it does two things for every share of the
-  episode: re-resolves `speaker_entity_id` **by time, not by segment
+  episode: re-resolves `speaker_entity_id` **by the quoted words, not by segment
   id**. A split or merge in the editor renumbers the effective
   transcript's segments (`transcript_edits.py`), so the stored
   `segment_id` can point at another turn after a refresh. The share's
-  anchor is `(episode_id, start_ms)`: the speaker is the entity of the
-  one resolved speaking mention whose `[start_ms, end_ms]` contains the
-  share's `start_ms`, and `segment_id` is rewritten to that mention's
-  segment. When no speaking mention contains it, or more than one does,
-  the speaker becomes `NULL` and the card renders "a guest on *Show*"
-  rather than guess; a now-hidden speaker makes the share 410. The id
+  anchor is its **`text` snapshot, with time as the tie-break**. On today's
+  source `start_ms` is the start of the turn the excerpt came from, not
+  of the excerpt itself, so time alone is not enough: a split inside the
+  shared turn can leave `start_ms` in the first half while the quoted
+  words now belong to the second. The rule: among the episode's speaking
+  mentions, take the segments whose effective text contains the
+  snapshot; if there is exactly one, or exactly one of them also
+  contains `start_ms` in its time range, the speaker is that mention's
+  entity and `segment_id` is rewritten to its segment. Otherwise (the
+  words were edited, the snapshot spans a split, or it appears in
+  several turns with no time match) the speaker becomes `NULL` and the
+  card renders "a guest on *Show*" rather than guess. A now-hidden
+  speaker makes the share 410. The id
   does not change: it was derived once and is stored. The invalidation
   also deletes **every rendered asset that carries the name**: the
   `quote_cards/<id>/` directory and the `quote_clips/<id>/` directory
@@ -592,8 +599,10 @@ Phase 0 these hold; the sections above describe the end state.
   stands alone (`_stands_alone`: opens and ends a sentence) and is at
   most 320 characters. A quote that fails it keeps today's `#t=` link
   and gets no `share_id`.
-- **The speaker is always a named person** on this source (`_FROM`
-  requires it), so "a guest on *Show*" cannot occur until Phase 4.
+- **The speaker is always a named person when a share is minted** on
+  this source (`_FROM` requires it). "A guest on *Show*" appears in
+  Phase 0 only when a later transcript edit leaves the speaker
+  unresolvable (§7).
 - **No end time.** Rows carry the mention's `start_ms` only.
   `quote_shares.end_ms` is nullable in Phase 0 and filled from Phase 2,
   which is the first phase to use it.
@@ -669,7 +678,9 @@ Phase 0 these hold; the sections above describe the end state.
 - **Invalidation after a split**: a turn before a shared quote is split,
   so every later segment id shifts by one; after the refresh the share
   still names its own speaker and its `segment_id` is the new one. A
-  share whose `start_ms` no speaking mention contains loses its name.
+  shared turn split after its start, with the second half (which holds
+  the snapshot) reassigned, takes the second half's speaker. A share
+  whose snapshot no segment contains any more loses its name.
 - **Invalidation**: a `rename-speaker` op that moves a segment from
   person A to person B, followed by the entity refresh, rewrites the
   share's `speaker_entity_id` to B, deletes the card and clip
