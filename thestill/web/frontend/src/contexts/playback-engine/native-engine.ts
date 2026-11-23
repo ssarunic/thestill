@@ -11,7 +11,7 @@
 
 import { canPlayHlsNatively, HLS_ERROR_EVENT, loadHls, needsHlsJs, type HlsInstance, type HlsModule } from './hls'
 import { rejectCrossOrigin } from '../../drift/corsVerdict'
-import type { TimelineMap } from './timeline-map'
+import type { AdBreak, TimelineMap } from './timeline-map'
 import type { EngineEvents, EngineSource, LoadOptions, PlaybackEngine } from './types'
 
 // Numeric codes rather than the MediaError constants — the global is not
@@ -73,6 +73,9 @@ export interface NativeEngineState {
 export interface AppliedTimeline {
   map: TimelineMap
   durationS: number
+  /** Spec #116 §6.2 — the transcribed copy's ad breaks that Skip ahead
+   * may jump over, in transcript time. The engine itself ignores them. */
+  adBreaks?: readonly AdBreak[]
 }
 
 interface HlsErrorData {

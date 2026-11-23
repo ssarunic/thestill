@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Built, not released: Skip ahead in the player (section 6.2, Phase 2c), for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-12
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -59,10 +59,10 @@ the banner stays as it is today.
 
 ## Non-goals
 
-- **Skipping ads for the listener.** The map knows where listener-side
-  ads are. Using that to skip them is a policy decision for a separate
-  spec. Section 6.1 uses the map only to say that a break differs in
-  the listener's copy and that an ad is playing; it offers no skip.
+- **Skipping ads without a map.** Section 6.2 offers Skip ahead only
+  where a map says where the ad ends. Without one the transcript's ad
+  times can be tens of seconds off in the listener's copy, so a jump
+  could land inside the episode or still inside the ad.
 - **Proxying or re-hosting audio.** It removes drift, and it also removes
   the publisher's ad impressions and download counts.
 - **Eager backfill of every old episode.** Their transcribed copy is
@@ -685,6 +685,38 @@ part of the transcript.
 state, added to the event allowlist of #95. If almost nobody opens a
 row, the text can go (see Alternatives considered).
 
+#### 6.2 Skip ahead
+
+**Problem.** A listener inside an ad has to scrub or tap +15 several
+times to get past it, and may overshoot into the episode.
+
+**Rule.** While an ad plays and the map knows where the episode resumes
+after it, the player shows "Skip ahead ⏭" (the mini player, beside the
+transport, and the Now Playing sheet, above it). One tap jumps there.
+When the ad ends, or the listener moves out of it, the button goes.
+There is no undo: the listener can scrub back.
+
+- An ad is either one of the listener's own (`listenerAdAt`) or a
+  break of the transcribed copy (a run as in 6.1) that the copy plays.
+- Ads back to back are skipped together: a transcribed break followed
+  by an ad of the listener's own lands after both.
+- Only breaks with episode content after them are skippable. A
+  post-roll, of either copy, has nothing to skip ahead to.
+- Not offered for a break the aligner could not place (`unresolved`),
+  for an end that maps only approximately, or in the last 2 s of an ad.
+- Only with a map in force, so only for sessions that hold
+  `drift.align` on a supported browser. As the permission and the
+  allow-list widen, Skip ahead reaches those listeners with no change.
+
+**Where it lives.** The map goes to the player with the transcript's
+skippable breaks (`AppliedTimeline.adBreaks`), so the button works on
+any page while the episode plays, not only in the reader.
+`TimelineMap.skipAheadFrom(assetTime, breaks)` returns the transcript
+time to seek to, or null; the player re-asks on every time update.
+
+**Measuring it.** A usage event `skip_ahead` with the seconds of the
+listener's copy skipped, on the #95 allowlist.
+
 ### 7. Logging, audit and proof of correctness
 
 A log of what the aligner decided does not show that the decision was
@@ -1248,6 +1280,25 @@ Acceptance (all in the repository):
   and again while the listener's ad plays (`Ad playing · 0:0n left`,
   the "Ad" tag in the player). The fixture has one break, so Absent,
   Unresolved and several breaks are covered by the unit tests only.
+
+### Phase 2c: Skip ahead
+
+Section 6.2. Shows only for sessions in which a map is applied.
+
+| # | Where | What |
+|---|---|---|
+| 2c.1 ✅ | `timeline-map.ts` | `skipAheadFrom(assetTime, breaks)`: where the episode resumes after the ad playing, or null |
+| 2c.2 ✅ | `utils/adBreaks.ts`, `useDriftAlignment.ts`, `native-engine.ts` | `skippableAdBreaks` (shared run rule with the reader's rows); the map is applied with `adBreaks` |
+| 2c.3 ✅ | `PlayerContext.tsx` | `skipAheadAvailable` (re-evaluated per time update), `skipAhead()` |
+| 2c.4 ✅ | `SkipAheadButton.tsx`, mini player, `NowPlayingSheet.tsx` | the button, present only while available |
+| 2c.5 ✅ | analytics | `skip_ahead` with `seconds` |
+
+Acceptance (all in the repository): unit tests for `skipAheadFrom`
+(a break played as transcribed, an ad of the listener's own, both back
+to back, the last 2 s, unresolved, post-roll); player tests that the
+button state follows ticks and the map; and a Playwright test in
+`tests/drift-alignment.spec.ts` that taps Skip ahead inside the
+listener copy's own 10 s ad and lands just past it.
 
 ### Phase 3: perceptual fallback and AAC
 

@@ -35,6 +35,7 @@ import EntityHighlight from './episode-entities/EntityHighlight'
 import { buildSpeakerColorMap, resolveSpeakerColor } from '../utils/speakerColors'
 import { HIGHLIGHT_LEAD_SECONDS } from '../utils/highlightLead'
 import { findActiveSegmentIndex } from '../utils/transcriptSearch'
+import { adBreakRunBounds } from '../utils/adBreaks'
 import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
 import KaraokeWord from './KaraokeWord'
 import { useToast } from './Toast'
@@ -629,33 +630,20 @@ interface AdRun {
 }
 
 function buildAdRuns(segments: ReadonlyArray<AnnotatedSegment>, offset: number): AdRun[] {
-  const runs: AdRun[] = []
-  let i = 0
-  while (i < segments.length) {
-    if (segments[i].kind !== 'ad_break') {
-      i += 1
-      continue
-    }
-    let last = i
-    for (let j = i + 1; j < segments.length; j += 1) {
-      if (segments[j].kind === 'ad_break') last = j
-      else if (segments[j].kind !== 'filler') break
-    }
-    const members = segments.slice(i, last + 1)
+  return adBreakRunBounds(segments).map(([first, last]) => {
+    const members = segments.slice(first, last + 1)
     const sponsors: string[] = []
     for (const seg of members) {
       if (seg.sponsor && !sponsors.includes(seg.sponsor)) sponsors.push(seg.sponsor)
     }
-    runs.push({
+    return {
       id: members[0].id,
       memberIds: new Set(members.map((seg) => seg.id)),
       startS: members[0].start + offset,
       endS: members[members.length - 1].end + offset,
       sponsors,
-    })
-    i = last + 1
-  }
-  return runs
+    }
+  })
 }
 
 type AdRowState = 'plain' | BreakState['kind']

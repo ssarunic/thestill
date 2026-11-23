@@ -3,12 +3,13 @@
 // for the admin debug strip. It changes nothing about playback: the map is
 // not verified against the audio element yet (§4 step 6), so it is not
 // applied.
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { reportDriftOutcome } from '../api/client'
 import type { AnnotatedTranscriptDump } from '../api/types'
 import { usePlayer } from '../contexts/PlayerContext'
 import type { AppliedTimeline } from '../contexts/playback-engine/native-engine'
-import { TimelineMap } from '../contexts/playback-engine/timeline-map'
+import { TimelineMap, type AdBreak } from '../contexts/playback-engine/timeline-map'
+import { skippableAdBreaks } from '../utils/adBreaks'
 import type { DriftWorkerMessage, DriftWorkerRequest } from '../workers/driftAlign.worker'
 import type { TranscriptInterval } from './classify'
 import { currentAudioLoad, setCorsVerdict } from './corsVerdict'
@@ -391,6 +392,13 @@ export function useDriftAlignment({
 
   const isPlaying = player.isPlaying
   const applyTimeline = player.applyTimeline
+  // Spec #116 §6.2 — the map goes in with the transcript's ad breaks, so
+  // the player can offer Skip ahead wherever the listener goes next. A
+  // ref: a refetched transcript must not rebuild the hooks below.
+  const adBreaksRef = useRef<readonly AdBreak[]>([])
+  useEffect(() => {
+    adBreaksRef.current = transcript ? skippableAdBreaks(transcript) : []
+  }, [transcript])
   const releaseTimelineHold = player.releaseTimelineHold
   const reloadHeldForCheck = player.reloadHeldForCheck
   const hooks = useMemo<PlayHooks | null>(() => {
@@ -406,7 +414,10 @@ export function useDriftAlignment({
       },
       // The player refuses unless this episode's audio is still what it is
       // playing, so a late verdict can never touch another source.
-      apply: (timeline) => (episodeId ? applyTimeline(episodeId, audioUrl, timeline) : false),
+      apply: (timeline) =>
+        episodeId
+          ? applyTimeline(episodeId, audioUrl, timeline && { ...timeline, adBreaks: adBreaksRef.current })
+          : false,
       release: () => {
         if (episodeId) releaseTimelineHold(episodeId, audioUrl)
       },

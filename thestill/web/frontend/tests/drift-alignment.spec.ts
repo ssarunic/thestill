@@ -275,6 +275,30 @@ test.describe('timeline map applied to a listener copy with other ads', () => {
     await expect(row).toContainText('An ad that only the transcribed copy carries.')
   })
 
+  test('Skip ahead shows during an ad and jumps to where the episode resumes', async ({ page }) => {
+    await openEpisode(page, 'listener.mp3', { play: false })
+    const skip = page.getByTestId('skip-ahead').first()
+    await page.getByRole('button', { name: /^Play episode/ }).click()
+    await expect(page.getByTestId('drift-debug-strip')).toContainText(
+      'Applied: seeks, the clock and the highlighting follow this map',
+      { timeout: 20_000 },
+    )
+    // Content: no button.
+    await expect(skip).toHaveCount(0)
+
+    // Inside this copy's own 10 s ad (25–35 s): the button, and one tap
+    // lands just past the ad.
+    await page.evaluate(() => {
+      document.querySelector('video')!.currentTime = 27
+    })
+    await expect(skip).toBeVisible()
+    await skip.click()
+    await expect(skip).toHaveCount(0)
+    const at = await elementTime(page)
+    expect(at).toBeGreaterThanOrEqual(35)
+    expect(at).toBeLessThan(37)
+  })
+
   test('the transcribed copy itself needs no map and seeks as before', async ({ page }) => {
     const outcomes = await openEpisode(page, 'transcribed.mp3')
     const strip = page.getByTestId('drift-debug-strip')

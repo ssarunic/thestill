@@ -369,6 +369,9 @@ describe('a play is checked again as later ranges arrive', () => {
     ]
     expect([episodeId, audioUrl, timeline.durationS]).toEqual(['ep-1', AUDIO, 20])
     expect(timeline.map.toAsset(5).time).toBe(13) // the report's one span plays 8 s later
+    // Spec §6.2: the transcript's ad breaks ride along; this one closes
+    // the episode, so there is nothing to skip ahead to.
+    expect((timeline as { adBreaks?: unknown }).adBreaks).toEqual([])
     expect((bodies()[0] as Body & { applied: boolean }).applied).toBe(true)
 
     act(() => recordMediaReport(range({ range: 'bytes=65536-', blockIndex: 1, crc: 999, adler: 44 })))

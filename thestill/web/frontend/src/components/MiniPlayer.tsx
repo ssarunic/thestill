@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import AdTag from './AdTag'
+import SkipAheadButton from './SkipAheadButton'
 import { Link } from 'react-router-dom'
 import { usePlayer, usePlayerTime } from '../contexts/PlayerContext'
 import { useEpisodeLinkState } from '../hooks/useEpisodeLinkState'
@@ -252,6 +253,9 @@ export default function MiniPlayer({ isOpen = false, onExpand }: MiniPlayerProps
           <span>/</span>
           <span>{hasDuration ? formatTime(duration) : '--:--'}</span>
         </div>
+
+        {/* Spec #116 §6.2 — only while an ad plays that the map can skip. */}
+        <SkipAheadButton />
 
         {/* Transport — the three actions every mobile bar surveyed carries
             (spec #71 §3). 44 px targets below sm, the previous 36/40 px above. */}
