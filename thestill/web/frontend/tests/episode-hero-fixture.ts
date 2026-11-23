@@ -58,16 +58,27 @@ export interface EpisodeOverrides {
   permissions?: string[]
   /** Episode duration in seconds. */
   duration?: number
+  /** False: a signed-in listener who is not an admin (multi-user mode). */
+  isAdmin?: boolean
 }
 
 export async function mockEpisodeApi(
   page: Page,
-  { listening = null, audioUrl = 'https://example.com/a.mp3', transcriptSegments, permissions, duration = 3505 }: EpisodeOverrides = {},
+  {
+    listening = null,
+    audioUrl = 'https://example.com/a.mp3',
+    transcriptSegments,
+    permissions,
+    duration = 3505,
+    isAdmin = true,
+  }: EpisodeOverrides = {},
 ) {
   await page.route('**/api/auth/status', (route) =>
     route.fulfill({
       json: {
-        multi_user: false,
+        // Single-user mode makes everyone the operator; a plain listener
+        // needs multi-user mode.
+        multi_user: !isAdmin,
         authenticated: true,
         email_delivery_available: false,
         user: {
@@ -79,7 +90,7 @@ export async function mockEpisodeApi(
           last_login_at: null,
           region: 'gb',
           region_locked: false,
-          is_admin: true,
+          is_admin: isAdmin,
         },
         ...(permissions ? { permissions } : {}),
       },

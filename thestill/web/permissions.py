@@ -14,7 +14,8 @@
 
 """Named permissions (spec #110 §7).
 
-Every permission is admin-only today. The point of naming them is that a
+Every permission is admin-only today, except ``drift.align``, whose
+audience is a runtime setting (spec #116). The point of naming them is that a
 future moderator role (§"Future: moderator role") is a change to
 ``has_permission`` and a grants table, not to any route, CLI command or UI
 entry point: callers ask for ``transcript.edit``, never for "admin".
@@ -28,11 +29,14 @@ from .dependencies import AppState, get_app_state, is_effective_admin, require_a
 
 if TYPE_CHECKING:
     from ..models.user import User
+    from ..services.abuse.settings_service import SettingsService
     from ..utils.config import Config
 
 TRANSCRIPT_EDIT = "transcript.edit"
 #: Spec #116 Phase 2 — the reader may align the transcript with the
-#: listener's copy of the audio. Also the kill switch: nobody holds it when
+#: listener's copy of the audio (and so offer Skip ahead). Held by admins, or
+#: by every signed-in user when the ``drift_alignment_audience`` runtime
+#: setting says ``users``. Also the kill switch: nobody holds it when
 #: ``DRIFT_ALIGNMENT_ENABLED`` is set to false (it is on by default).
 DRIFT_ALIGN = "drift.align"
 
@@ -40,23 +44,40 @@ DRIFT_ALIGN = "drift.align"
 PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN)
 
 
-def has_permission(user: "User", permission: str, config: "Config", *, episode_id: Optional[str] = None) -> bool:
+def has_permission(
+    user: "User",
+    permission: str,
+    config: "Config",
+    *,
+    episode_id: Optional[str] = None,
+    settings: Optional["SettingsService"] = None,
+) -> bool:
     """Whether ``user`` holds ``permission`` (on ``episode_id``, when scoped).
 
     ``episode_id`` is in the signature now so a per-podcast grant later
-    changes no call sites. Unknown permissions are never granted.
+    changes no call sites. Unknown permissions are never granted. Without
+    ``settings`` a runtime audience cannot be read, so the permission stays
+    with admins.
     """
     if permission not in PERMISSIONS:
         return False
-    if permission == DRIFT_ALIGN and getattr(config, "drift_alignment_enabled", False) is not True:
-        return False
-    # Spec #110: every permission is admin-only for now.
+    if permission == DRIFT_ALIGN:
+        if getattr(config, "drift_alignment_enabled", False) is not True:
+            return False
+        if settings is not None and settings.get("drift_alignment_audience") == "users":
+            return True
+    # Spec #110: every other permission is admin-only for now.
     return is_effective_admin(user, config)
 
 
-def permissions_for(user: "User", config: "Config") -> List[str]:
+def permissions_for(user: "User", config: "Config", settings: Optional["SettingsService"] = None) -> List[str]:
     """The permissions ``user`` holds, for ``/api/auth/status`` and ``/me``."""
-    return [p for p in PERMISSIONS if has_permission(user, p, config)]
+    return [p for p in PERMISSIONS if has_permission(user, p, config, settings=settings)]
+
+
+def runtime_settings(state: AppState) -> Optional["SettingsService"]:
+    """The runtime settings service, when the app has one (spec #104)."""
+    return state.abuse.settings if state.abuse is not None else None
 
 
 def require_permission(permission: str) -> Callable[..., "User"]:
@@ -74,7 +95,7 @@ def require_permission(permission: str) -> Callable[..., "User"]:
         user: "User" = Depends(require_auth),
     ) -> "User":
         episode_id = request.path_params.get("episode_id")
-        if not has_permission(user, permission, state.config, episode_id=episode_id):
+        if not has_permission(user, permission, state.config, episode_id=episode_id, settings=runtime_settings(state)):
             raise HTTPException(status_code=403, detail=f"Permission required: {permission}")
         return user
 

@@ -526,8 +526,9 @@ export default function EpisodeReader({
   const transcriptSegments = transcriptData?.segments?.segments ?? null
 
   // Spec #116 Phase 2 — align the transcript with this browser's copy of
-  // the audio once playback starts, and report the outcome. Nothing is
-  // corrected yet; `?driftdebug=1` shows the result.
+  // the audio once playback starts, and report the outcome. Who may is the
+  // `drift_alignment_audience` runtime setting; `?driftdebug=1` shows the
+  // result, to admins only.
   const canAlignDrift = can('drift.align') && driftAlignmentSupported()
   const driftAlignment = useDriftAlignment({
     enabled: canAlignDrift,
@@ -536,7 +537,7 @@ export default function EpisodeReader({
     episodeId: episode?.id,
     transcript: transcriptData?.segments,
   })
-  const showDriftDebug = canAlignDrift && searchParams.get('driftdebug') === '1'
+  const showDriftDebug = canAlignDrift && isAdmin && searchParams.get('driftdebug') === '1'
   // Spec #116 §6 — while a map is being built or checked, the drift banner
   // says so. Once a map is applied the banner goes by itself: the player
   // then reports the transcribed copy's duration.

@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
 SIGNUP_MODES = ("open", "allowlist", "closed")
 
+#: Spec #116 — who holds ``drift.align``: admins only, or every signed-in user.
+DRIFT_ALIGNMENT_AUDIENCES = ("admins", "users")
+
 
 #: Costly paths a switch can pause. ``read_only`` pauses all of them.
 FEATURES = ("new_feeds", "imports", "translations", "narration")
@@ -58,6 +61,12 @@ def _validate_signup_mode(value: Any) -> str:
     if isinstance(value, str) and value.strip().lower() in SIGNUP_MODES:
         return value.strip().lower()
     raise ValueError(f"expected one of {', '.join(SIGNUP_MODES)}")
+
+
+def _validate_drift_audience(value: Any) -> str:
+    if isinstance(value, str) and value.strip().lower() in DRIFT_ALIGNMENT_AUDIENCES:
+        return value.strip().lower()
+    raise ValueError(f"expected one of {', '.join(DRIFT_ALIGNMENT_AUDIENCES)}")
 
 
 def normalize_allowlist_entry(entry: str) -> str:
@@ -215,6 +224,16 @@ SETTINGS: Dict[str, SettingSpec] = {
             "public_prerender_enabled",
             "Off: public pages send the head-only shell, with no server-written content (spec #105).",
             lambda c: bool(c.public_prerender_enabled),
+        ),
+        SettingSpec(
+            "drift_alignment_audience",
+            "Who aligns the transcript with their own copy of the audio, and so gets Skip ahead past ads "
+            "(spec #116): admins, or users (every signed-in user). DRIFT_ALIGNMENT_ENABLED=false turns it "
+            "off for everyone.",
+            lambda _c: "users",
+            _validate_drift_audience,
+            lambda raw: raw.strip(),
+            failsafe="admins",
         ),
         SettingSpec(
             "entity_noindex",
