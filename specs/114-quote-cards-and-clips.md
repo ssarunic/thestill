@@ -480,10 +480,18 @@ landing hook, not the cards, is what to change next.
   refresh completes** (a hook at the end of the entity branch for a
   reprocessed episode; an entity relink via `thestill entity relink`
   triggers the same), and it does two things for every share of the
-  episode: re-resolves `speaker_entity_id` from the segment's current
-  speaking mention (`NULL` when the segment no longer resolves, which
-  renders "a guest on *Show*"; a now-hidden speaker makes the share 410),
-  and deletes **every rendered asset that carries the name**: the
+  episode: re-resolves `speaker_entity_id` **by time, not by segment
+  id**. A split or merge in the editor renumbers the effective
+  transcript's segments (`transcript_edits.py`), so the stored
+  `segment_id` can point at another turn after a refresh. The share's
+  anchor is `(episode_id, start_ms)`: the speaker is the entity of the
+  one resolved speaking mention whose `[start_ms, end_ms]` contains the
+  share's `start_ms`, and `segment_id` is rewritten to that mention's
+  segment. When no speaking mention contains it, or more than one does,
+  the speaker becomes `NULL` and the card renders "a guest on *Show*"
+  rather than guess; a now-hidden speaker makes the share 410. The id
+  does not change: it was derived once and is stored. The invalidation
+  also deletes **every rendered asset that carries the name**: the
   `quote_cards/<id>/` directory and the `quote_clips/<id>/` directory
   (§4.2's videos embed the card PNG, so a stale video would keep showing
   the wrong speaker after the card was fixed). Images re-render on the
@@ -658,6 +666,10 @@ Phase 0 these hold; the sections above describe the end state.
 - **Routes**: head tags, cache headers, rate limit, 404/410 matrix, UA
   blindness (same body for three user agents), `ts_ref` cookie set and
   read by the OAuth callback.
+- **Invalidation after a split**: a turn before a shared quote is split,
+  so every later segment id shifts by one; after the refresh the share
+  still names its own speaker and its `segment_id` is the new one. A
+  share whose `start_ms` no speaking mention contains loses its name.
 - **Invalidation**: a `rename-speaker` op that moves a segment from
   person A to person B, followed by the entity refresh, rewrites the
   share's `speaker_entity_id` to B, deletes the card and clip
