@@ -1,6 +1,6 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Built, not released: Skip ahead in the player (section 6.2, Phase 2c), for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins until v1.50.0; every signed-in user from the next release, through the `drift_alignment_audience` runtime setting): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Built, not released: Skip ahead in the player (section 6.2, Phase 2c), for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
 > **Created:** 2026-11-10
 > **Updated:** 2026-11-12
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
@@ -1147,8 +1147,10 @@ How this was built, where it differs from the sections above:
 
 - **Switch.** `DRIFT_ALIGNMENT_ENABLED` is on by default and exists to
   turn the feature off. It grants a named permission, `drift.align`,
-  held by admins only for now; widening the rollout is a change to
-  `has_permission`.
+  held by admins, or by every signed-in user while the runtime setting
+  `drift_alignment_audience` is `users` (the default from 2026-11-23).
+  `thestill settings set drift_alignment_audience admins` narrows it
+  again without a deploy. Signed-out visitors never hold it.
 - **Route.** The report goes to `/api/podcasts/…/episodes/…/drift-outcome`,
   next to the sync track route. Every route under `/api/episodes` is
   operator-only.
@@ -1235,7 +1237,14 @@ per place. In the Safari 27.2 check of 2026-11-11 (a Megaphone episode
 through podtrac, 13 s of shift, clicks before and after the end of the
 file) the net was never needed.
 
-Rollout: admins only, then per browser. Standalone browser probes stop
+Rollout: admins only, then per browser. **Changed 2026-11-23:** opened
+to every signed-in user on the allowed browsers (desktop Chrome, Mac
+Safari) before the bar below was met. Admin plays alone could never meet
+it: about 70 plays by then, all one person's, none on Art19. Every map is
+still applied only after the playing bytes are verified, so the bar is
+now read from real listeners' reports, and `drift_alignment_audience`
+goes back to `admins` if they show a play where the bytes differed or a
+rise in playback errors. Standalone browser probes stop
 here; the remaining questions (Safari on iOS, Firefox, more plays on
 Acast and Art19, pass time on a phone) are answered by the outcome
 reports of real plays on thestill.me. A browser is switched on for

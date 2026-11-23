@@ -38,6 +38,7 @@ from ...utils.episode_origin import derive_episode_origin
 from ...utils.language_config import normalize_language_code
 from ..analytics_request import capture_event
 from ..dependencies import AppState, get_app_state, get_current_user, is_effective_admin, require_auth
+from ..permissions import DRIFT_ALIGN, require_permission
 from ..responses import api_response, conflict, etag_json_response, not_found, paginated_response
 
 logger = get_logger(__name__)
@@ -615,9 +616,11 @@ def report_drift_outcome(
     body: DriftOutcomeRequest,
     request: Request,
     state: AppState = Depends(get_app_state),
-    user: User = Depends(require_auth),
+    user: User = Depends(require_permission(DRIFT_ALIGN)),
 ) -> dict:
     """Record what a browser made of aligning this episode (spec #116).
+
+    Only a session that holds ``drift.align`` aligns, so only one reports.
 
     The report is logged as ``drift_map_reported`` and its summary goes to
     usage analytics as ``drift_alignment_result``. It changes nothing: the

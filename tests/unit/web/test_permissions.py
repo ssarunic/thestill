@@ -54,6 +54,42 @@ def test_drift_alignment_is_on_by_default_and_the_setting_turns_it_off(monkeypat
     assert not has_permission(ADMIN_USER, DRIFT_ALIGN, MagicMock(multi_user=True))
 
 
+class _Settings:
+    def __init__(self, audience):
+        self.audience = audience
+
+    def get(self, key):
+        assert key == "drift_alignment_audience"
+        return self.audience
+
+
+def test_drift_alignment_audience_opens_it_to_every_signed_in_user():
+    """Spec #116 — the runtime setting widens drift.align, and only that."""
+    users = _Settings("users")
+    assert has_permission(PLAIN_USER, DRIFT_ALIGN, _config(True), settings=users)
+    assert permissions_for(PLAIN_USER, _config(True), users) == [DRIFT_ALIGN]
+    # Never anything else.
+    assert not has_permission(PLAIN_USER, TRANSCRIPT_EDIT, _config(True), settings=users)
+    # Admins only when it says so, or when it cannot be read.
+    admins = _Settings("admins")
+    assert not has_permission(PLAIN_USER, DRIFT_ALIGN, _config(True), settings=admins)
+    assert has_permission(ADMIN_USER, DRIFT_ALIGN, _config(True), settings=admins)
+    assert not has_permission(PLAIN_USER, DRIFT_ALIGN, _config(True))
+    # The kill switch still wins.
+    assert not has_permission(PLAIN_USER, DRIFT_ALIGN, _config(True, drift_alignment=False), settings=users)
+
+
+def test_drift_alignment_audience_setting():
+    from thestill.services.abuse.settings_registry import get_spec
+
+    spec = get_spec("drift_alignment_audience")
+    assert spec.env_default(MagicMock()) == "users"
+    assert spec.validate(" Admins ") == "admins"
+    assert spec.failsafe == "admins"
+    with pytest.raises(ValueError):
+        spec.validate("everyone")
+
+
 def test_unknown_permission_is_never_granted():
     assert not has_permission(ADMIN_USER, "reports.triage", _config(False))
     with pytest.raises(ValueError):

@@ -53,7 +53,7 @@ catch-all serves crawlable public pages:
 - `TRANSCRIPT_EDIT = "transcript.edit"`, `DRIFT_ALIGN = "drift.align"` (spec #116: the
   reader may align the transcript with the listener's copy of the audio) and
   `PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN)`, the order `/api/auth/status` lists them.
-- `has_permission`, `permissions_for`, and `require_permission(permission)`, a
+- `has_permission(..., settings=)`, `permissions_for(user, config, settings)`, `runtime_settings(state)`, and `require_permission(permission)`, a
   dependency factory that returns 401 or 403.
 
 ### Responses and errors
@@ -190,9 +190,11 @@ All of these are registered inside `if static_dir.exists():` (`app.py:968`). Wit
   for non-admin POST, PATCH, PUT and DELETE when the `read_only` setting is on. GET,
   HEAD and OPTIONS always pass.
 - **Permissions.** `permissions.py:has_permission` never grants an unknown permission,
-  and every permission is admin-only today. `DRIFT_ALIGN` is also a kill switch: nobody
-  holds it unless `config.drift_alignment_enabled` is `True` (`DRIFT_ALIGNMENT_ENABLED`,
-  on by default). `require_permission` raises `ValueError` at import for an unknown
+  and every permission is admin-only today except `DRIFT_ALIGN`, which every signed-in
+  user holds while the `drift_alignment_audience` runtime setting is `users` (admins
+  only when it is `admins`, or when no settings service is passed). `DRIFT_ALIGN` is
+  also a kill switch: nobody holds it unless `config.drift_alignment_enabled` is `True`
+  (`DRIFT_ALIGNMENT_ENABLED`, on by default). `POST …/drift-outcome` requires it. `require_permission` raises `ValueError` at import for an unknown
   name. New routes should use it instead of `require_admin`.
 - **Route order.** The `/mcp` mount and the OAuth routes are registered before the SPA
   catch-all. `serve_spa` returns `None` for these paths:

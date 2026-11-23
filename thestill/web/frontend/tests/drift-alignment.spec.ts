@@ -144,13 +144,18 @@ async function recordWhatIsHeard(page: Page) {
 }
 const heard = (page: Page) => page.evaluate(() => (window as unknown as { __heard: number[] }).__heard)
 
-async function openEpisode(page: Page, file: 'transcribed.mp3' | 'listener.mp3', { play = true } = {}) {
+async function openEpisode(
+  page: Page,
+  file: 'transcribed.mp3' | 'listener.mp3',
+  { play = true, isAdmin = true } = {},
+) {
   const outcomes: Outcome[] = []
   await mockEpisodeApi(page, {
     audioUrl: `${hostOrigin}/${file}`,
     transcriptSegments: TRANSCRIPT,
     permissions: ['drift.align'],
     duration: 46,
+    isAdmin,
   })
   await page.route(`**/api/podcasts/${PODCAST}/episodes/${EPISODE}/sync-track/e2e`, (route) =>
     route.fulfill({ body: TRACK, contentType: 'application/octet-stream' }),
@@ -297,6 +302,25 @@ test.describe('timeline map applied to a listener copy with other ads', () => {
     const at = await elementTime(page)
     expect(at).toBeGreaterThanOrEqual(35)
     expect(at).toBeLessThan(37)
+  })
+
+  test('a listener who is not an admin gets the map and Skip ahead, but not the debug strip', async ({ page }) => {
+    // drift.align held through the drift_alignment_audience setting.
+    await openEpisode(page, 'listener.mp3', { isAdmin: false })
+    // The map is in force once the ad row says what this copy plays there.
+    await expect(page.getByTestId('ad-break-text-3')).toHaveText('Ad break · different in your copy · 0:10', {
+      timeout: 20_000,
+    })
+    await expect(page.getByTestId('drift-debug-strip')).toHaveCount(0)
+
+    await page.evaluate(() => {
+      document.querySelector('video')!.currentTime = 27
+    })
+    const skip = page.getByTestId('skip-ahead').first()
+    await expect(skip).toBeVisible()
+    await skip.click()
+    await expect(skip).toHaveCount(0)
+    expect(await elementTime(page)).toBeGreaterThanOrEqual(35)
   })
 
   test('the transcribed copy itself needs no map and seeks as before', async ({ page }) => {
