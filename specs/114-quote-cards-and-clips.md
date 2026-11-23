@@ -2,7 +2,7 @@
 
 > **Status:** 📝 Draft (2026-11-05)
 > **Created:** 2026-11-05
-> **Updated:** 2026-11-05
+> **Updated:** 2026-11-23 (the five open questions decided: D9–D12)
 > **Priority:** Medium-high. The first readers arrive from public pages and leave without following anything (spec #111); this is the first feature built to bring *more* of them, so it ships together with the hook that keeps them.
 > **Author:** Product & Engineering
 > **Related:** [#100 quote-ranking-and-featured-quotes](100-quote-ranking-and-featured-quotes.md) (the quote gate and candidates table this consumes), [#94 public-pages](94-public-pages.md) (the landing page, head injection, `public_pages` opt-out), [#105 server-rendered-public-pages](105-server-rendered-public-pages.md) (UA-blind rule, one URL per episode), [#104 abuse-prevention-and-user-admin](104-abuse-prevention-and-user-admin.md) (quotas, kill switches, audit), [#111 product-health-metrics](111-product-health-metrics.md) (the Scorecard this is read against), [#95 product-analytics](95-product-analytics.md) (events), [#34 briefing-audio-and-feeds](34-briefing-audio-and-feeds.md) (quote clip cutting, designed there, built here first), [#38 karaoke-word-highlighting](38-karaoke-word-highlighting.md) (word timestamps), [#45 entity-page-enrichment](45-entity-page-enrichment.md) (guest social handles), [#91 transcript-and-summary-export](91-transcript-and-summary-export.md) (Web Share with files), [#86 quality-feedback-loop](86-quality-feedback-loop.md) (reports), [#110 transcript-editor](110-transcript-editor.md) (speaker fixes invalidate cards), [#93 native-web-capabilities](93-native-web-capabilities.md) (permission rule), [#42 robustness-and-failure-mode-hardening](42-robustness-and-failure-mode-hardening.md) (FM-6, FM-7)
@@ -44,8 +44,8 @@ more visitors without a hook only makes that number bigger.
 - **Text is public, audio is narrower.** Short attributed quotes match
   what the public pages already show. Redistributing publisher audio as
   branded video is a different posture: RSS-sourced shows only, never
-  YouTube-derived audio, 30 s cap, per-show opt-out honoured within the
-  cache TTL, revocable by id.
+  YouTube-derived audio, 30 s cap, only for shows the operator has
+  switched clips on for (an allowlist, Decision D3), revocable by id.
 - **One canonical URL per episode stays true.** The short link is a
   `noindex` page with its own Open Graph tags that sends people to the
   canonical episode URL with a fragment. No `?ref=` or `?utm=` on episode
@@ -168,7 +168,7 @@ definition). It reuses `_gate`'s conditions:
 | Episode has a summary (the public page exists) | required | required |
 | Quote passes the gate: whole sentences, 60–320 chars, after the intro skip, no sponsor term, not ad-adjacent | required | required |
 | Speaker resolved to a person entity, not `public_hidden` | name shown; otherwise "a guest on *Show*" | required (no anonymous-voice clips) |
-| `podcasts.audio_clips` true (new column, default **true**; see Decision D3) | — | required |
+| `podcasts.audio_clips` true (new column, default **false**: an allowlist, switched on per show; see Decision D3) | — | required |
 | Episode audio is an RSS enclosure, not YouTube-derived (`audio_url` host not a YouTube or googlevideo host, and the episode has no YouTube-only source) | — | required |
 | Quote duration ≤ 30 s after sentence snapping | — | required |
 
@@ -367,7 +367,7 @@ cache and revocation rules as the images.
 
 **4.3 Clips are narrower than cards.** §1's clip column: RSS enclosure
 only, never YouTube-derived audio (the existing "Hear it on YouTube"
-timestamp link covers those), named speaker only, show not opted out,
+timestamp link covers those), named speaker only, show on the clips allowlist,
 30 s cap. The rendered video carries the show's name and the short link
 on every frame; there is no unbranded export.
 
@@ -479,8 +479,9 @@ landing hook, not the cards, is what to change next.
   assets deleted by the same invalidation.
 - **Show opt-out**: `set-podcast-visibility --public false` already removes
   the show from `_gate`; this spec makes it also revoke the show's
-  `quote_shares` and delete assets. New `--audio-clips off` turns off clips
-  only (keeps cards), deletes `quote_audio` and clip renders.
+  `quote_shares` and delete assets. New `--audio-clips on|off` puts a show
+  on the clips allowlist or takes it off; off keeps cards and deletes
+  `quote_audio` and clip renders.
 - **`thestill quote-share revoke <id> --reason "…"`**: 410, assets gone,
   audited through `AuditService.record`. **`thestill quote-share list
   --episode <slug>`** shows what exists.
@@ -500,7 +501,7 @@ landing hook, not the cards, is what to change next.
 | `clips_per_day` quota | 10 | reserve → render → commit; failed render releases |
 | Public rate limit | existing | `/q/*` sits on the public router |
 | Render concurrency | 2 images, 1 video | process-wide semaphores |
-| Per-show `audio_clips` | true | the opt-out; see D3 for the allowlist alternative |
+| Per-show `audio_clips` | false | the allowlist: `set-podcast-visibility --audio-clips on` per show (D3) |
 
 Anonymous visitors never trigger a render they did not get from the cache
 or a gated public quote (G6). Image renders are cheap enough that the
@@ -528,7 +529,7 @@ rate limit suffices; video is never anonymous.
 | 1 | `square` and `story` variants; download and Web Share with files; caption with the X handle chip; *Quote this* in the transcript (gate's block only); follow hook on the linked card | Phase 0; spec #91 §7's files path (small, can be built here) |
 | 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
 | 3 | Video clips: queued render, `clips_per_day`, `clips_enabled`, QR, `GET /q/{id}/{variant}.mp4` | Phase 2; libass probe |
-| 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules | Phase 1; a decision on whether the activation read from Phases 0–1 justifies it |
+| 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules | Phase 1; the use of *Quote this* in Phases 0–1 (D11) |
 
 Phase 0 is the launchable unit and the cheapest test of the whole thesis:
 if shared quote links do not get opened, nothing after it is worth
@@ -616,12 +617,12 @@ building.
 | Risk | Mitigation |
 |---|---|
 | A wrong name on a widely shared card | Gate-only sources; render-time name; revoke CLI; report link; hidden-speaker switch (§7). The residual risk is a diarization error the gate cannot see; the "Hear it" link makes the claim checkable |
-| Publisher objection to audio clips | RSS-only, 30 s, attribution and link on every frame, `audio_clips` opt-out and per-id revoke; D3 asks whether to go allowlist |
+| Publisher objection to audio clips | RSS-only, 30 s, attribution and link on every frame, clips only for shows on the `audio_clips` allowlist (D3), per-id revoke |
 | YouTube Terms of Service | No clips from YouTube-derived audio, ever; cards link to YouTube at the timestamp instead |
 | Facebook and LinkedIn replace the card with the episode artwork | `og:url` is the short link (D1); checked in the acceptance criteria |
 | Search engines index `/q` pages or treat them as cloaking | `noindex` + canonical; UA-blind bytes; `robots.txt` disallows `/q/` from crawling but the previewers are not crawlers |
 | Render storms on the RPi5 | Cache, two-image semaphore, public rate limit, `quote_cards_enabled` |
-| Storage growth from clip audio | ~5 MB per public episode; deleted with the episode or the opt-out; `thestill quote-audio prune` for episodes no longer public |
+| Storage growth from clip audio | ~5 MB per public episode; deleted with the episode or when the show leaves the allowlist; `thestill quote-audio prune` for episodes no longer public |
 | Retained originals pile up when the entity branch fails (`DELETE_AUDIO_AFTER_PROCESSING` deployments) | The candidates step deletes after the cut; the 7-day housekeeping sweep deletes the rest and clears the marker; `clips_enabled` off restores today's deletion |
 | The on-read upsert of gated `quote_shares` rows becomes a write amplifier on public pages | One statement per response, idempotent, bounded by the gated set (one row per quote ever); skipped under `read_only`; gone once spec #100 mints on write |
 | Caption tagging annoys the people quoted | The handle is a removable chip, never automatic posting; operators can blank a handle |
@@ -643,19 +644,17 @@ columns, both ignorable.
 |---|---|---|
 | D1 | `og:url` on the `/q` page is the short link itself; `<link rel="canonical">` is the episode URL | Facebook and LinkedIn fetch `og:url` and use its tags; pointing it at the episode would show the episode artwork instead of the card. Search engines read the canonical and the `noindex` |
 | D2 | Pillow with a bundled font, not headless Chromium or client canvas | Runs on the RPi5 and the small EC2 box; deterministic; previews need a server image anyway (Options B, C) |
-| D3 | Clips are opt-out per show (`audio_clips` default true), cards follow `public_pages` | Matches the existing public-pages stance; **open question Q1 asks whether audio should be allowlist instead** before Phase 2 ships |
+| D3 | Clips are an allowlist per show (`audio_clips` default false, switched on with `--audio-clips on`); cards follow `public_pages` and stay opt-out | Putting a publisher's audio into branded video is the one part of this spec that can draw a complaint, and under an opt-out the complaint is the first signal. Text cards match what the public pages already show. Decided 2026-11-23 (was open question Q1) |
 | D4 | No QR on image cards; QR on video only | A QR on an X or LinkedIn image is dead weight; on Reels and TikTok it is the only link |
 | D5 | The speaker's handle goes in the caption as a removable chip, never on the image, never auto-posted | Tagging drives the reach; the user, not the system, decides to tag a person |
 | D6 | Clip audio is cut at the entity stage from the retained original and kept; never re-fetched from the enclosure. With `DELETE_AUDIO_AFTER_PROCESSING` on, clip-eligible episodes keep the original until the cut (§4.1), with a 7-day orphan sweep | Original audio is usually gone by share time, the cut needs resolved speakers so it cannot run earlier, and dynamic ad insertion makes re-fetched audio misaligned by minutes (spec #113) |
 | D7 | No auto-follow from a quote link | A URL is not consent (spec #80); a forced follow games spec #111's activation metric |
 | D8 | Gated quotes have deterministic ids, and the id-to-quote row is persisted before the link is shown: minted by the quote payloads on read (idempotent upsert) until spec #100's candidates step mints it on write | A truncated hash cannot be reversed, so `/q/<id>` must be a lookup, never a search; deterministic ids let #100 replace the source without changing links. Self-describing ids were rejected: they triple the URL length and episode ids have no short indexed form |
+| D9 | The `/q` page is head-only plus the visible link; no server-written quote text in the body | The page is `noindex` and redirects at once; only link previewers read it, and they read the tags. Decided 2026-11-23 (was Q2) |
+| D10 | Phase 0 ships on the spec #94 stand-in query and does not wait for spec #100's candidates table | Phase 0 is the test of whether shared quote links get opened; the id scheme is independent of the source, so #100 replaces it without changing links. Decided 2026-11-23 (was Q3) |
+| D11 | Phase 4 is decided by use, not by a cohort comparison: it starts only if signed-in readers use *Quote this* (`quote_sheet_open` and `quote_share_actions`) in Phases 0–1 | Phase 4 exists for readers who want their own passage, so their use of the gated version is the direct signal. A quote-referred activation cohort would be a handful of people at current volume (spec #111) and could not be read in four weeks. The cohort is still logged per `docs/experiments.md`. Decided 2026-11-23 (was Q4) |
+| D12 | `story` video captions sit in the lower third with a 320 px bottom safe area | Reels and TikTok cover the bottom with their own controls, and centred captions would collide with the waveform. Revisit with the first real render in Phase 3. Decided 2026-11-23 (was Q5) |
 
 ## Open questions
 
-| # | Question | Default if unanswered |
-|---|---|---|
-| Q1 | Should audio clips require a per-show allowlist rather than an opt-out, at least until the first publisher conversation? | Ship Phase 2 behind `clips_enabled = off` in production and turn it on per show with `--audio-clips on` for a handful of shows first; keep the column's default `true` for self-hosted single-user installs |
-| Q2 | Does the `/q` page need the spec #105 content budget treatment (server-written quote text in the body) or is a head-only page enough? | Head-only plus the visible link; the page is `noindex`, so there is no crawler to serve |
-| Q3 | Should Phase 0 wait for spec #100's candidates table or ship on the stand-in query? | Ship on the stand-in; the id scheme is independent, and #100 replaces the source without changing ids |
-| Q4 | Which spec #111 cohort read decides Phase 4? | Phase 4 starts only if quote-referred readers activate at ≥ the all-readers rate after four weekly cohorts |
-| Q5 | Do we want `story`-sized video with the captions in the lower third for Reels' UI overlays, or centred? | Lower third with a 320 px safe area, the common Reels and TikTok guidance |
+None. The five questions of the first draft are decisions D3 and D9–D12.
