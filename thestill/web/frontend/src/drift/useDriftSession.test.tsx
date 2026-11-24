@@ -3,7 +3,8 @@ import { CHROME_UA } from '../test/setup'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beginAudioLoad, setCorsVerdict, setCrossOriginLoadingEnabled } from './corsVerdict'
 import { mediaReportsFor, page, resetDriftServiceWorkerClient } from './swClient'
-import { useDriftSession } from './useDriftSession'
+import { setUnverifiedBrowsersAllowed } from './support'
+import { useDriftAllowed, useDriftSession } from './useDriftSession'
 
 const auth = { isLoading: false, permissions: [] as string[] }
 vi.mock('../contexts/AuthContext', () => ({
@@ -27,6 +28,7 @@ beforeEach(() => {
   swListeners.length = 0
   resetDriftServiceWorkerClient()
   other.mockClear()
+  setUnverifiedBrowsersAllowed(false)
   setCrossOriginLoadingEnabled(false)
   setCorsVerdict(URL_A, 'cors_ok')
   Object.assign(auth, { isLoading: false, permissions: [] })
@@ -145,5 +147,48 @@ describe('useDriftSession', () => {
     expect(localStorage.getItem('thestill:drift:enabled')).toBeNull()
     expect(beginAudioLoad(URL_A, true)).toBe(false)
     expect(swListeners).toHaveLength(0)
+  })
+
+  it('runs in an unverified browser for a session that may use them, and stops when it may not', async () => {
+    const iphone =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 27_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.1 Mobile/15E148 Safari/604.1'
+    vi.stubGlobal('navigator', {
+      userAgent: iphone,
+      maxTouchPoints: 5,
+      serviceWorker: {
+        get controller() {
+          return controlledBy
+        },
+        addEventListener: (_name: string, listener: (event: { data: unknown }) => void) => swListeners.push(listener),
+        getRegistrations: async () => [{ active: { scriptURL: 'https://thestill.me/sw.js' }, unregister }],
+      },
+    })
+    auth.permissions = ['drift.align', 'drift.align.unverified']
+    const { result, rerender } = renderHook(() => {
+      useDriftSession()
+      return useDriftAllowed()
+    })
+    expect(result.current).toBe(true)
+    expect(beginAudioLoad(URL_A, true)).toBe(true)
+    expect(swListeners).toHaveLength(1)
+    expect(unregister).not.toHaveBeenCalled()
+    // Remembered, so the next page load starts with it.
+    expect(localStorage.getItem('thestill:drift:unverified')).toBe('1')
+
+    // drift_unverified_browsers set to off: back to the list.
+    auth.permissions = ['drift.align']
+    rerender()
+    expect(result.current).toBe(false)
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalledTimes(1))
+    expect(beginAudioLoad(URL_A, true)).toBe(false)
+    expect(localStorage.getItem('thestill:drift:unverified')).toBeNull()
+  })
+
+  it('never runs in an unverified browser on that permission alone', () => {
+    const firefox = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0'
+    vi.stubGlobal('navigator', { userAgent: firefox, serviceWorker: { getRegistrations: async () => [] } })
+    auth.permissions = ['drift.align.unverified']
+    const { result } = renderHook(() => useDriftAllowed())
+    expect(result.current).toBe(false)
   })
 })

@@ -1216,6 +1216,21 @@ in for Safari: it mis-seeks this kind of file even without any of this
 code. A local build with `VITE_DRIFT_ANY_BROWSER=1` runs the feature in
 any browser, for such a check.
 
+**Unverified browsers, for admins (2026-11-24).** The allow-list also
+kept admins out, so no outcome report could ever arrive from a phone and
+the questions left to "real plays" (Safari on iOS, Firefox, Android)
+could not be answered. A second permission, `drift.align.unverified`,
+lifts the list for the session that holds it: admins, while the runtime
+setting `drift_unverified_browsers` is `admins` (the default) and
+`DRIFT_ALIGNMENT_ENABLED` is on. Their plays in those browsers send the
+same outcome reports, with the browser family in each, and
+`?driftdebug=1` shows the result on the page. `thestill settings set
+drift_unverified_browsers off` puts admins back on the list without a
+deploy, if playback misbehaves there. The browser remembers the answer
+for the next page load (`thestill:drift:unverified` in `localStorage`),
+because the player restores a source before the session has loaded.
+Everyone else stays on the allow-list.
+
 **What went wrong in Safari (v1.40.0 to v1.42.0).** Two faults of
 Safari's media element, both ending the same way: it reports the
 position it is at as the duration and fires `ended`, after which every

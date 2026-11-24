@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { driftAlignmentSupported } from './support'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { driftAlignmentSupported, driftBrowserVerified, setUnverifiedBrowsersAllowed } from './support'
 
 const UA = {
   chrome:
@@ -17,27 +17,52 @@ const UA = {
   firefox: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0',
 }
 
-describe('driftAlignmentSupported', () => {
+describe('driftBrowserVerified', () => {
   it('allows the browsers the feature has been proven in: desktop Chrome, Edge and Safari', () => {
-    expect(driftAlignmentSupported(UA.chrome)).toBe(true)
-    expect(driftAlignmentSupported(UA.edge)).toBe(true)
-    expect(driftAlignmentSupported(UA.safari)).toBe(true)
+    expect(driftBrowserVerified(UA.chrome)).toBe(true)
+    expect(driftBrowserVerified(UA.edge)).toBe(true)
+    expect(driftBrowserVerified(UA.safari)).toBe(true)
   })
 
   it('does not take an iPad asking for the desktop site for a Mac', () => {
-    expect(driftAlignmentSupported(UA.safari, 5)).toBe(false)
-    expect(driftAlignmentSupported(UA.safari, 0)).toBe(true)
+    expect(driftBrowserVerified(UA.safari, 5)).toBe(false)
+    expect(driftBrowserVerified(UA.safari, 0)).toBe(true)
   })
 
   it.each(Object.entries(UA).filter(([name]) => !['chrome', 'edge', 'safari'].includes(name)))(
     'gives %s none of it',
     (_name, userAgent) => {
-      expect(driftAlignmentSupported(userAgent)).toBe(false)
+      expect(driftBrowserVerified(userAgent)).toBe(false)
     },
   )
 
   it('is off for an unknown or empty user agent', () => {
-    expect(driftAlignmentSupported('')).toBe(false)
-    expect(driftAlignmentSupported('curl/8.4.0')).toBe(false)
+    expect(driftBrowserVerified('')).toBe(false)
+    expect(driftBrowserVerified('curl/8.4.0')).toBe(false)
+  })
+})
+
+describe('driftAlignmentSupported', () => {
+  afterEach(() => {
+    setUnverifiedBrowsersAllowed(false)
+    vi.unstubAllGlobals()
+  })
+
+  it('follows the list until the session may use unverified browsers, and remembers that', () => {
+    vi.stubGlobal('navigator', { userAgent: UA.iphone, maxTouchPoints: 5 })
+    expect(driftAlignmentSupported()).toBe(false)
+
+    setUnverifiedBrowsersAllowed(true)
+    expect(driftAlignmentSupported()).toBe(true)
+    expect(localStorage.getItem('thestill:drift:unverified')).toBe('1')
+
+    setUnverifiedBrowsersAllowed(false)
+    expect(driftAlignmentSupported()).toBe(false)
+    expect(localStorage.getItem('thestill:drift:unverified')).toBeNull()
+  })
+
+  it('stays on in a verified browser without it', () => {
+    vi.stubGlobal('navigator', { userAgent: UA.chrome, maxTouchPoints: 0 })
+    expect(driftAlignmentSupported()).toBe(true)
   })
 })

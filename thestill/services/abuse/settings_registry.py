@@ -33,6 +33,9 @@ SIGNUP_MODES = ("open", "allowlist", "closed")
 
 #: Spec #116 — who holds ``drift.align``: admins only, or every signed-in user.
 DRIFT_ALIGNMENT_AUDIENCES = ("admins", "users")
+#: Spec #116 — who gets drift alignment in a browser it is not yet verified
+#: in (holds ``drift.align.unverified``): admins, or nobody.
+DRIFT_UNVERIFIED_BROWSERS = ("off", "admins")
 
 
 #: Costly paths a switch can pause. ``read_only`` pauses all of them.
@@ -67,6 +70,12 @@ def _validate_drift_audience(value: Any) -> str:
     if isinstance(value, str) and value.strip().lower() in DRIFT_ALIGNMENT_AUDIENCES:
         return value.strip().lower()
     raise ValueError(f"expected one of {', '.join(DRIFT_ALIGNMENT_AUDIENCES)}")
+
+
+def _validate_drift_unverified_browsers(value: Any) -> str:
+    if isinstance(value, str) and value.strip().lower() in DRIFT_UNVERIFIED_BROWSERS:
+        return value.strip().lower()
+    raise ValueError(f"expected one of {', '.join(DRIFT_UNVERIFIED_BROWSERS)}")
 
 
 def normalize_allowlist_entry(entry: str) -> str:
@@ -234,6 +243,16 @@ SETTINGS: Dict[str, SettingSpec] = {
             _validate_drift_audience,
             lambda raw: raw.strip(),
             failsafe="admins",
+        ),
+        SettingSpec(
+            "drift_unverified_browsers",
+            "Who gets drift alignment in a browser it is not yet verified in, such as an iPhone, iPad, "
+            "Android or Firefox (spec #116): admins, so that their plays are the check, or off. Verified "
+            "browsers (desktop Chrome, Edge, Safari) follow drift_alignment_audience.",
+            lambda _c: "admins",
+            _validate_drift_unverified_browsers,
+            lambda raw: raw.strip(),
+            failsafe="off",
         ),
         SettingSpec(
             "entity_noindex",

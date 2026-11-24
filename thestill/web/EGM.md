@@ -51,8 +51,9 @@ catch-all serves crawlable public pages:
 ### Permissions (`permissions.py`)
 
 - `TRANSCRIPT_EDIT = "transcript.edit"`, `DRIFT_ALIGN = "drift.align"` (spec #116: the
-  reader may align the transcript with the listener's copy of the audio) and
-  `PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN)`, the order `/api/auth/status` lists them.
+  reader may align the transcript with the listener's copy of the audio),
+  `DRIFT_ALIGN_UNVERIFIED = "drift.align.unverified"` (the same, in a browser not yet verified) and
+  `PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN, DRIFT_ALIGN_UNVERIFIED)`, the order `/api/auth/status` lists them.
 - `has_permission(..., settings=)`, `permissions_for(user, config, settings)`, `runtime_settings(state)`, and `require_permission(permission)`, a
   dependency factory that returns 401 or 403.
 
@@ -194,7 +195,9 @@ All of these are registered inside `if static_dir.exists():` (`app.py:968`). Wit
   user holds while the `drift_alignment_audience` runtime setting is `users` (admins
   only when it is `admins`, or when no settings service is passed). `DRIFT_ALIGN` is
   also a kill switch: nobody holds it unless `config.drift_alignment_enabled` is `True`
-  (`DRIFT_ALIGNMENT_ENABLED`, on by default). `POST …/drift-outcome` requires it. `require_permission` raises `ValueError` at import for an unknown
+  (`DRIFT_ALIGNMENT_ENABLED`, on by default). `DRIFT_ALIGN_UNVERIFIED` (the feature in
+  browsers it is not verified in) obeys the same kill switch and is admin-only; nobody
+  holds it while the `drift_unverified_browsers` runtime setting is `off`. `POST …/drift-outcome` requires it. `require_permission` raises `ValueError` at import for an unknown
   name. New routes should use it instead of `require_admin`.
 - **Route order.** The `/mcp` mount and the OAuth routes are registered before the SPA
   catch-all. `serve_spa` returns `None` for these paths:
