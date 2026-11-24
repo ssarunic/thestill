@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef, lazy, Suspense, type RefObject } from 'react'
 import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { useEpisode, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh, useReprocessEpisode } from '../hooks/useApi'
+import { useEpisode, useEpisodeQuoteShares, useEpisodeTranscript, useEpisodeSummary, useEpisodeEntities, useRelatedEpisodes, useEpisodeTranscriptWords, useMarkInboxReadOnView, useEpisodeLiveRefresh, useEpisodeTasks, useEntityBranchRefresh, useReprocessEpisode } from '../hooks/useApi'
 import { useAuth } from '../contexts/AuthContext'
 import { useReadingPosition } from '../hooks/useReadingPosition'
 import { useReaderEvents } from '../hooks/useReaderEvents'
@@ -204,6 +204,8 @@ export default function EpisodeReader({
     { live: !settled },
   )
   const { data: transcriptData, isLoading: transcriptLoading } = useEpisodeTranscript(podcastSlug!, episodeSlug!)
+  // Spec #114 — quotes the transcript can offer to share (public ones only).
+  const { data: quoteShares } = useEpisodeQuoteShares(podcastSlug!, episodeSlug!)
   const {
     data: summaryData,
     isLoading: summaryLoading,
@@ -857,6 +859,7 @@ export default function EpisodeReader({
                   />
                 )}
                 <TranscriptPanel
+                  quoteShares={quoteShares}
                   transcriptData={transcriptData}
                   transcriptLoading={transcriptLoading}
                   episodeState={episode?.state}
@@ -941,6 +944,8 @@ export default function EpisodeReader({
  * renders the loading / unavailable states.
  */
 interface TranscriptPanelProps {
+  // Spec #114 — public quotes of this episode, shareable from their turns.
+  quoteShares?: import('../api/types').QuoteShareItem[]
   transcriptData: import('../api/types').ContentResponse | undefined
   transcriptLoading: boolean
   episodeState: string | undefined
@@ -1033,6 +1038,7 @@ function formatDeltaSeconds(seconds: number): string {
 }
 
 function TranscriptPanel({
+  quoteShares,
   transcriptData,
   transcriptLoading,
   episodeState,
@@ -1104,6 +1110,7 @@ function TranscriptPanel({
         <>
           {entityFilterBar && <div className="mb-3">{entityFilterBar}</div>}
           <SegmentedTranscriptViewer
+            quoteShares={quoteShares}
             transcript={transcriptData.segments}
             episodeId={episodeId}
             onSeekRequest={onSegmentSeek}

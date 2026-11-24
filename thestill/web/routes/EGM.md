@@ -136,7 +136,7 @@ Per-route guards on top of the router guard:
     `get_episode_tasks` returns an empty list instead of a 404, because the
     episode reader polls it for every viewer.
 - **Reads by slug are open.** `api_podcasts.py` reads by slug (`get_podcast`,
-  `get_episode_by_slugs`, `.../transcript`, `.../summary`, `.../sync-track/...`,
+  `get_episode_by_slugs`, `.../transcript`, `.../summary`, `.../quote-shares` (spec #114: public quotes with their turn and short link id), `.../sync-track/...`,
   `.../audio`) and `api_transcript_words.py:get_episode_transcript_words` have no follow
   or ownership check; neither does `report_drift_outcome`. `api_podcasts.py:get_podcasts`
   lists only the caller's followed podcasts

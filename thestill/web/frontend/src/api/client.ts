@@ -1,4 +1,5 @@
 import type {
+  QuoteShareItem,
   AnalyticsRange,
   AnalyticsResponse,
   DashboardStats,
@@ -228,6 +229,11 @@ export async function getEpisode(podcastSlug: string, episodeSlug: string): Prom
 
 export async function getEpisodeTranscript(podcastSlug: string, episodeSlug: string): Promise<ContentResponse> {
   return fetchApi<ContentResponse>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/transcript`)
+}
+
+export async function getEpisodeQuoteShares(podcastSlug: string, episodeSlug: string): Promise<QuoteShareItem[]> {
+  const body = await fetchApi<{ shares: QuoteShareItem[] }>(`/podcasts/${podcastSlug}/episodes/${episodeSlug}/quote-shares`)
+  return body.shares
 }
 
 export async function getEpisodeSummary(

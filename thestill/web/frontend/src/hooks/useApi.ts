@@ -8,6 +8,7 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query'
 import {
+  getEpisodeQuoteShares,
   getDashboardStats,
   getNarrationDashboardStats,
   getAnalytics,
@@ -323,6 +324,19 @@ export function useEpisodeTranscript(podcastSlug: string, episodeSlug: string) {
   })
 }
 
+// Spec #114 — the transcript's shareable quotes (already public ones only).
+// Best effort: on any error the transcript simply offers none.
+export function useEpisodeQuoteShares(podcastSlug: string, episodeSlug: string) {
+  return useQuery({
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'],
+    queryFn: () => getEpisodeQuoteShares(podcastSlug, episodeSlug),
+    enabled: !!podcastSlug && !!episodeSlug,
+    retry: false,
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
+  })
+}
+
 // Spec #38 — karaoke wipe word-level timestamps. ``enabled`` is driven by
 // the toolbar chip; the request never fires when karaoke is off, so the
 // default page weight is unchanged. ``data === null`` means the endpoint
@@ -457,6 +471,11 @@ export function useEpisodeLiveRefresh({
       // Prefix key — every cached language variant, not just the active one
       // (the full key is [..., 'summary', lang]).
       queryClient.invalidateQueries({ queryKey: summaryKey })
+    }
+    if (prev.state !== episode.state || prev.hasSummary !== episode.has_summary) {
+      // Spec #114 — a quote is public only once the episode has a summary
+      // and its speakers are resolved, so the shareable set grows with both.
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'] })
     }
     if (prev.state !== episode.state) {
       queryClient.invalidateQueries({ queryKey: ['episodes', episode.id, 'entities'] })
@@ -835,6 +854,11 @@ export function useEntityBranchRefresh(
       // Prefix key — covers every minConfidence / limit variant, including
       // the NowPlayingSheet's entities observer.
       queryClient.invalidateQueries({ queryKey: ['episodes', episodeId, target] })
+      // Spec #114 — resolved entities are what make a quote public: the
+      // transcript's share icons follow them.
+      if (target === 'entities' && podcastSlug && episodeSlug) {
+        queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'] })
+      }
     }
   }, [episodeId, tasks, queryClient, podcastSlug, episodeSlug])
 }
