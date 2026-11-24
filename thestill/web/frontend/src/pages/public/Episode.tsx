@@ -97,13 +97,19 @@ export default function Episode() {
       : null
   const linked: QuoteCardQuote | null = shared ?? firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
+  // While a shared quote is still being fetched the page does not scroll:
+  // the quote at that time may not be the one that was shared, and the
+  // scroll would settle on it. `linkedWords` re-runs the scroll when the
+  // linked quote changes at the same second.
+  const awaitingShare = !!shareId && sharedQuery.isLoading
+  const linkedWords = linked?.text ?? null
   useEffect(() => {
-    if (!linkedId) return
+    if (!linkedId || awaitingShare) return
     const el = document.getElementById(linkedId)
     if (!el) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-  }, [linkedId])
+  }, [linkedId, linkedWords, awaitingShare])
 
   const speakers = firstPage?.speakers ?? []
   const quoteCount = speakers.reduce((n, s) => n + s.quotes, 0)

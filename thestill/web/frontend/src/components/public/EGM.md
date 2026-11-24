@@ -22,7 +22,7 @@ The signed-out shell and shared UI kit of the spec #94 public pages (landing, sh
 
 ## Side Effects
 
-- Quote share hands out `quoteShareUrl` and calls `track('share', { kind: 'quote', method })`: `navigator.share` on touch (`(hover: none)`) devices, else `navigator.clipboard.writeText` with a 1.5 s "copied" timer [src/components/public/ui.tsx:QuoteCard]
+- Quote share hands out `quoteShareUrl` and calls `reportQuoteShared(method)` (a fire-and-forget `POST /api/public/quote-shared`; the public site has no analytics client): `navigator.share` on touch (`(hover: none)`) devices, else `navigator.clipboard.writeText` with a 1.5 s "copied" timer [src/components/public/ui.tsx:QuoteCard]
 - Imports `styles/public.css` and restores scroll on Back via `useScrollRestoration` [src/components/public/PublicLayout.tsx:PublicLayout]
 
 ## Verification

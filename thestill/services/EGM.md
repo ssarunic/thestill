@@ -303,7 +303,7 @@ Callers import every other module by its own path.
 - `analytics_sink.py`:
   - Sinks: the `AnalyticsSink` Protocol, `PostHogSink` and `NullSink`.
   - Factory and helper: `make_analytics_sink(config)` and `follow_source`.
-  - Event models: `PublicPageView`, `LoginStarted`, `LoginCompleted`,
+  - Event models: `PublicPageView`, `PublicQuoteShared`, `LoginStarted`, `LoginCompleted`,
     `LoginCancelled`, `LoginFailed`, `Search`, `Follow`, `Unfollow`,
     `McpToolCall` and `DriftAlignmentResult` (spec #116, with the
     `DriftOutcome` and `DriftSwState` literals).

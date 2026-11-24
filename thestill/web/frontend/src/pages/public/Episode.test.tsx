@@ -102,6 +102,29 @@ describe('public episode page', () => {
       expect(screen.getByText(`“${inList.text}”`).closest('figure')).not.toHaveTextContent('Linked quote')
     })
 
+    it('scrolls to the shared quote once it is known, not to the quote at that time before', () => {
+      const scroll = vi.mocked(Element.prototype.scrollIntoView)
+      scroll.mockClear()
+      vi.mocked(usePublicEpisodeQuotes).mockReturnValue(quotesPage as never)
+      vi.mocked(usePublicQuoteShare).mockReturnValue({ data: undefined, isLoading: true } as never)
+      const view = open('#t=125&s=aaaaaaaaaa')
+      expect(scroll).not.toHaveBeenCalled()
+
+      vi.mocked(usePublicQuoteShare).mockReturnValue({
+        data: { share: { id: 'aaaaaaaaaa', text: 'Shared words here.', start_seconds: 125, speaker: null, episode, podcast: show } },
+        isLoading: false,
+      } as never)
+      view.rerender(
+        <MemoryRouter initialEntries={[`${SLUGS}#t=125&s=aaaaaaaaaa`]}>
+          <Routes>
+            <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug" element={<Episode />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect(scroll.mock.instances[0]).toHaveTextContent('Shared words here.')
+    })
+
     it('names "A guest" without a link when the speaker could not be kept', () => {
       vi.mocked(usePublicEpisodeQuotes).mockReturnValue(quotesPage as never)
       vi.mocked(usePublicQuoteShare).mockReturnValue({

@@ -14,8 +14,7 @@ import {
   type PublicQuote,
 } from '../../api/public'
 import type { SignInIntent } from '../../utils/signIn'
-import { track } from '../../analytics/client'
-import { quoteShareUrl, quoteUrl, useSignIn } from './helpers'
+import { quoteShareUrl, quoteUrl, reportQuoteShared, useSignIn } from './helpers'
 
 function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ')
@@ -175,11 +174,11 @@ export function QuoteCard({
     try {
       if (navigator.share && window.matchMedia?.('(hover: none)').matches) {
         await navigator.share({ title: `${quote.speaker.name} on ${quote.podcast.title}`, url: absolute })
-        track('share', { kind: 'quote', method: 'share' }) // spec #95: never the URL
+        reportQuoteShared('share')
         return
       }
       await navigator.clipboard.writeText(absolute)
-      track('share', { kind: 'quote', method: 'link' })
+      reportQuoteShared('link')
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {

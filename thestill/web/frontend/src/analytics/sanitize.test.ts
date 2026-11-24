@@ -55,11 +55,6 @@ describe('sanitizeEvent (spec #95 §3.6)', () => {
     expect(out.properties).toEqual({ kind: 'episode', app: 'thestill' })
   })
 
-  it('keeps how a quote was shared (spec #114) and nothing else about it', () => {
-    const out = sanitizeEvent(event('share', { kind: 'quote', method: 'link', url: `${origin}/q/abc`, share_id: 'abc' }))!
-    expect(out.properties).toEqual({ kind: 'quote', method: 'link', app: 'thestill' })
-  })
-
   it('drops SDK props that are not allowlisted, including session-entry URLs', () => {
     const out = sanitizeEvent(
       event('$pageview', {

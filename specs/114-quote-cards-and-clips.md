@@ -485,7 +485,12 @@ usage-analytics opt-out like every measurement-only fact (spec #111 §1).
 | Clips rendered | `usage_events` kind `clip` (spec #104 ledger) | cost and quota tuning |
 | Sign-ins that followed a card | `ts_ref` cookie read by the OAuth callback → `login_completed.next_kind = quote` and a `users.acquired_via = 'quote:<id>'` column set once on first sign-in | the quote-referred cohort for the Scorecard |
 
-Client events (spec #95 names): `share` with `kind` = `quote` or `clip`
+Shares from the public site go through our own server, not the browser's
+analytics client, which runs only for signed-in readers (spec #95): the
+page posts `{method}` to `POST /api/public/quote-shared` and the server
+sends `public_quote_shared` for browsers, as it does page views. Client
+events for the signed-in share sheet (Phase 1; spec #95 names): `share`
+with `kind` = `quote` or `clip`
 and `method` = `link | files | download | caption`; `quote_sheet_open`;
 `clip_requested`. Server: `quote_link_open` with `referrer_host`, no id.
 

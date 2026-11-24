@@ -39,12 +39,10 @@ describe('QuoteCard (spec #94)', () => {
   })
 })
 
-const track = vi.hoisted(() => vi.fn())
-vi.mock('../../analytics/client', () => ({ track }))
-
 describe('QuoteCard share (spec #114)', () => {
   const writeText = vi.fn(async () => {})
   const share = (q: PublicQuote) => {
+    vi.stubGlobal('fetch', fetchMock)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     render(
       <MemoryRouter>
@@ -53,15 +51,22 @@ describe('QuoteCard share (spec #114)', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: 'Copy link to this quote' }))
   }
+  const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
   afterEach(() => {
     writeText.mockClear()
-    track.mockClear()
+    fetchMock.mockClear()
+    vi.unstubAllGlobals()
   })
 
-  it('hands out the short link, which previews as the quote, and counts the share without the URL', async () => {
+  it('hands out the short link, which previews as the quote, and reports the share without the URL', async () => {
     share({ ...quote, share_id: 'k7m2xq3dpa' })
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/q/k7m2xq3dpa`))
-    expect(track).toHaveBeenCalledWith('share', { kind: 'quote', method: 'link' })
+    // Counted through our own server (the public site has no analytics
+    // client): how it was shared, never the quote or its link.
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/public/quote-shared',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ method: 'link' }) }),
+    )
     expect(await screen.findByRole('button', { name: 'Link copied' })).toBeInTheDocument()
   })
 

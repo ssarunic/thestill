@@ -56,6 +56,19 @@ export function quoteShareUrl(quote: Pick<PublicQuote, 'share_id' | 'start_secon
   return quote.share_id ? `/q/${quote.share_id}` : quoteUrl(quote)
 }
 
+/** Spec #114: count one use of a quote's share button. The public site has
+ * no analytics client (spec #95), so, like a page view, it tells our own
+ * server, which drops bots and applies the visitor's opt-outs. Only how it
+ * was shared: never the quote or its link. Fire-and-forget. */
+export function reportQuoteShared(method: 'link' | 'share') {
+  fetch('/api/public/quote-shared', {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method }),
+  }).catch(() => {})
+}
+
 /** Groups consecutive quotes by episode (the API returns newest episode first). */
 export function groupByEpisode(quotes: PublicQuote[]) {
   const groups: { key: string; quotes: PublicQuote[] }[] = []

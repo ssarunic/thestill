@@ -12,8 +12,7 @@ const EVENT_PROPS: Record<string, readonly string[]> = {
   // can hide the operator (sign-in events are anonymous and cannot carry it).
   $set: [],
   $pageview: ['path_kind'],
-  // `method` (spec #114): how a quote was shared, `link` or `share`.
-  share: ['kind', 'method'],
+  share: ['kind'],
   entity_open: ['entity_type'],
   reader_tab: ['tab'],
   read_depth: ['tab', 'percent'],
