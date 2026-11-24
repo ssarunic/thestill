@@ -209,7 +209,9 @@ def test_robots_keeps_entity_heavy_crawlers_off_entities_only(site):
             assert not parser.can_fetch(agent, base + blocked), (agent, blocked)
         for allowed in ("/", "/top", "/podcasts/a/episodes/b", "/api/public/podcasts/a"):
             assert parser.can_fetch(agent, base + allowed), (agent, allowed)
-    for agent in ("Googlebot", "Bingbot", "Applebot", "Amazonbot"):
+    assert "PerplexityBot" in public_shell.ENTITY_HEAVY_CRAWLERS
+    # A person's own fetch through Perplexity is not the crawler.
+    for agent in ("Googlebot", "Bingbot", "Applebot", "Amazonbot", "Perplexity-User"):
         assert parser.can_fetch(agent, base + "/entities/person/jane-doe"), agent
 
 

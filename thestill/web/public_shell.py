@@ -598,10 +598,15 @@ TRAINING_CRAWLERS = (
 # on 2026-11-16/17 Reflectionbot made ~6.1k and PetalBot ~1.2k entity
 # requests in 29 h, almost all cold builds that crowd the prerender cap
 # (spec #105 §4). They keep podcasts and episodes; only /entities/ and its
-# JSON go. Applebot, Amazonbot and the search/user-fetch agents are not here.
+# JSON go. Applebot, Amazonbot and the user-fetch agents are not here.
+# PerplexityBot joined on 2026-11-24: a search crawler that can send
+# readers, so it keeps episodes, but its entity crawl of 2026-11-23 ran
+# several cold builds at once at 1-1.5 s each. Perplexity-User (a person's
+# own fetch) is a different agent and is not limited.
 ENTITY_HEAVY_CRAWLERS = (
     "Reflectionbot",
     "PetalBot",
+    "PerplexityBot",
 )
 
 # The ``*`` group's rules. A crawler that matches a named group ignores

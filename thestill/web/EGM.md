@@ -272,7 +272,7 @@ All of these are registered inside `if static_dir.exists():` (`app.py:968`). Wit
   `noindex`. `/claude` is not a `PRERENDER_KINDS` kind, so it gets no body HTML.
 - **Robots and sitemap.** Without public pages, `robots.txt` is `ROBOTS_PRIVATE`
   (disallow everything) and the sitemap returns 404. `ROBOTS_PUBLIC` blocks the
-  `TRAINING_CRAWLERS` from everything. `ENTITY_HEAVY_CRAWLERS` (Reflectionbot, PetalBot)
+  `TRAINING_CRAWLERS` from everything. `ENTITY_HEAVY_CRAWLERS` (Reflectionbot, PetalBot, PerplexityBot)
   get their own group that disallows `/entities/` and `/api/public/entities/` and
   repeats every other `*` rule (`_ENTITY_HEAVY_RULES`), because a crawler that matches a
   named group ignores `*`. The sitemap always lists `/`, `/top` and `/claude`
