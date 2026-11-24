@@ -170,7 +170,7 @@ definition). It reuses `_gate`'s conditions:
 | Speaker resolved to a person entity, not `public_hidden` | name shown; otherwise "a guest on *Show*" | required (no anonymous-voice clips) |
 | `podcasts.audio_clips` true (new column, default **false**: an allowlist, switched on per show; see Decision D3) | — | required |
 | Episode audio is an RSS enclosure, not YouTube-derived (`audio_url` host not a YouTube or googlevideo host, and the episode has no YouTube-only source) | — | required |
-| Quote duration ≤ 30 s after sentence snapping | — | required |
+| The cut clip, padding included, is ≤ 30 s (padding shrinks to fit; a quote over 30 s on its own is ineligible) | — | required |
 
 Until spec #100's `public_quote_candidates` lands, the stand-in query in
 `public_quotes.py` supplies the gated set; the id scheme in §2 does not
@@ -187,7 +187,8 @@ CREATE TABLE quote_shares (
     podcast_id      uuid NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
     segment_id      bigint NOT NULL,
     start_ms        bigint NOT NULL,
-    end_ms          bigint NULL,                 -- filled from Phase 2
+    end_ms          bigint NOT NULL,             -- end of the source turn at minting; with start_ms, the source span (§7)
+    audio_key       text NULL,                   -- the cut clip audio, set in Phase 2; never derived from segment_id
     text            text NOT NULL,               -- the gated sentence block
     speaker_entity_id text NULL,                 -- re-resolved, see §7; no FK (merges delete rows)
     source          text NOT NULL,               -- 'gated' | 'custom'
@@ -200,8 +201,12 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
 ```
 
 - **Gated quotes get a deterministic id:** base32 of the first 50 bits of
-  `sha256(episode_id || segment_id || start_ms)`, so the same quote always
-  has the same link and spec #100 can take over the source without
+  `sha256(episode_id || start_ms || text)`, so the same quote always
+  has the same link. The text is in the hash because one turn can yield
+  several excerpts: each entity page picks the excerpt around its own
+  name, and on today's source they all carry the turn's `start_ms`. The
+  segment id is not in it: it is positional and changes with edits (§7).
+  The same words always get the same link and spec #100 can take over the source without
   changing ids. **The row is persisted before the link is shown**, never
   minted on `GET /q/<id>`: a truncated hash cannot be reversed, so an id
   with no row cannot be resolved to a quote without hashing the whole
@@ -218,7 +223,7 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
     candidate, so once #100 lands the public read path writes nothing.
   `GET /q/<id>` for an id with no row is a plain 404; it never searches
   quotes. Collisions are detected on insert (same id, different
-  `(episode_id, segment_id, start_ms)`) and resolved by appending a
+  `(episode_id, start_ms, text)`) and resolved by appending a
   character to the newer quote's id.
 - **Custom selections (Phase 4) get a random id** and a `created_by`.
 - **`text` is a snapshot; `speaker_entity_id` is a cache.** A re-clean or
@@ -302,8 +307,11 @@ deployments), and re-fetching the publisher's enclosure is unreliable:
 dynamic ad insertion shifts timestamps by minutes (spec #113 measured
 4.5–11.7 min of drift on one show). So the step that writes spec #100's
 `public_quote_candidates` also cuts, for each eligible candidate, a mono
-64 kbps MP3 of the quote range with 250 ms padding and sentence-snapped
-boundaries, into `PathManager.quote_audio_dir()/<episode>/<segment>-<start_ms>.mp3`.
+64 kbps MP3 of the quote range with up to 250 ms padding (less when the
+file would pass 30 s) and sentence-snapped
+boundaries, into `PathManager.quote_audio_dir()/<episode>/<share_id>.mp3`,
+recorded on the share as `audio_key`. The key is the share's id, never
+its segment id, which §7 rewrites after structural edits.
 Twenty quotes × ~250 KB ≈ 5 MB per episode, deleted with the episode
 or when the show turns `audio_clips` off. `ensure_ffmpeg_on_path` already
 guarantees ffmpeg. A backfill command, `thestill quote-audio backfill`,
@@ -369,7 +377,13 @@ is one ffmpeg invocation per variant:
   colour;
 - captions from the words endpoint as an ASS subtitle track with `\k`
   karaoke timing when ffmpeg has libass (probed once at startup), else
-  per-word `drawtext` filters (worse, still correct);
+  per-word `drawtext` filters (worse, still correct). A turn can have
+  no word timings (no `source_word_span`, or stale after a spec #110
+  text edit; the words endpoint then omits it): the video then shows the
+  whole quote as static captions, and the cut in §4.1 falls back to the
+  turn's own start and end. A turn longer than 30 s without word timings
+  is clip-ineligible (`no_word_timings`), since the quote cannot be
+  located inside it;
 - a QR code (the `segno` library, pure Python, MIT) of the short link,
   bottom corner, with the short URL text beside it;
 - H.264 `yuv420p`, AAC 128 kbps, 1080 × 1080 and 1080 × 1920, ≤ 30 s,
@@ -442,13 +456,15 @@ show see no button on the card.
 
 ### 6. Measurement
 
-Product tables first (spec #111's rule: no number that drops opted-out
-readers), PostHog second.
+Product tables first, PostHog second. Facts the product needs anyway
+(links, opens of a link, clips rendered) count every reader. The one
+table kept only to measure, `quote_share_actions`, honours the
+usage-analytics opt-out like every measurement-only fact (spec #111 §1).
 
 | Fact | Where | Why |
 |---|---|---|
 | Links minted | `quote_shares` (`source`, `created_by`, `created_at`) | catalog size only: gated rows appear when a quote is served or a candidate is written, **not** when someone shares, so this is never labelled "shares" |
-| Share actions (signed in) | new `quote_share_actions(share_id, user_id, kind image\|clip\|link, method link\|files\|download\|caption, created_at)`, written by `POST /api/quote-shares/{id}/actions` from the signed-in share menu and by the clip and download routes themselves | the share volume the product tables can know; anonymous share actions never write (G6) and exist only as the PostHog `share` event, which is the one stated gap |
+| Share actions (signed in) | new `quote_share_actions(share_id, user_id, kind image\|clip\|link, method link\|files\|download\|caption, created_at)`, written by `POST /api/quote-shares/{id}/actions` from the signed-in share menu and by the clip and download routes themselves | the share volume the product tables can know. This log exists only to measure, so it is written only when `analytics_request.may_measure` allows (usage analytics on, no GPC), as spec #111 §1 requires of measurement-only facts; readers who opted out are not in it and the panel says so. Anonymous share actions never write (G6) and exist only as the PostHog `share` event |
 | Short link opens | `quote_share_hits` (browser UAs only, `referrer_host`, day) | the backlink loop, per platform; the primary signal, because it counts anonymous sharers' audiences too |
 | Clips rendered | `usage_events` kind `clip` (spec #104 ledger) | cost and quota tuning |
 | Sign-ins that followed a card | `ts_ref` cookie read by the OAuth callback → `login_completed.next_kind = quote` and a `users.acquired_via = 'quote:<id>'` column set once on first sign-in | the quote-referred cohort for the Scorecard |
@@ -484,18 +500,19 @@ landing hook, not the cards, is what to change next.
   id**. A split or merge in the editor renumbers the effective
   transcript's segments (`transcript_edits.py`), so the stored
   `segment_id` can point at another turn after a refresh. The share's
-  anchor is its **`text` snapshot, with time as the tie-break**. On today's
-  source `start_ms` is the start of the turn the excerpt came from, not
-  of the excerpt itself, so time alone is not enough: a split inside the
-  shared turn can leave `start_ms` in the first half while the quoted
-  words now belong to the second. The rule: among the episode's speaking
-  mentions, take the segments whose effective text contains the
-  snapshot; if there is exactly one, or exactly one of them also
-  contains `start_ms` in its time range, the speaker is that mention's
-  entity and `segment_id` is rewritten to its segment. Otherwise (the
-  words were edited, the snapshot spans a split, or it appears in
-  several turns with no time match) the speaker becomes `NULL` and the
-  card renders "a guest on *Show*" rather than guess. A now-hidden
+  anchor is its **`text` snapshot inside its source span**
+  (`start_ms`–`end_ms`, the turn's time range when the share was
+  minted; times survive splits, merges and renumbering). The rule: take
+  the speaking mentions whose time range overlaps the source span and
+  whose segment's effective text contains the snapshot. Exactly one:
+  the speaker is that mention's entity and `segment_id` is rewritten to
+  its segment, so a split inside the turn follows the words to the half
+  that holds them. None (the words were edited, or the snapshot now
+  straddles a split) or several: the speaker becomes `NULL` and the
+  card renders "a guest on *Show*" rather than guess. A match outside
+  the source span never counts, however exact: another speaker
+  repeating the passage minutes later is not evidence of who said it
+  here. A now-hidden
   speaker makes the share 410. The id
   does not change: it was derived once and is stored. The invalidation
   also deletes **every rendered asset that carries the name**: the
@@ -507,7 +524,8 @@ landing hook, not the cards, is what to change next.
   as a system job that reserves no user quota and runs under the same
   concurrency limit; until it finishes `GET /q/<id>/<variant>.mp4`
   returns 404 with `Retry-After`, never the old file. The `quote_audio`
-  MP3 carries no name and is kept. Image and video cache keys include a
+  MP3 carries no name and is kept; it is found through `audio_key`, which
+  the rewrite of `segment_id` does not touch. Image and video cache keys include a
   hash of the speaker name beside `template_version`, so a stale file
   can never match a fresh request even if a deletion is missed. The id
   and link survive. Between the edit and the refresh the old assets can
@@ -525,6 +543,10 @@ landing hook, not the cards, is what to change next.
   --episode <slug>`** shows what exists.
 - **Report link** on the `/q` page and under every card: "Wrong speaker?
   Report" → the spec #86 report path with the share id as subject.
+- Custom (Phase 4) selections get a clip only when they lie inside audio
+  that was retained for a gated quote of the same turn; any other custom
+  selection is image-only, and the sheet says so. The original is gone
+  by then (D6) and is never re-fetched.
 - Custom (Phase 4) cards never carry a name the gate would not put there,
   and never span two speaker turns.
 
@@ -578,7 +600,7 @@ rate limit suffices; video is never anonymous.
 | 1 | `square` and `story` variants; download and Web Share with files; caption with the X handle chip; *Quote this* in the transcript (gate's block only); follow hook on the linked card | Phase 0; spec #91 §7's files path (small, can be built here) |
 | 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on, and of Dalston's job audio on the direct-URL path (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
 | 3 | Video clips: queued render, `clips_per_day`, `clips_enabled`, QR, `GET /q/{id}/{variant}.mp4` | Phase 2; libass probe |
-| 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules | Phase 1; the use of *Quote this* in Phases 0–1 (D11) |
+| 4 | Custom trim within one speaker turn; free highlight that snaps to the gate's rules (image-only outside retained clip audio, §7) | Phase 1; the use of *Quote this* in Phases 0–1 (D11) |
 
 Phase 0 is the launchable unit and the cheapest test of the whole thesis:
 if shared quote links do not get opened, nothing after it is worth
@@ -603,9 +625,11 @@ Phase 0 these hold; the sections above describe the end state.
   this source (`_FROM` requires it). "A guest on *Show*" appears in
   Phase 0 only when a later transcript edit leaves the speaker
   unresolvable (§7).
-- **No end time.** Rows carry the mention's `start_ms` only.
-  `quote_shares.end_ms` is nullable in Phase 0 and filled from Phase 2,
-  which is the first phase to use it.
+- **Times are the turn's, not the excerpt's.** A row's `start_ms` is the
+  start of the turn the excerpt came from. Phase 0 stores that with the
+  turn's end (the speaking row's `end_ms`, selected for this purpose) as
+  the share's source span. The excerpt's own times arrive with Phase 2,
+  from word timestamps, in the clip cut; the source span does not change.
 - **Minting happens when a quote payload is built, not per response.**
   Payloads are cached for 10 minutes and the prerender calls the same
   builders, so the upsert runs once per cache build. This is the public
@@ -680,7 +704,8 @@ Phase 0 these hold; the sections above describe the end state.
   still names its own speaker and its `segment_id` is the new one. A
   shared turn split after its start, with the second half (which holds
   the snapshot) reassigned, takes the second half's speaker. A share
-  whose snapshot no segment contains any more loses its name.
+  whose words were edited in its own turn loses its name, even when
+  another speaker says the same words elsewhere in the episode.
 - **Invalidation**: a `rename-speaker` op that moves a segment from
   person A to person B, followed by the entity refresh, rewrites the
   share's `speaker_entity_id` to B, deletes the card and clip
@@ -691,8 +716,13 @@ Phase 0 these hold; the sections above describe the end state.
   `speaker_entity_id`; a cache key with the old speaker hash never serves.
 - **Measurement**: serving a quotes payload twice adds rows to
   `quote_shares` only once and never to `quote_share_actions`; a
-  signed-in download adds one action row; an anonymous `POST …/actions`
-  is 401.
+  signed-in download adds one action row, and none for a reader who
+  opted out of usage analytics or sends GPC; an anonymous
+  `POST …/actions` is 401.
+- **Identity**: two different excerpts of one turn (the same
+  `start_ms`) get two ids and two rows, each with its own text; the
+  same excerpt reached from an entity page and from the episode page
+  gets one.
 - **Minting**: a quotes payload inserts a `quote_shares` row per returned
   quote and is idempotent on the second call; the same payload under
   `read_only` writes nothing and carries no `share_id`; `/q/<id>` for an
