@@ -143,9 +143,24 @@ Cost was unchanged at $0.014 per audio-hour.
 | Claims marked as someone else's position | not asked | 34 of 266 (13%) |
 | Claims marked hedged | not asked | 46 of 266 (17%); 16 of them still labelled prediction |
 
-This checks only that the old errors went away. A fresh sample was not
-judged, so new kinds of error and wrongly set `holder` or `hedged` flags
-are not ruled out. Phase 1's golden set settles that.
+**Fresh sample from the second run.** Claude judged a new random sample
+of 96 anchored claims (6 per episode, a different seed), again one judge
+and one pass.
+
+| Finding | Claims | Notes |
+|---|---|---|
+| Marked as someone else's position | 7 of 96 | All 7 correct (an email, a tweet, two articles, a memo, a blog post, a press claim). Dropped by the holder check |
+| Kept, and right speaker, real claim, stated faithfully | 87 of 89 (98%) | First run: 86–90% |
+| Wrong | 2 | A speaker's open question turned into "likely biases"; "GPT models" became GPT-4 with an invented motive |
+| Reported speech that slipped through | 0 | |
+| `hedged` set | 19 | 3 clearly wrong ("I believe this is going to derail their IPOs", "I would say 100%", "I think Anthropic will get to a trillion") and 3 arguable. No missed hedge seen |
+| Kind wrong | about 7 | Mostly opinion labelled factual assertion |
+| Evidence in the cold-open montage | 2 | One montage segment is labelled `content`, not `intro` |
+| `holder` given as the speaker's own name, not "speaker" | 6 | All in one episode; the check must compare names |
+
+So the holder check works and the claim sentences keep the speaker's
+strength of belief, but the `hedged` flag is wrong about a third of the
+time and would demote real predictions. It is stored, not acted on.
 
 **What the spike changes in the design.**
 
@@ -153,8 +168,10 @@ are not ruled out. Phase 1's golden set settles that.
    The displayed quote is cut from the transcript.
 2. The extractor must say who holds the position. A claim whose holder
    is not the speaker is dropped in v1.
-3. The extractor must mark hedged statements, and a hedged statement is
-   never a prediction.
+3. The prompt must list the known mistakes (reported speech, lost
+   hedges, goals as predictions, questions, joined quotes). It took the
+   kept claims from 86–90% right to 98% at no extra cost. The `hedged`
+   flag is stored but too noisy to act on.
 4. Topic targets resolve to existing entities or are kept as plain text.
    Extraction never creates a topic entity.
 5. Intro segments are evidence only when no later segment carries the
@@ -229,12 +246,14 @@ and counted in the stage's structured log:
    window. Store the window, not the quote.
 2. **Named speaker.** The first evidence segment's speaker is a name,
    not `SPEAKER_nn` or `Unknown`.
-3. **Holder.** `holder` is the speaker. Reported speech is dropped in
-   v1. Attributing it to the person quoted is a later option.
-4. **Hedge.** A hedged claim with kind `prediction` becomes `opinion`.
-5. **Teaser.** When two claims in one episode have the same speaker and
-   overlapping evidence text, and one is in an `intro` segment, drop the
-   intro one.
+3. **Holder.** `holder` is "speaker" or the speaker's own name.
+   Reported speech is dropped in v1. Attributing it to the person quoted
+   is a later option.
+4. **Teaser.** When two claims in one episode have the same speaker and
+   overlapping evidence text, keep the later one. A claim whose evidence
+   is in the first two minutes and that has no later twin is kept only
+   when its segment is not a montage (several unrelated sentences from
+   one speaker with no reply).
 
 **Episodes that are skipped.** Fewer than 90% of segments with a named
 speaker; non-English transcripts in v1.
@@ -297,7 +316,7 @@ Thresholds before any phase after 1 ships:
 
 | Metric | Gate |
 |---|---|
-| Right speaker, a real claim, stated faithfully | ≥ 95% (spike: 86–90% before the holder and hedge checks) |
+| Right speaker, a real claim, stated faithfully | ≥ 95% (spike: 98% on 89 kept claims with the second prompt) |
 | Stance right, of correct claims | ≥ 95% |
 | Recall against a hand-made list of each episode's main positions, 5 episodes | ≥ 70% |
 | Cost | ≤ $0.03 per audio-hour, checker pass included |
@@ -336,7 +355,7 @@ episodes, three repeats on the ones that move.
 | Phase | Deliverable | Ships to users |
 |---|---|---|
 | 0 | The spike above and this spec | No |
-| 1 | Tables, repository, `extract-claims` stage with the five checks, `thestill claims` CLI, golden set and eval; run on the 16 spike episodes plus 50 more across genres | No |
+| 1 | Tables, repository, `extract-claims` stage with the four checks, `thestill claims` CLI, golden set and eval; run on the 16 spike episodes plus 50 more across genres | No |
 | 2 | MCP tools `list_claims_by` and `list_claims_about`; curation and reprocess hooks; backfill of the last 90 days | Yes, connector only |
 | 3 | Entity page sections behind the #100 public gate; stance over time in MCP | Yes |
 
