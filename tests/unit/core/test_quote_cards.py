@@ -143,3 +143,24 @@ def test_card_text_fits_the_card_and_never_stops_inside_a_quotation():
     assert card_text(quoted) is None
     closed = 'Then it comes back in a very positive voice, like, "You did tell me that." And it moves on.'
     assert card_text(closed) == closed
+
+
+def test_card_text_keeps_an_inner_quotation_and_strips_only_an_enclosing_one():
+    inner = 'The company said this is the only way to keep all of its customers happy: "We will never sell your data."'
+    assert card_text(inner) == inner
+    assert card_text("“The best teams change their minds fast when the evidence changes, and quickly.”") == (
+        "The best teams change their minds fast when the evidence changes, and quickly."
+    )
+
+
+def test_card_text_does_not_end_a_sentence_at_an_abbreviation():
+    # "U.S." mid-sentence, the rest past the card's length: no fragment.
+    text = (
+        "The most important thing to understand about these new regulations in the U.S. is that " + "X " * 150 + "End."
+    )
+    assert card_text(text) is None
+    whole = "Dr. Smith said the trial results were stronger than anyone in the room had expected. Then we moved on."
+    assert card_text(whole) == whole
+    assert card_text("So the U.S. market is where the growth is, and Europe is a long way behind it now.") == (
+        "The U.S. market is where the growth is, and Europe is a long way behind it now."
+    )

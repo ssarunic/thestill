@@ -88,8 +88,44 @@ _LEADING_FILLER = re.compile(
     r"^(?:(?:and|but|so|or|well|yeah|yes|like|um|uh|oh|okay|ok|right)\b[,.]?\s+|(?:you know|i mean)\s*,\s*)+",
     re.I,
 )
-#: The end of a sentence, with any closing quote or bracket after it.
+#: A sentence-end candidate: the mark, any closing quote or bracket after
+#: it, then a space or the end. ``_sentence_ends`` drops abbreviations.
 _SENTENCE_END = re.compile(r"[.!?][\"”’')\]]*(?=\s|$)")
+#: Words whose full stop does not end a sentence ("Dr. Smith", "the U.S. market").
+_ABBREVIATIONS = frozenset(
+    "mr mrs ms dr prof st sr jr vs etc inc ltd co corp no vol approx dept est fig gen gov sen rep rev".split()
+)
+_INITIALS = re.compile(r"^(?:[A-Za-z]\.)*[A-Za-z]$")
+
+
+def _sentence_ends(text: str) -> List[int]:
+    """Where sentences end in ``text`` (offsets just past the mark).
+
+    A full stop after an abbreviation or initials ("Dr.", "U.S.", "e.g.")
+    is not an end.
+    """
+    ends: List[int] = []
+    for match in _SENTENCE_END.finditer(text):
+        if text[match.start()] == ".":
+            word = re.search(r"([A-Za-z.]+)$", text[: match.start()])
+            token = word.group(1) if word else ""
+            if token.lower().rstrip(".") in _ABBREVIATIONS or _INITIALS.match(token):
+                continue
+        ends.append(match.end())
+    return ends
+
+
+def _strip_enclosing_quotes(text: str) -> str:
+    """Drop quotation marks that enclose the whole text, and only those:
+    a mark that closes a quotation inside it stays."""
+    for opening, closing in (("“", "”"), ('"', '"')):
+        if len(text) > 1 and text.startswith(opening) and text.endswith(closing):
+            inner = text[1:-1]
+            if _quotes_balanced(inner):
+                return inner.strip()
+    return text
+
+
 #: A card's quote is at least this long after trimming (the gate's floor).
 CARD_MIN_CHARS = 60
 
@@ -116,22 +152,20 @@ def card_text(text: str) -> Optional[str]:
     A quote that opens with a pronoun ("They...", "This...") is kept: the
     card names the speaker and the show. Never rewords anything else.
     """
-    text = " ".join(text.split()).strip('“”"').strip()
+    text = _strip_enclosing_quotes(" ".join(text.split()))
     if text and text[0].islower():
         # Cut mid-sentence: start at the next sentence, if there is one.
         # (Judged before any filler word is dropped: "So when..." is a
         # whole sentence, "when..." alone is not.)
-        first_end = _SENTENCE_END.search(text)
-        text = text[first_end.end() :].strip() if first_end else ""
+        first_ends = _sentence_ends(text)
+        text = text[first_ends[0] :].strip() if first_ends else ""
     text = _LEADING_FILLER.sub("", text)
     if not text:
         return None
     text = text[0].upper() + text[1:]
     # Keep whole sentences, up to the length the card takes, and never stop
     # inside a quotation the speaker opened.
-    ends = [
-        m.end() for m in _SENTENCE_END.finditer(text) if m.end() <= CARD_MAX_CHARS and _quotes_balanced(text[: m.end()])
-    ]
+    ends = [end for end in _sentence_ends(text) if end <= CARD_MAX_CHARS and _quotes_balanced(text[:end])]
     if not ends:
         return None
     text = text[: ends[-1]].strip()

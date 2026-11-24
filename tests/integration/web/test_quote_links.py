@@ -386,7 +386,10 @@ def test_reader_shares_need_a_session(anon, shares):
     assert anon.get(READER_SHARES).status_code == 401
 
 
-SPOKEN_LINE = "So, you know, Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."
+# Two spaces and a line break inside, as an excerpt can carry them; the card collapses them.
+SPOKEN_LINE = (
+    "So, you know, Nvidia owns the data centre  now, and nobody else is anywhere\nclose to catching up with it."
+)
 
 
 def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speaker(anon, shares, app_state):
@@ -426,7 +429,7 @@ def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speake
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         conn.execute("UPDATE entity_mentions SET resolution_status = 'resolved' WHERE entity_id IS NOT NULL")
 
-    listed = _quotes(anon)[SPOKEN_LINE]
+    listed = next(quote for text, quote in _quotes(anon).items() if text.startswith("So, you know, Nvidia"))
     # The page lists the quote as spoken; the card has the written form.
     share = anon.get(f"/api/public/quote-shares/{listed['share_id']}").json()["share"]
     assert share["text"] == "Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."

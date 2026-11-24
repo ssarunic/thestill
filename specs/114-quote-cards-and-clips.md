@@ -651,13 +651,16 @@ Phase 0 these hold; the sections above describe the end state.
   (`card_text`, changed 2026-11-24): it drops a spoken opener ("And",
   "So", "Well", "Yeah", "Like", "You know,", "I mean,"), skips a first
   sentence the excerpt cut in the middle, and keeps the whole sentences
-  that fit in 320 characters without stopping inside a quotation. What
+  that fit in 320 characters without stopping inside a quotation (a
+  full stop after an abbreviation or initials, such as "Dr." or "U.S.",
+  does not end a sentence; only quotation marks enclosing the whole
+  excerpt are removed). What
   is left must be at least 60 characters, open with a capital and end a
   sentence, and the card's fonts must be able to draw it. A quote that
   opens with a pronoun ("They...", "This...") is kept, because the card
   names the speaker. The first rule, borrowed from the featured quote
   (no pronoun or connective at the start, nothing trimmed), gave 44% of
-  2,079 public quotes (36 episodes, 12 shows) a card; this one gives 89%.
+  2,171 public quotes (36 episodes, 12 shows) a card; this one gives 87%.
   The episode page still lists each quote as transcribed; the card and
   the landing show the trimmed words, and the landing finds the listed
   quote by its share id. The quote is
