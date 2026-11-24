@@ -435,6 +435,19 @@ def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speake
     assert share["text"] == "Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."
     assert share["speaker"]["name"] == "Ed Elson"
 
+    # The transcript's share (signed in) offers the same words as the card.
+    from fastapi.testclient import TestClient
+
+    from thestill.models.user import User
+    from thestill.web.app import create_app
+    from thestill.web.dependencies import require_auth
+
+    app = create_app(anon.app.state.app_state.config)
+    app.state.app_state = app_state
+    app.dependency_overrides[require_auth] = lambda: User(id="user-plain", email="p@example.com", name="P")
+    reader_shares = TestClient(app).get(READER_SHARES).json()["shares"]
+    assert {s["text"] for s in reader_shares if s["id"] == listed["share_id"]} == {share["text"]}
+
     # The speaker re-check still finds the trimmed words in their turn.
     _respeak(app_state, 8, "person:scott-galloway")
     assert shares.reconcile_episode(EPISODE_ID)["unnamed"] == 0

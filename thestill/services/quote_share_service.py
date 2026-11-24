@@ -111,12 +111,16 @@ def _sentence_ends(text: str) -> List[int]:
     """Where sentences end in ``text`` (offsets just past the mark).
 
     A full stop after an abbreviation or initials ("Dr.", "U.S.", "e.g.")
-    is not an end, unless the text ends there. Nor is the end of a quoted
+    is not an end, unless the text ends there, and an ellipsis never is.
+    Nor is the end of a quoted
     sentence inside a longer one: a closing mark followed by a lower-case
     word ('The question "How?" is one that...').
     """
     ends: List[int] = []
     for match in _SENTENCE_END.finditer(text):
+        # An ellipsis ("is... ") is a pause or an omission, never an end.
+        if text[match.start()] == "." and match.start() > 0 and text[match.start() - 1] == ".":
+            continue
         closes_quotation = any(mark in match.group(0) for mark in "\"”’'")
         rest = text[match.end() :].lstrip()
         if closes_quotation and rest and rest[0].islower():

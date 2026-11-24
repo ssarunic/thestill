@@ -659,7 +659,7 @@ Phase 0 these hold; the sections above describe the end state.
   marks that enclose the whole excerpt, one opening closed by the last
   mark, are removed; a quoted question or sentence followed by more of
   the speaker's sentence is not an end; single quotation marks count
-  too, an apostrophe does not). What
+  too, an apostrophe does not; an ellipsis is never an end). What
   is left must be at least 60 characters, open with a capital and end a
   sentence, and the card's fonts must be able to draw it. A quote that
   opens with a pronoun ("They...", "This...") is kept, because the card

@@ -214,3 +214,9 @@ def test_card_text_never_stops_inside_a_single_quotation():
     assert card_text("It’s the company’s best quarter in years, and nobody on the board saw it coming.") == (
         "It’s the company’s best quarter in years, and nobody on the board saw it coming."
     )
+
+
+def test_card_text_never_ends_at_an_ellipsis():
+    text = "The one thing that matters most about building a durable company is... " + "X " * 150 + "End."
+    assert card_text(text) is None
+    assert card_text("It was a long night and we argued about the plan until the sun came up...") is None

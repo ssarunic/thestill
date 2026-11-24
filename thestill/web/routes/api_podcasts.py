@@ -35,6 +35,7 @@ from ...services.follower_service import AlreadyFollowingError, NotFollowingErro
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
 from ...services.podcast_service import PodcastWithIndex
+from ...services.quote_share_service import card_text
 from ...utils.duration import format_duration
 from ...utils.episode_origin import derive_episode_origin
 from ...utils.language_config import normalize_language_code
@@ -525,7 +526,8 @@ def get_episode_quote_shares(
         {
             "id": ids[row["mention_id"]],
             "segment_id": int(row["segment_id"]),
-            "text": (row.get("quote") or "").strip(),
+            # The card's words, as the card, the landing and a share sheet show them.
+            "text": card_text(row.get("quote") or "") or "",
             "start_seconds": int(row.get("start_ms") or 0) // 1000,
             "speaker": display_name(row["speaker_name"]),
         }
