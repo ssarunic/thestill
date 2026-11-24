@@ -97,19 +97,26 @@ export default function Episode() {
       : null
   const linked: QuoteCardQuote | null = shared ?? firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
-  // While a shared quote is still being fetched the page does not scroll:
-  // the quote at that time may not be the one that was shared, and the
-  // scroll would settle on it. `linkedWords` re-runs the scroll when the
-  // linked quote changes at the same second.
-  const awaitingShare = !!shareId && sharedQuery.isLoading
+  // A shared quote is matched by its words too: another excerpt of the
+  // same turn is not it.
+  const isLinkedQuote = (quote: { start_seconds: number; text: string }) =>
+    !!linked && quote.start_seconds === linked.start_seconds && (!shared || quote.text === shared.text)
+  const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
+  const linkedInList = shown.some(isLinkedQuote)
+  // The page scrolls to the linked quote once, when both the share lookup
+  // and the episode's quotes are in: before that, the quote at that time
+  // may not be the one that was shared, and the linked card may yet move
+  // from above the list into it. `linkedWords` and `linkedInList` re-run
+  // the scroll if either still changes afterwards.
+  const awaitingLinked = (!!shareId && sharedQuery.isLoading) || quotes.isLoading
   const linkedWords = linked?.text ?? null
   useEffect(() => {
-    if (!linkedId || awaitingShare) return
+    if (!linkedId || awaitingLinked) return
     const el = document.getElementById(linkedId)
     if (!el) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-  }, [linkedId, linkedWords, awaitingShare])
+  }, [linkedId, linkedWords, linkedInList, awaitingLinked])
 
   const speakers = firstPage?.speakers ?? []
   const quoteCount = speakers.reduce((n, s) => n + s.quotes, 0)
@@ -137,12 +144,6 @@ export default function Episode() {
   }
   const people = episode ? [...episode.hosts, ...episode.guests] : []
   const youtube = episode?.platform_links.find((l) => l.platform === 'youtube')?.url ?? null
-  const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
-  // A shared quote is matched by its words too: another excerpt of the
-  // same turn is not it.
-  const isLinkedQuote = (quote: { start_seconds: number; text: string }) =>
-    !!linked && quote.start_seconds === linked.start_seconds && (!shared || quote.text === shared.text)
-  const linkedInList = shown.some(isLinkedQuote)
   const moreEpisodes = (more.data?.pages[0]?.episodes ?? []).filter((e) => e.slug !== episodeSlug).slice(0, 3)
 
   return (

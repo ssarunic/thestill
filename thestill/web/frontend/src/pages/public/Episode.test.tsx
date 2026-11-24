@@ -125,6 +125,42 @@ describe('public episode page', () => {
       expect(scroll.mock.instances[0]).toHaveTextContent('Shared words here.')
     })
 
+    it('waits for the episode\u2019s quotes too: the linked card may move into the list', () => {
+      const scroll = vi.mocked(Element.prototype.scrollIntoView)
+      scroll.mockClear()
+      const sharedInList = {
+        ...inList,
+        text: 'Shared words here.',
+        share_id: 'aaaaaaaaaa',
+        about: { ...inList.about, id: 'topic:rates', slug: 'rates' },
+      }
+      vi.mocked(usePublicQuoteShare).mockReturnValue({
+        data: { share: { id: 'aaaaaaaaaa', text: 'Shared words here.', start_seconds: 125, speaker: inList.speaker, episode, podcast: show } },
+        isLoading: false,
+      } as never)
+      vi.mocked(usePublicEpisodeQuotes).mockReturnValue({ data: undefined, isLoading: true } as never)
+      // A new element each time: React skips a re-render of the very same one.
+      const page = () => (
+        <MemoryRouter initialEntries={[`${SLUGS}#t=125&s=aaaaaaaaaa`]}>
+          <Routes>
+            <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug" element={<Episode />} />
+          </Routes>
+        </MemoryRouter>
+      )
+      const view = render(page())
+      expect(scroll).not.toHaveBeenCalled()
+
+      vi.mocked(usePublicEpisodeQuotes).mockReturnValue({
+        data: { pages: [{ ...quotesPage.data.pages[0], quotes: [inList, sharedInList] }] },
+        isLoading: false,
+      } as never)
+      view.rerender(page())
+      expect(scroll).toHaveBeenCalledTimes(1)
+      // One linked card, and it is the one in the list.
+      expect(screen.getAllByText('Linked quote')).toHaveLength(1)
+      expect(scroll.mock.instances[0]).toHaveTextContent('Shared words here.')
+    })
+
     it('names "A guest" without a link when the speaker could not be kept', () => {
       vi.mocked(usePublicEpisodeQuotes).mockReturnValue(quotesPage as never)
       vi.mocked(usePublicQuoteShare).mockReturnValue({
