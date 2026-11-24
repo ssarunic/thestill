@@ -55,6 +55,8 @@ class Claim(BaseModel):
     quote: str
     claim: str
     kind: Literal["opinion", "prediction", "factual_assertion"]
+    holder: str
+    hedged: bool
     targets: List[Target]
     horizon: Optional[str] = None
 
@@ -83,6 +85,13 @@ Each transcript line is `[segment_id] Speaker: text`. Return claims, each with:
   the speaker's stance toward each (positive, negative, neutral, mixed). Use
   the full canonical name ("Sam Altman", not "Sam"; "OpenAI", not "they").
   A topic is a named concept ("usage-based pricing"), not a vague area.
+- holder: who holds the position. "speaker" when it is the speaker's own.
+  When the speaker is reading or relaying someone else's words (an email, a
+  tweet, a press release, an article, "he told me that..."), give that
+  person's or organisation's name instead, and write the claim sentence about
+  them ("Satya Nadella wrote that..."), not about the speaker.
+- hedged: true when the speaker marks the statement as a guess or speculation
+  ("maybe", "who knows", "this is just speculation", "non-zero chance").
 - horizon: for predictions only, when it should come true if stated
   ("by 2030", "within 18 months"); otherwise null.
 
@@ -94,6 +103,31 @@ Only extract a claim when:
   speaker said it. Skip pleasantries, biography recaps, show logistics, ads.
 - the quote alone supports it. If the position only emerges across several
   segments, pick the segment that states it most directly.
+
+Common mistakes to avoid:
+- Reported speech. A host reading out a quote is not making the claim. Set
+  holder to the person quoted. If the speaker then adds their own view, that
+  view is a separate claim with holder "speaker".
+- Lost hedges. Keep the speaker's own strength of belief in the claim
+  sentence: "speculates that", "thinks it is possible that". Never turn
+  "maybe X" into "predicts X".
+- Goals and plans are not predictions. "We aim to reach 10x" is an opinion or
+  a factual_assertion about the plan. A prediction says what will happen.
+- Questions are not claims, even rhetorical ones.
+- Who is who. Take the speaker's name from the line prefix of the segment you
+  quote, and use that exact name in the claim sentence.
+- Tense and comparisons. Do not restate "the current administration is
+  better" as a comparison between two named administrations unless the
+  speaker names both.
+- Stance is the speaker's attitude toward the target in this claim. An entity
+  used only as an example or a yardstick is neutral.
+- Kind. If it is a judgement someone could reasonably disagree with, it is an
+  opinion even when stated flatly. factual_assertion is for checkable facts.
+- Quote mechanics. Take the quote from one segment only, with no "..." and
+  no joining of separate passages, and keep filler words and repetitions
+  exactly as written.
+- Cold opens. Many episodes start with a montage of clips from later in the
+  episode. Quote the later, full passage, not the montage.
 
 Aim for the 15-25 most substantive claims per hour of audio. Fewer is fine when
 the episode has fewer. Do not pad."""

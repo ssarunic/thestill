@@ -128,6 +128,25 @@ Intelligence"). Only 20 of 439 targets are people.
 were found), how targets resolve against the real entity tables, and
 anything outside tech and investing shows.
 
+**Second run, with instructions for the known mistakes.** The same 16
+episodes, the same model, and a prompt that adds `holder` and `hedged`
+fields plus a list of mistakes to avoid (reported speech, lost hedges,
+goals as predictions, questions, cold-open montages, joined quotes).
+Cost was unchanged at $0.014 per audio-hour.
+
+| Check | First run | Second run |
+|---|---|---|
+| The 10 claims judged wrong | 10 wrong | 9 fixed: 4 now name the person quoted as holder, 1 is marked hedged, 4 are no longer extracted. 1 still garbled ("the current administration") |
+| Quote matches the transcript word for word | 69% | 78% |
+| Anchored after alignment | 97% | 98% |
+| Claims with evidence in an intro segment | 5 | 2 |
+| Claims marked as someone else's position | not asked | 34 of 266 (13%) |
+| Claims marked hedged | not asked | 46 of 266 (17%); 16 of them still labelled prediction |
+
+This checks only that the old errors went away. A fresh sample was not
+judged, so new kinds of error and wrongly set `holder` or `hedged` flags
+are not ruled out. Phase 1's golden set settles that.
+
 **What the spike changes in the design.**
 
 1. Evidence is a segment range plus character offsets found by code.
