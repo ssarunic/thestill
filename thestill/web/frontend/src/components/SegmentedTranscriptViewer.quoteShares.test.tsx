@@ -94,11 +94,22 @@ describe('sharing a quote from the transcript (spec #114, Rule A)', () => {
     expect(await screen.findByText('Quote link copied')).toBeInTheDocument()
   })
 
-  it('closes on Escape without sharing', () => {
-    renderViewer(shares)
-    fireEvent.click(screen.getByRole('button', { name: 'Share a quote from Alice' }))
-    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(track).not.toHaveBeenCalled()
+  it('closes on Escape without sharing, and the Escape goes no further', () => {
+    // The reader overlay (spec #52) closes on any Escape left unhandled.
+    const overlayEscape = vi.fn((e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) overlayClosed()
+    })
+    const overlayClosed = vi.fn()
+    document.addEventListener('keydown', overlayEscape)
+    try {
+      renderViewer(shares)
+      fireEvent.click(screen.getByRole('button', { name: 'Share a quote from Alice' }))
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(overlayClosed).not.toHaveBeenCalled()
+      expect(track).not.toHaveBeenCalled()
+    } finally {
+      document.removeEventListener('keydown', overlayEscape)
+    }
   })
 })

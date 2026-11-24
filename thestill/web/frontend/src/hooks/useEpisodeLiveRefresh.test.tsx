@@ -140,6 +140,12 @@ describe('useEpisodeLiveRefresh', () => {
       expect(countKey(invalidateSpy, TRANSCRIPT_KEY)).toBe(1)
     })
 
+    it('refetches the transcript\u2019s shareable quotes as the summary and state move on (spec #114)', () => {
+      const { rerender } = renderLiveRefresh(queryClient, { episode: episodeAt() })
+      rerender({ episode: episodeAt({ state: 'summarized', has_summary: true }) })
+      expect(countKey(invalidateSpy, ['episodes', PODCAST, EPISODE, 'quote-shares'])).toBe(1)
+    })
+
     it('re-arms the task poll and entity queries on any state change', () => {
       const { rerender } = renderLiveRefresh(queryClient, { episode: episodeAt() })
 

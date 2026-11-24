@@ -72,6 +72,19 @@ describe('useEntityBranchRefresh', () => {
     expect(keys()).toEqual([JSON.stringify(['episodes', EP, 'entities'])])
   })
 
+  it('refetches the transcript\u2019s shareable quotes when resolve-entities completes (spec #114)', () => {
+    const slugs = { podcastSlug: 'the-show', episodeSlug: 'ep-1' }
+    const { rerender } = renderHook(
+      (props: Props) => useEntityBranchRefresh(props.episodeId, props.tasks, slugs),
+      { wrapper: createWrapper(queryClient), initialProps: { episodeId: EP, tasks: [task('resolve-entities', 'processing')] } as Props },
+    )
+    rerender({ episodeId: EP, tasks: [task('resolve-entities', 'completed')] })
+    expect(keys()).toEqual([
+      JSON.stringify(['episodes', EP, 'entities']),
+      JSON.stringify(['episodes', 'the-show', 'ep-1', 'quote-shares']),
+    ])
+  })
+
   it('refetches the related rail when compute-related completes', () => {
     const { rerender } = render(queryClient, {
       episodeId: EP,

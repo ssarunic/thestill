@@ -46,7 +46,12 @@ export default function QuoteShareDialog({ share, onClose }: { share: QuoteShare
       className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50"
       onClick={onClose}
       onKeyDown={(e) => {
-        if (e.key === 'Escape') onClose()
+        if (e.key !== 'Escape') return
+        // Escape closes this dialog only: the reader overlay around it
+        // (spec #52) closes on an Escape nobody has handled.
+        e.preventDefault()
+        e.stopPropagation()
+        onClose()
       }}
       role="presentation"
     >

@@ -472,6 +472,11 @@ export function useEpisodeLiveRefresh({
       // (the full key is [..., 'summary', lang]).
       queryClient.invalidateQueries({ queryKey: summaryKey })
     }
+    if (prev.state !== episode.state || prev.hasSummary !== episode.has_summary) {
+      // Spec #114 — a quote is public only once the episode has a summary
+      // and its speakers are resolved, so the shareable set grows with both.
+      queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'] })
+    }
     if (prev.state !== episode.state) {
       queryClient.invalidateQueries({ queryKey: ['episodes', episode.id, 'entities'] })
       queryClient.invalidateQueries({ queryKey: ['episodes', episode.id, 'related'] })
@@ -849,6 +854,11 @@ export function useEntityBranchRefresh(
       // Prefix key — covers every minConfidence / limit variant, including
       // the NowPlayingSheet's entities observer.
       queryClient.invalidateQueries({ queryKey: ['episodes', episodeId, target] })
+      // Spec #114 — resolved entities are what make a quote public: the
+      // transcript's share icons follow them.
+      if (target === 'entities' && podcastSlug && episodeSlug) {
+        queryClient.invalidateQueries({ queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'] })
+      }
     }
   }, [episodeId, tasks, queryClient, podcastSlug, episodeSlug])
 }
