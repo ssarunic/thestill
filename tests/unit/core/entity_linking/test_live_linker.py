@@ -206,15 +206,57 @@ def test_p31_can_move_an_entity_to_another_bucket(decisions):
     assert result.entity.type == EntityType.PRODUCT  # a film, whatever GLiNER said (spec #92)
 
 
-def test_a_person_linked_to_a_work_stays_a_person(decisions):
+def test_a_name_tagged_person_linked_to_a_work_loses_the_link(decisions):
     # Prod 2026-10-28: "JFK" → the film, "Chuck" (Nice) → the TV series. A
-    # person tag that Wikidata contradicts is a wrong link far more often
-    # than a wrong tag, so the type is held, as backfill-entity-types does.
+    # name tagged person that Wikidata says is no human was matched to the
+    # wrong item: the person stays, the film's QID and description do not.
     wikidata = FakeWikidata({"Truman": [FILM]}, p31={"Q214801": ["Q11424"]})
     linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
     (result,) = linker.resolve([mention(1, "Truman", label="person")], context=CTX)
-    assert result.entity.type == EntityType.PERSON
-    assert result.entity.wikidata_instance_of == ["Q11424"]  # kept for the review queue
+    assert result.status == "unresolvable"
+    assert result.entity.type == EntityType.PERSON and result.entity.id == "person:truman"
+    assert result.entity.wikidata_qid is None and result.entity.description is None
+
+
+WIFE = WikidataSearchHit("Q188830", "wife", "female spouse; woman who is married")
+WIFE_P31 = {"Q188830": ["Q954007", "Q135929693"]}  # affinity, term for a woman: in no list
+
+
+def test_a_common_noun_tagged_person_keeps_the_link_and_becomes_a_topic(decisions):
+    # Prod 2026-11-24: "wife" stood under People. Lower-case as spoken, so
+    # the link is right and the tag wrong, whatever classes the item has.
+    wikidata = FakeWikidata({"wife": [WIFE]}, p31=WIFE_P31)
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "wife", label="person")], context=CTX)
+    assert result.status == "resolved" and result.entity.wikidata_qid == "Q188830"
+    assert result.entity.type == EntityType.TOPIC
+
+
+def test_a_capitalised_common_noun_tagged_person_is_never_a_linked_person(decisions):
+    # A sentence start. Nothing says it is not a name, so the link goes.
+    wikidata = FakeWikidata({"Wife": [WIFE]}, p31=WIFE_P31)
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Wife", label="person")], context=CTX)
+    assert result.status == "unresolvable" and result.entity.wikidata_qid is None
+
+
+def test_a_described_person_is_never_searched_or_asked(decisions):
+    # "my wife" names nobody; "wife" is in no word list and need not be.
+    wikidata = FakeWikidata({"my wife": [WIFE], "his brother": [WIFE]}, p31=WIFE_P31)
+    linker, provider = make_linker(decisions, wikidata, [pick_first_candidate])
+    results = linker.resolve(
+        [mention(1, "my wife", label="person"), mention(2, "his brother", label="person")], context=CTX
+    )
+    assert [r.status for r in results] == ["unresolvable", "unresolvable"]
+    assert wikidata.searched == [] and provider.user_messages == []
+
+
+def test_a_person_with_no_classes_on_wikidata_stays_a_linked_person(decisions):
+    # No P31 at all is no evidence against the tag.
+    wikidata = FakeWikidata({"Dario Amodei": [DARIO]}, p31={})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Dario Amodei", label="person")], context=CTX)
+    assert result.entity.type == EntityType.PERSON and result.entity.wikidata_qid == "Q100"
 
 
 def test_a_person_linked_to_a_kind_of_person_becomes_a_topic(decisions):

@@ -362,7 +362,9 @@ class TestP31Gating:
         resolver = EntityResolver(preloaded_model=StubReFinED(predictions), wikidata_client=client)
         results = resolver.resolve([_mention(1, "Bellingham", label="person")])
         assert results[0].entity.type is EntityType.PERSON
-        assert results[0].entity.id.startswith("person:")
+        assert results[0].entity.id == "person:bellingham"
+        # ...and no longer carries the city's QID.
+        assert results[0].status == "unresolvable" and results[0].entity.wikidata_qid is None
 
     def test_no_p31_signal_falls_back_to_inferred_type(self):
         predictions = {"Mystery": ("Q9999", "Mystery", "WAT")}

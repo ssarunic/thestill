@@ -81,13 +81,15 @@ def plan_backfill(
     Croatia" count as a place. Entities with nothing to change are not
     yielded.
 
-    A person whose P31 says place, work or company is ``held``: the prod
+    A person whose P31 says anything but human is ``held``: the prod
     dry run of 2026-10-27 showed the person tag is usually right and the
     link wrong (Bellingham the footballer → the US city, Amol Avasare →
     the Iranian city). Only ids in ``release`` (reviewed) move. A kind of
     person (profession, title, kinship, age group) is never held: that is
     a common noun with a right link and a wrong tag. Nor is a named AI
-    model ("Sora", "Claude"), for the same reason.
+    model ("Sora", "Claude"), for the same reason. The linker can tell
+    the two cases apart by how the name was spoken (``linked_result``); a
+    stored row has only its canonical name, so here a curator decides.
     """
     for entity in entities:
         p31 = entity.wikidata_instance_of

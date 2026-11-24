@@ -112,6 +112,18 @@ def test_generic_nouns_are_not_searched():
         ("a person", "person", True),
         ("our customers'", "person", True),  # plural possessive
         ("these founders\u2019", "person", True),
+        # a described person names nobody, whatever the noun: no list needed
+        ("my wife", "person", True),
+        ("My wife", "person", True),
+        ("his brother\u2019s", "person", True),
+        ("a friend", "person", True),
+        ("our neighbour", "person", True),
+        # ...but only for people, only behind a determiner, only lower-case
+        ("wife", "person", False),  # bare: searched, and typed by Wikidata
+        ("my Wife", "person", False),
+        ("the wife", "person", False),
+        ("this bitcoin", "topic", False),
+        ("our kubernetes", "product", False),
         # "the" is not stripped: these are titles
         ("The Founder", "product", False),
         ("the agent", "product", False),

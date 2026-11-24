@@ -86,16 +86,25 @@ def is_generic_noun(group: NameGroup) -> bool:
     "Another Country" a film, while "this country" and "This country" (a
     sentence start) are not. The extractor has no label for works, so the
     capital is the only sign.
+
+    For a name tagged ``person`` the word list is not consulted once a
+    determiner was looked past: "my wife", "his brother" and "a friend"
+    describe someone and name nobody, whichever noun follows. The list
+    missed every kinship word, and "my wife" became the person "Wife".
     """
     words = group.surface_key.split()
+    described = False
     if len(words) > 1:
         spoken_noun = group.surface_form.split()[-1]
         if spoken_noun[:1].isupper():
             return False
         while len(words) > 1 and words[0] in _DETERMINERS:
             words = words[1:]
+            described = True
         if len(words) != 1:
             return False
+        if described and (group.surface_label or "").lower() == "person":
+            return True
     word = words[0] if words else ""
     for suffix in _POSSESSIVE_SUFFIXES:
         if word.endswith(suffix):
