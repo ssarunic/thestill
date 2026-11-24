@@ -50,9 +50,11 @@ from ..models.entities import EntityType
 # which is both ``business`` and ``public company``).
 #
 # The lists are not exhaustive on purpose: if a P31 isn't here we fall
-# back to whatever the resolver originally picked (current behavior).
-# Add to these lists by inspecting Wikidata for the surface forms that
-# slip through.
+# back to whatever the resolver originally picked. The one exception is
+# ``person``: ``PERSON_P31`` is the whole definition of a person, and an
+# item with classes but none of these is never one (rule 8 of
+# ``classify_entity_type``). So a class missing from this list costs a
+# real figure its link or its place under People; add it when that shows.
 PERSON_P31 = frozenset(
     {
         "Q5",  # human
@@ -61,6 +63,11 @@ PERSON_P31 = frozenset(
         "Q15632617",  # fictional human
         "Q95074",  # fictional character
         "Q3658341",  # literary character
+        "Q15773317",  # television character
+        "Q15773347",  # film character
+        "Q15711870",  # animated character
+        "Q1114461",  # comics character
+        "Q4271324",  # mythical character (Santa Claus)
     }
 )
 
@@ -168,7 +175,12 @@ SOFTWARE_P31 = frozenset(
 SOFTWARE_P31 = SOFTWARE_P31 | AI_MODEL_P31
 _PLACE_P31 = frozenset({"Q6256", "Q3624078", "Q7275", "Q515", "Q486972", "Q5107"})
 
-# Kinds of person, not persons. "child", "parent", "Professor" and
+# Kinds of person, not persons. This list no longer decides whether such an
+# item is a person (it is not: it has no ``PERSON_P31`` class). It decides
+# that the link is right and only the tag wrong, whatever the name looked
+# like, so the row moves to topic without a curator.
+#
+# "child", "parent", "Professor" and
 # "billionaire" are real Wikidata items the linker finds, but their P31 is
 # a kinship, population-group, title, rank, degree, social-status or
 # life-phase class, which no list named, so GLiNER's ``person`` label
@@ -417,7 +429,13 @@ def classify_entity_type(
     7. Else if ``superclasses`` is given and any P31's direct superclass
        (P279) is in ``SUPERCLASS_TOPIC_P31`` → ``TOPIC``. Catches
        per-country place classes such as "town in Croatia".
-    8. Else → ``fallback`` (we have no signal to override the resolver).
+    8. Else if ``fallback`` is ``PERSON`` and there is any P31 at all →
+       ``TOPIC``. A person is what Wikidata calls a human, and nothing
+       else: the kinds-of-person list was extended three times and "wife"
+       (P31 "affinity", "term for a woman") still stood under People,
+       because an unlisted class meant "keep the person tag". Callers
+       decide whether that is a wrong tag or a wrong link.
+    9. Else → ``fallback`` (we have no signal to override the resolver).
 
     Returns ``None`` only when ``p31_qids`` is empty *and* ``fallback``
     is ``None`` — the resolver always passes a fallback so this is a
@@ -467,5 +485,8 @@ def classify_entity_type(
     if superclasses is not None and fallback != EntityType.TOPIC:
         if any(set(superclasses(q)) & SUPERCLASS_TOPIC_P31 for q in sorted(p31_set)):
             return EntityType.TOPIC
+
+    if fallback is EntityType.PERSON and p31_set:
+        return EntityType.TOPIC
 
     return fallback

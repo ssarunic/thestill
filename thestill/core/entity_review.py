@@ -204,7 +204,9 @@ def scan_entities_for_review(
 
         # Signal 2 — Wikidata P31 actively says this is a different type.
         # (The "P31 present but unsupported, classify keeps the same type"
-        # case is intentionally NOT flagged — that's an allow-set gap.)
+        # case is intentionally NOT flagged — that's an allow-set gap. A
+        # person is the exception: any P31 set without a human class
+        # classifies as topic, so "wife" tagged person is flagged.)
         # Distinct from ``repo.find_mistyped_entities``, which keys off the
         # GLiNER surface_label majority rather than Wikidata P31.
         p31_disagrees = False

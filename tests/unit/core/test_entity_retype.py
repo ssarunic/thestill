@@ -60,7 +60,7 @@ class TestSuperclasses:
         assert [(p.entity.id, p.new_type) for p in plans] == [("company:knin", EntityType.TOPIC)]
 
     def test_without_a_lookup_the_town_keeps_its_type(self):
-        knin = _entity("company:knin", EntityType.PERSON, ["Q15105893"], qid="Q208514")
+        knin = _entity("company:knin", EntityType.COMPANY, ["Q15105893"], qid="Q208514")
         assert list(plan_backfill([knin], None)) == []
 
 
@@ -117,6 +117,15 @@ class TestPersonDemotionsAreHeld:
         entity = _entity("person:london", EntityType.PERSON, self.CITY)
         (plan,) = plan_backfill([entity], None, release={"person:london"})
         assert plan.new_type is EntityType.TOPIC and not plan.held
+
+    def test_a_person_with_only_unlisted_classes_is_held_too(self):
+        # "wife": affinity, term for a woman. No list names either class;
+        # the row is no longer left alone, it waits for a curator.
+        wife = _entity("person:wife", EntityType.PERSON, ["Q954007", "Q135929693"], qid="Q188830")
+        (plan,) = plan_backfill([wife], None)
+        assert plan.new_type is EntityType.TOPIC and plan.held
+        (released,) = plan_backfill([wife], None, release={"person:wife"})
+        assert released.new_type is EntityType.TOPIC and not released.held
 
     def test_other_types_are_never_held(self):
         (plan,) = plan_backfill([_entity("company:knin", EntityType.COMPANY, self.CITY)], None)

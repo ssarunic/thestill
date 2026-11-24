@@ -3767,9 +3767,9 @@ def backfill_entity_types(
     bucket only (``--type person`` walks just the People rows). ``--dry-run``
     reports the planned changes without writing.
 
-    A person that Wikidata calls a place, work or company is held, not
+    A person that Wikidata calls anything but a human is held, not
     retyped: usually the name was linked to the wrong item (Bellingham the
-    footballer → the US city). Held rows only get their P31 cached. Check
+    footballer → the US city), sometimes it is a common noun ("wife"). Held rows only get their P31 cached. Check
     each link; unlink a wrong one with ``entity relink ID none``, and apply
     a right one by naming it with ``--entity-id``. A person whose Wikidata
     item is a kind of person (profession, title, kinship, age group) is not

@@ -68,7 +68,7 @@ The pipeline caller is `thestill/core/task_handlers.py:resolve_pending_mentions`
   - `candidates.py` emits `entity_linking_candidate_search_failed` (`WikidataCandidateSource.fetch`; the error text only, never the spoken name) and `wikidata_control_chars_stripped` (`_clean`).
   - `chooser.py` emits `entity_linking_chooser_call_failed` (`LLMCandidateChooser.choose`) and `llm_control_chars_stripped` (`Choice._strip_control_chars`).
   - `cache.py` emits `entity_link_decisions_invalidated` and `entity_link_decision_promoted`.
-  - `shared.py:linked_result` emits `entity_person_demotion_held` and `entity_type_reclassified`.
+  - `shared.py:linked_result` emits `entity_person_link_dropped` and `entity_type_reclassified`.
 
 ## Verification
 

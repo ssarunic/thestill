@@ -16,6 +16,8 @@ the resolver's tentative type unchanged.
 
 from __future__ import annotations
 
+import pytest
+
 from thestill.core.entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
 from thestill.models.entities import EntityType
 
@@ -152,12 +154,61 @@ class TestNoSignalFallback:
 
     def test_unknown_p31_returns_fallback(self):
         # P31 we don't have rules for — no override.
-        assert classify_entity_type(["Q99999999"], EntityType.PERSON) is EntityType.PERSON
+        for fallback in (EntityType.COMPANY, EntityType.PRODUCT, EntityType.TOPIC):
+            assert classify_entity_type(["Q99999999"], fallback) is fallback
+
+    def test_empty_p31_keeps_a_person(self):
+        # No classes at all is no evidence ("widow", a failed fetch).
+        assert classify_entity_type([], EntityType.PERSON) is EntityType.PERSON
 
     def test_blank_qid_string_skipped(self):
         # Defensive: a stray empty string in the list shouldn't trip
         # the rules. Should fall through to fallback.
         assert classify_entity_type(["", "Q99999999"], EntityType.TOPIC) is EntityType.TOPIC
+
+
+class TestAPersonIsOnlyWhatWikidataCallsHuman:
+    """Prod 2026-11-24: "my wife" stood under People as the person "Wife".
+    The kinds-of-person list had been extended three times and still did not
+    name wife's classes, and an unlisted class kept the person tag. The
+    answers below are Wikidata's on that day."""
+
+    # name → P31 of the item the name finds
+    RELATIONS = {
+        "wife": ["Q954007", "Q135929693"],  # affinity, term for a woman
+        "husband": ["Q954007", "Q135929846"],  # affinity, term for a man
+        "spouse": ["Q954007"],
+        "boyfriend": ["Q134556"],  # single
+        "brother": ["Q140036799"],  # type of sibling
+        "colleague": ["Q4897819", "Q1145523", "Q109682310"],  # role, ...
+        "fiance": ["Q214339", "Q11666901"],  # social role, ...
+        "daughter": ["Q171318"],  # kinship
+        "uncle": ["Q171318"],
+        # what the bare word finds when it is not the relation at all
+        "friend": ["Q101352"],  # family name
+        "roommate": ["Q7058673"],  # video game series
+        "baby": ["Q484170"],
+    }
+
+    @pytest.mark.parametrize("name", sorted(RELATIONS))
+    def test_a_relation_word_tagged_person_is_not_a_person(self, name):
+        assert classify_entity_type(self.RELATIONS[name], EntityType.PERSON) is not EntityType.PERSON
+
+    def test_any_class_that_is_not_a_person_class_makes_a_topic(self):
+        assert classify_entity_type(["Q99999999"], EntityType.PERSON) is EntityType.TOPIC
+
+    @pytest.mark.parametrize(
+        "p31",
+        [
+            ["Q5"],
+            ["Q5", "Q99999999"],  # a human with a class nobody listed
+            ["Q15632617", "Q15773317", "Q15711870", "Q15773347"],  # Homer Simpson
+            ["Q119228985", "Q1114461", "Q15711870"],  # Mickey Mouse
+            ["Q113371917", "Q4271324"],  # Santa Claus, without his fictional-human class
+        ],
+    )
+    def test_humans_and_characters_stay_people(self, p31):
+        assert classify_entity_type(p31, EntityType.PERSON) is EntityType.PERSON
 
 
 class TestPriorityOrdering:

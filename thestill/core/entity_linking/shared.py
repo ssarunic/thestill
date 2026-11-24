@@ -135,15 +135,21 @@ def linked_result(
     ``instance of`` contradicts the extractor's guess (e.g. countries that
     GLiNER labelled "company"). Without a client the unchecked type stands.
 
-    A person is never moved out of ``person`` here: when Wikidata says place
-    or work, the name was usually matched to the wrong item (Bellingham the
-    footballer → the US city), the same call ``backfill-entity-types``
-    holds. The entity review queue flags the disagreement
-    (``p31_says_other_type``) for a curator. The exception is a kind of
-    person (profession, title, kinship, age group): "the photographer"
-    linked to the occupation is a right link and a wrong tag, so it moves
-    to topic at once. A named AI model ("Sora", "Claude") is the same case
-    and moves to product.
+    A mention tagged ``person`` stays a person only when the item is a
+    human (``PERSON_P31``). When it is anything else, one of two things
+    went wrong, and the name as spoken says which:
+
+    - Written as a name ("Bellingham" → the US city, "JFK" → the film):
+      the link is wrong. It is dropped and the mention is an unlinked
+      person, as if Wikidata had nothing. Before, the row was held as a
+      person carrying the city's QID and description.
+    - Written as a common noun ("my wife", "wife" → the item wife): the
+      tag is wrong. The link stands and the row takes the type Wikidata
+      gives it, a topic unless a list says otherwise.
+
+    A kind of person (profession, title, kinship, age group) and a named
+    AI model ("Sora", "Claude") are a wrong tag however they are written:
+    "Professor" and "Sora" keep their link and move to topic and product.
     """
     p31_qids: List[str] = []
     entity_type = fallback_type
@@ -157,15 +163,16 @@ def linked_result(
             and classified not in (None, EntityType.PERSON)
             and not is_kind_of_person(p31_qids, qid)
             and not is_ai_model(p31_qids)
+            and not _spoken_as_common_noun(mention.surface_form)
         ):
             logger.info(
-                "entity_person_demotion_held",
+                "entity_person_link_dropped",
                 surface_form=mention.surface_form,
                 qid=qid,
-                to_type=classified.value,
+                wikidata_type=classified.value,
                 p31=p31_qids,
             )
-            classified = fallback_type
+            return unresolvable_result(mention)
         if classified is not None and classified != fallback_type:
             logger.info(
                 "entity_type_reclassified",
@@ -190,6 +197,12 @@ def linked_result(
         status="resolved",
         method=method,
     )
+
+
+def _spoken_as_common_noun(surface_form: str) -> bool:
+    """No capital anywhere: "my wife", "the photographer". A name in a
+    script without case ("習近平") is not lower-case, so it counts as a name."""
+    return surface_form.islower()
 
 
 def _is_plausible_alias(surface_form: str, canonical_name: str) -> bool:
