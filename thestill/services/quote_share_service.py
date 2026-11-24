@@ -83,9 +83,18 @@ def stands_alone(text: str) -> bool:
 
 #: Words a spoken sentence often opens with that a written quote drops:
 #: "And when I talked to him..." is quoted as "When I talked to him...".
-#: "You know," and "I mean," only with their comma: "You know what..." stays.
+#: Only where the word cannot be part of the sentence:
+#: - "And", "But", "Um" and "Uh" always;
+#: - "So" unless it starts a phrase ("So far", "So much", "So that");
+#: - "Well", "Yeah", "Yes", "Like", "Oh", "Okay", "Right", "Look", "You know"
+#:   and "I mean" only with their comma ("Like it or not", "Well done" and
+#:   "You know what..." stay).
 _LEADING_FILLER = re.compile(
-    r"^(?:(?:and|but|so|or|well|yeah|yes|like|um|uh|oh|okay|ok|right)\b[,.]?\s+|(?:you know|i mean)\s*,\s*)+",
+    r"^(?:"
+    r"(?:and|but|um|uh)\b,?\s+"
+    r"|so\b(?:,\s*|\s+(?!(?:far|much|many|long|few|little|too|that|called|what|on)\b))"
+    r"|(?:well|yeah|yes|like|oh|okay|ok|right|look|listen|you know|i mean)\s*,\s*"
+    r")+",
     re.I,
 )
 #: A sentence-end candidate: the mark, any closing quote or bracket after
@@ -102,11 +111,13 @@ def _sentence_ends(text: str) -> List[int]:
     """Where sentences end in ``text`` (offsets just past the mark).
 
     A full stop after an abbreviation or initials ("Dr.", "U.S.", "e.g.")
-    is not an end.
+    is not an end, unless the text ends there.
     """
     ends: List[int] = []
     for match in _SENTENCE_END.finditer(text):
-        if text[match.start()] == ".":
+        # At the very end of the text an abbreviation's stop also ends the
+        # sentence: "...their data centres in the U.S."
+        if text[match.start()] == "." and match.end() < len(text.rstrip()):
             word = re.search(r"([A-Za-z.]+)$", text[: match.start()])
             token = word.group(1) if word else ""
             if token.lower().rstrip(".") in _ABBREVIATIONS or _INITIALS.match(token):
@@ -115,14 +126,28 @@ def _sentence_ends(text: str) -> List[int]:
     return ends
 
 
+def _first_letter(text: str) -> int:
+    """Where the text's first word starts, past any opening quotation mark."""
+    index = 0
+    while index < len(text) - 1 and text[index] in "“\"‘'(":
+        index += 1
+    return index
+
+
 def _strip_enclosing_quotes(text: str) -> str:
     """Drop quotation marks that enclose the whole text, and only those:
-    a mark that closes a quotation inside it stays."""
-    for opening, closing in (("“", "”"), ('"', '"')):
-        if len(text) > 1 and text.startswith(opening) and text.endswith(closing):
-            inner = text[1:-1]
-            if _quotes_balanced(inner):
-                return inner.strip()
+    the opening mark must be closed by the very last one. Separate
+    quotations at the start and the end ("A." Then "B.") stay as they are."""
+    if len(text) < 2:
+        return text
+    if text.startswith("“") and text.endswith("”"):
+        depth = 0
+        for i, ch in enumerate(text):
+            depth += 1 if ch == "“" else -1 if ch == "”" else 0
+            if depth == 0:
+                return text[1:-1].strip() if i == len(text) - 1 else text
+    if text.startswith('"') and text.endswith('"') and text.find('"', 1) == len(text) - 1:
+        return text[1:-1].strip()
     return text
 
 
@@ -153,7 +178,7 @@ def card_text(text: str) -> Optional[str]:
     card names the speaker and the show. Never rewords anything else.
     """
     text = _strip_enclosing_quotes(" ".join(text.split()))
-    if text and text[0].islower():
+    if text and text[_first_letter(text)].islower():
         # Cut mid-sentence: start at the next sentence, if there is one.
         # (Judged before any filler word is dropped: "So when..." is a
         # whole sentence, "when..." alone is not.)
@@ -162,14 +187,15 @@ def card_text(text: str) -> Optional[str]:
     text = _LEADING_FILLER.sub("", text)
     if not text:
         return None
-    text = text[0].upper() + text[1:]
+    first = _first_letter(text)
+    text = text[:first] + text[first].upper() + text[first + 1 :]
     # Keep whole sentences, up to the length the card takes, and never stop
     # inside a quotation the speaker opened.
     ends = [end for end in _sentence_ends(text) if end <= CARD_MAX_CHARS and _quotes_balanced(text[:end])]
     if not ends:
         return None
     text = text[: ends[-1]].strip()
-    if len(text) < CARD_MIN_CHARS or not text[0].isupper() or not can_render(text):
+    if len(text) < CARD_MIN_CHARS or not text[_first_letter(text)].isupper() or not can_render(text):
         return None
     return text
 

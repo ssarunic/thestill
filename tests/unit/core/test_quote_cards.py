@@ -164,3 +164,35 @@ def test_card_text_does_not_end_a_sentence_at_an_abbreviation():
     assert card_text("So the U.S. market is where the growth is, and Europe is a long way behind it now.") == (
         "The U.S. market is where the growth is, and Europe is a long way behind it now."
     )
+
+
+def test_card_text_keeps_an_opener_that_belongs_to_the_sentence():
+    for text in (
+        "Like it or not, Nvidia is the company that everybody depends on for the next generation of chips.",
+        "So far, Nvidia has managed to stay ahead of every competitor in the data centre market.",
+        "Well done to everyone who worked on the launch, it was the smoothest one we have ever had.",
+        "Right now the market is pricing in two more cuts before the end of the year, at the very least.",
+    ):
+        assert card_text(text) == text
+    # The same words as fillers, with their comma, still go.
+    assert card_text("Like, it has a very low approval rating among average citizens in every poll this year.") == (
+        "It has a very low approval rating among average citizens in every poll this year."
+    )
+    assert card_text("So I think the market has completely misread what the central bank is trying to do.") == (
+        "I think the market has completely misread what the central bank is trying to do."
+    )
+
+
+def test_card_text_ends_at_an_abbreviation_that_ends_the_quote():
+    for text in (
+        "The best teams in the world have all decided to build their data centres in the U.S.",
+        "We sell to hospitals, schools, local councils and universities, airports, ports, etc.",
+    ):
+        assert card_text(text) == text
+
+
+def test_card_text_leaves_separate_quotations_at_both_ends_alone():
+    text = '"The best teams change their minds when the evidence changes." That is why I always say "Be willing."'
+    assert card_text(text) == text
+    curly = "“The best teams change their minds when the evidence changes.” That is why I say “Be willing.”"
+    assert card_text(curly) == curly
