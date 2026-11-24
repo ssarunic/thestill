@@ -270,7 +270,7 @@ Callers import every other module by its own path.
 
 - `quote_share_service.py:QuoteShareService`: `mint` (rows of public quotes in, `{mention_id: share_id}` out; never raises; nothing in read-only mode), `resolve` (None for unknown or non-public, raises `ShareGone` for revoked or a hidden speaker), `record_open`, `card_png` / `card_etag` / `short_url`, `revoke` (audited as `quote_share.revoke`), `revoke_for_podcast`, `delete_assets`, `list_for_episode`, `reconcile_episode` (re-resolves each share's speaker from the mention that carries its words inside its source span; none or several speakers clear the name; called by `core/task_handlers.py:_reconcile_quote_shares` when `resolve-entities` completes) and `forget_speaker_cards`.
 - `quote_share_service.py:share_id` is the first 10 base32 characters of `sha256(episode_id|start_ms|text)`; `card_eligible` is `stands_alone` plus `CARD_MAX_CHARS` (320). `stands_alone` is also what the public API uses to pick a featured quote.
-- At most two cards render at once per process (`_render_slots`). Artwork is fetched through `utils.url_guard.guarded_get`, with no retries, capped at 8 MB and 8 s in all; any failure renders the neutral tile. Rendering stops under `quote_cards_enabled` off and under `read_only`; cached cards still serve.
+- At most two cards render at once per process (`_render_slots`). Artwork is fetched through `utils.url_guard.guarded_get`, on its own thread with no retries, capped at 8 MB and abandoned at 8 s (the response is closed under a blocked read); any failure renders the neutral tile. Rendering stops under `quote_cards_enabled` off and under `read_only`; cached cards still serve.
 
 ### Sync tracks, indexing and analytics
 

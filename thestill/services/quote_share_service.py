@@ -273,27 +273,59 @@ class QuoteShareService:
         return png
 
     def _artwork(self, share: QuoteShare) -> Optional[bytes]:
+        """The share's artwork, or None. Never takes longer than
+        ``_ARTWORK_TOTAL_SECONDS``, whatever the other server does: this
+        runs holding one of the two render slots.
+
+        The download runs on its own thread. A socket timeout bounds only
+        the wait for the *next* bytes, so a server that trickles them could
+        otherwise hold the slot for as long as it liked; at the deadline the
+        caller stops waiting and closes the response under the download,
+        which ends its blocked read.
+        """
         if not share.image_url:
             return None
-        try:
-            validate_public_url(share.image_url)
-            # One attempt, no retries: the default session sleeps through an
-            # upstream's Retry-After, and this runs holding a render slot.
-            with guarded_session(retries=Retry(total=0, redirect=3), user_agent="Thestill/1.0") as session:
-                response = session.get(
-                    share.image_url, timeout=(_ARTWORK_CONNECT_SECONDS, _ARTWORK_READ_SECONDS), stream=True
-                )
-                response.raise_for_status()
-                deadline = time.monotonic() + _ARTWORK_TOTAL_SECONDS
-                body = b""
-                for chunk in response.iter_content(64 * 1024):
-                    body += chunk
-                    if len(body) > _ARTWORK_MAX_BYTES or time.monotonic() > deadline:
-                        return None
-                return body
-        except Exception as exc:
-            logger.info("quote_card_artwork_unavailable", share_id=share.id, error=type(exc).__name__)
+        url = share.image_url
+        state: Dict[str, Any] = {}
+
+        def download() -> None:
+            try:
+                validate_public_url(url)
+                # One attempt, no retries: the default session sleeps
+                # through an upstream's Retry-After.
+                with guarded_session(retries=Retry(total=0), user_agent="Thestill/1.0") as session:
+                    response = session.get(url, timeout=(_ARTWORK_CONNECT_SECONDS, _ARTWORK_READ_SECONDS), stream=True)
+                    state["response"] = response
+                    response.raise_for_status()
+                    body = b""
+                    while not state.get("abandoned"):
+                        chunk = response.raw.read1(64 * 1024)
+                        if not chunk:
+                            state["body"] = body
+                            return
+                        body += chunk
+                        if len(body) > _ARTWORK_MAX_BYTES:
+                            return
+            except Exception as exc:
+                state["error"] = type(exc).__name__
+
+        worker = threading.Thread(target=download, name="quote-card-artwork", daemon=True)
+        worker.start()
+        worker.join(_ARTWORK_TOTAL_SECONDS)
+        if worker.is_alive():
+            state["abandoned"] = True
+            response = state.get("response")
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:  # closing under a read may raise; the thread is ending either way
+                    pass
+            state.setdefault("error", "deadline")
+        body = state.get("body")
+        if body is None:
+            logger.info("quote_card_artwork_unavailable", share_id=share.id, error=state.get("error", "too_large"))
             return None
+        return body
 
     def delete_assets(self, share_ids: Iterable[str]) -> None:
         """Delete every rendered card of these shares. Never raises."""
