@@ -181,18 +181,45 @@ class TestAPersonIsOnlyWhatWikidataCallsHuman:
         "boyfriend": ["Q134556"],  # single
         "brother": ["Q140036799"],  # type of sibling
         "colleague": ["Q4897819", "Q1145523", "Q109682310"],  # role, ...
-        "fiance": ["Q214339", "Q11666901"],  # social role, ...
+        "fiance": ["Q214339", "Q11666901"],  # social role, nominal kinship
         "daughter": ["Q171318"],  # kinship
         "uncle": ["Q171318"],
-        # what the bare word finds when it is not the relation at all
-        "friend": ["Q101352"],  # family name
-        "roommate": ["Q7058673"],  # video game series
-        "baby": ["Q484170"],
+    }
+    # Each class's direct superclasses (P279), as fetched the same day.
+    SUPERCLASSES = {
+        "Q954007": ["Q11666901"],  # affinity → nominal kinship
+        "Q135929693": ["Q8171"],  # term for a woman → word
+        "Q135929846": ["Q8171"],
+        "Q140036799": ["Q171318"],  # type of sibling → kinship
+        "Q22989102": ["Q178885", "Q22988604"],  # Greek deity → deity, mythological Greek character
+        "Q99999990": ["Q15632617"],  # stands for "fictional detective" → fictional human
     }
 
+    def superclasses(self, qid):
+        return self.SUPERCLASSES.get(qid, [])
+
     @pytest.mark.parametrize("name", sorted(RELATIONS))
-    def test_a_relation_word_tagged_person_is_not_a_person(self, name):
-        assert classify_entity_type(self.RELATIONS[name], EntityType.PERSON) is not EntityType.PERSON
+    def test_a_relation_word_tagged_person_is_a_topic(self, name):
+        p31 = self.RELATIONS[name]
+        assert classify_entity_type(p31, EntityType.PERSON) is EntityType.TOPIC
+        assert classify_entity_type(p31, EntityType.PERSON, self.superclasses) is EntityType.TOPIC
+
+    def test_a_class_one_step_below_a_person_class_is_a_person(self):
+        assert classify_entity_type(["Q99999990"], EntityType.PERSON, self.superclasses) is EntityType.PERSON
+        assert classify_entity_type(["Q22989102"], EntityType.PERSON, self.superclasses) is EntityType.PERSON  # Zeus
+        # ...only for a mention tagged person, and only with a lookup
+        assert classify_entity_type(["Q99999990"], EntityType.TOPIC, self.superclasses) is EntityType.TOPIC
+        assert classify_entity_type(["Q99999990"], EntityType.PERSON) is EntityType.TOPIC
+
+    def test_a_person_asks_for_superclasses_once_per_class_and_no_more(self):
+        asked = []
+
+        def lookup(qid):
+            asked.append(qid)
+            return []
+
+        assert classify_entity_type(["Q954007", "Q135929693"], EntityType.PERSON, lookup) is EntityType.TOPIC
+        assert sorted(asked) == ["Q135929693", "Q954007"]
 
     def test_any_class_that_is_not_a_person_class_makes_a_topic(self):
         assert classify_entity_type(["Q99999999"], EntityType.PERSON) is EntityType.TOPIC
@@ -205,6 +232,10 @@ class TestAPersonIsOnlyWhatWikidataCallsHuman:
             ["Q15632617", "Q15773317", "Q15711870", "Q15773347"],  # Homer Simpson
             ["Q119228985", "Q1114461", "Q15711870"],  # Mickey Mouse
             ["Q113371917", "Q4271324"],  # Santa Claus, without his fictional-human class
+            ["Q20643955"],  # Moses: human biblical figure, his only class
+            ["Q22988604", "Q13002315"],  # Achilles
+            ["Q125258836"],  # the Coen brothers: brother duo
+            ["Q16017119"],  # a collective pseudonym
         ],
     )
     def test_humans_and_characters_stay_people(self, p31):
@@ -357,7 +388,9 @@ class TestPlacesAndEventsBySuperclass:
     def test_a_town_in_croatia_is_a_topic(self):
         for fallback in (EntityType.COMPANY, EntityType.PERSON, EntityType.PRODUCT):
             assert classify_entity_type(["Q15105893"], fallback, self.lookup) is EntityType.TOPIC
-        assert classify_entity_type(["Q4845841"], EntityType.PERSON, self.lookup) is EntityType.TOPIC
+        assert classify_entity_type(["Q4845841"], EntityType.COMPANY, self.lookup) is EntityType.TOPIC
+        # the superclass decides it: without the lookup a company stays one
+        assert classify_entity_type(["Q4845841"], EntityType.COMPANY) is EntityType.COMPANY
 
     def test_demographics_is_a_topic(self):
         assert classify_entity_type(["Q62944360", "Q23983664"], EntityType.COMPANY, self.lookup) is EntityType.TOPIC

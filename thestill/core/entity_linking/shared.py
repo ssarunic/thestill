@@ -30,6 +30,7 @@ from structlog import get_logger
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
 from ..entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
+from .candidates import _DETERMINERS
 
 logger = get_logger(__name__)
 
@@ -143,9 +144,12 @@ def linked_result(
       the link is wrong. It is dropped and the mention is an unlinked
       person, as if Wikidata had nothing. Before, the row was held as a
       person carrying the city's QID and description.
-    - Written as a common noun ("my wife", "wife" → the item wife): the
-      tag is wrong. The link stands and the row takes the type Wikidata
-      gives it, a topic unless a list says otherwise.
+    - Written as a common noun ("the wife", "wife" → the item wife): the
+      tag is wrong. The link stands and the row is a topic. When the
+      item is a work or a company ("mom" → the series Mom, "roommate" →
+      the video game) the link is wrong after all and is dropped: as a
+      product it would agree with its classes and no review would ever
+      look at it again.
 
     A kind of person (profession, title, kinship, age group) and a named
     AI model ("Sora", "Claude") are a wrong tag however they are written:
@@ -163,7 +167,7 @@ def linked_result(
             and classified not in (None, EntityType.PERSON)
             and not is_kind_of_person(p31_qids, qid)
             and not is_ai_model(p31_qids)
-            and not _spoken_as_common_noun(mention.surface_form)
+            and not (_spoken_as_common_noun(mention.surface_form) and classified is EntityType.TOPIC)
         ):
             logger.info(
                 "entity_person_link_dropped",
@@ -200,9 +204,14 @@ def linked_result(
 
 
 def _spoken_as_common_noun(surface_form: str) -> bool:
-    """No capital anywhere: "my wife", "the photographer". A name in a
-    script without case ("習近平") is not lower-case, so it counts as a name."""
-    return surface_form.islower()
+    """No capital in it: "wife", "the photographer". The capital of a
+    leading determiner is a sentence start ("My wife", "The wife"), as
+    ``is_generic_noun`` reads it. A name in a script without case ("習近平")
+    is not lower-case, so it counts as a name."""
+    words = surface_form.split()
+    if len(words) > 1 and words[0].lower() in _DETERMINERS | {"the"}:
+        words = words[1:]
+    return " ".join(words).islower()
 
 
 def _is_plausible_alias(surface_form: str, canonical_name: str) -> bool:

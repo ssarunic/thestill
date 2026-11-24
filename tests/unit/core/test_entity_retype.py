@@ -55,7 +55,7 @@ class TestKindsOfPerson:
 
 class TestSuperclasses:
     def test_a_town_typed_company_becomes_a_topic(self):
-        knin = _entity("company:knin", EntityType.PERSON, ["Q15105893"], qid="Q208514")
+        knin = _entity("company:knin", EntityType.COMPANY, ["Q15105893"], qid="Q208514")
         plans = list(plan_backfill([knin], None, superclasses=lambda q: ["Q3957", "Q515"]))
         assert [(p.entity.id, p.new_type) for p in plans] == [("company:knin", EntityType.TOPIC)]
 
