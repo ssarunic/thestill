@@ -12,7 +12,7 @@ import { useDeepLinkScrollTarget } from '../hooks/useDeepLinkScrollTarget'
 import { deepLinkSeconds } from '../hooks/useDeepLinkSeek'
 import { useIsSmUp } from '../hooks/useMediaQuery'
 import { useDriftAlignment } from '../drift/useDriftAlignment'
-import { driftAlignmentSupported } from '../drift/support'
+import { useDriftAllowed } from '../drift/useDriftSession'
 import DriftDebugStrip from '../drift/DriftDebugStrip'
 
 // Lazy load heavy markdown viewer components
@@ -527,9 +527,10 @@ export default function EpisodeReader({
 
   // Spec #116 Phase 2 — align the transcript with this browser's copy of
   // the audio once playback starts, and report the outcome. Who may is the
-  // `drift_alignment_audience` runtime setting; `?driftdebug=1` shows the
+  // `drift_alignment_audience` runtime setting, in the browsers the feature
+  // is verified in (admins: every browser); `?driftdebug=1` shows the
   // result, to admins only.
-  const canAlignDrift = can('drift.align') && driftAlignmentSupported()
+  const canAlignDrift = useDriftAllowed()
   const driftAlignment = useDriftAlignment({
     enabled: canAlignDrift,
     podcastSlug,

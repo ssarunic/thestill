@@ -15,7 +15,8 @@
 """Named permissions (spec #110 §7).
 
 Every permission is admin-only today, except ``drift.align``, whose
-audience is a runtime setting (spec #116). The point of naming them is that a
+audience is a runtime setting (spec #116); ``drift.align.unverified`` is
+admin-only and has a runtime off switch. The point of naming them is that a
 future moderator role (§"Future: moderator role") is a change to
 ``has_permission`` and a grants table, not to any route, CLI command or UI
 entry point: callers ask for ``transcript.edit``, never for "admin".
@@ -39,9 +40,15 @@ TRANSCRIPT_EDIT = "transcript.edit"
 #: setting says ``users``. Also the kill switch: nobody holds it when
 #: ``DRIFT_ALIGNMENT_ENABLED`` is set to false (it is on by default).
 DRIFT_ALIGN = "drift.align"
+#: Spec #116 Phase 2, rollout — ``drift.align`` also works in a browser the
+#: feature has not been verified in yet (iPhone, iPad, Android, Firefox), so
+#: that an admin's own plays there are the check that verifies it. Held by
+#: admins while the ``drift_unverified_browsers`` runtime setting is
+#: ``admins`` and ``DRIFT_ALIGNMENT_ENABLED`` is on; never by anyone else.
+DRIFT_ALIGN_UNVERIFIED = "drift.align.unverified"
 
 #: Every named permission, in the order ``/api/auth/status`` lists them.
-PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN)
+PERMISSIONS = (TRANSCRIPT_EDIT, DRIFT_ALIGN, DRIFT_ALIGN_UNVERIFIED)
 
 
 def has_permission(
@@ -56,16 +63,21 @@ def has_permission(
 
     ``episode_id`` is in the signature now so a per-podcast grant later
     changes no call sites. Unknown permissions are never granted. Without
-    ``settings`` a runtime audience cannot be read, so the permission stays
-    with admins.
+    ``settings`` a runtime audience or switch cannot be read, so the
+    permission stays with admins.
     """
     if permission not in PERMISSIONS:
         return False
-    if permission == DRIFT_ALIGN:
+    if permission in (DRIFT_ALIGN, DRIFT_ALIGN_UNVERIFIED):
         if getattr(config, "drift_alignment_enabled", False) is not True:
             return False
+    if permission == DRIFT_ALIGN:
         if settings is not None and settings.get("drift_alignment_audience") == "users":
             return True
+    if permission == DRIFT_ALIGN_UNVERIFIED:
+        # A deployment without runtime settings has no switch: admins hold it.
+        if settings is not None and settings.get("drift_unverified_browsers") != "admins":
+            return False
     # Spec #110: every other permission is admin-only for now.
     return is_effective_admin(user, config)
 

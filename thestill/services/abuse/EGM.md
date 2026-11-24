@@ -105,6 +105,7 @@ service, which imports `abuse.errors`.
     - `read_only`
     - `public_prerender_enabled`
     - `drift_alignment_audience` (`admins` | `users`, default `users`; read by `web/permissions.py:has_permission`)
+    - `drift_unverified_browsers` (`off` | `admins`, default `admins`, failsafe `off`; read by `web/permissions.py:has_permission`)
     - `entity_noindex`
     - `quota_overrides`
     - `alerts`
@@ -113,6 +114,7 @@ service, which imports `abuse.errors`.
     - `settings_registry.py:get_spec`
     - `settings_registry.py:SIGNUP_MODES`
     - `settings_registry.py:DRIFT_ALIGNMENT_AUDIENCES`
+    - `settings_registry.py:DRIFT_UNVERIFIED_BROWSERS`
     - `settings_registry.py:FEATURES`
     - `settings_registry.py:ALERT_THRESHOLDS`
     - `settings_registry.py:SPEND_BREAKER_ACTIONS`

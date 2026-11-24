@@ -6,6 +6,7 @@ import pytest
 
 from thestill.web.permissions import (
     DRIFT_ALIGN,
+    DRIFT_ALIGN_UNVERIFIED,
     PERMISSIONS,
     TRANSCRIPT_EDIT,
     has_permission,
@@ -55,12 +56,11 @@ def test_drift_alignment_is_on_by_default_and_the_setting_turns_it_off(monkeypat
 
 
 class _Settings:
-    def __init__(self, audience):
-        self.audience = audience
+    def __init__(self, audience, unverified="off"):
+        self.values = {"drift_alignment_audience": audience, "drift_unverified_browsers": unverified}
 
     def get(self, key):
-        assert key == "drift_alignment_audience"
-        return self.audience
+        return self.values[key]
 
 
 def test_drift_alignment_audience_opens_it_to_every_signed_in_user():
@@ -88,6 +88,36 @@ def test_drift_alignment_audience_setting():
     assert spec.failsafe == "admins"
     with pytest.raises(ValueError):
         spec.validate("everyone")
+
+
+def test_unverified_browsers_are_for_admins_only_and_can_be_switched_off():
+    """Spec #116 rollout — admins try the feature where it is not verified yet."""
+    on = _Settings("users", unverified="admins")
+    assert has_permission(ADMIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True), settings=on)
+    assert permissions_for(ADMIN_USER, _config(True), on) == [TRANSCRIPT_EDIT, DRIFT_ALIGN, DRIFT_ALIGN_UNVERIFIED]
+    # Never a plain user, even though they hold drift.align.
+    assert not has_permission(PLAIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True), settings=on)
+    assert permissions_for(PLAIN_USER, _config(True), on) == [DRIFT_ALIGN]
+    # Off, nobody holds it; drift.align itself is untouched.
+    off = _Settings("users", unverified="off")
+    assert not has_permission(ADMIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True), settings=off)
+    assert has_permission(ADMIN_USER, DRIFT_ALIGN, _config(True), settings=off)
+    # No runtime settings (single-user mode): no switch, so admins hold it.
+    assert has_permission(ADMIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True))
+    assert not has_permission(PLAIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True))
+    # The kill switch still wins.
+    assert not has_permission(ADMIN_USER, DRIFT_ALIGN_UNVERIFIED, _config(True, drift_alignment=False), settings=on)
+
+
+def test_drift_unverified_browsers_setting():
+    from thestill.services.abuse.settings_registry import get_spec
+
+    spec = get_spec("drift_unverified_browsers")
+    assert spec.env_default(MagicMock()) == "admins"
+    assert spec.validate(" OFF ") == "off"
+    assert spec.failsafe == "off"
+    with pytest.raises(ValueError):
+        spec.validate("users")
 
 
 def test_unknown_permission_is_never_granted():
