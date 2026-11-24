@@ -43,6 +43,9 @@ const entityPayload = {
   indexable: false,
 }
 
+// Spec #114: another excerpt of the same turn as `quote`, shared by its own id.
+const SHARED_TEXT = 'The words that were shared are these, from the same minute of the episode.'
+
 async function mockPublicApi(page: Page): Promise<string[]> {
   const privateCalls: string[] = []
   // Registered first, so the specific routes below take precedence.
@@ -91,6 +94,19 @@ async function mockPublicApi(page: Page): Promise<string[]> {
       return route.fulfill({
         json: { quotes: [quote], total: 1, linked: url.searchParams.get('q') === '460' ? quote : null, mentioned: [] },
       })
+    if (path === '/quote-shares/k7m2xq3dpa')
+      return route.fulfill({
+        json: {
+          share: {
+            id: 'k7m2xq3dpa',
+            text: SHARED_TEXT,
+            start_seconds: 460,
+            speaker: quote.speaker,
+            episode: { slug: 'chips', title: 'Chips and Cheese' },
+            podcast: { slug: 'public-show', title: 'Public Show' },
+          },
+        },
+      })
     if (path === '/podcasts/public-show/episodes') return route.fulfill({ json: { episodes: [], total: 0, next_offset: null } })
     if (path === '/entities/person/dylan-patel') return route.fulfill({ json: entityPayload })
     if (path.startsWith('/entities/person/dylan-patel/quotes'))
@@ -136,6 +152,30 @@ test('episode page shows the summary, keeps the transcript behind sign-in, and l
   await expect(readTranscript).toHaveAttribute(
     'href',
     `/login#next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}&intent=transcript`,
+  )
+  expect(privateCalls).toEqual([])
+})
+
+test('a quote short link lands on the quote that was shared, and its share button copies the short link (spec #114)', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  const privateCalls = await mockPublicApi(page)
+  // Where /q/k7m2xq3dpa sends a browser.
+  await page.goto('/podcasts/public-show/episodes/chips#t=460&s=k7m2xq3dpa')
+  const linked = page.locator('figure', { hasText: 'Linked quote' })
+  await expect(linked).toContainText(SHARED_TEXT)
+  // The episode's own quote at that second is a different excerpt: listed, not linked.
+  await expect(page.locator('figure', { hasText: quote.text })).not.toContainText('Linked quote')
+
+  await linked.getByRole('button', { name: 'Copy link to this quote' }).click()
+  await expect(linked.getByRole('button', { name: 'Link copied' })).toBeVisible()
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${new URL(page.url()).origin}/q/k7m2xq3dpa`)
+  // Sign-in still comes back to that moment.
+  await expect(page.getByRole('banner').getByRole('link', { name: 'Sign in' })).toHaveAttribute(
+    'href',
+    `/login#next=${encodeURIComponent('/podcasts/public-show/episodes/chips?view=transcript&t=460')}`,
   )
   expect(privateCalls).toEqual([])
 })

@@ -69,7 +69,7 @@ else.
 |---|---|---|
 | `$pageview` | signed-in app, on route change | `path_kind` (the route pattern, e.g. `/podcasts/:podcastSlug`) |
 | `$set` | signed-in app, once per load | person property `is_admin` only (for the internal-users filter) |
-| `share` | signed-in app (episode share button, transcript timestamp link) | `kind`: `episode` or `moment` |
+| `share` | signed-in app (episode share button, transcript timestamp link) and the share button on a public quote (spec #114) | `kind`: `episode`, `moment` or `quote`; for a quote also `method`: `link` (copied) or `share` (the phone's share sheet) |
 | `entity_open` | signed-in app, entity page | `entity_type` |
 | `reader_tab` | signed-in app, episode reader: once per tab shown per episode, the landing tab included | `tab`: `summary` or `transcript` |
 | `read_depth` | signed-in app, episode reader: once per tab and milestone per episode, on scroll, once the tab's content has loaded | `tab`, `percent`: 25, 50, 75 or 100 (the bottom of the viewport within 2% of the end) |

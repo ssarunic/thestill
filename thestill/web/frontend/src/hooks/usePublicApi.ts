@@ -51,6 +51,19 @@ export function usePublicEpisodeQuotes(podcastSlug: string, episodeSlug: string,
   })
 }
 
+/** Spec #114: the quote behind a short link, or nothing without an id. A
+ * withdrawn or unknown link is an error; the page then falls back to the
+ * quote at that time. */
+export function usePublicQuoteShare(id: string | null) {
+  return useQuery({
+    queryKey: publicKeys.quoteShare(id ?? ''),
+    queryFn: () => publicApi.quoteShare(id as string),
+    enabled: !!id,
+    retry,
+    staleTime,
+  })
+}
+
 export function usePublicRecentSummaries(limit = 6) {
   return useQuery({
     queryKey: publicKeys.recent(limit),

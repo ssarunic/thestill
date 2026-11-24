@@ -84,6 +84,9 @@ export interface PublicSummary {
 export interface PublicQuote {
   text: string
   start_seconds: number
+  /** Spec #114: the quote's short link id (`/q/<id>`), when it may become a
+   * card. Absent from responses cached before the field existed. */
+  share_id?: string | null
   speaker: { name: string; slug: string }
   about: { name: string; type: PublicEntityType; slug: string; id: string }
   episode: { slug: string; title: string; pub_date: string | null; image_url: string | null }
@@ -121,6 +124,17 @@ export interface PublicEntityPayload {
   speakers: { name: string; slug: string; quotes: number; shows: number; image_url: string | null; quote: string | null }[]
   quote_counts: { said: number; about: number }
   indexable: boolean
+}
+
+/** Spec #114: one shared quote, as it was shared (`/q/<id>`). */
+export interface PublicQuoteShare {
+  id: string
+  text: string
+  start_seconds: number
+  /** Null when the speaker can no longer be named. */
+  speaker: { name: string; slug: string } | null
+  episode: { slug: string; title: string }
+  podcast: { slug: string; title: string }
 }
 
 export interface PublicQuotePage {
@@ -195,6 +209,7 @@ export const publicApi = {
     if (speaker) params.set('speaker', speaker)
     return get<PublicEpisodeQuotes>(`/podcasts/${enc(podcastSlug)}/episodes/${enc(episodeSlug)}/quotes?${params.toString()}`)
   },
+  quoteShare: (id: string) => get<{ share: PublicQuoteShare }>(`/quote-shares/${enc(id)}`),
   whoSaidWhat: () => get<PublicWhoSaidWhat>('/who-said-what'),
   recentSummaries: (limit = 6) => get<{ episodes: PublicEpisodeListItem[] }>(`/recent-summaries?limit=${limit}`),
   topChart: (region?: string, category?: string) => {
@@ -225,6 +240,7 @@ export const publicKeys = {
   summary: (podcastSlug: string, episodeSlug: string) => ['public', 'summary', podcastSlug, episodeSlug] as const,
   episodeQuotes: (podcastSlug: string, episodeSlug: string, q: number | null, speaker: string | null) =>
     ['public', 'episode-quotes', podcastSlug, episodeSlug, q, speaker ?? ''] as const,
+  quoteShare: (id: string) => ['public', 'quote-share', id] as const,
   recent: (limit: number) => ['public', 'recent', limit] as const,
   top: (region?: string, category?: string) => ['public', 'top', region ?? '', category ?? ''] as const,
   entity: (type: string, slug: string) => ['public', 'entity', type, slug] as const,

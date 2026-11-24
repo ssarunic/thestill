@@ -14,7 +14,8 @@ import {
   type PublicQuote,
 } from '../../api/public'
 import type { SignInIntent } from '../../utils/signIn'
-import { quoteUrl, useSignIn } from './helpers'
+import { track } from '../../analytics/client'
+import { quoteShareUrl, quoteUrl, useSignIn } from './helpers'
 
 function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ')
@@ -135,6 +136,10 @@ function spokenTime(seconds: number) {
   return `${h ? `${h} hours ` : ''}${m} minutes ${s} seconds`
 }
 
+export type QuoteCardQuote = Omit<PublicQuote, 'about' | 'speaker'> & {
+  speaker: { name: string; slug: string | null }
+}
+
 /**
  * One attributed, timed quote. ``variant``: stream (lists), featured (the
  * page's one large quote), linked (reached via a ?q= link).
@@ -150,7 +155,9 @@ export function QuoteCard({
   id,
   className,
 }: {
-  quote: PublicQuote
+  /** `about` is not shown; a shared quote (spec #114) has none, and its
+   * speaker has no page when the name could not be kept. */
+  quote: QuoteCardQuote
   variant?: 'stream' | 'featured' | 'linked'
   showSpeaker?: boolean
   showShow?: boolean
@@ -163,13 +170,16 @@ export function QuoteCard({
   const [copied, setCopied] = useState(false)
   const href = quoteUrl(quote)
   const copy = async () => {
-    const absolute = `${window.location.origin}${href}`
+    // Spec #114: the short link, which previews as the quote's card.
+    const absolute = `${window.location.origin}${quoteShareUrl(quote)}`
     try {
       if (navigator.share && window.matchMedia?.('(hover: none)').matches) {
         await navigator.share({ title: `${quote.speaker.name} on ${quote.podcast.title}`, url: absolute })
+        track('share', { kind: 'quote', method: 'share' }) // spec #95: never the URL
         return
       }
       await navigator.clipboard.writeText(absolute)
+      track('share', { kind: 'quote', method: 'link' })
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -184,9 +194,15 @@ export function QuoteCard({
   )
   if (showSpeaker) {
     meta.push(
-      <Link key="s" to={entityPath({ type: 'person', slug: quote.speaker.slug })} className="ts-quote-speaker">
-        {quote.speaker.name}
-      </Link>,
+      quote.speaker.slug ? (
+        <Link key="s" to={entityPath({ type: 'person', slug: quote.speaker.slug })} className="ts-quote-speaker">
+          {quote.speaker.name}
+        </Link>
+      ) : (
+        <span key="s" className="ts-quote-speaker">
+          {quote.speaker.name}
+        </span>
+      ),
     )
   }
   if (showShow) {

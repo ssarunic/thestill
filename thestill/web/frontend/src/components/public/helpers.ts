@@ -45,8 +45,15 @@ export function typeLabel(type: PublicEntityType) {
  * same URL lands on the passage whether or not the recipient is signed in.
  * It goes in the fragment so crawlers see one URL per episode, not one per
  * quoted minute (see ``deepLinkParam``). */
-export function quoteUrl(quote: PublicQuote) {
+export function quoteUrl(quote: Pick<PublicQuote, 'start_seconds' | 'podcast' | 'episode'>) {
   return `${episodePath(quote.podcast.slug, quote.episode.slug)}#t=${quote.start_seconds}`
+}
+
+/** Spec #114: what the share button hands out. The quote's short link
+ * (`/q/<id>`) previews as the quote itself wherever it is pasted; a quote
+ * without one keeps its link to the moment. */
+export function quoteShareUrl(quote: Pick<PublicQuote, 'share_id' | 'start_seconds' | 'podcast' | 'episode'>) {
+  return quote.share_id ? `/q/${quote.share_id}` : quoteUrl(quote)
 }
 
 /** Groups consecutive quotes by episode (the API returns newest episode first). */
