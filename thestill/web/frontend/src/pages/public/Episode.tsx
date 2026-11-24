@@ -274,7 +274,9 @@ export default function Episode() {
                   return (
                     <QuoteCard
                       key={`${quote.start_seconds}-${quote.about.id}`}
-                      quote={quote}
+                      // The shared quote shows the words that were shared
+                      // (the card's), wherever in the list it sits.
+                      quote={isLinked && shared ? shared : quote}
                       variant={isLinked ? 'linked' : 'stream'}
                       label={isLinked ? 'Linked quote' : undefined}
                       showShow={false}

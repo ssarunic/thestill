@@ -196,3 +196,21 @@ def test_card_text_leaves_separate_quotations_at_both_ends_alone():
     assert card_text(text) == text
     curly = "“The best teams change their minds when the evidence changes.” That is why I say “Be willing.”"
     assert card_text(curly) == curly
+
+
+def test_card_text_does_not_end_at_a_question_quoted_inside_a_sentence():
+    text = "The question “How can every hospital keep all of its patients safe?” is one that " + "X " * 150 + "End."
+    assert card_text(text) is None
+    whole = "The question “How can every hospital keep all of its patients safe?” is one that we keep asking."
+    assert card_text(whole) == whole
+
+
+def test_card_text_never_stops_inside_a_single_quotation():
+    open_single = (
+        "The interviewer repeated the warning: ‘Every hospital must protect its patients. The next part " + "x" * 300
+    )
+    assert card_text(open_single) is None
+    # An apostrophe is not a quotation mark.
+    assert card_text("It’s the company’s best quarter in years, and nobody on the board saw it coming.") == (
+        "It’s the company’s best quarter in years, and nobody on the board saw it coming."
+    )

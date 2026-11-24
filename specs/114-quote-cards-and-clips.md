@@ -657,16 +657,18 @@ Phase 0 these hold; the sections above describe the end state.
   full stop after an abbreviation or initials, such as "Dr." or "U.S.",
   does not end a sentence unless the excerpt ends there; only quotation
   marks that enclose the whole excerpt, one opening closed by the last
-  mark, are removed). What
+  mark, are removed; a quoted question or sentence followed by more of
+  the speaker's sentence is not an end; single quotation marks count
+  too, an apostrophe does not). What
   is left must be at least 60 characters, open with a capital and end a
   sentence, and the card's fonts must be able to draw it. A quote that
   opens with a pronoun ("They...", "This...") is kept, because the card
   names the speaker. The first rule, borrowed from the featured quote
   (no pronoun or connective at the start, nothing trimmed), gave 44% of
   about 2,000 public quotes (36 episodes, 12 shows) a card; this one gives 87–89%.
-  The episode page still lists each quote as transcribed; the card and
-  the landing show the trimmed words, and the landing finds the listed
-  quote by its share id. The quote is
+  The episode page lists each quote as transcribed; the card and the
+  landing show the trimmed words (the landing finds the listed quote by
+  its share id and shows the shared words in its place). The quote is
   set in Newsreader, or in Inter when it has letters Newsreader lacks
   (Cyrillic, Greek). Text neither font covers (Arabic, Chinese and
   others) gets no card: a card of empty boxes is worse than none, and

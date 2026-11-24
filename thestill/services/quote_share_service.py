@@ -111,10 +111,16 @@ def _sentence_ends(text: str) -> List[int]:
     """Where sentences end in ``text`` (offsets just past the mark).
 
     A full stop after an abbreviation or initials ("Dr.", "U.S.", "e.g.")
-    is not an end, unless the text ends there.
+    is not an end, unless the text ends there. Nor is the end of a quoted
+    sentence inside a longer one: a closing mark followed by a lower-case
+    word ('The question "How?" is one that...').
     """
     ends: List[int] = []
     for match in _SENTENCE_END.finditer(text):
+        closes_quotation = any(mark in match.group(0) for mark in "\"”’'")
+        rest = text[match.end() :].lstrip()
+        if closes_quotation and rest and rest[0].islower():
+            continue
         # At the very end of the text an abbreviation's stop also ends the
         # sentence: "...their data centres in the U.S."
         if text[match.start()] == "." and match.end() < len(text.rstrip()):
@@ -156,8 +162,11 @@ CARD_MIN_CHARS = 60
 
 
 def _quotes_balanced(text: str) -> bool:
-    """Every quotation the text opens, it also closes."""
-    return text.count('"') % 2 == 0 and text.count("“") == text.count("”")
+    """Every quotation the text opens, it also closes: double marks, and
+    single curly marks, where a closing ’ inside a word ("it’s") is an
+    apostrophe, not a close."""
+    single_closes = len(re.findall(r"’(?![A-Za-z])", text))
+    return text.count('"') % 2 == 0 and text.count("“") == text.count("”") and text.count("‘") <= single_closes
 
 
 def card_text(text: str) -> Optional[str]:
