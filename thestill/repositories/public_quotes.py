@@ -90,6 +90,7 @@ _FROM = """
 
 _COLUMNS = """
     m.id AS mention_id, m.episode_id, m.segment_id, m.start_ms, m.quote_excerpt AS quote,
+    e.podcast_id AS podcast_id, sp.end_ms AS turn_end_ms,
     sp.entity_id AS speaker_id, spe.canonical_name AS speaker_name,
     m.entity_id AS about_id, ae.canonical_name AS about_name, ae.type AS about_type,
     e.slug AS episode_slug, e.title AS episode_title, e.pub_date AS episode_pub_date,

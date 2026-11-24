@@ -697,6 +697,34 @@ CREATE TABLE IF NOT EXISTS entity_redirects (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_entity_redirects_to ON entity_redirects(to_entity_id);
+-- Spec #114: short links to public quotes and their opens (alembic 0031).
+-- speaker_entity_id has no FK: an entity merge deletes the losing row.
+CREATE TABLE IF NOT EXISTS quote_shares (
+    id text PRIMARY KEY,
+    episode_id uuid NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+    podcast_id uuid NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+    segment_id bigint NOT NULL,
+    start_ms bigint NOT NULL,
+    end_ms bigint NOT NULL,
+    text text NOT NULL,
+    speaker_entity_id text NULL,
+    source text NOT NULL DEFAULT 'gated',
+    created_by uuid NULL REFERENCES users(id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz NULL,
+    revoked_reason text NULL,
+    template_version smallint NOT NULL DEFAULT 1,
+    audio_key text NULL
+);
+CREATE INDEX IF NOT EXISTS idx_quote_shares_episode ON quote_shares(episode_id);
+CREATE INDEX IF NOT EXISTS idx_quote_shares_podcast ON quote_shares(podcast_id);
+CREATE TABLE IF NOT EXISTS quote_share_hits (
+    share_id text NOT NULL REFERENCES quote_shares(id) ON DELETE CASCADE,
+    day date NOT NULL,
+    referrer_host text NOT NULL DEFAULT '',
+    hits integer NOT NULL DEFAULT 0,
+    PRIMARY KEY (share_id, day, referrer_host)
+);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
 CREATE INDEX IF NOT EXISTS idx_entities_wikidata ON entities(wikidata_qid) WHERE wikidata_qid IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entities_name_trgm ON entities USING gin (canonical_name gin_trgm_ops);

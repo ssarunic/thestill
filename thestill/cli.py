@@ -495,7 +495,9 @@ def set_podcast_visibility(ctx, podcast_id, public):
 
     --private hides the show, its episodes and their quotes from every
     signed-out surface (public API, page shell, sitemap) within a few
-    minutes (caches expire). Signed-in users are unaffected.
+    minutes (caches expire), and withdraws its quote short links: every
+    /q link of the show answers 410 and its cards are deleted (spec #114).
+    Signed-in users are unaffected.
     """
     podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
     if not podcast:
@@ -513,6 +515,10 @@ def set_podcast_visibility(ctx, podcast_id, public):
         service=_podcast_curation(ctx),
     )
     click.echo(f"✓ {podcast.title}: public pages {'on' if public else 'off'}.")
+    if not public:
+        withdrawn = _quote_share_service(ctx).revoke_for_podcast(str(podcast.id), reason="show made private")
+        if withdrawn:
+            click.echo(f"  Quote links withdrawn: {len(withdrawn)}.")
     if indexnow.enabled:
         paths = _public_page_paths(ctx.obj.repository, podcast) if public else before
         status = indexnow.submit(paths or [f"/podcasts/{podcast.slug}"])
@@ -580,6 +586,12 @@ def set_entity_visibility(ctx, entity_id, public):
     """
     entity = _curate(ctx, lambda svc, actor: svc.set_visibility(entity_id, public=public, actor=actor))
     click.echo(f"✓ {entity.canonical_name} ({entity.id}): public page {'on' if public else 'hidden'}.")
+    if not public:
+        # Spec #114: quote links that name them answer 410 from now on; take
+        # their stored cards away too.
+        withdrawn = _quote_share_service(ctx).forget_speaker_cards(entity.id)
+        if withdrawn:
+            click.echo(f"  Quote links that named them: {withdrawn} (now 410, cards deleted).")
 
 
 @main.command("link-platforms")
@@ -4532,6 +4544,87 @@ def _sync_track_service(ctx):
     from .services.sync_track_service import SyncTrackService
 
     return SyncTrackService(ctx.obj.config, make_repositories(ctx.obj.config).sync_track)
+
+
+def _quote_share_service(ctx):
+    """The quote share service for CLI commands (spec #114)."""
+    from .repositories.factory import make_repositories
+    from .services.quote_share_service import QuoteShareService
+
+    abuse = ctx.obj.abuse
+    return QuoteShareService(
+        make_repositories(ctx.obj.config).quote_share,
+        ctx.obj.config,
+        settings=abuse.settings if abuse else None,
+        audit=abuse.audit if abuse else None,
+    )
+
+
+@main.group("quote-share")
+def quote_share_group():
+    """Quote short links (spec #114): the /q links to public quotes."""
+
+
+@quote_share_group.command("revoke")
+@click.argument("share_id")
+@click.option("--reason", required=True, help="Why the link is withdrawn (kept in the audit log).")
+@click.pass_context
+@require_config
+@log_command
+def quote_share_revoke(ctx, share_id, reason):
+    """Withdraw one quote link: /q/SHARE_ID answers 410 and its card is deleted."""
+    from .services.abuse.actor import Actor
+
+    if _quote_share_service(ctx).revoke(share_id, actor=Actor.cli(), reason=reason):
+        click.echo(f"✓ Quote link {share_id} withdrawn.")
+    else:
+        click.echo(f"❌ No live quote link {share_id} (unknown, or already withdrawn).", err=True)
+        ctx.exit(1)
+
+
+@quote_share_group.command("list")
+@click.option("--podcast-id", required=True, help="Podcast (index, slug, RSS URL or UUID).")
+@click.option("--episode", "episode_slug", required=True, help="Episode slug.")
+@click.option("--json", "json_output", is_flag=True, help="Emit a JSON array.")
+@click.pass_context
+@require_config
+@log_command
+def quote_share_list(ctx, podcast_id, episode_slug, json_output):
+    """List an episode's quote links, with how often each was opened."""
+    podcast = ctx.obj.podcast_service.get_podcast(podcast_id)
+    found = ctx.obj.repository.get_episode_by_slug(podcast.slug, episode_slug) if podcast else None
+    if not found:
+        click.echo("❌ Episode not found", err=True)
+        ctx.exit(1)
+    _podcast, episode = found
+    rows = _quote_share_service(ctx).list_for_episode(str(episode.id))
+    if json_output:
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "id": row["id"],
+                        "start_seconds": int(row["start_ms"]) // 1000,
+                        "text": row["text"],
+                        "opens": int(row["opens"] or 0),
+                        "revoked": row["revoked_at"] is not None,
+                        "revoked_reason": row["revoked_reason"],
+                    }
+                    for row in rows
+                ]
+            )
+        )
+        return
+    if not rows:
+        click.echo("No quote links for this episode yet.")
+        return
+    for row in rows:
+        seconds = int(row["start_ms"]) // 1000
+        state = f"withdrawn ({row['revoked_reason'] or 'no reason'})" if row["revoked_at"] is not None else "live"
+        text = row["text"] if len(row["text"]) <= 70 else row["text"][:69] + "…"
+        click.echo(
+            f"{row['id']}  {seconds // 60}:{seconds % 60:02d}  opens {int(row['opens'] or 0):>4}  {state}  {text}"
+        )
 
 
 @main.group("sync-track")

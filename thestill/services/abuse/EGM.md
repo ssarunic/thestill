@@ -104,6 +104,7 @@ service, which imports `abuse.errors`.
     - `narration_enabled`
     - `read_only`
     - `public_prerender_enabled`
+    - `quote_cards_enabled` (off: no new quote cards render; cached cards and `/q` links still serve)
     - `drift_alignment_audience` (`admins` | `users`, default `users`; read by `web/permissions.py:has_permission`)
     - `drift_unverified_browsers` (`off` | `admins`, default `admins`, failsafe `off`; read by `web/permissions.py:has_permission`)
     - `entity_noindex`

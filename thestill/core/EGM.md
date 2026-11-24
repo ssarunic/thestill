@@ -114,6 +114,7 @@ Most modules are processors that receive their collaborators: an LLM provider, a
 - `elevenlabs_transcriber.py:ElevenLabsTranscriber`: Scribe v1. Supports sync, async and webhook modes. Also `list_pending_operations`.
 - `dalston_transcriber.py:DalstonTranscriber`: client for a self-hosted Dalston server using the Dalston SDK.
 - `dalston_transcriber.py:iter_job_audio`: streams the audio stored for a Dalston job.
+- `quote_cards.py` (spec #114): `render_og(QuoteCard) -> bytes` draws the 1200 × 630 link-preview PNG with Pillow from the fonts in `thestill/assets/fonts`; `clean_text`, `wrap_balanced`, `quote_font_name` / `can_render` (Newsreader, else Inter for Cyrillic and Greek, else no card), `TEMPLATE_VERSION`. Pure: no network, no storage.
 - `sync_track.py` (spec #116): `build_sync_track`, `align`, `SyncTrack` (`to_bytes`/`from_bytes`), `Alignment.to_other`, `iter_mp3_frames`, `iter_file_chunks`, `SyncTrackError`.
 
 ### Cleaning, facts and transcript access

@@ -45,6 +45,7 @@ from .mcp_token_repository import McpTokenRepository
 from .oauth_repository import OAuthRepository
 from .podcast_follower_repository import PodcastFollowerRepository
 from .public_page_view_repository import PublicPageViewRepository
+from .quote_share_repository import QuoteShareRepository
 from .settings_repository import SettingsRepository
 from .suspended_follow_repository import SuspendedFollowRepository
 from .sync_track_repository import SyncTrackRepository
@@ -153,6 +154,7 @@ class RepositoryBundle:
     # Spec #103: first episode opens, and signed-out public page views.
     episode_view: EpisodeViewRepository
     public_page_view: PublicPageViewRepository
+    quote_share: QuoteShareRepository
     # Spec #111: reader-local days with a successful connector call.
     connector_day: ConnectorDayRepository
     # Spec #116: which sync track file describes each episode's transcript.
@@ -195,6 +197,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         from .postgres_podcast_follower_repository import PostgresPodcastFollowerRepository
         from .postgres_podcast_repository import PostgresPodcastRepository
         from .postgres_public_page_view_repository import PostgresPublicPageViewRepository
+        from .postgres_quote_share_repository import PostgresQuoteShareRepository
         from .postgres_settings_repository import PostgresSettingsRepository
         from .postgres_suspended_follow_repository import PostgresSuspendedFollowRepository
         from .postgres_sync_track_repository import PostgresSyncTrackRepository
@@ -225,6 +228,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
             analytics=PostgresAnalyticsRepository(dsn, exclude_emails=(DEFAULT_USER_EMAIL,)),
             episode_view=PostgresEpisodeViewRepository(dsn),
             public_page_view=PostgresPublicPageViewRepository(dsn),
+            quote_share=PostgresQuoteShareRepository(dsn),
             connector_day=PostgresConnectorDayRepository(dsn),
             sync_track=PostgresSyncTrackRepository(dsn),
             settings=PostgresSettingsRepository(dsn),
@@ -254,6 +258,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
     from .sqlite_podcast_follower_repository import SqlitePodcastFollowerRepository
     from .sqlite_podcast_repository import SqlitePodcastRepository
     from .sqlite_public_page_view_repository import SqlitePublicPageViewRepository
+    from .sqlite_quote_share_repository import SqliteQuoteShareRepository
     from .sqlite_settings_repository import SqliteSettingsRepository
     from .sqlite_suspended_follow_repository import SqliteSuspendedFollowRepository
     from .sqlite_sync_track_repository import SqliteSyncTrackRepository
@@ -284,6 +289,7 @@ def make_repositories(config: "Config") -> RepositoryBundle:
         analytics=UnavailableAnalyticsRepository(),
         episode_view=SqliteEpisodeViewRepository(db_path=db_path),
         public_page_view=SqlitePublicPageViewRepository(db_path=db_path),
+        quote_share=SqliteQuoteShareRepository(db_path=db_path),
         connector_day=SqliteConnectorDayRepository(db_path=db_path),
         sync_track=SqliteSyncTrackRepository(db_path=db_path),
         settings=SqliteSettingsRepository(db_path=db_path),

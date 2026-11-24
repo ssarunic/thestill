@@ -51,7 +51,7 @@ interfaces, never to a backend class.
   - `listening_progress`, `link_decision`, `legacy_claim`, `pending_ops`
   - `entity`, `queue_manager`, `analytics`, `episode_view`
   - `user_message` (spec #118)
-  - `public_page_view`, `connector_day`, `sync_track`, `settings`
+  - `public_page_view`, `quote_share`, `connector_day`, `sync_track`, `settings`
   - `audit_log`, `suspended_follow`, `user_directory`, `usage`
   - `transcript_edit`
 - `factory.py:make_user_repository`, `make_search_backend` (PgVectorBackend /
@@ -86,6 +86,7 @@ concrete classes read or write (taken from their SQL strings).
 | `episode_view_repository.py:EpisodeViewRepository` | `sqlite_episode_view_repository.py:SqliteEpisodeViewRepository` | `postgres_episode_view_repository.py:PostgresEpisodeViewRepository` | `user_episode_views`, `episodes`, `users` |
 | `connector_day_repository.py:ConnectorDayRepository` | `sqlite_connector_day_repository.py:SqliteConnectorDayRepository` | `postgres_connector_day_repository.py:PostgresConnectorDayRepository` | `user_connector_days`, `users`; Postgres also reads `user_briefing_schedules` |
 | `public_page_view_repository.py:PublicPageViewRepository` | `sqlite_public_page_view_repository.py:SqlitePublicPageViewRepository` | `postgres_public_page_view_repository.py:PostgresPublicPageViewRepository` | `public_page_daily_views` |
+| `quote_share_repository.py:QuoteShareRepository` (holds the SQL for both backends; subclasses supply the connection, the placeholder and how a timestamp and a day bind) | `sqlite_quote_share_repository.py:SqliteQuoteShareRepository` | `postgres_quote_share_repository.py:PostgresQuoteShareRepository` | `quote_shares`, `quote_share_hits`; reads `episodes`, `podcasts`, `entities`, `entity_redirects` |
 | `mcp_token_repository.py:McpTokenRepository` | `sqlite_mcp_token_repository.py:SqliteMcpTokenRepository` | `postgres_mcp_token_repository.py:PostgresMcpTokenRepository` | `mcp_tokens` |
 | `oauth_repository.py:OAuthRepository` | `sqlite_oauth_repository.py:SqliteOAuthRepository` | `postgres_oauth_repository.py:PostgresOAuthRepository` | `oauth_clients`, `oauth_pending`, `oauth_grants`, `oauth_codes`, `oauth_tokens` |
 | `link_decision_repository.py:LinkDecisionRepository` | `sqlite_link_decision_repository.py:SqliteLinkDecisionRepository` | `postgres_link_decision_repository.py:PostgresLinkDecisionRepository` | `entity_link_decisions` |

@@ -234,6 +234,11 @@ SETTINGS: Dict[str, SettingSpec] = {
             "Off: public pages send the head-only shell, with no server-written content (spec #105).",
             lambda c: bool(c.public_prerender_enabled),
         ),
+        _switch(
+            "quote_cards_enabled",
+            "Off: no new quote cards are rendered (spec #114); cached cards still serve and /q links still lead "
+            "to their episode.",
+        ),
         SettingSpec(
             "drift_alignment_audience",
             "Who aligns the transcript with their own copy of the audio, and so gets Skip ahead past ads "
