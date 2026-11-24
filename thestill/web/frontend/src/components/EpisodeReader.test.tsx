@@ -19,6 +19,7 @@ vi.mock('../hooks/useApi', () => ({
   useSendToInbox: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useSetInboxState: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useEpisode: vi.fn(),
+  useEpisodeQuoteShares: vi.fn(() => ({ data: [] })),
   useEpisodeTranscript: vi.fn(() => ({ data: undefined, isLoading: false })),
   useEpisodeSummary: vi.fn(),
   useEpisodeTranscriptWords: vi.fn(() => ({ data: undefined, isFetched: false })),

@@ -601,6 +601,16 @@ export interface SummaryCitation {
   resolved: boolean
 }
 
+/** Spec #114: a quote a reader can share from the transcript (one that is
+ * already public), with its short link id and the turn it comes from. */
+export interface QuoteShareItem {
+  id: string
+  segment_id: number
+  text: string
+  start_seconds: number
+  speaker: string
+}
+
 export interface ContentResponse {
   status: string
   timestamp: string

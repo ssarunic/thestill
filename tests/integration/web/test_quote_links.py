@@ -343,3 +343,44 @@ def test_a_share_is_reported_for_browsers_with_the_method_only(anon, app_state):
     assert captured[-1].properties() == {"method": "share"}
     assert anon.post("/api/public/quote-shared", json={"method": "email"}, headers=CHROME).status_code == 422
     assert len(captured) == 2
+
+
+@pytest.fixture
+def reader(app_config, app_state):
+    """A signed-in reader: the session dependency answers with a plain user."""
+    from fastapi.testclient import TestClient
+
+    from thestill.models.user import User
+    from thestill.web.app import create_app
+    from thestill.web.dependencies import require_auth
+
+    app = create_app(app_config)
+    app.state.app_state = app_state
+    app.dependency_overrides[require_auth] = lambda: User(id="user-plain", email="p@example.com", name="P")
+    return TestClient(app)
+
+
+READER_SHARES = "/api/podcasts/public-show/episodes/summarised/quote-shares"
+
+
+def test_reader_gets_the_public_quotes_of_an_episode_with_their_turns(reader, anon, shares):
+    """Spec #114 Rule A: the transcript offers only quotes already public."""
+    body = reader.get(READER_SHARES).json()["shares"]
+    public = {quote["text"]: quote for quote in _quotes(anon).values()}
+    assert {share["text"] for share in body} == set(public)
+    for share in body:
+        assert share["id"] == public[share["text"]]["share_id"]
+    galloway = next(share for share in body if share["text"] == GALLOWAY_LINE)
+    assert (galloway["segment_id"], galloway["start_seconds"], galloway["speaker"]) == (2, 125, "Scott Galloway")
+    # The sponsor read, the unnamed speaker and the hidden person offer nothing.
+    assert len(body) == 2
+
+
+def test_reader_gets_nothing_where_there_is_nothing_public(reader, anon, shares, app_state):
+    app_state.repository.set_podcast_public_pages("11111111-1111-1111-1111-111111111111", False)
+    assert reader.get(READER_SHARES).json()["shares"] == []
+    assert reader.get("/api/podcasts/public-show/episodes/no-such-episode/quote-shares").status_code == 404
+
+
+def test_reader_shares_need_a_session(anon, shares):
+    assert anon.get(READER_SHARES).status_code == 401

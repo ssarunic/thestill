@@ -1,6 +1,6 @@
 # Quote Cards and Clips
 
-> **Status:** 🚧 Phase 0 in progress. Built (2026-11-24, branch `feat/114-quote-cards-phase0`): the tables, short link ids on public quotes, `/q/{id}` and its card, the shared-quote lookup, the `quote_cards_enabled` switch, `thestill quote-share revoke|list` and revocation when a show is made private. The frontend followed (branch `feat/114-quote-share-menu`): the share button on a public quote hands out the short link, and the episode page shows the shared quote from its id. Phase 0 still to come: `ts_ref` attribution and the `/analytics` panel
+> **Status:** 🚧 Phase 0 in progress. Built (2026-11-24, branch `feat/114-quote-cards-phase0`): the tables, short link ids on public quotes, `/q/{id}` and its card, the shared-quote lookup, the `quote_cards_enabled` switch, `thestill quote-share revoke|list` and revocation when a show is made private. The frontend followed (PR #556): the share button on a public quote hands out the short link, and the episode page shows the shared quote from its id. Deployed in v1.52.0 (2026-11-24). Signed-in readers share from the transcript (Rule A, branch `feat/114-quote-this`). Phase 0 still to come: `ts_ref` attribution and the `/analytics` panel
 > **Created:** 2026-11-05
 > **Updated:** 2026-11-23 (open questions decided: D9–D12; follow hook reuses spec #117; Q6 opened on D6)
 > **Priority:** Medium-high. The first readers arrive from public pages and leave without following anything (spec #111); this is the first feature built to bring *more* of them, so it ships together with the hook that keeps them.
@@ -426,7 +426,16 @@ and the image is ready, spec #91 §7's path), *Download image* (square),
 *Copy caption*. On the public episode page the `linked` variant gains the
 clip player (§5.3) and the follow hook (§5.4).
 
-**Transcript (signed in).** Each turn's hover or long-press actions (next
+**Transcript (signed in), as built (Rule A, 2026-11-24).** A turn gets a
+share icon only when it holds a quote that is already public: the reader
+fetches the episode's public quotes with their turn ids
+(`GET /api/podcasts/{show}/episodes/{slug}/quote-shares`) and puts the
+icon on each turn whose text still contains its quote. The icon opens the
+quote's card with *Copy link* and, on phones, *Share…*. Turns without a
+public quote show nothing, so sharing makes nothing public that was not
+already. Any sentence the reader picks (Rule B) stays a Phase 4 decision.
+
+**Transcript (signed in), as first drafted.** Each turn's hover or long-press actions (next
 to `TimestampLink`) gain *Quote this*. It opens a bottom sheet with the
 turn's gated sentence block preselected, ± sentence toggles within the
 gate's limits (one speaker turn, ≤ 320 chars, ≤ 30 s), a live card

@@ -8,6 +8,7 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query'
 import {
+  getEpisodeQuoteShares,
   getDashboardStats,
   getNarrationDashboardStats,
   getAnalytics,
@@ -320,6 +321,19 @@ export function useEpisodeTranscript(podcastSlug: string, episodeSlug: string) {
     // Don't poll transcript content
     refetchInterval: false,
     staleTime: 60000, // 1 minute
+  })
+}
+
+// Spec #114 — the transcript's shareable quotes (already public ones only).
+// Best effort: on any error the transcript simply offers none.
+export function useEpisodeQuoteShares(podcastSlug: string, episodeSlug: string) {
+  return useQuery({
+    queryKey: ['episodes', podcastSlug, episodeSlug, 'quote-shares'],
+    queryFn: () => getEpisodeQuoteShares(podcastSlug, episodeSlug),
+    enabled: !!podcastSlug && !!episodeSlug,
+    retry: false,
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
   })
 }
 

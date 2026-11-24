@@ -26,6 +26,7 @@ const wordsState: { data: unknown } = { data: null }
 const transcriptState: { data: unknown } = { data: transcript }
 
 vi.mock('../hooks/useApi', () => ({
+  useEpisodeQuoteShares: vi.fn(() => ({ data: [] })),
   useEpisodeTranscript: vi.fn(() => ({ data: transcriptState.data })),
   useEpisodeTranscriptWords: vi.fn(() => ({ data: wordsState.data })),
 }))

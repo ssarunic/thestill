@@ -16,6 +16,7 @@ import { useFollowPlayback } from '../hooks/useFollowPlayback'
 import type {
   AnnotatedSegment,
   AnnotatedTranscriptDump,
+  QuoteShareItem,
   EpisodeEntity,
   KaraokeWordsByEpisode,
   MentionLite,
@@ -38,6 +39,8 @@ import { findActiveSegmentIndex } from '../utils/transcriptSearch'
 import { adBreakRunBounds } from '../utils/adBreaks'
 import { useKaraokeActiveWordIdx } from '../hooks/useKaraokeActiveWordIdx'
 import KaraokeWord from './KaraokeWord'
+import QuoteShareDialog from './QuoteShareDialog'
+import { ShareIcon } from './Button'
 import { useToast } from './Toast'
 import {
   applyEntityHighlights,
@@ -157,6 +160,9 @@ function saveHiddenKinds(kinds: Set<TogglableKind>): void {
 
 interface SegmentedTranscriptViewerProps {
   transcript: AnnotatedTranscriptDump
+  // Spec #114 — public quotes of this episode. A turn that holds one gets a
+  // share icon; the rest get none.
+  quoteShares?: QuoteShareItem[]
   // Enables active-segment highlighting when the player is on this episode.
   episodeId?: string | null
   // Called with an absolute playback second when the user clicks or
@@ -404,6 +410,10 @@ interface ContentSegmentProps {
   // smooth" and "the highlight handoff between words is also smooth".
   karaokeWords?: WordTimestamp[]
   karaokeGetCurrentTime?: () => number
+  // Spec #114 — the public quote cut from this turn, if any, and what
+  // opening it does.
+  quoteShare?: QuoteShareItem
+  onShareQuote?: (share: QuoteShareItem) => void
 }
 
 const ContentSegment = memo(function ContentSegment({
@@ -423,6 +433,8 @@ const ContentSegment = memo(function ContentSegment({
   onFocusEntity,
   karaokeWords,
   karaokeGetCurrentTime,
+  quoteShare,
+  onShareQuote,
 }: ContentSegmentProps) {
   // Per-frame karaoke cursor: which word is currently spoken (-1 during
   // pauses) and how far through the segment the audio has progressed.
@@ -524,6 +536,24 @@ const ContentSegment = memo(function ContentSegment({
               onSeek,
               onFocusEntity,
             })}
+        {quoteShare && onShareQuote && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onShareQuote(quoteShare)
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            aria-label={`Share a quote from ${speaker}`}
+            title="Share a quote from this passage"
+            data-testid={`quote-share-${segment.id}`}
+            className="ml-2 inline-flex h-6 w-6 translate-y-1 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-primary-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+          >
+            <span className="block h-4 w-4">
+              <ShareIcon />
+            </span>
+          </button>
+        )}
       </p>
     </div>
   )
@@ -885,6 +915,7 @@ export function ActiveSegmentTracker({
 }
 
 export default function SegmentedTranscriptViewer({
+  quoteShares,
   transcript,
   episodeId,
   onSeekRequest,
@@ -1135,6 +1166,23 @@ export default function SegmentedTranscriptViewer({
     // stable from useAutoScrollFollow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollToSegmentId?.segmentId, scrollToSegmentId?.nonce])
+
+  // Spec #114 — a share belongs to the turn it was cut from: same id, and
+  // the turn's text still holds the quote (an edit since the last entity
+  // refresh can move ids, and then the icon is simply left off).
+  const sharesBySegmentId = useMemo(() => {
+    const byId = new Map<number, QuoteShareItem>()
+    if (!quoteShares?.length) return byId
+    const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
+    const textById = new Map(transcript.segments.map((seg) => [seg.id, squash(seg.text)]))
+    for (const share of quoteShares) {
+      const text = textById.get(share.segment_id)
+      if (text && !byId.has(share.segment_id) && text.includes(squash(share.text))) byId.set(share.segment_id, share)
+    }
+    return byId
+  }, [quoteShares, transcript.segments])
+  const [sharing, setSharing] = useState<QuoteShareItem | null>(null)
+  const closeSharing = useCallback(() => setSharing(null), [])
 
   const handleCopyTimestamp = useCallback(
     async (seconds: number) => {
@@ -1695,6 +1743,8 @@ export default function SegmentedTranscriptViewer({
                       isKaraokeSegment ? getCurrentTime : undefined
                     }
                     linked={isCued}
+                    quoteShare={sharesBySegmentId.get(segment.id)}
+                    onShareQuote={setSharing}
                   />
                 </Fragment>
               )
@@ -1737,6 +1787,7 @@ export default function SegmentedTranscriptViewer({
           Resume follow
         </button>
       )}
+      <QuoteShareDialog share={sharing} onClose={closeSharing} />
     </div>
   )
 }

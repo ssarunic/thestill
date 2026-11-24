@@ -25,7 +25,9 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 from structlog import get_logger
 
+from ...models.entities import display_name
 from ...models.user import User
+from ...repositories.public_quotes import QuoteFilter
 from ...repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID
 from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
 from ...services.audio_address import resolver as audio_address_resolver
@@ -487,6 +489,50 @@ def get_episode_transcript_by_slugs(
 
     # Write-once resource: content-hash ETag + revalidation (Phase 6.2).
     return etag_json_response(request, response_payload)
+
+
+#: More than any one episode has public quotes (spec #94 caps its own list the same way).
+_QUOTE_SHARES_MAX = 1000
+
+
+@router.get("/{podcast_slug}/episodes/{episode_slug}/quote-shares")
+def get_episode_quote_shares(
+    podcast_slug: str,
+    episode_slug: str,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """The episode's quotes a reader can share from the transcript (spec #114).
+
+    Only quotes that are already public (the spec #94 quote gate: a public
+    show, an episode with a summary, a named speaker, no sponsor read, a
+    quote that reads on its own), each with its short link id and the
+    transcript turn it comes from, so the reader can put a share icon on
+    that turn. Sharing one makes nothing public that was not already.
+    Empty where there are no public pages to share to.
+    """
+    result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
+    if not result:
+        not_found("Episode", f"{podcast_slug}/{episode_slug}")
+    _, episode = result
+    service = getattr(state, "quote_share_service", None)
+    if service is None or not (state.config.multi_user and state.config.public_pages_enabled):
+        return api_response({"shares": []})
+    rows, _ = state.entity_repository.public_quote_queries().quotes(
+        QuoteFilter(episode_id=str(episode.id)), order="episode", limit=_QUOTE_SHARES_MAX
+    )
+    ids = service.mint(rows)
+    shares = [
+        {
+            "id": ids[row["mention_id"]],
+            "segment_id": int(row["segment_id"]),
+            "text": (row.get("quote") or "").strip(),
+            "start_seconds": int(row.get("start_ms") or 0) // 1000,
+            "speaker": display_name(row["speaker_name"]),
+        }
+        for row in rows
+        if row.get("mention_id") in ids
+    ]
+    return api_response({"shares": shares})
 
 
 @router.get("/{podcast_slug}/episodes/{episode_slug}/sync-track/{generation}")

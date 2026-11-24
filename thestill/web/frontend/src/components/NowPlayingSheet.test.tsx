@@ -11,6 +11,7 @@ import NowPlayingSheet from './NowPlayingSheet'
 // the sheet test needs no QueryClient. Two people, three mentions.
 vi.mock('../hooks/useApi', () => ({
   // The current-line strip has its own test; here it has no transcript.
+  useEpisodeQuoteShares: vi.fn(() => ({ data: [] })),
   useEpisodeTranscript: vi.fn(() => ({ data: undefined })),
   useEpisodeTranscriptWords: vi.fn(() => ({ data: undefined })),
   useEpisodeEntities: vi.fn((episodeId: string | null) => ({
