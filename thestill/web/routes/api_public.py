@@ -21,8 +21,10 @@ few hard rules:
   allowlist; nothing is splatted from a model or a row, so pipeline state,
   failure details, storage paths, feed URLs and per-user flags cannot leak.
 - **No spend.** The module never imports the LLM provider factory, never
-  enqueues work (no refresh-on-open) and never writes. A summary language
-  that is not already stored is a 404, not a translation.
+  enqueues work (no refresh-on-open). It writes twice, both counters or
+  idempotent: the page-view counter, and a ``quote_shares`` row per public
+  quote when a quote payload is built (spec #114). A summary language that
+  is not already stored is a 404, not a translation.
 - **One visibility rule.** :mod:`thestill.web.public_access` decides what is
   public; hidden podcasts and entities are 404s here and are filtered out of
   every list.
@@ -49,6 +51,7 @@ from ...models.entities import display_name
 from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.analytics_sink import PublicPageView
 from ...services.podcast_service import PodcastWithIndex
+from ...services.quote_share_service import ShareGone, stands_alone
 from ...utils.duration import format_duration
 from ...utils.geoip import lookup_country_from_ip
 from ...utils.language_config import normalize_language_code
@@ -739,12 +742,14 @@ def _entity_type_str(value: Any) -> str:
     return str(value.value if hasattr(value, "value") else value)
 
 
-def _quote_item(row: Dict[str, Any]) -> Dict[str, Any]:
+def _quote_item(row: Dict[str, Any], share_id: Optional[str] = None) -> Dict[str, Any]:
     """One public quote, attributed and timed (no transcript beyond the excerpt)."""
     start_ms = int(row.get("start_ms") or 0)
     return {
         "text": (row.get("quote") or "").strip(),
         "start_seconds": start_ms // 1000,
+        # Spec #114: the quote's short link id, when it may become a card.
+        "share_id": share_id,
         "speaker": {"name": display_name(row["speaker_name"]), "slug": entity_slug(str(row["speaker_id"]))},
         "about": {
             "name": display_name(row["about_name"]),
@@ -762,17 +767,17 @@ def _quote_item(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-_DANGLING_OPENERS = re.compile(
-    r"^(he|she|it|they|them|him|her|his|their|this|that|these|those|and|but|so|or|because|which|who|like|yeah|well)\b",
-    re.I,
-)
+def _quote_items(state: AppState, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Public quotes for ``rows``, each with its short link id (spec #114).
 
-
-def _stands_alone(text: str) -> bool:
-    """A featured quote should read on its own: it opens a sentence (capital,
-    no pronoun or connective) and ends one."""
-    text = text.strip().strip('\u201c\u201d"')
-    return bool(text) and text[0].isupper() and not _DANGLING_OPENERS.match(text) and text[-1] in ".!?"
+    Minting is the one write on these read paths besides the page-view
+    counter: an idempotent upsert, once per cache build, bounded by the
+    gated quote set. Without the service, or in read-only mode, quotes
+    carry no id and keep their plain link to the moment.
+    """
+    service = getattr(state, "quote_share_service", None)
+    ids = service.mint(rows) if service is not None and rows else {}
+    return [_quote_item(row, ids.get(row.get("mention_id"))) for row in rows]
 
 
 _entity_path_cache = TtlCache(_PAYLOAD_TTL_SECONDS, max_size=_PAYLOAD_CACHE_MAX)
@@ -854,9 +859,9 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
     def featured(f_recent: QuoteFilter, f_any: QuoteFilter) -> Optional[Dict[str, Any]]:
         for f in (f_recent, f_any):
             rows, _ = queries.quotes(f, order="longest", limit=25)
-            standalone = [r for r in rows if _stands_alone(r.get("quote") or "")]
+            standalone = [r for r in rows if stands_alone(r.get("quote") or "")]
             if standalone or rows:
-                return _quote_item((standalone or rows)[0])
+                return _quote_items(state, [(standalone or rows)[0]])[0]
         return None
 
     since = days_ago(_FEATURED_WINDOW_DAYS)
@@ -893,7 +898,7 @@ def _build_entity_payload(state: AppState, visibility: PublicVisibility, entity_
             best, _ = queries.quotes(
                 QuoteFilter(speaker_id=str(row["speaker_id"]), about_id=entity_id), order="longest", limit=10
             )
-            best = sorted(best, key=lambda r: not _stands_alone(r.get("quote") or ""))
+            best = sorted(best, key=lambda r: not stands_alone(r.get("quote") or ""))
             speakers.append(
                 {
                     "name": display_name(row["speaker_name"]),
@@ -1147,7 +1152,7 @@ def public_entity_quotes_payload(
             f, order="recent", limit=_QUOTE_PAGE, offset=(page - 1) * _QUOTE_PAGE
         )
         return {
-            "quotes": [_quote_item(r) for r in rows],
+            "quotes": _quote_items(state, rows),
             "total": total,
             "page": page,
             "next_page": page + 1 if page * _QUOTE_PAGE < total else None,
@@ -1191,7 +1196,7 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
                 "role": row.speaker_kind if kind == "person" and row.takes_part else None,
             }
         )
-    return {"every": [_quote_item(r) for r in rows], "mentioned": mentioned}
+    return {"every": _quote_items(state, rows), "mentioned": mentioned}
 
 
 def public_episode_quotes_payload(
@@ -1253,6 +1258,43 @@ def list_public_episode_quotes(
     return api_response(payload)
 
 
+@router.get("/quote-shares/{share_id}")
+def get_public_quote_share(
+    share_id: str,
+    request: Request,
+    response: Response,
+    state: AppState = Depends(get_app_state),
+) -> dict:
+    """One shared quote by its short link id (spec #114): the words as they
+    were shared, who said them and where. The episode page shows it as the
+    linked quote. 404 for an unknown or non-public share, 410 for one that
+    was withdrawn."""
+    service = getattr(state, "quote_share_service", None)
+    try:
+        share = service.resolve(share_id) if service is not None else None
+    except ShareGone:
+        raise HTTPException(status_code=410, detail="Quote link withdrawn") from None
+    if share is None:
+        raise _not_found("Quote link")
+    apply_public_cache_headers(request, response)
+    return api_response(
+        {
+            "share": {
+                "id": share.id,
+                "text": share.text,
+                "start_seconds": share.start_seconds,
+                "speaker": (
+                    {"name": share.speaker_name, "slug": entity_slug(share.speaker_id)}
+                    if share.speaker_name and share.speaker_id
+                    else None
+                ),
+                "episode": {"slug": share.episode_slug, "title": share.episode_title},
+                "podcast": {"slug": share.podcast_slug, "title": share.podcast_title},
+            }
+        }
+    )
+
+
 _TRENDING_TTL_SECONDS = 1800.0
 _trending_cache = TtlCache(_TRENDING_TTL_SECONDS, max_size=4)
 
@@ -1288,19 +1330,20 @@ def _pick_trending(state: AppState) -> Dict[str, Any]:
         row = top[0]
         about_id = str(row["about_id"])
         rows, _ = queries.quotes(QuoteFilter(about_id=about_id, since=days_ago(days)), order="longest", limit=40)
-        rows = sorted(rows, key=lambda r: not _stands_alone(r.get("quote") or ""))
-        picked: List[Dict[str, Any]] = []
+        rows = sorted(rows, key=lambda r: not stands_alone(r.get("quote") or ""))
+        picked_rows: List[Dict[str, Any]] = []
         seen_speakers: set = set()
         seen_shows: set = set()
         for quote_row in rows:
             speaker, show = str(quote_row["speaker_id"]), quote_row["podcast_slug"]
             if speaker in seen_speakers or show in seen_shows:
                 continue
-            picked.append(_quote_item(quote_row))
+            picked_rows.append(quote_row)
             seen_speakers.add(speaker)
             seen_shows.add(show)
-            if len(picked) == 3:
+            if len(picked_rows) == 3:
                 break
+        picked = _quote_items(state, picked_rows)
         payload = {
             "entity": {
                 "name": display_name(row["about_name"]),

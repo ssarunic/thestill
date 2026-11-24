@@ -252,6 +252,21 @@ class PathManager:
         _validate_slug(generation, name="generation")
         return self._assert_inside_root(self.sync_tracks_dir() / podcast_slug / f"{episode_slug}.{generation}.sync")
 
+    def quote_cards_dir(self) -> Path:
+        """Rendered quote cards root (spec #114)."""
+        return self.storage_path / "quote_cards"
+
+    def quote_card_file(self, share_id: str, variant: str, version: str) -> Path:
+        """Path of one rendered card: ``quote_cards/<id>/<variant>.<version>.png``.
+
+        ``version`` carries the template version and a hash of the speaker
+        name, so a card rendered for another name is never served.
+        """
+        _validate_slug(share_id, name="share_id")
+        _validate_slug(variant, name="variant")
+        _validate_slug(version, name="version")
+        return self._assert_inside_root(self.quote_cards_dir() / share_id / f"{variant}.{version}.png")
+
     # --- Spec #28 corpus paths -------------------------------------------------
     # The four entity-type subdirs are split because a rendered Markdown
     # entity page is itself just ``<type>/<slug>.md`` — keeping them in
@@ -518,6 +533,7 @@ class PathManager:
             self.pending_operations_dir(),
             self.narrations_dir(),
             self.sync_tracks_dir(),
+            self.quote_cards_dir(),
             # Spec #28 corpus tree — entity pages only (Phase 2.10
             # removed the per-episode rendered Markdown projection).
             self.corpus_dir(),

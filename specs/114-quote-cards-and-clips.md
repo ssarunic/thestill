@@ -1,6 +1,6 @@
 # Quote Cards and Clips
 
-> **Status:** 📝 Draft (2026-11-05)
+> **Status:** 🚧 Phase 0 in progress. Built (2026-11-24, branch `feat/114-quote-cards-phase0`): the tables, short link ids on public quotes, `/q/{id}` and its card, the shared-quote lookup, the `quote_cards_enabled` switch, `thestill quote-share revoke|list` and revocation when a show is made private. Phase 0 still to come: the share menu and the linked quote on the episode page (frontend), `ts_ref` attribution and the `/analytics` panel
 > **Created:** 2026-11-05
 > **Updated:** 2026-11-23 (open questions decided: D9–D12; follow hook reuses spec #117; Q6 opened on D6)
 > **Priority:** Medium-high. The first readers arrive from public pages and leave without following anything (spec #111); this is the first feature built to bring *more* of them, so it ships together with the hook that keeps them.
@@ -223,8 +223,10 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
     candidate, so once #100 lands the public read path writes nothing.
   `GET /q/<id>` for an id with no row is a plain 404; it never searches
   quotes. Collisions are detected on insert (same id, different
-  `(episode_id, start_ms, text)`) and resolved by appending a
-  character to the newer quote's id.
+  `(episode_id, start_ms, text)`). The newer quote then gets no share
+  id and keeps its plain link to the moment; with 50 bits, two quotes
+  of the whole catalog colliding is not expected to happen, and a rule
+  that renames one side is more machinery than that deserves.
 - **Custom selections (Phase 4) get a random id** and a `created_by`.
 - **`text` is a snapshot; `speaker_entity_id` is a cache.** A re-clean or
   a spec #110 edit changes the transcript; the card keeps saying what it
@@ -295,8 +297,8 @@ title, episode artwork (falls back to show artwork, then a neutral tile),
 the short URL as text (`thestill.me/q/abcd…`), and the thestill mark.
 **No QR code on image cards** (Decision D4): nobody scans a code on the
 phone they are holding; the QR belongs on video (§4) where links do not
-work. Light and dark templates, chosen by the artwork's luminance so the
-text always contrasts.
+work. One dark template: the text sits on the card's own background,
+never over the artwork, so contrast does not depend on the artwork.
 
 Artwork is fetched through the existing guarded HTTP client with the
 usual SSRF rules, cached under `PathManager.quote_cards_dir()` as
@@ -767,7 +769,7 @@ Phase 0 these hold; the sections above describe the end state.
 | Publisher objection to audio clips | RSS-only, 30 s, attribution and link on every frame, clips only for shows on the `audio_clips` allowlist (D3), per-id revoke |
 | YouTube Terms of Service | No clips from YouTube-derived audio, ever; cards link to YouTube at the timestamp instead |
 | Facebook and LinkedIn replace the card with the episode artwork | `og:url` is the short link (D1); checked in the acceptance criteria |
-| Search engines index `/q` pages or treat them as cloaking | `noindex` + canonical; UA-blind bytes; `robots.txt` disallows `/q/` from crawling but the previewers are not crawlers |
+| Search engines index `/q` pages or treat them as cloaking | `noindex` in the page and in an `X-Robots-Tag` header, plus the canonical; UA-blind bytes. `/q/` is **not** disallowed in `robots.txt`: Twitterbot obeys `robots.txt`, so a disallowed link would preview as nothing, and a crawler that cannot fetch the page cannot see its `noindex` either |
 | Render storms on the RPi5 | Cache, two-image semaphore, public rate limit, `quote_cards_enabled` |
 | Storage growth from clip audio | ~5 MB per public episode; deleted with the episode or when the show leaves the allowlist; `thestill quote-audio prune` for episodes no longer public |
 | Retained originals pile up when the entity branch fails (`DELETE_AUDIO_AFTER_PROCESSING` deployments) | The candidates step deletes after the cut; the 7-day housekeeping sweep deletes the rest and clears the marker; `clips_enabled` off restores today's deletion |

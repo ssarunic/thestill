@@ -266,6 +266,12 @@ Callers import every other module by its own path.
   no LLM calls. `LinkResult.cleared_host_guests` lists stored guest ids
   that `link_episode_roles` removed because they are the show's hosts.
 
+### Quote shares (spec #114)
+
+- `quote_share_service.py:QuoteShareService`: `mint` (rows of public quotes in, `{mention_id: share_id}` out; never raises; nothing in read-only mode), `resolve` (None for unknown or non-public, raises `ShareGone` for revoked or a hidden speaker), `record_open`, `card_png` / `card_etag` / `short_url`, `revoke` (audited as `quote_share.revoke`), `revoke_for_podcast`, `delete_assets`, `list_for_episode`.
+- `quote_share_service.py:share_id` is the first 10 base32 characters of `sha256(episode_id|start_ms|text)`; `card_eligible` is `stands_alone` plus `CARD_MAX_CHARS` (320). `stands_alone` is also what the public API uses to pick a featured quote.
+- At most two cards render at once per process (`_render_slots`). Artwork is fetched through `utils.url_guard.guarded_get`, capped at 8 MB and 6 s; any failure renders the neutral tile.
+
 ### Sync tracks, indexing and analytics
 
 - `sync_track_service.py:SyncTrackService`, by group:

@@ -227,6 +227,9 @@ instead of a copy per moment. Malformed values are dropped.
 | `/api/public/entities/{type}/{slug}` | GET | Person / company / product / topic page payload (stats, roles, featured quote, who's talking) |
 | `/api/public/entities/{type}/{slug}/quotes` | GET | Paged quotes, `?kind=said\|about`, `?about=<type:slug>`, `?page=` |
 | `/api/public/who-said-what` | GET | Landing module: the week's most-quoted entity and three quotes from different speakers and shows |
+| `/api/public/quote-shares/{share_id}` | GET | Spec #114: one shared quote by its short link id (the words as shared, speaker, episode, show). The public episode page shows it as the linked quote. 404 unknown or not public, 410 withdrawn |
+| `/q/{share_id}` | GET | Spec #114: the quote short link. A small `noindex` HTML page whose Open Graph tags are the quote card (`og:url` is the short link, the canonical is the episode), then a refresh to the episode at that moment. The same bytes for every user agent; opens by browsers are counted per day and referrer host. Mounted with the public pages, on the public rate limit |
+| `/q/{share_id}.png` | GET | Spec #114: the quote's link-preview card (1200 × 630 PNG), rendered on first request and cached; `ETag` changes with the speaker's name. 503 while `quote_cards_enabled` is off and the card is not cached |
 | `/api/public/pageview` | POST | Spec #95: the public site reports each route change as `{path, referrer}` (referrer only on the first view). The server derives the page kind, logs `public_page_view`, and sends browser views (not crawlers or link previews) to PostHog with a daily visitor key. Browser views of a show, episode, entity, top or landing page the public site would serve also go on a per-page daily counter (spec #103, `public_page_daily_views`; no visitor id, IP or referrer). Always 204; signed-in readers and unknown paths are ignored |
 
 **Visibility.** An episode is public when it has a summary with a preview,

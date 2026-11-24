@@ -61,6 +61,11 @@ thestill set-show-link --podcast-id X --platform spotify --url https://open.spot
 thestill sync-track show --podcast-id X --episode <slug> [--json]
 thestill sync-track backfill [--podcast-id X] [--since-days N] [--max-episodes N] [--dry-run]   # recent Dalston jobs only
 
+# Quote short links (spec #114): /q/<id> previews as the quote's card. Minted
+# when a public quote page is built; `set-podcast-visibility --private` withdraws a show's.
+thestill quote-share list --podcast-id X --episode <slug> [--json]   # each link, its opens, live or withdrawn
+thestill quote-share revoke <id> --reason "..."                       # 410 from then on, card deleted, audited
+
 # Summary genre profiles (spec #98): override > Apple category > general;
 # genre profiles only apply once listed in SUMMARY_PROFILES_ENABLED.
 thestill summary-profiles                  # each show's profile and why

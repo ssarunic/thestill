@@ -45,6 +45,8 @@ dependencies = [
     # (PEP 594); audioop-lts is the drop-in backport.
     "audioop-lts>=0.2.2; python_version >= '3.13'",
     "click>=8.1.7",
+    # Quote cards (spec #114): renders the link-preview image.
+    "pillow>=11.0.0",
     "python-dotenv>=1.0.0",
     "aiofiles>=23.2.1",
     "httpx>=0.25.2",

@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from ..services.mcp_token_service import McpTokenService
     from ..services.narration import NarrationRunner
     from ..services.platform_link_service import PlatformLinkService
+    from ..services.quote_share_service import QuoteShareService
     from ..services.refresh_on_open import RefreshOnOpenService
     from ..services.sync_track_service import SyncTrackService
     from ..services.transcript_edit_service import TranscriptEditService
@@ -213,6 +214,9 @@ class AppState:
     episode_view_repository: "Optional[EpisodeViewRepository]" = None
     # Spec #103 Phase 2 — signed-out public page views per day.
     public_page_view_repository: "Optional[PublicPageViewRepository]" = None
+    # Spec #114 — short links to public quotes. ``None`` only in hand-built
+    # test fixtures; quotes then carry no share id.
+    quote_share_service: "Optional[QuoteShareService]" = None
     # Spec #95 Layer B — usage events (PostHog, or NullSink when off).
     # ``None`` only in hand-built test fixtures; emitters treat it as off.
     analytics_sink: "Optional[AnalyticsSink]" = None

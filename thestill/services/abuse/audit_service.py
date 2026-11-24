@@ -66,6 +66,8 @@ AUDIT_ACTIONS = (
     "facts.add_host",
     # Episode repair (thestill.services.episode_curation)
     "episode.fold_import_twin",
+    # Quote shares (spec #114)
+    "quote_share.revoke",
 )
 
 

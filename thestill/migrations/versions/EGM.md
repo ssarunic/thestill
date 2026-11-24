@@ -50,6 +50,7 @@ Each revision module exposes `revision`, `down_revision`, `upgrade()` and
 | `0026` | `0026_connector_days.py` | Table `user_connector_days` (PK `(user_id, day)`, `first_at`). Index `idx_connector_days_day` |
 | `0027` | `0027_transcript_edits.py` | Table `transcript_edits` (append-only op log: `seq`, `op`, `raw_sha256`, jsonb `anchor_json`/`args_json`/`before_json`, self-FK `reverts`, `UNIQUE (episode_id, seq)`, index `idx_transcript_edits_actor`) and table `transcript_edit_refreshes` |
 | `0028` | `0028_episode_sync_tracks.py` | Table `episode_sync_tracks` (PK `(episode_id, generation)`, `state` pending/current, `path`, `frames`, `anchors`, `audio_bytes`, `audio_duration_s`). Unique index `idx_sync_tracks_one_per_state` on `(episode_id, state)` |
+| `0031` | `0031_quote_shares.py` | Tables `quote_shares` (PK `id`, a truncated hash; FKs to `episodes` and `podcasts` with `ON DELETE CASCADE`; `speaker_entity_id` deliberately without an FK; `revoked_at`) and `quote_share_hits` (PK `share_id, day, referrer_host`), spec #114 |
 
 ## Invariants
 

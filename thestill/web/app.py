@@ -66,6 +66,7 @@ from ..services.mcp_token_service import McpTokenService
 from ..services.narration import NarrationGenerator, NarrationRunner
 from ..services.narration_prompts import load_anchor_prompt
 from ..services.platform_link_service import PlatformLinkService
+from ..services.quote_share_service import QuoteShareService
 from ..services.refresh_on_open import RefreshOnOpenService
 from ..services.sync_track_service import SyncTrackService
 from ..services.transcript_edit_service import TranscriptEditService
@@ -133,6 +134,7 @@ from .routes import (
     api_transcript_words,
     auth,
     health,
+    quote_links,
     unsubscribe,
     webhooks,
 )
@@ -489,6 +491,7 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
         analytics_sink=make_analytics_sink(config),
         episode_view_repository=repos.episode_view,
         public_page_view_repository=repos.public_page_view,
+        quote_share_service=QuoteShareService(repos.quote_share, config, settings=abuse.settings, audit=abuse.audit),
         abuse=abuse,
         # Spec #110 — the transcript editor: op log for every reader, the
         # service for the admin routes and the idle-refresh sweep.
@@ -959,6 +962,8 @@ def create_app(config: Optional[Config] = None) -> FastAPI:
     # anonymous visitors.
     if config.multi_user and config.public_pages_enabled:
         app.include_router(api_public.router, prefix="/api/public", tags=["public"])
+        # Spec #114: quote short links and their cards, also signed out.
+        app.include_router(quote_links.router, tags=["public"])
 
     # Spec #78 — mount the MCP capability-URL endpoint before the SPA
     # catch-all so route matching can never hand /mcp/* to the frontend

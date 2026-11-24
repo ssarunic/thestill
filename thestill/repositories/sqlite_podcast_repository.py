@@ -1860,6 +1860,37 @@ class SqlitePodcastRepository(PodcastRepository, EpisodeRepository):
                                 DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now'))
             );
             CREATE INDEX IF NOT EXISTS idx_entity_redirects_to ON entity_redirects(to_entity_id);
+
+            -- Spec #114: short links to public quotes and their opens
+            -- (alembic 0031 on Postgres). speaker_entity_id has no FK: an
+            -- entity merge deletes the losing row.
+            CREATE TABLE IF NOT EXISTS quote_shares (
+                id                TEXT PRIMARY KEY NOT NULL,
+                episode_id        TEXT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+                podcast_id        TEXT NOT NULL REFERENCES podcasts(id) ON DELETE CASCADE,
+                segment_id        INTEGER NOT NULL,
+                start_ms          INTEGER NOT NULL,
+                end_ms            INTEGER NOT NULL,
+                text              TEXT NOT NULL,
+                speaker_entity_id TEXT NULL,
+                source            TEXT NOT NULL DEFAULT 'gated',
+                created_by        TEXT NULL REFERENCES users(id) ON DELETE SET NULL,
+                created_at        TIMESTAMP NOT NULL
+                                  DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00','now')),
+                revoked_at        TIMESTAMP NULL,
+                revoked_reason    TEXT NULL,
+                template_version  INTEGER NOT NULL DEFAULT 1,
+                audio_key         TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_quote_shares_episode ON quote_shares(episode_id);
+            CREATE INDEX IF NOT EXISTS idx_quote_shares_podcast ON quote_shares(podcast_id);
+            CREATE TABLE IF NOT EXISTS quote_share_hits (
+                share_id      TEXT NOT NULL REFERENCES quote_shares(id) ON DELETE CASCADE,
+                day           TEXT NOT NULL,
+                referrer_host TEXT NOT NULL DEFAULT '',
+                hits          INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (share_id, day, referrer_host)
+            );
             """
         )
 

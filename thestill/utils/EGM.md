@@ -76,14 +76,14 @@ The pluggable storage backends are in the
   `clean_transcripts_dir`, `summaries_dir`, `evaluations_dir`,
   `podcast_facts_dir`, `episode_facts_dir`, `debug_feeds_dir`,
   `pending_operations_dir`, `external_transcripts_dir`, `briefings_dir`,
-  `narrations_dir`, `sync_tracks_dir`, `corpus_*_dir`,
+  `narrations_dir`, `sync_tracks_dir`, `quote_cards_dir`, `corpus_*_dir`,
   `evaluation_runs_dir`, `external_transcript_dir_for_podcast`.
   Checked file getters (path root-checked; all but `briefing_dir` also
   validate their slug or run id):
   `raw_transcript_file_with_podcast`,
   `clean_transcript_file_with_podcast`, `external_transcript_file`,
   `podcast_facts_file`, `episode_facts_file`, `debug_feed_file`,
-  `briefing_dir`, `sync_track_file`, `corpus_entity_file`,
+  `briefing_dir`, `sync_track_file`, `quote_card_file`, `corpus_entity_file`,
   `evaluation_run_dir`. `feeds_file` takes no argument.
   Flat file getters that join a caller-supplied filename unchecked:
   `original_audio_file`, `downsampled_audio_file`, `raw_transcript_file`,

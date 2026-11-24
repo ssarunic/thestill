@@ -171,6 +171,12 @@ Per-route guards on top of the router guard:
     ElevenLabs pending operations (`_settle_pending_operations`). That is what
     `thestill transcribe` waits on, so it finishes whichever process receives the
     callback.
+- **`quote_links.py`** (spec #114): `GET /q/{share_id}` returns the same HTML to every user
+  agent, with `og:url` set to the short link and the canonical to the episode; it is
+  `noindex` by meta and header and never cached, and it counts an open only for a
+  `browser` user agent. `GET /q/{share_id}.png` is declared first so the `.png` path is
+  not taken for an id. Unknown or non-public shares are 404, withdrawn ones 410. The
+  router is mounted only with the public pages and carries `public_rate_limit`.
 - **`unsubscribe.py`:** `unsubscribe_briefings` (GET) never changes anything, so mail
   scanners that prefetch the link are harmless. `unsubscribe_briefings_one_click` (POST)
   is idempotent and shows the same success page whether or not a row changed. The only
