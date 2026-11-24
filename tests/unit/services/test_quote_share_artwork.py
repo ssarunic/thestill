@@ -109,3 +109,46 @@ def test_an_error_status_or_an_oversized_file_is_no_artwork(server, monkeypatch)
 
     behaviour["serve"] = big
     assert _service()._artwork(_share(url)) is None
+
+
+def test_a_host_trickling_chunk_framing_does_not_hold_the_caller(server, monkeypatch):
+    """Closing a response whose read is blocked can wait for that read; the
+    caller must be released at the deadline all the same."""
+    behaviour, url = server
+    monkeypatch.setattr(module, "_ARTWORK_TOTAL_SECONDS", 0.3)
+
+    def serve(handler):
+        handler.protocol_version = "HTTP/1.1"
+        handler.send_response(200)
+        handler.send_header("Transfer-Encoding", "chunked")
+        handler.end_headers()
+        try:
+            handler.wfile.write(b"5;")  # a chunk-size line that never ends
+            for _ in range(60):
+                handler.wfile.write(b"x=1;")
+                handler.wfile.flush()
+                time.sleep(0.05)
+        except OSError:
+            pass
+
+    behaviour["serve"] = serve
+    started = time.monotonic()
+    assert _service()._artwork(_share(url)) is None
+    assert time.monotonic() - started < 0.8
+
+
+def test_gzipped_artwork_is_decoded(server):
+    import gzip
+
+    behaviour, url = server
+    packed = gzip.compress(b"image-bytes")
+
+    def serve(handler):
+        handler.send_response(200)
+        handler.send_header("Content-Encoding", "gzip")
+        handler.send_header("Content-Length", str(len(packed)))
+        handler.end_headers()
+        handler.wfile.write(packed)
+
+    behaviour["serve"] = serve
+    assert _service()._artwork(_share(url)) == b"image-bytes"

@@ -86,6 +86,14 @@ def share_id(episode_id: str, start_ms: int, text: str) -> str:
     return base64.b32encode(digest).decode("ascii").lower()[:10]
 
 
+def _close_quietly(response: Any) -> None:
+    try:
+        if response is not None:
+            response.close()
+    except Exception:  # closing under a read may raise; the download is ending either way
+        pass
+
+
 class ShareGone(Exception):
     """The share existed and was withdrawn: revoked, or its speaker hidden."""
 
@@ -280,8 +288,8 @@ class QuoteShareService:
         The download runs on its own thread. A socket timeout bounds only
         the wait for the *next* bytes, so a server that trickles them could
         otherwise hold the slot for as long as it liked; at the deadline the
-        caller stops waiting and closes the response under the download,
-        which ends its blocked read.
+        caller stops waiting and returns. The abandoned download is closed
+        from another thread and ends by itself at its next read timeout.
         """
         if not share.image_url:
             return None
@@ -299,7 +307,8 @@ class QuoteShareService:
                     response.raise_for_status()
                     body = b""
                     while not state.get("abandoned"):
-                        chunk = response.raw.read1(64 * 1024)
+                        # Decoded: a host may gzip the image on the wire.
+                        chunk = response.raw.read1(64 * 1024, decode_content=True)
                         if not chunk:
                             state["body"] = body
                             return
@@ -314,13 +323,13 @@ class QuoteShareService:
         worker.join(_ARTWORK_TOTAL_SECONDS)
         if worker.is_alive():
             state["abandoned"] = True
-            response = state.get("response")
-            if response is not None:
-                try:
-                    response.close()
-                except Exception:  # closing under a read may raise; the thread is ending either way
-                    pass
-            state.setdefault("error", "deadline")
+            # Closing can itself wait for the blocked read to let go of the
+            # connection, so it gets its own thread: the caller, and its
+            # render slot, are released now.
+            threading.Thread(target=_close_quietly, args=(state.get("response"),), daemon=True).start()
+            state["error"] = "deadline"
+            logger.info("quote_card_artwork_unavailable", share_id=share.id, error="deadline")
+            return None
         body = state.get("body")
         if body is None:
             logger.info("quote_card_artwork_unavailable", share_id=share.id, error=state.get("error", "too_large"))
