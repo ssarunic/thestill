@@ -88,7 +88,9 @@ export interface PublicQuote {
    * card. Absent from responses cached before the field existed. */
   share_id?: string | null
   speaker: { name: string; slug: string }
-  about: { name: string; type: PublicEntityType; slug: string; id: string }
+  /** What the quote names. Null on an episode page's quotes (spec #120:
+   * the summary's Best Quotes are about the episode, not one thing). */
+  about: { name: string; type: PublicEntityType; slug: string; id: string } | null
   episode: { slug: string; title: string; pub_date: string | null; image_url: string | null }
   podcast: { slug: string; title: string }
 }

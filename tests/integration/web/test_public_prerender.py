@@ -37,10 +37,12 @@ from thestill.web import public_prerender
 from thestill.web.dependencies import AUTH_COOKIE_NAME
 
 from .test_public_api import (  # noqa: F401
+    BEST_QUOTES,
     _anchor_people,
     _fresh_buckets,
     _seed,
     _seed_people,
+    _seed_summary_quotes,
     _write_summary,
     app_config,
 )
@@ -215,6 +217,7 @@ def test_episode_page_lists_who_takes_part_apart_from_who_is_mentioned(site, app
 
 def test_episode_page_has_its_content_in_the_html(site, app_state):
     _seed_people(app_state)
+    _seed_summary_quotes(app_state, BEST_QUOTES)
     response = site.get(EPISODE, headers={"User-Agent": BING})
     assert response.status_code == 200
     page = _parse(response.text)
@@ -224,6 +227,12 @@ def test_episode_page_has_its_content_in_the_html(site, app_state):
     assert "Episode 1" in text
     assert "Two hosts argue about chips." in text
     assert "I think Nvidia has built the deepest moat" in text
+    # Spec #120: each quote plays on thestill after sign-in, as the client does.
+    assert "Play from 2:00" in text
+    assert (
+        "/login#next=%2Fpodcasts%2Fpublic-show%2Fepisodes%2Fsummarised%3Fview%3Dtranscript%26t%3D120&intent=play"
+        in page.hrefs
+    )
     assert "Scott Galloway" in text and "Companies mentioned" in text
     assert "Publisher notes." in text
     # Nobody is anchored as host or guest here, so there is no cast list.
@@ -272,22 +281,23 @@ def test_budget_keeps_held_back_sections_transcripts_and_extra_quotes_out(site, 
     long_description = " ".join(f"word{i}" for i in range(200))
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         conn.execute("UPDATE episodes SET description = ? WHERE slug = 'summarised'", (long_description,))
-    _write_summary(
+    _seed_summary_quotes(
         app_state,
-        "summarised_summary.md",
-        "## The Gist\n\nTwo hosts argue about chips.\n\n## Timeline\n\n- [01:00] Secret timeline line\n\n"
+        BEST_QUOTES,
+        head="## The Gist\n\nTwo hosts argue about chips.\n\n## Timeline\n\n- [01:00] Secret timeline line\n\n"
         "## Drama\n\nSecret drama line.\n",
     )
     response = site.get(EPISODE)
     root = _root(response.text)
     assert "Secret timeline line" not in root and "Secret drama line" not in root
     page = _parse(response.text)
-    assert page.tags.count("figure") == public_prerender_quote_page()
-    assert "First sentence only." not in root  # speaking-row excerpts are not quotes
+    # Spec #120: the summary's checked quotes, never transcript excerpts.
+    assert page.tags.count("figure") == 2 <= public_prerender_quote_page()
+    assert "Extra quote number" not in root and "First sentence only." not in root
     description = next(t for t in page.texts if t.startswith("word0"))
     assert len(description.split()) == 80 and description.endswith("…")
     quotes = next(q for q in _bootstrap(page)["queries"] if q["query"] == "episodeQuotes")
-    assert len(quotes["data"]["quotes"]) == 6 and quotes["data"]["next_page"] == 2
+    assert len(quotes["data"]["quotes"]) == 2 and quotes["data"]["next_page"] is None
 
 
 def public_prerender_quote_page() -> int:
@@ -313,15 +323,13 @@ def test_untrusted_text_comes_out_inert(site, app_state):
     _seed_people(app_state)
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         conn.execute("UPDATE podcasts SET title = ? WHERE slug = 'public-show'", ("</h1><script>alert(1)</script>",))
-        conn.execute(
-            "UPDATE entity_mentions SET quote_excerpt = ? WHERE quote_excerpt LIKE 'I think Nvidia%'",
-            ("Nvidia </script><script>alert(2)</script> is a long enough quote to keep.",),
-        )
-    _write_summary(
+    hostile = "Nvidia </script><script>alert(2)</script> is a long enough quote to keep."
+    _seed_summary_quotes(
         app_state,
-        "summarised_summary.md",
-        "## The Gist\n\nTwo hosts <img src=x onerror=alert(3)> argue. [click](javascript:alert(4)) "
+        f'* "{hostile}" - Scott Galloway [02:00]\n',
+        head="## The Gist\n\nTwo hosts <img src=x onerror=alert(3)> argue. [click](javascript:alert(4)) "
         "[data](data:text/html,x) [ok](https://example.com/a) [cite](?cite=c1)\n",
+        galloway_turn=hostile,
     )
     response = site.get(EPISODE)
     root = _root(response.text)

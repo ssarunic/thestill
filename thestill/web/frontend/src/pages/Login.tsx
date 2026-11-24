@@ -28,6 +28,7 @@ const WHY: Record<SignInIntent | 'default', string> = {
   follow: "Sign in and we'll follow the show for you. New episodes arrive summarised in your inbox.",
   transcript: 'Sign in to read the full transcript, with speaker names and timestamps.',
   summary: 'Sign in to read the full summary, with the timeline, best quotes and more.',
+  play: 'Sign in to listen from this moment, with the transcript alongside.',
   default: 'Follow shows, read every transcript, and get a morning briefing across them.',
 }
 

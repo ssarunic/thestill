@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { parseSignInFragment } from '../../utils/signIn'
 import type { PublicQuote } from '../../api/public'
 import { QuoteCard } from './ui'
 
@@ -28,14 +29,36 @@ describe('QuoteCard (spec #94)', () => {
     expect(minute).toHaveTextContent('at 3:58')
   })
 
-  it('omits the speaker on the speaker’s own page and adds the YouTube link only when given', () => {
+  it('omits the speaker on the speaker’s own page', () => {
     render(
       <MemoryRouter>
-        <QuoteCard quote={quote} showSpeaker={false} youtubeUrl="https://youtube.com/watch?v=abc" />
+        <QuoteCard quote={quote} showSpeaker={false} />
       </MemoryRouter>,
     )
     expect(screen.queryByRole('link', { name: 'Scott Galloway' })).toBeNull()
-    expect(screen.getByRole('link', { name: 'Hear it on YouTube' })).toHaveAttribute('href', 'https://youtube.com/watch?v=abc&t=238')
+  })
+
+  // Spec #120 — "Play from" signs in and plays in the signed-in reader;
+  // nothing on a quote leads off thestill.
+  it('offers Play from in place of the timestamp, through sign-in to the reader at that moment', () => {
+    render(
+      <MemoryRouter>
+        <QuoteCard quote={quote} play />
+      </MemoryRouter>,
+    )
+    const play = screen.getByRole('link', { name: 'Play from 3 minutes 58 seconds' })
+    expect(play).toHaveTextContent('Play from 3:58')
+    expect(play).toHaveAttribute('rel', 'nofollow')
+    const href = play.getAttribute('href') ?? ''
+    expect(href.startsWith('/login#')).toBe(true)
+    expect(parseSignInFragment(href.slice('/login'.length))).toEqual({
+      next: '/podcasts/prof-g/episodes/portfolio?view=transcript&t=238',
+      intent: 'play',
+    })
+    expect(screen.queryByRole('link', { name: /at 3 minutes/ })).toBeNull()
+    for (const link of screen.getAllByRole('link')) {
+      expect(link.getAttribute('href') ?? '').toMatch(/^\//)
+    }
   })
 })
 

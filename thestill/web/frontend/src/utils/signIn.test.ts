@@ -18,6 +18,7 @@ describe('sign-in links (spec #102)', () => {
   it('accepts only known intents', () => {
     expect(parseIntent('follow')).toBe('follow')
     expect(parseIntent('summary')).toBe('summary')
+    expect(parseIntent('play')).toBe('play')
     expect(parseIntent('delete-account')).toBeNull()
     expect(parseIntent(null)).toBeNull()
   })

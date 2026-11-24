@@ -449,12 +449,114 @@ def test_hidden_entities_are_404(anon, app_state):
     assert anon.get("/api/public/entities/planet/earth").status_code == 404
 
 
-def test_episode_quotes_and_linked_quote(anon, app_state):
+HIDDEN_LINE = "Nvidia is something the hidden person has a long and detailed opinion about, apparently."
+UNNAMED_LINE = "Nvidia is a company that somebody we cannot name talked about at great length."
+
+
+def _seed_summary_quotes(app_state, quotes: str, *, head: str = REAL_SUMMARY, galloway_turn: str | None = None) -> None:
+    """Spec #120: give the summarised episode a transcript and a summary
+    whose Best Quotes cite it, with the citations sidecar written as the
+    summarizer writes it. Segment ``n`` starts at ``n`` minutes, as the
+    speaking rows of ``_seed_people`` say."""
+    from thestill.core.summary_citations import resolve_and_persist_summary_citations
+
+    texts = {
+        2: galloway_turn or f"Well, look. {GALLOWAY_LINE}",
+        3: ELSON_LINE,
+        4: "This episode is brought to you by Nvidia, use code PROFG for ten percent off today.",
+        5: UNNAMED_LINE,
+        6: HIDDEN_LINE,
+    }
+    speakers = {2: "Scott Galloway", 3: "Ed Elson", 4: "Scott Galloway", 5: "SPEAKER_03", 6: "Hidden Person"}
+    annotated = {
+        "episode_id": "00000000-0000-0000-0000-000000000001",
+        "playback_time_offset_seconds": 0.0,
+        "algorithm_version": "v1",
+        "transcript_source_duration_s": None,
+        "segments": [
+            {
+                "id": n,
+                "start": n * 60.0,
+                "end": n * 60.0 + 20.0,
+                "speaker": speakers[n],
+                "text": text,
+                "kind": "content",
+            }
+            for n, text in texts.items()
+        ],
+    }
+    name = "summarised_annotated.json"
+    path = app_state.path_manager.clean_transcripts_dir() / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(annotated), encoding="utf-8")
+    app_state.repository.update_episode(
+        "https://example.com/public.xml", "guid-1", {"clean_transcript_json_path": name}
+    )
+    _podcast, episode = app_state.repository.get_episode("00000000-0000-0000-0000-000000000001")
+    resolve_and_persist_summary_citations(
+        summary_markdown=head + "\n## 5. 💬 Best Quotes\n\n" + quotes,
+        episode=episode,
+        summary_path=Path(app_state.path_manager.summary_file(episode.summary_path)),
+        path_manager=app_state.path_manager,
+        file_storage=app_state.podcast_service.file_storage,
+    )
+    clear_public_caches()
+
+
+BEST_QUOTES = (
+    f'* "{GALLOWAY_LINE}" - Scott Galloway [02:00]\n'
+    f'* "{ELSON_LINE}" - Ed Elson [03:00]\n'
+    # Unnamed, hidden, misattributed and made-up quotes never appear.
+    f'* "{UNNAMED_LINE}" - Ed Elson [05:00]\n'
+    f'* "{HIDDEN_LINE}" - Hidden Person [06:00]\n'
+    f'* "{ELSON_LINE}" - Scott Galloway [03:00]\n'
+    '* "Nvidia will be worth a hundred trillion dollars by Friday." - Scott Galloway [02:00]\n'
+)
+
+
+def test_episode_quotes_are_the_summarys_checked_best_quotes(anon, app_state):
     _seed_people(app_state)
+    _seed_summary_quotes(app_state, BEST_QUOTES)
     body = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes?q=125").json()
-    assert {q["speaker"]["name"] for q in body["quotes"]} == {"Scott Galloway", "Ed Elson"}
+    assert [(q["speaker"]["name"], q["text"], q["start_seconds"]) for q in body["quotes"]] == [
+        ("Scott Galloway", GALLOWAY_LINE, 120),
+        ("Ed Elson", ELSON_LINE, 180),
+    ]
+    assert all(q["about"] is None for q in body["quotes"])
     assert body["linked"]["text"] == GALLOWAY_LINE
     assert "Hidden Person" not in {m["name"] for m in body["mentioned"]}
+
+
+def test_episode_without_checked_summary_quotes_shows_none(anon, app_state):
+    _seed_people(app_state)
+    body = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes").json()
+    # No transcript and no quotes section: transcript excerpts are not a fallback.
+    assert body["quotes"] == [] and body["total"] == 0 and body["speakers"] == []
+    assert body["mentioned"]
+
+
+def test_a_failed_quote_check_shows_no_quotes_and_keeps_the_rest(anon, app_state, monkeypatch):
+    from thestill.services import public_summary_quotes
+
+    _seed_people(app_state)
+    _seed_summary_quotes(app_state, BEST_QUOTES)
+
+    def broken(*_args, **_kwargs):
+        raise OSError("sidecar unreadable")
+
+    monkeypatch.setattr(public_summary_quotes, "verified_summary_quotes", broken)
+    response = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes")
+    assert response.status_code == 200
+    assert response.json()["quotes"] == [] and response.json()["mentioned"]
+
+
+def test_a_link_from_before_summary_quotes_still_finds_its_words(anon, app_state):
+    _seed_people(app_state)
+    _seed_summary_quotes(app_state, f'* "{GALLOWAY_LINE}" - Scott Galloway [02:00]\n')
+    body = anon.get("/api/public/podcasts/public-show/episodes/summarised/quotes?q=185").json()
+    assert [q["text"] for q in body["quotes"]] == [GALLOWAY_LINE]
+    # The transcript excerpt at that time answers the old #t= link, unminted.
+    assert body["linked"]["text"] == ELSON_LINE and body["linked"]["share_id"] is None
 
 
 def test_who_said_what_picks_a_thing_with_several_speakers(anon, app_state):
@@ -579,6 +681,7 @@ def test_top_chart_region_follows_the_visitor_then_the_us(anon, app_state, monke
 
 def test_episode_quotes_page_filter_and_find_a_linked_quote_anywhere(anon, app_state, monkeypatch):
     _seed_people(app_state)
+    _seed_summary_quotes(app_state, BEST_QUOTES)
     monkeypatch.setattr(api_public, "_EPISODE_QUOTE_PAGE", 1)
     url = "/api/public/podcasts/public-show/episodes/summarised/quotes"
 

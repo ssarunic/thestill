@@ -14,7 +14,7 @@ import {
   type PublicQuote,
 } from '../../api/public'
 import type { SignInIntent } from '../../utils/signIn'
-import { quoteShareUrl, quoteUrl, reportQuoteShared, useSignIn } from './helpers'
+import { playFromPath, quoteShareUrl, quoteUrl, reportQuoteShared, useSignIn } from './helpers'
 
 function cx(...parts: (string | false | null | undefined)[]) {
   return parts.filter(Boolean).join(' ')
@@ -151,7 +151,8 @@ export type QuoteCardQuote = Omit<PublicQuote, 'about' | 'speaker'> & {
 
 /**
  * One attributed, timed quote. ``variant``: stream (lists), featured (the
- * page's one large quote), linked (reached via a ?q= link).
+ * page's one large quote), linked (reached via a ?q= link). ``play`` offers
+ * "Play from" in place of the plain timestamp (the episode page).
  */
 export function QuoteCard({
   quote,
@@ -159,7 +160,7 @@ export function QuoteCard({
   showSpeaker = true,
   showShow = true,
   showDate = true,
-  youtubeUrl,
+  play = false,
   label,
   id,
   className,
@@ -171,7 +172,7 @@ export function QuoteCard({
   showSpeaker?: boolean
   showShow?: boolean
   showDate?: boolean
-  youtubeUrl?: string | null
+  play?: boolean
   label?: string
   id?: string
   className?: string
@@ -228,18 +229,22 @@ export function QuoteCard({
   }
   if (meta.length) meta.push(sep('s3'))
   meta.push(
-    <Link key="t" to={href} className="ts-quote-time" aria-label={`at ${spokenTime(quote.start_seconds)}`}>
-      at {formatTimestamp(quote.start_seconds)}
-    </Link>,
+    play ? (
+      <Link
+        key="t"
+        to={playFromPath(quote)}
+        rel="nofollow"
+        className="ts-quote-time ts-quote-play"
+        aria-label={`Play from ${spokenTime(quote.start_seconds)}`}
+      >
+        Play from {formatTimestamp(quote.start_seconds)}
+      </Link>
+    ) : (
+      <Link key="t" to={href} className="ts-quote-time" aria-label={`at ${spokenTime(quote.start_seconds)}`}>
+        at {formatTimestamp(quote.start_seconds)}
+      </Link>
+    ),
   )
-  if (youtubeUrl) {
-    meta.push(sep('s4'))
-    meta.push(
-      <a key="y" href={`${youtubeUrl}${youtubeUrl.includes('?') ? '&' : '?'}t=${quote.start_seconds}`} target="_blank" rel="noopener noreferrer">
-        Hear it on YouTube
-      </a>,
-    )
-  }
   return (
     <figure className={cx('ts-quote', `ts-quote-${variant}`, className)} id={id}>
       {variant === 'featured' && (

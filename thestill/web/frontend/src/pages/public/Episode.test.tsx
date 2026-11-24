@@ -50,6 +50,49 @@ describe('public episode page', () => {
     expect(follow.closest('.ts-eyebrow')).toHaveTextContent('The Rest Is Money')
   })
 
+  // Spec #120 — the quotes play on thestill, after sign-in; no quote links to YouTube.
+  it('offers Play from on each quote and never a YouTube link', () => {
+    const quote = {
+      text: 'Why break in when you can log in?',
+      start_seconds: 2610,
+      share_id: 'cccccccccc',
+      speaker: { name: 'George Kurtz', slug: 'george-kurtz' },
+      about: null,
+      episode: { slug: '329-how-close-is-a-global-markets-crash', title: 'How close?', pub_date: null, image_url: null },
+      podcast: { slug: 'the-rest-is-money', title: 'The Rest Is Money' },
+    }
+    vi.mocked(usePublicEpisodeQuotes).mockReturnValue({
+      data: {
+        pages: [
+          {
+            quotes: [quote, { ...quote, text: 'We are minting more adversaries.', start_seconds: 617, share_id: 'dddddddddd' }],
+            total: 2,
+            page: 1,
+            next_page: null,
+            linked: null,
+            speakers: [{ name: 'George Kurtz', slug: 'george-kurtz', quotes: 2 }],
+            mentioned: [],
+          },
+        ],
+      },
+      isLoading: false,
+    } as never)
+    render(
+      <MemoryRouter initialEntries={['/podcasts/the-rest-is-money/episodes/329-how-close-is-a-global-markets-crash']}>
+        <Routes>
+          <Route path="/podcasts/:podcastSlug/episodes/:episodeSlug" element={<Episode />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    const play = screen.getByRole('link', { name: 'Play from 43 minutes 30 seconds' })
+    expect(parseSignInFragment((play.getAttribute('href') ?? '').slice('/login'.length))).toEqual({
+      next: '/podcasts/the-rest-is-money/episodes/329-how-close-is-a-global-markets-crash?view=transcript&t=2610',
+      intent: 'play',
+    })
+    expect(screen.queryByText(/YouTube/)).toBeNull()
+    vi.mocked(usePublicEpisodeQuotes).mockReturnValue({ data: undefined, isLoading: false } as never)
+  })
+
   // Spec #114 — a quote short link lands with its id in the fragment.
   describe('a shared quote (#t=…&s=…)', () => {
     const SLUGS = '/podcasts/the-rest-is-money/episodes/329-how-close-is-a-global-markets-crash'

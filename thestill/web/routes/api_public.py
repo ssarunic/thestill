@@ -51,6 +51,7 @@ from ...models.entities import display_name
 from ...repositories.public_quotes import QuoteFilter, days_ago
 from ...services.analytics_sink import PublicPageView, PublicQuoteShared
 from ...services.podcast_service import PodcastWithIndex
+from ...services.public_summary_quotes import episode_summary_quotes
 from ...services.quote_share_service import ShareGone, stands_alone
 from ...utils.duration import format_duration
 from ...utils.geoip import lookup_country_from_ip
@@ -1161,19 +1162,69 @@ def public_entity_quotes_payload(
     return _entity_quotes_cache.get_or_compute((entity_id, kind, about, page, visibility.fingerprint()), build)
 
 
-# Spec #105 decision 2: an episode's first quote page is 6 for everyone,
-# so the server-written page, its data block and the page agree.
-_EPISODE_QUOTE_PAGE = 6
+# Spec #105 decision 2: an episode's first quote page is the same size for
+# everyone, so the server-written page, its data block and the page agree.
+# Spec #120: the summary picks at most seven quotes, so one page holds them.
+_EPISODE_QUOTE_PAGE = 8
 _EPISODE_QUOTES_MAX = 1000
 _episode_quote_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=256)
+_episode_moment_cache = TtlCache(_ENTITY_TTL_SECONDS, max_size=256)
 
 
-def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -> Dict[str, Any]:
-    """Every public quote in one episode, in episode order (a few hundred at
-    most), and the entities it mentions, capped per type."""
+def _summary_quote_items(state: AppState, podcast, episode) -> List[Dict[str, Any]]:
+    """The episode page's quotes (spec #120), each with its short link id."""
+    found = episode_summary_quotes(
+        state.podcast_service,
+        state.entity_repository,
+        getattr(state, "quote_share_service", None),
+        podcast,
+        episode,
+    )
+    image_url = episode.image_url or podcast.image_url
+    return [
+        {
+            "text": item.quote.text,
+            "start_seconds": item.quote.start_ms // 1000,
+            "share_id": item.share_id,
+            "speaker": {
+                "name": display_name(item.quote.speaker.name),
+                "slug": entity_slug(item.quote.speaker.entity_id),
+            },
+            # A summary quote is about the episode, not one named thing.
+            "about": None,
+            "episode": {
+                "slug": episode.slug,
+                "title": episode.title,
+                "pub_date": _iso(episode.pub_date),
+                "image_url": image_url,
+            },
+            "podcast": {"slug": podcast.slug, "title": podcast.title},
+        }
+        for item in found
+    ]
+
+
+def _episode_moments(state: AppState, episode) -> List[Dict[str, Any]]:
+    """The episode's transcript excerpts (the quotes public pages showed
+    before spec #120), only to answer a ``#t=`` link shared before then
+    with the words at that time. Never listed, never minted."""
     rows, _ = state.entity_repository.public_quote_queries().quotes(
         QuoteFilter(episode_id=str(episode.id)), order="episode", limit=_EPISODE_QUOTES_MAX
     )
+    return [_quote_item(row) for row in rows]
+
+
+def _nearest(items: List[Dict[str, Any]], q: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The quote starting within 5 seconds of ``q``, closest first."""
+    if q is None:
+        return None
+    near = [item for item in items if abs(item["start_seconds"] - q) <= 5]
+    return min(near, key=lambda item: abs(item["start_seconds"] - q)) if near else None
+
+
+def _episode_quote_set(state: AppState, visibility: PublicVisibility, podcast, episode) -> Dict[str, Any]:
+    """The episode's public quotes (spec #120: the summary's Best Quotes,
+    checked) and the entities it mentions, capped per type."""
     hidden = visibility.hidden_entity_ids()
     # Grouped by type on the page (people, companies, products, topics, as
     # in the signed-in reader), so the cap is per type, in the reader's
@@ -1196,7 +1247,8 @@ def _episode_quote_set(state: AppState, visibility: PublicVisibility, episode) -
                 "role": row.speaker_kind if kind == "person" and row.takes_part else None,
             }
         )
-    return {"every": _quote_items(state, rows), "mentioned": mentioned}
+    every = _summary_quote_items(state, podcast, episode)
+    return {"every": every, "mentioned": mentioned}
 
 
 def public_episode_quotes_payload(
@@ -1210,17 +1262,21 @@ def public_episode_quotes_payload(
     """One page of an episode's quotes, plus who speaks in it and the
     entities it mentions."""
     visibility = get_public_visibility(state)
-    _podcast, episode = public_episode_models(state, podcast_slug, episode_slug)
+    podcast, episode = public_episode_models(state, podcast_slug, episode_slug)
     quote_set = _episode_quote_cache.get_or_compute(
-        (str(episode.id), visibility.fingerprint()), lambda: _episode_quote_set(state, visibility, episode)
+        (str(episode.id), episode.summary_path, visibility.fingerprint()),
+        lambda: _episode_quote_set(state, visibility, podcast, episode),
     )
     every = quote_set["every"]
     shown = [item for item in every if not speaker or item["speaker"]["slug"] == speaker]
     start = (page - 1) * _EPISODE_QUOTE_PAGE
-    linked = None
-    if q is not None:
-        near = [item for item in every if abs(item["start_seconds"] - q) <= 5]
-        linked = min(near, key=lambda item: abs(item["start_seconds"] - q)) if near else None
+    linked = _nearest(every, q)
+    if q is not None and linked is None:
+        # A link from before spec #120 names a moment, not a summary quote.
+        moments = _episode_moment_cache.get_or_compute(
+            (str(episode.id), visibility.fingerprint()), lambda: _episode_moments(state, episode)
+        )
+        linked = _nearest(moments, q)
     speakers: Dict[str, Dict[str, Any]] = {}
     for item in every:
         entry = speakers.setdefault(item["speaker"]["slug"], {**item["speaker"], "quotes": 0})

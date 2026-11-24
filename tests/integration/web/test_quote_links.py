@@ -11,10 +11,12 @@ from thestill.services.abuse.actor import Actor
 from thestill.services.quote_share_service import QuoteShareService, share_id
 
 from .test_public_api import (  # noqa: F401 (fixtures)
+    BEST_QUOTES,
     ELSON_LINE,
     GALLOWAY_LINE,
     _fresh_buckets,
     _seed_people,
+    _seed_summary_quotes,
     anon,
     app_config,
 )
@@ -34,26 +36,36 @@ def shares(app_config, app_state) -> QuoteShareService:
     )
     app_state.quote_share_service = service
     _seed_people(app_state)
+    # Spec #120: the episode page's quotes are the summary's.
+    _seed_summary_quotes(app_state, BEST_QUOTES)
     return service
 
 
 def _quotes(anon) -> dict:
+    """The episode page's quotes (spec #120: the summary's) by their words."""
     response = anon.get(EPISODE_QUOTES)
     assert response.status_code == 200, response.text
     return {quote["text"]: quote for quote in response.json()["quotes"]}
+
+
+def _excerpt_share(anon) -> str:
+    """The share of a transcript excerpt (spec #114's ``gated`` source): the
+    person page still lists excerpts until spec #120 Phase 2."""
+    quotes = anon.get("/api/public/entities/person/scott-galloway/quotes?kind=said").json()["quotes"]
+    return next(quote["share_id"] for quote in quotes if quote["text"] == GALLOWAY_LINE)
 
 
 def test_public_quotes_carry_a_share_id_backed_by_a_row(anon, shares):
     quotes = _quotes(anon)
     galloway = quotes[GALLOWAY_LINE]
     # Deterministic: the episode, the quote's start and its words.
-    assert galloway["share_id"] == share_id(EPISODE_ID, 2 * 60_000 + 5_000, GALLOWAY_LINE)
+    assert galloway["share_id"] == share_id(EPISODE_ID, 2 * 60_000, GALLOWAY_LINE)
     assert quotes[ELSON_LINE]["share_id"] != galloway["share_id"]
     rows = shares.list_for_episode(EPISODE_ID)
     assert {row["id"] for row in rows} == {quote["share_id"] for quote in quotes.values()}
-    # The source turn's end is stored with the start: the speaker's anchor.
+    # The source turn's end is stored with the start, and where the words came from.
     stored = make_repositories(anon.app.state.app_state.config).quote_share.get(galloway["share_id"])
-    assert (stored["start_ms"], stored["end_ms"]) == (125_000, 140_000)
+    assert (stored["start_ms"], stored["end_ms"], stored["source"]) == (120_000, 140_000, "summary")
 
 
 def test_minting_is_idempotent_and_the_same_words_share_one_link(anon, shares, app_state):
@@ -63,9 +75,9 @@ def test_minting_is_idempotent_and_the_same_words_share_one_link(anon, shares, a
     clear_public_caches()
     assert _quotes(anon) == first
     assert len(shares.list_for_episode(EPISODE_ID)) == len(first)
-    # The same quote reached from an entity page has the same link.
+    # The person page's excerpt of the same turn is a quote of its own.
     entity = anon.get("/api/public/entities/person/scott-galloway").json()
-    assert entity["featured_quote"]["share_id"] == first[GALLOWAY_LINE]["share_id"]
+    assert entity["featured_quote"]["share_id"] not in {None, first[GALLOWAY_LINE]["share_id"]}
 
 
 def test_read_only_mints_nothing(anon, shares, app_state):
@@ -99,7 +111,7 @@ def test_short_link_page_is_the_card_for_every_user_agent(anon, shares):
     assert '<meta name="robots" content="noindex">' in page
     assert '<meta name="twitter:card" content="summary_large_image">' in page
     # The landing: the episode at that moment, with the share id in the fragment.
-    landing = f"https://thestill.test/podcasts/public-show/episodes/summarised#t=125&amp;s={sid}"
+    landing = f"https://thestill.test/podcasts/public-show/episodes/summarised#t=120&amp;s={sid}"
     assert f'<meta http-equiv="refresh" content="0;url={landing}">' in page
     assert f'<a href="{landing}"' in page
     assert "Scott Galloway on " in page
@@ -176,7 +188,7 @@ def test_shared_quote_lookup_for_the_landing(anon, shares):
     assert body == {
         "id": sid,
         "text": ELSON_LINE,
-        "start_seconds": 185,
+        "start_seconds": 180,
         "speaker": {"name": "Ed Elson", "slug": "ed-elson"},
         "episode": {"slug": "summarised", "title": "Episode 1"},
         "podcast": {"slug": "public-show", "title": body["podcast"]["title"]},
@@ -270,7 +282,7 @@ def _respeak(app_state, segment: int, who: str) -> None:
 def test_refresh_moves_a_share_to_the_corrected_speaker_and_drops_its_card(
     anon, shares, app_state, app_config, monkeypatch
 ):
-    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    sid = _excerpt_share(anon)
     monkeypatch.setattr(QuoteShareService, "_artwork", lambda self, share: None)
     assert anon.get(f"/q/{sid}.png").status_code == 200
     _respeak(app_state, 2, "person:ed-elson")
@@ -284,7 +296,7 @@ def test_refresh_moves_a_share_to_the_corrected_speaker_and_drops_its_card(
 
 
 def test_refresh_follows_the_words_through_a_split_and_ignores_a_repeat_elsewhere(anon, shares, app_state):
-    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    sid = _excerpt_share(anon)
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         # The turn (segment 2, 120-140 s) is split: its second half is now
         # segment 7 at 130 s, spoken by Ed, and holds the quoted words.
@@ -314,6 +326,21 @@ def test_refresh_follows_the_words_through_a_split_and_ignores_a_repeat_elsewher
     assert shares.reconcile_episode(EPISODE_ID)["unnamed"] >= 1
     assert shares.resolve(sid).speaker_name is None
     assert "A guest on " in anon.get(f"/q/{sid}").text
+
+
+def test_refresh_leaves_a_summary_share_to_the_next_build(anon, shares, app_state):
+    """Spec #120: a summary quote's words are the summary's, so they cannot
+    anchor it; the next build of the episode's quotes re-checks it."""
+    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    _respeak(app_state, 2, "person:ed-elson")
+    counts = shares.reconcile_episode(EPISODE_ID)
+    assert counts["checked"] == 0
+    assert shares.resolve(sid).speaker_name == "Scott Galloway"
+    # Rebuilt, the quote no longer matches its new speaker and is not shown.
+    from thestill.web.public_access import clear_public_caches
+
+    clear_public_caches()
+    assert GALLOWAY_LINE not in _quotes(anon)
 
 
 def test_a_share_is_reported_for_browsers_with_the_method_only(anon, app_state):
@@ -371,7 +398,7 @@ def test_reader_gets_the_public_quotes_of_an_episode_with_their_turns(reader, an
     for share in body:
         assert share["id"] == public[share["text"]]["share_id"]
     galloway = next(share for share in body if share["text"] == GALLOWAY_LINE)
-    assert (galloway["segment_id"], galloway["start_seconds"], galloway["speaker"]) == (2, 125, "Scott Galloway")
+    assert (galloway["segment_id"], galloway["start_seconds"], galloway["speaker"]) == (2, 120, "Scott Galloway")
     # The sponsor read, the unnamed speaker and the hidden person offer nothing.
     assert len(body) == 2
 
@@ -429,7 +456,9 @@ def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speake
     with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
         conn.execute("UPDATE entity_mentions SET resolution_status = 'resolved' WHERE entity_id IS NOT NULL")
 
-    listed = next(quote for text, quote in _quotes(anon).items() if text.startswith("So, you know, Nvidia"))
+    # Spec #120: transcript excerpts are listed on the speaker's page.
+    said = anon.get("/api/public/entities/person/ed-elson/quotes?kind=said").json()["quotes"]
+    listed = next(quote for quote in said if quote["text"].startswith("So, you know, Nvidia"))
     # The page lists the quote as spoken; the card has the written form.
     share = anon.get(f"/api/public/quote-shares/{listed['share_id']}").json()["share"]
     assert share["text"] == "Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."
@@ -446,7 +475,11 @@ def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speake
     app.state.app_state = app_state
     app.dependency_overrides[require_auth] = lambda: User(id="user-plain", email="p@example.com", name="P")
     reader_shares = TestClient(app).get(READER_SHARES).json()["shares"]
-    assert {s["text"] for s in reader_shares if s["id"] == listed["share_id"]} == {share["text"]}
+    assert reader_shares
+    for offered in reader_shares:
+        assert offered["text"] == anon.get(f"/api/public/quote-shares/{offered['id']}").json()["share"]["text"]
+    # Spec #120: it offers the episode page's quotes, the summary's, not excerpts.
+    assert listed["share_id"] not in {offered["id"] for offered in reader_shares}
 
     # The speaker re-check still finds the trimmed words in their turn.
     _respeak(app_state, 8, "person:scott-galloway")

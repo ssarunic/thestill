@@ -1194,17 +1194,20 @@ class PodcastService:
         *,
         language: Optional[str] = None,
         canonical_language: str = "en",
+        segmented: Optional[SegmentedTranscriptResult] = None,
     ) -> Optional[List[dict]]:
         """Load frontend-safe summary citations for an already-resolved episode.
 
         Invalid, stale, or missing sidecars return ``None`` so callers can
         render the summary as normal markdown. The helper validates the sidecar
         against the exact summary content being served and the current
-        annotated transcript metadata.
+        annotated transcript metadata. ``segmented`` is the episode's
+        transcript when the caller has already loaded it.
         """
         if not episode.summary_path:
             return None
-        segmented = self.get_segmented_transcript_for_episode(episode)
+        if segmented is None:
+            segmented = self.get_segmented_transcript_for_episode(episode)
         if segmented is None:
             return None
         summary_path = self._summary_path_for_language(

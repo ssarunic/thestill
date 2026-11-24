@@ -30,6 +30,15 @@ export function returnPath(pathname: string, search: string, hash: string): stri
   return `${pathname}?${params.toString()}`
 }
 
+/** Spec #120: where a quote's "Play from" goes for a signed-out visitor.
+ * Sign-in comes back to the signed-in reader at that moment, with the
+ * transcript open, where the player (and its drift correction, spec #116)
+ * plays it. Public pages never play audio themselves. */
+export function playFromPath(quote: { start_seconds: number; episode: { slug: string }; podcast: { slug: string } }): string {
+  const episode = episodePath(quote.podcast.slug, quote.episode.slug)
+  return signInPath(returnPath(episode, '', `#t=${quote.start_seconds}`), 'play')
+}
+
 const TYPE_LABEL: Record<PublicEntityType, string> = {
   person: 'Person',
   company: 'Company',
