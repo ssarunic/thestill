@@ -14,7 +14,7 @@ from thestill.core.quote_cards import (
     render_og,
     wrap_balanced,
 )
-from thestill.services.quote_share_service import card_eligible, share_id, stands_alone
+from thestill.services.quote_share_service import card_eligible, card_text, share_id, stands_alone
 
 QUOTE = "The best teams changed their minds fastest when the evidence changed."
 
@@ -46,14 +46,16 @@ def test_the_quote_is_set_in_a_font_that_has_its_letters():
     assert quote_font_name(QUOTE) == "Newsreader.ttf"
     assert quote_font_name("Čovjek kaže: „žuč“ — “quoted” … it’s fine.") == "Newsreader.ttf"
     # Cyrillic and Greek are not in the serif; the sans has them.
-    russian = "Лучшие команды быстрее всех меняли своё мнение."
+    russian = "Лучшие команды быстрее всех меняли своё мнение, когда менялись факты."
     assert quote_font_name(russian) == "Inter.ttf"
     assert quote_font_name("Οι καλύτερες ομάδες άλλαζαν γνώμη.") == "Inter.ttf"
     assert render_og(_card(quote=russian)) != render_og(_card(quote="?" * len(russian)))
     # No bundled font draws these: no card, rather than a card of boxes.
     assert not can_render("اقتباس قصير من حلقة.")
     assert not can_render("这是一个引用。")
-    assert card_eligible(russian) and not card_eligible("这是一个完整的句子。")
+    assert card_eligible(russian) and not card_eligible(
+        "这是一个完整的句子，而且它足够长，可以放在一张卡片上，但没有字体能画出它。"
+    )
 
 
 def test_unreadable_artwork_falls_back_to_the_tile_and_real_artwork_is_used():
@@ -103,3 +105,41 @@ def test_share_id_is_stable_and_depends_on_the_words():
         len({first, share_id("ep", 1000, QUOTE + " More."), share_id("ep", 2000, QUOTE), share_id("e2", 1000, QUOTE)})
         == 4
     )
+
+
+def test_card_text_drops_spoken_openers_the_way_a_written_quote_would():
+    assert card_text("And so how do I feel about this? It is, without doubt, a correction of the market.") == (
+        "How do I feel about this? It is, without doubt, a correction of the market."
+    )
+    assert card_text("Yeah, well, the BBC News headline was that the typical energy bill will go up.") == (
+        "The BBC News headline was that the typical energy bill will go up."
+    )
+    assert card_text("You know, we have had the data centre backlash for two years now, right?") == (
+        "We have had the data centre backlash for two years now, right?"
+    )
+    # "You know" without its comma is the speaker's sentence, not a filler.
+    assert card_text("You know what the hardest part of building a company is? Hiring people.") == (
+        "You know what the hardest part of building a company is? Hiring people."
+    )
+
+
+def test_card_text_keeps_pronoun_openers_and_whole_sentences_only():
+    # The card names the speaker, so "They" is fine.
+    text = "They were the ones who changed their minds fastest when the evidence changed."
+    assert card_text(text) == text
+    # A start mid-sentence moves on to the next sentence; an end mid-sentence moves back.
+    assert card_text(
+        "have bought the stock already. The real question is who sells first when the music finally stops. And then"
+    ) == ("The real question is who sells first when the music finally stops.")
+    # Nothing whole and long enough is left: no card.
+    assert card_text("have bought the stock and I'm just like John Ternus is an engineer.") is None
+    assert card_text("I mean, I think that they were, I think that, you know, presumably waiting until") is None
+
+
+def test_card_text_fits_the_card_and_never_stops_inside_a_quotation():
+    long = "This first sentence is a complete thought of reasonable length for a card. " + "x" * 300 + "."
+    assert card_text(long) == "This first sentence is a complete thought of reasonable length for a card."
+    quoted = 'Then it comes back in a very positive voice, like, "You did tell me that. I forgot it. Sorry'
+    assert card_text(quoted) is None
+    closed = 'Then it comes back in a very positive voice, like, "You did tell me that." And it moves on.'
+    assert card_text(closed) == closed

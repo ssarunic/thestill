@@ -384,3 +384,55 @@ def test_reader_gets_nothing_where_there_is_nothing_public(reader, anon, shares,
 
 def test_reader_shares_need_a_session(anon, shares):
     assert anon.get(READER_SHARES).status_code == 401
+
+
+SPOKEN_LINE = "So, you know, Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."
+
+
+def test_a_spoken_quote_gets_a_card_with_its_opener_dropped_and_keeps_its_speaker(anon, shares, app_state):
+    from thestill.models.entities import EntityMention, MentionRole
+
+    episode_id = EPISODE_ID
+    app_state.entity_repository.insert_mentions(
+        [
+            EntityMention(
+                entity_id="person:ed-elson",
+                episode_id=episode_id,
+                segment_id=8,
+                start_ms=480_000,
+                end_ms=500_000,
+                speaker="Ed Elson",
+                role=MentionRole.SPEAKING,
+                surface_form="Ed Elson",
+                quote_excerpt="First sentence only.",
+                confidence=1.0,
+                extractor="speaker:synth",
+            ),
+            EntityMention(
+                entity_id="company:nvidia",
+                episode_id=episode_id,
+                segment_id=8,
+                start_ms=485_000,
+                end_ms=488_000,
+                speaker="Ed Elson",
+                role=MentionRole.MENTIONED,
+                surface_form="Nvidia",
+                quote_excerpt=SPOKEN_LINE,
+                confidence=0.9,
+                extractor="gliner:test",
+            ),
+        ]
+    )
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute("UPDATE entity_mentions SET resolution_status = 'resolved' WHERE entity_id IS NOT NULL")
+
+    listed = _quotes(anon)[SPOKEN_LINE]
+    # The page lists the quote as spoken; the card has the written form.
+    share = anon.get(f"/api/public/quote-shares/{listed['share_id']}").json()["share"]
+    assert share["text"] == "Nvidia owns the data centre now, and nobody else is anywhere close to catching up with it."
+    assert share["speaker"]["name"] == "Ed Elson"
+
+    # The speaker re-check still finds the trimmed words in their turn.
+    _respeak(app_state, 8, "person:scott-galloway")
+    assert shares.reconcile_episode(EPISODE_ID)["unnamed"] == 0
+    assert shares.resolve(listed["share_id"]).speaker_name == "Scott Galloway"

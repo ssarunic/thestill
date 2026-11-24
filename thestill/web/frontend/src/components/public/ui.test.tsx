@@ -49,7 +49,7 @@ describe('QuoteCard share (spec #114)', () => {
         <QuoteCard quote={q} />
       </MemoryRouter>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Copy link to this quote' }))
+    fireEvent.click(screen.getByRole('button', { name: q.share_id ? 'Share this quote' : 'Copy link to this moment' }))
   }
   const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
   afterEach(() => {

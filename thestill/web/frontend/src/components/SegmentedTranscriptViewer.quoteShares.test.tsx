@@ -73,6 +73,17 @@ describe('sharing a quote from the transcript (spec #114, Rule A)', () => {
     expect(screen.queryByTestId('quote-share-3')).toBeNull()
   })
 
+  it('finds a card whose words were trimmed and capitalised from the turn', () => {
+    renderViewer([
+      // The turn says "...changes. Then more talk."; the card dropped nothing
+      // but starts with a capital the transcript has lower case elsewhere.
+      { id: 'cccccccccc', segment_id: 2, text: 'Something else entirely, with no public quote in it.', start_seconds: 20, speaker: 'Bob' },
+      { id: 'dddddddddd', segment_id: 1, text: 'THE BEST TEAMS change their minds fast when the evidence changes.', start_seconds: 10, speaker: 'Alice' },
+    ])
+    expect(screen.getByTestId('quote-share-1')).toBeInTheDocument()
+    expect(screen.getByTestId('quote-share-2')).toBeInTheDocument()
+  })
+
   it('offers nothing without shares (single-user installs, private shows)', () => {
     renderViewer([])
     expect(screen.queryByRole('button', { name: /Share a quote/ })).toBeNull()

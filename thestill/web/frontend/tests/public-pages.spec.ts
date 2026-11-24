@@ -169,7 +169,7 @@ test('a quote short link lands on the quote that was shared, and its share butto
   // The episode's own quote at that second is a different excerpt: listed, not linked.
   await expect(page.locator('figure', { hasText: quote.text })).not.toContainText('Linked quote')
 
-  await linked.getByRole('button', { name: 'Copy link to this quote' }).click()
+  await linked.getByRole('button', { name: 'Share this quote' }).click()
   await expect(linked.getByRole('button', { name: 'Link copied' })).toBeVisible()
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${new URL(page.url()).origin}/q/k7m2xq3dpa`)
   // Sign-in still comes back to that moment.

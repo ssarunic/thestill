@@ -120,6 +120,16 @@ function LinkIcon() {
   )
 }
 
+function ShareGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width={18} height={18} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+      <path d="M16 6l-4-4-4 4" />
+      <path d="M12 2v13" />
+    </svg>
+  )
+}
+
 function CheckIcon() {
   return (
     <svg viewBox="0 0 24 24" width={18} height={18} aria-hidden="true" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round">
@@ -242,8 +252,17 @@ export function QuoteCard({
         <blockquote className="ts-quote-text">
           {variant === 'featured' ? quote.text : `“${quote.text}”`}
         </blockquote>
-        <button type="button" className="ts-quote-copy" aria-label={copied ? 'Link copied' : 'Copy link to this quote'} onClick={copy}>
-          {copied ? <CheckIcon /> : <LinkIcon />}
+        {/* Spec #114: a quote with a card is shared as its card; one without
+            (not whole sentences, or a script the card cannot draw) offers a
+            link to its moment, and looks and reads differently. */}
+        <button
+          type="button"
+          className="ts-quote-copy"
+          aria-label={copied ? 'Link copied' : quote.share_id ? 'Share this quote' : 'Copy link to this moment'}
+          title={quote.share_id ? 'Share this quote' : 'Copy link to this moment'}
+          onClick={copy}
+        >
+          {copied ? <CheckIcon /> : quote.share_id ? <ShareGlyph /> : <LinkIcon />}
         </button>
       </div>
       <figcaption className="ts-quote-meta">{meta}</figcaption>

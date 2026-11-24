@@ -29,6 +29,7 @@ from .quote_share_repository import QuoteShareRepository
 class PostgresQuoteShareRepository(QuoteShareRepository):
     placeholder = "%s"
     _is_distinct_from = "IS DISTINCT FROM EXCLUDED"
+    _contains = "strpos({haystack}, {needle}) > 0"
 
     def __init__(self, dsn: str):
         self.dsn = dsn

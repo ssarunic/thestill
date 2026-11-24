@@ -81,10 +81,68 @@ def stands_alone(text: str) -> bool:
     return bool(text) and text[0].isupper() and not _DANGLING_OPENERS.match(text) and text[-1] in ".!?"
 
 
+#: Words a spoken sentence often opens with that a written quote drops:
+#: "And when I talked to him..." is quoted as "When I talked to him...".
+#: "You know," and "I mean," only with their comma: "You know what..." stays.
+_LEADING_FILLER = re.compile(
+    r"^(?:(?:and|but|so|or|well|yeah|yes|like|um|uh|oh|okay|ok|right)\b[,.]?\s+|(?:you know|i mean)\s*,\s*)+",
+    re.I,
+)
+#: The end of a sentence, with any closing quote or bracket after it.
+_SENTENCE_END = re.compile(r"[.!?][\"”’')\]]*(?=\s|$)")
+#: A card's quote is at least this long after trimming (the gate's floor).
+CARD_MIN_CHARS = 60
+
+
+def _quotes_balanced(text: str) -> bool:
+    """Every quotation the text opens, it also closes."""
+    return text.count('"') % 2 == 0 and text.count("“") == text.count("”")
+
+
+def card_text(text: str) -> Optional[str]:
+    """The words a quote's card shows, or None when no card can be made.
+
+    A quote is cut from speech, so it often opens with "And", "So" or
+    "Well", starts mid-sentence, or stops mid-sentence. The card keeps the
+    whole sentences inside it, the way a written quote would:
+
+    - a leading filler word is dropped and the next word capitalised;
+    - a start mid-sentence (lower case) moves on to the next sentence;
+    - an end mid-sentence moves back to the last full stop;
+    - a quote longer than ``CARD_MAX_CHARS`` keeps its sentences that fit.
+
+    What is left must be at least ``CARD_MIN_CHARS`` long, open with a
+    capital and end a sentence, and the card's fonts must have its letters.
+    A quote that opens with a pronoun ("They...", "This...") is kept: the
+    card names the speaker and the show. Never rewords anything else.
+    """
+    text = " ".join(text.split()).strip('“”"').strip()
+    if text and text[0].islower():
+        # Cut mid-sentence: start at the next sentence, if there is one.
+        # (Judged before any filler word is dropped: "So when..." is a
+        # whole sentence, "when..." alone is not.)
+        first_end = _SENTENCE_END.search(text)
+        text = text[first_end.end() :].strip() if first_end else ""
+    text = _LEADING_FILLER.sub("", text)
+    if not text:
+        return None
+    text = text[0].upper() + text[1:]
+    # Keep whole sentences, up to the length the card takes, and never stop
+    # inside a quotation the speaker opened.
+    ends = [
+        m.end() for m in _SENTENCE_END.finditer(text) if m.end() <= CARD_MAX_CHARS and _quotes_balanced(text[: m.end()])
+    ]
+    if not ends:
+        return None
+    text = text[: ends[-1]].strip()
+    if len(text) < CARD_MIN_CHARS or not text[0].isupper() or not can_render(text):
+        return None
+    return text
+
+
 def card_eligible(text: str) -> bool:
-    """Whether a public quote may become a card: it stands alone, fits, and
-    the card's fonts can draw it (Latin, Cyrillic and Greek today)."""
-    return len(text.strip()) <= CARD_MAX_CHARS and stands_alone(text) and can_render(text)
+    """Whether a public quote can become a card (``card_text`` finds one)."""
+    return card_text(text) is not None
 
 
 def share_id(episode_id: str, start_ms: int, text: str) -> str:
@@ -181,8 +239,8 @@ class QuoteShareService:
         candidates: Dict[str, Dict[str, Any]] = {}
         by_mention: Dict[Any, str] = {}
         for row in rows:
-            text = (row.get("quote") or "").strip()
-            if not card_eligible(text) or not row.get("podcast_id"):
+            text = card_text(row.get("quote") or "")
+            if text is None or not row.get("podcast_id"):
                 continue
             start_ms = int(row.get("start_ms") or 0)
             new_id = share_id(str(row["episode_id"]), start_ms, text)

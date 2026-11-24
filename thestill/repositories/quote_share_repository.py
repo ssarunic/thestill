@@ -105,6 +105,8 @@ class QuoteShareRepository(ABC):
 
     #: ``a IS NOT b`` treating NULL as a value; Postgres spells it differently.
     _is_distinct_from = "IS NOT EXCLUDED"
+    #: ``haystack`` contains ``needle`` (no LIKE, so no wildcard escaping).
+    _contains = "instr({haystack}, {needle}) > 0"
 
     # ----- reads -----
 
@@ -180,10 +182,12 @@ class QuoteShareRepository(ABC):
     def speakers_of_passage(self, episode_id: str, text: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
         """Who speaks ``text`` inside the source span now (spec #114 §7).
 
-        A mention's excerpt is cut from its segment's text, so a mention
-        with exactly these words whose segment starts inside the span is
-        the passage in today's transcript; its segment's resolved speaking
-        row is the speaker. One row per distinct (speaker, segment).
+        A share's text is its mention's excerpt, trimmed to whole sentences
+        for the card (``card_text``), so a mention whose excerpt contains
+        these words (ignoring case: the trim may capitalise the first
+        letter), in a segment that starts inside the span, is the passage
+        in today's transcript; its segment's resolved speaking row is the
+        speaker. One row per distinct (speaker, segment).
         """
         p = self.placeholder
         return self._fetch(
@@ -195,7 +199,7 @@ class QuoteShareRepository(ABC):
              AND sp.role = 'speaking' AND sp.resolution_status = 'resolved' AND sp.entity_id IS NOT NULL
             WHERE m.episode_id = {p}
               AND (m.role IS NULL OR m.role <> 'speaking')
-              AND m.quote_excerpt = {p}
+              AND {self._contains.format(haystack="lower(m.quote_excerpt)", needle=f"lower({p})")}
               AND m.start_ms >= {p} AND m.start_ms <= {p}
             """,
             [episode_id, text, start_ms, end_ms],

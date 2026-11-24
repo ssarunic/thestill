@@ -97,10 +97,11 @@ export default function Episode() {
       : null
   const linked: QuoteCardQuote | null = shared ?? firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
-  // A shared quote is matched by its words too: another excerpt of the
-  // same turn is not it.
-  const isLinkedQuote = (quote: { start_seconds: number; text: string }) =>
-    !!linked && quote.start_seconds === linked.start_seconds && (!shared || quote.text === shared.text)
+  // A shared quote is matched by its id: another excerpt of the same turn
+  // is not it, and its card may show fewer words than the list does (the
+  // card drops a spoken "And so" and keeps whole sentences).
+  const isLinkedQuote = (quote: { start_seconds: number; share_id?: string | null }) =>
+    !!linked && quote.start_seconds === linked.start_seconds && (!shared || quote.share_id === shared.share_id)
   const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
   const linkedInList = shown.some(isLinkedQuote)
   // The page scrolls to the linked quote once, when both the share lookup
