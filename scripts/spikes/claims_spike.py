@@ -27,6 +27,9 @@ from google import genai
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
+from thestill.core.facts_extractor import _GENERIC_LABELS, _without_trailing_number
+from thestill.models.facts import strip_role_annotation
+
 MODEL = "gemini-3-flash-preview"
 PRICE_IN, PRICE_OUT = 0.50, 3.00  # USD per 1M tokens (llm_provider.py pricing note)
 
@@ -41,7 +44,17 @@ SHOWS = [
     "all-in-with-chamath-jason-sacks-friedberg",
 ]
 
-UNNAMED = re.compile(r"^(SPEAKER_\d+|unknown|speaker \d+|)$", re.I)
+UNNAMED = re.compile(r"^(SPEAKER_\d+|)$", re.I)
+
+
+def is_unnamed(speaker: str) -> bool:
+    """True for a raw diarization id or a role-word fallback ("Host 1", "Guest").
+
+    Uses the facts extractor's own generic-label vocabulary, numbered or with
+    a role annotation, so an episode labelled only by role is not "named".
+    """
+    base = strip_role_annotation(speaker.strip()).strip()
+    return bool(UNNAMED.match(base)) or _without_trailing_number(base).casefold() in _GENERIC_LABELS
 
 
 class Target(BaseModel):
@@ -142,7 +155,7 @@ def load_episode(path: Path):
 def named_share(segs) -> float:
     if not segs:
         return 0.0
-    return sum(1 for s in segs if not UNNAMED.match((s.get("speaker") or "").strip())) / len(segs)
+    return sum(1 for s in segs if not is_unnamed(s.get("speaker") or "")) / len(segs)
 
 
 def pick(data: Path, per_show: int, seed: int):
@@ -211,7 +224,7 @@ def run_one(client, path: Path, out: Path, thinking: str):
             segment_text=(seg or {}).get("text"),
             anchored_segment_id=(seg or {}).get("id"),
         )
-        if status in ("ok", "neighbour_segment") and UNNAMED.match((row["speaker"] or "").strip()):
+        if status in ("ok", "neighbour_segment") and is_unnamed(row["speaker"] or ""):
             row["status"] = "unnamed_speaker"
         rows.append(row)
     cost = tok_in / 1e6 * PRICE_IN + tok_out / 1e6 * PRICE_OUT
