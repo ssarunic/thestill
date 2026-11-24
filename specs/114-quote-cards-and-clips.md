@@ -247,8 +247,19 @@ CREATE INDEX ON quote_shares (episode_id, segment_id);
   the episode URL, `<meta http-equiv="refresh" content="0;url=…#t=…">`
   and a visible link for clients that do not follow refresh. The same
   bytes for every user agent; previewers read the tags, browsers move on.
-- The redirect target is `/podcasts/{show}/episodes/{slug}#t={start_s}`.
-  No query string (spec #105 §3; Google indexed every `?t=` variant).
+- The redirect target is
+  `/podcasts/{show}/episodes/{slug}#t={start_s}&s={id}`. The share id
+  travels in the fragment because the time alone cannot say which quote
+  was shared: several excerpts of one turn have the same `t`, and the
+  episode page's own quote list keeps one excerpt per turn. The page
+  reads `s` and shows the linked card from the share's stored snapshot,
+  fetched from `GET /api/public/quote-shares/{id}` (the text, speaker
+  and time of that share, under the same eligibility and revocation
+  rules as `/q/{id}`: 404 or 410 otherwise). A snapshot whose words
+  were later edited in the transcript still shows what was shared.
+  Without `s`, or when the share is gone, the page falls back to today's
+  match by `t`. No query string (spec #105 §3; Google indexed every
+  `?t=` variant); a fragment is never sent to the server or indexed.
 - Sets `ts_ref=q:{id}` (HttpOnly, `SameSite=Lax`, 7 days) for the
   attribution in §6. Nothing else is stored client-side.
 - 404 for an unknown id or an ineligible quote; **410 Gone** for a revoked
@@ -596,7 +607,7 @@ rate limit suffices; video is never anonymous.
 
 | Phase | Scope | Depends on |
 |---|---|---|
-| 0 | `quote_shares` + `quote_share_hits` tables; deterministic ids; `GET /q/{id}` and `/q/{id}.png` with the `og` card; `QuoteCardRenderer`; share menu on public `QuoteCard`; `ts_ref` attribution; `/analytics` panel; revoke CLI and show-opt-out revocation | — (works on the #94 stand-in quotes) |
+| 0 | `quote_shares` + `quote_share_hits` tables; deterministic ids; `GET /q/{id}` and `/q/{id}.png` with the `og` card; `GET /api/public/quote-shares/{id}` and the `s` fragment on the episode page; `QuoteCardRenderer`; share menu on public `QuoteCard`; `ts_ref` attribution; `/analytics` panel; revoke CLI and show-opt-out revocation | — (works on the #94 stand-in quotes) |
 | 1 | `square` and `story` variants; download and Web Share with files; caption with the X handle chip; *Quote this* in the transcript (gate's block only); follow hook on the linked card | Phase 0; spec #91 §7's files path (small, can be built here) |
 | 2 | `quote_audio` cutting at the entity stage + backfill; original-audio retention until the cut when `DELETE_AUDIO_AFTER_PROCESSING` is on, and of Dalston's job audio on the direct-URL path (`audio_retained_for`, orphan sweep); the anonymous clip player; `audio_clips` column and CLI flag | spec #100 Phase 1 (candidates table); Phase 0 |
 | 3 | Video clips: queued render, `clips_per_day`, `clips_enabled`, QR, `GET /q/{id}/{variant}.mp4` | Phase 2; libass probe |
@@ -739,6 +750,9 @@ Phase 0 these hold; the sections above describe the end state.
   to the expected length ± 50 ms; the ASS track has one event per word;
   the ffmpeg filtergraph is a pure function with a unit test, and one
   integration test runs real ffmpeg when it is present.
+- **Landing**: two shares minted from different excerpts of one turn
+  each land on the episode page with their own text in the linked card;
+  a revoked share's `s` falls back to the match by `t`.
 - **Playwright**: share menu on a public quote; `/q` → episode `#t=` →
   highlighted quote → Follow CTA; signed-in *Quote this* sheet refuses a
   sponsor-read turn with the reason.
