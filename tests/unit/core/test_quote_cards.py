@@ -4,7 +4,16 @@ import io
 
 from PIL import Image
 
-from thestill.core.quote_cards import OG_SIZE, QuoteCard, _font, clean_text, render_og, wrap_balanced
+from thestill.core.quote_cards import (
+    OG_SIZE,
+    QuoteCard,
+    _font,
+    can_render,
+    clean_text,
+    quote_font_name,
+    render_og,
+    wrap_balanced,
+)
 from thestill.services.quote_share_service import card_eligible, share_id, stands_alone
 
 QUOTE = "The best teams changed their minds fastest when the evidence changed."
@@ -31,7 +40,20 @@ def test_card_is_a_png_of_the_link_preview_size():
 def test_card_renders_at_the_length_cap_without_a_speaker_and_with_other_scripts():
     longest = ("Čovjek kaže da je ovo vrlo duga rečenica. " * 8)[:320]
     assert _size(render_og(_card(quote=longest, speaker=None, show="Š" * 200, episode_title="E" * 400))) == OG_SIZE
-    assert _size(render_og(_card(quote="اقتباس قصير من حلقة.", show="بودكاست"))) == OG_SIZE
+
+
+def test_the_quote_is_set_in_a_font_that_has_its_letters():
+    assert quote_font_name(QUOTE) == "Newsreader.ttf"
+    assert quote_font_name("Čovjek kaže: „žuč“ — “quoted” … it’s fine.") == "Newsreader.ttf"
+    # Cyrillic and Greek are not in the serif; the sans has them.
+    russian = "Лучшие команды быстрее всех меняли своё мнение."
+    assert quote_font_name(russian) == "Inter.ttf"
+    assert quote_font_name("Οι καλύτερες ομάδες άλλαζαν γνώμη.") == "Inter.ttf"
+    assert render_og(_card(quote=russian)) != render_og(_card(quote="?" * len(russian)))
+    # No bundled font draws these: no card, rather than a card of boxes.
+    assert not can_render("اقتباس قصير من حلقة.")
+    assert not can_render("这是一个引用。")
+    assert card_eligible(russian) and not card_eligible("这是一个完整的句子。")
 
 
 def test_unreadable_artwork_falls_back_to_the_tile_and_real_artwork_is_used():

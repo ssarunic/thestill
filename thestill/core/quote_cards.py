@@ -87,6 +87,37 @@ def _font(name: str, size: int, weight: int) -> ImageFont.FreeTypeFont:
     return font
 
 
+@lru_cache(maxsize=8192)
+def _has_glyph(name: str, ch: str) -> bool:
+    """Whether the font draws ``ch`` as itself and not as its missing-glyph box."""
+    if ch.isspace():
+        return True
+    font = _font(name, 40, 400)
+    missing = font.getmask("\uffff")
+    mask = font.getmask(ch)
+    return not (mask.size == missing.size and bytes(mask) == bytes(missing))
+
+
+def _covers(name: str, text: str) -> bool:
+    return all(_has_glyph(name, ch) for ch in set(text))
+
+
+def quote_font_name(text: str) -> Optional[str]:
+    """The font a quote is set in: the serif when it has every character,
+    else the sans (which also has Cyrillic and Greek), else None: no
+    bundled font can draw this text, and a card of boxes is worse than none."""
+    cleaned = clean_text(text)
+    for name in (_SERIF, _SANS):
+        if _covers(name, cleaned):
+            return name
+    return None
+
+
+def can_render(text: str) -> bool:
+    """Whether a quote can be drawn at all with the bundled fonts."""
+    return quote_font_name(text) is not None
+
+
 def clean_text(text: str) -> str:
     """One line of printable text: control characters out, whitespace collapsed."""
     kept = "".join(" " if ch.isspace() else ch for ch in text if ch.isspace() or unicodedata.category(ch)[0] != "C")
@@ -144,12 +175,13 @@ def wrap_balanced(text: str, font: ImageFont.FreeTypeFont, width: int) -> List[s
 
 def _fit_quote(text: str, width: int, height: int) -> Tuple[ImageFont.FreeTypeFont, List[str]]:
     """The largest quote size whose balanced lines fit the box."""
+    name = quote_font_name(text) or _SERIF
     for size in range(_QUOTE_MAX_PX, _QUOTE_MIN_PX - 1, -2):
-        font = _font(_SERIF, size, 420)
+        font = _font(name, size, 420)
         lines = wrap_balanced(text, font, width)
         if len(lines) <= _QUOTE_MAX_LINES and len(lines) * size * _LINE_SPACING <= height:
             return font, lines
-    font = _font(_SERIF, _QUOTE_MIN_PX, 420)
+    font = _font(name, _QUOTE_MIN_PX, 420)
     lines = wrap_balanced(text, font, width)[:_QUOTE_MAX_LINES]
     if lines:
         lines[-1] = _truncate(lines[-1] + " …", font, width)

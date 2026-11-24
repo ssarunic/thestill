@@ -28,6 +28,7 @@ is a lookup of ``quote_shares``, never a search of the quotes.
 import base64
 import hashlib
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -38,7 +39,7 @@ from urllib.parse import urlparse
 from structlog import get_logger
 from urllib3.util.retry import Retry
 
-from ..core.quote_cards import TEMPLATE_VERSION, QuoteCard, render_og
+from ..core.quote_cards import TEMPLATE_VERSION, QuoteCard, can_render, render_og
 from ..models.entities import display_name
 from ..repositories.quote_share_repository import QuoteShareRepository
 from ..utils.url_guard import guarded_session, validate_public_url
@@ -61,6 +62,11 @@ _ARTWORK_READ_SECONDS = 4
 _ARTWORK_TOTAL_SECONDS = 8
 #: At most this many cards render at once, process-wide (spec §8).
 _render_slots = threading.BoundedSemaphore(2)
+#: At most this many artwork downloads exist at once, abandoned ones
+#: included: a download can outlive its render slot until its socket lets
+#: go, and must not pile up behind a host that never does. Over the budget
+#: a card renders without artwork.
+_artwork_slots = threading.BoundedSemaphore(4)
 
 _DANGLING_OPENERS = re.compile(
     r"^(he|she|it|they|them|him|her|his|their|this|that|these|those|and|but|so|or|because|which|who|like|yeah|well)\b",
@@ -76,8 +82,9 @@ def stands_alone(text: str) -> bool:
 
 
 def card_eligible(text: str) -> bool:
-    """Whether a public quote may become a card: it stands alone and fits."""
-    return len(text.strip()) <= CARD_MAX_CHARS and stands_alone(text)
+    """Whether a public quote may become a card: it stands alone, fits, and
+    the card's fonts can draw it (Latin, Cyrillic and Greek today)."""
+    return len(text.strip()) <= CARD_MAX_CHARS and stands_alone(text) and can_render(text)
 
 
 def share_id(episode_id: str, start_ms: int, text: str) -> str:
@@ -86,11 +93,13 @@ def share_id(episode_id: str, start_ms: int, text: str) -> str:
     return base64.b32encode(digest).decode("ascii").lower()[:10]
 
 
-def _close_quietly(response: Any) -> None:
+def _shutdown_socket(response: Any) -> None:
+    """End a download blocked in a read by shutting its socket down."""
     try:
-        if response is not None:
-            response.close()
-    except Exception:  # closing under a read may raise; the download is ending either way
+        sock = getattr(getattr(getattr(response, "raw", None), "connection", None), "sock", None)
+        if sock is not None:
+            sock.shutdown(socket.SHUT_RDWR)
+    except Exception:  # already closed, or never connected
         pass
 
 
@@ -295,8 +304,17 @@ class QuoteShareService:
             return None
         url = share.image_url
         state: Dict[str, Any] = {}
+        if not _artwork_slots.acquire(blocking=False):
+            logger.info("quote_card_artwork_unavailable", share_id=share.id, error="download_budget")
+            return None
 
         def download() -> None:
+            try:
+                _download()
+            finally:
+                _artwork_slots.release()
+
+        def _download() -> None:
             try:
                 validate_public_url(url)
                 # One attempt, no retries: the default session sleeps
@@ -323,10 +341,10 @@ class QuoteShareService:
         worker.join(_ARTWORK_TOTAL_SECONDS)
         if worker.is_alive():
             state["abandoned"] = True
-            # Closing can itself wait for the blocked read to let go of the
-            # connection, so it gets its own thread: the caller, and its
-            # render slot, are released now.
-            threading.Thread(target=_close_quietly, args=(state.get("response"),), daemon=True).start()
+            # Shut the socket itself: that needs no lock and ends the blocked
+            # read, where closing the response can wait for that read. The
+            # caller, and its render slot, are released now either way.
+            _shutdown_socket(state.get("response"))
             state["error"] = "deadline"
             logger.info("quote_card_artwork_unavailable", share_id=share.id, error="deadline")
             return None

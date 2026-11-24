@@ -632,8 +632,12 @@ Phase 0 these hold; the sections above describe the end state.
   320-character cap, no ad-adjacency check and no whole-sentence rule.
   Phase 0 therefore adds its own card test on top of `_gate`: the text
   stands alone (`_stands_alone`: opens and ends a sentence) and is at
-  most 320 characters. A quote that fails it keeps today's `#t=` link
-  and gets no `share_id`.
+  most 320 characters, and the card's fonts can draw it. The quote is
+  set in Newsreader, or in Inter when it has letters Newsreader lacks
+  (Cyrillic, Greek). Text neither font covers (Arabic, Chinese and
+  others) gets no card: a card of empty boxes is worse than none, and
+  bundling more scripts is a later choice. A quote that fails the test
+  keeps today's `#t=` link and gets no `share_id`.
 - **The speaker is always a named person when a share is minted** on
   this source (`_FROM` requires it). "A guest on *Show*" appears in
   Phase 0 only when a later transcript edit leaves the speaker

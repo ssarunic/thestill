@@ -112,6 +112,14 @@ def test_reconcile_queries(repo):
     assert repo.ids_for_speaker("person:jane-doe") == ["aaaaaaaaaa"]
     # No mention carries these words: nobody is found.
     assert repo.speakers_of_passage(EPISODE, QUOTE, 120_000, 150_000) == []
+    # A share cached under an entity that was merged away is found under
+    # the entity it was merged into.
+    repo._execute(
+        f"INSERT INTO entity_redirects (from_entity_id, to_entity_id) VALUES ({repo.placeholder}, {repo.placeholder})",
+        ["person:jane-doe", "person:jane-roe"],
+    )
+    assert repo.ids_for_speaker("person:jane-roe") == ["aaaaaaaaaa"]
+    repo._execute(f"DELETE FROM entity_redirects WHERE from_entity_id = {repo.placeholder}", ["person:jane-doe"])
     repo.set_speaker("aaaaaaaaaa", None, 9)
     row = repo.get("aaaaaaaaaa")
     assert (row["speaker_entity_id"], row["segment_id"]) == (None, 9)

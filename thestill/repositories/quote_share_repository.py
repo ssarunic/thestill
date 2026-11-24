@@ -161,10 +161,20 @@ class QuoteShareRepository(ABC):
         )
 
     def ids_for_speaker(self, entity_id: str) -> List[str]:
-        """Every share whose cached speaker is this entity."""
+        """Every share that names this entity: cached as it, or as an
+        entity that was merged into it (``get`` follows the same redirect)."""
         p = self.placeholder
         return [
-            row["id"] for row in self._fetch(f"SELECT id FROM quote_shares WHERE speaker_entity_id = {p}", [entity_id])
+            row["id"]
+            for row in self._fetch(
+                f"""
+                SELECT id FROM quote_shares
+                WHERE speaker_entity_id = {p}
+                   OR speaker_entity_id IN (SELECT from_entity_id FROM entity_redirects WHERE to_entity_id = {p})
+                ORDER BY id
+                """,
+                [entity_id, entity_id],
+            )
         ]
 
     def speakers_of_passage(self, episode_id: str, text: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:

@@ -135,6 +135,22 @@ def test_a_host_trickling_chunk_framing_does_not_hold_the_caller(server, monkeyp
     started = time.monotonic()
     assert _service()._artwork(_share(url)) is None
     assert time.monotonic() - started < 0.8
+    # The abandoned download does not linger: its socket was shut, so its
+    # thread ends and gives its place in the download budget back.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and any(t.name == "quote-card-artwork" for t in threading.enumerate()):
+        time.sleep(0.02)
+    assert not any(t.name == "quote-card-artwork" for t in threading.enumerate())
+    assert module._artwork_slots.acquire(blocking=False)
+    module._artwork_slots.release()
+
+
+def test_no_download_starts_once_the_budget_is_spent(server, monkeypatch):
+    behaviour, url = server
+    behaviour["serve"] = lambda handler: pytest.fail("a download started")
+    monkeypatch.setattr(module, "_artwork_slots", threading.BoundedSemaphore(1))
+    assert module._artwork_slots.acquire(blocking=False)
+    assert _service()._artwork(_share(url)) is None
 
 
 def test_gzipped_artwork_is_decoded(server):
