@@ -48,6 +48,7 @@ test_an_id_that_holds_another_quote_is_a_collision_and_is_left_alone = (
 test_revoke_is_once_and_a_revoked_id_is_not_usable = cases.test_revoke_is_once_and_a_revoked_id_is_not_usable
 test_revoke_for_podcast_returns_the_live_ids = cases.test_revoke_for_podcast_returns_the_live_ids
 test_hits_add_up_per_share = cases.test_hits_add_up_per_share
+test_reconcile_queries = cases.test_reconcile_queries
 
 
 def test_deleting_the_episode_removes_its_shares_and_hits(repo):

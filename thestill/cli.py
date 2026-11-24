@@ -586,6 +586,12 @@ def set_entity_visibility(ctx, entity_id, public):
     """
     entity = _curate(ctx, lambda svc, actor: svc.set_visibility(entity_id, public=public, actor=actor))
     click.echo(f"✓ {entity.canonical_name} ({entity.id}): public page {'on' if public else 'hidden'}.")
+    if not public:
+        # Spec #114: quote links that name them answer 410 from now on; take
+        # their stored cards away too.
+        withdrawn = _quote_share_service(ctx).forget_speaker_cards(entity.id)
+        if withdrawn:
+            click.echo(f"  Quote links that named them: {withdrawn} (now 410, cards deleted).")
 
 
 @main.command("link-platforms")

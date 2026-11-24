@@ -233,3 +233,84 @@ def test_robots_leaves_quote_links_fetchable(anon, shares):
     parser.parse(public_shell.ROBOTS_PUBLIC.format(base="https://thestill.test").splitlines())
     assert parser.can_fetch("Twitterbot", "https://thestill.test/q/aaaaaaaaaa")
     assert parser.can_fetch("LinkedInBot", "https://thestill.test/q/aaaaaaaaaa.png")
+
+
+def test_read_only_serves_cached_cards_and_renders_no_new_ones(anon, shares, app_state, monkeypatch):
+    quotes = _quotes(anon)
+    monkeypatch.setattr(QuoteShareService, "_artwork", lambda self, share: None)
+    cached, cold = quotes[GALLOWAY_LINE]["share_id"], quotes[ELSON_LINE]["share_id"]
+    assert anon.get(f"/q/{cached}.png").status_code == 200
+    app_state.abuse.settings.set("read_only", True, actor=Actor.cli())
+    assert anon.get(f"/q/{cached}.png").status_code == 200
+    assert anon.get(f"/q/{cold}.png").status_code == 503
+    assert not (anon.app.state.app_state.config.path_manager.quote_cards_dir() / cold).exists()
+
+
+def test_hiding_a_speaker_deletes_their_cards(anon, shares, app_state, app_config, monkeypatch):
+    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    monkeypatch.setattr(QuoteShareService, "_artwork", lambda self, share: None)
+    assert anon.get(f"/q/{sid}.png").status_code == 200
+    card_dir = app_config.path_manager.quote_cards_dir() / sid
+    assert list(card_dir.glob("*.png"))
+    app_state.entity_repository.set_entity_public_hidden("person:scott-galloway", True)
+    assert shares.forget_speaker_cards("person:scott-galloway") == 1
+    assert not list(card_dir.glob("*.png"))
+
+
+def _respeak(app_state, segment: int, who: str) -> None:
+    """Hand a turn to another speaker, as a transcript correction plus the
+    entity refresh would."""
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        conn.execute(
+            "UPDATE entity_mentions SET entity_id = ? WHERE episode_id = ? AND segment_id = ? AND role = 'speaking'",
+            (who, EPISODE_ID, segment),
+        )
+
+
+def test_refresh_moves_a_share_to_the_corrected_speaker_and_drops_its_card(
+    anon, shares, app_state, app_config, monkeypatch
+):
+    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    monkeypatch.setattr(QuoteShareService, "_artwork", lambda self, share: None)
+    assert anon.get(f"/q/{sid}.png").status_code == 200
+    _respeak(app_state, 2, "person:ed-elson")
+
+    counts = shares.reconcile_episode(EPISODE_ID)
+    assert counts["changed"] == 1 and counts["unnamed"] == 0
+    assert shares.resolve(sid).speaker_name == "Ed Elson"
+    assert not list((app_config.path_manager.quote_cards_dir() / sid).glob("*.png"))
+    # Stable: a second pass changes nothing.
+    assert shares.reconcile_episode(EPISODE_ID)["changed"] == 0
+
+
+def test_refresh_follows_the_words_through_a_split_and_ignores_a_repeat_elsewhere(anon, shares, app_state):
+    sid = _quotes(anon)[GALLOWAY_LINE]["share_id"]
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001 - fixture write
+        # The turn (segment 2, 120-140 s) is split: its second half is now
+        # segment 7 at 130 s, spoken by Ed, and holds the quoted words.
+        conn.execute(
+            "UPDATE entity_mentions SET segment_id = 7, start_ms = 130000 "
+            "WHERE episode_id = ? AND segment_id = 2 AND quote_excerpt = ?",
+            (EPISODE_ID, GALLOWAY_LINE),
+        )
+        conn.execute(
+            "INSERT INTO entity_mentions (entity_id, episode_id, segment_id, start_ms, end_ms, speaker, role,"
+            " surface_form, quote_excerpt, confidence, extractor, resolution_status)"
+            " SELECT 'person:ed-elson', episode_id, 7, 130000, 140000, 'Ed Elson', role, 'Ed Elson', quote_excerpt,"
+            " confidence, extractor, resolution_status FROM entity_mentions"
+            " WHERE episode_id = ? AND segment_id = 2 AND role = 'speaking'",
+            (EPISODE_ID,),
+        )
+    shares.reconcile_episode(EPISODE_ID)
+    assert shares.resolve(sid).speaker_name == "Ed Elson"
+
+    # The words are then edited away in that turn, while another speaker
+    # says the same words minutes later: never taken for the speaker.
+    with app_state.repository._get_connection() as conn:  # noqa: SLF001
+        conn.execute(
+            "UPDATE entity_mentions SET segment_id = 3, start_ms = 185000 WHERE episode_id = ? AND quote_excerpt = ?",
+            (EPISODE_ID, GALLOWAY_LINE),
+        )
+    assert shares.reconcile_episode(EPISODE_ID)["unnamed"] >= 1
+    assert shares.resolve(sid).speaker_name is None
+    assert "A guest on " in anon.get(f"/q/{sid}").text

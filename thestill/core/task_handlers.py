@@ -1682,6 +1682,20 @@ def handle_resolve_entities(task: Task, state: "AppState") -> None:
                 state.repository.settle_linking_deferred(episode.id)
             # Its quotes and people are in, so the page is now indexable.
             _ping_indexnow_on_publish(state, podcast, episode.id)
+            _reconcile_quote_shares(state, episode.id)
+
+
+def _reconcile_quote_shares(state: "AppState", episode_id: str) -> None:
+    """Spec #114 §7 — the episode's mentions were just rewritten: make every
+    quote link of it name whoever speaks its words now. Never fails the
+    task: a link that keeps a stale name is fixed by the next refresh."""
+    service = getattr(state, "quote_share_service", None)
+    if service is None:
+        return
+    try:
+        service.reconcile_episode(str(episode_id))
+    except Exception:
+        logger.exception("quote_share_reconcile_failed", episode_id=episode_id)
 
 
 def _retry_or_defer(task: Task, state: "AppState", episode, failure: Exception) -> None:

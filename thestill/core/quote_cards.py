@@ -93,6 +93,21 @@ def clean_text(text: str) -> str:
     return " ".join(kept.split())
 
 
+def _split_token(word: str, font: ImageFont.FreeTypeFont, width: float) -> List[str]:
+    """A word wider than the column (a URL, say), cut into pieces that fit."""
+    pieces: List[str] = []
+    piece = ""
+    for ch in word:
+        if piece and font.getlength(piece + ch) > width:
+            pieces.append(piece)
+            piece = ch
+        else:
+            piece += ch
+    if piece:
+        pieces.append(piece)
+    return pieces
+
+
 def _greedy(words: List[str], font: ImageFont.FreeTypeFont, width: float) -> List[str]:
     lines: List[str] = []
     line = ""
@@ -110,8 +125,11 @@ def _greedy(words: List[str], font: ImageFont.FreeTypeFont, width: float) -> Lis
 
 def wrap_balanced(text: str, font: ImageFont.FreeTypeFont, width: int) -> List[str]:
     """Wrap to ``width``, then narrow the lines as far as the same line
-    count allows, so the last line is not a stray word."""
-    words = text.split()
+    count allows, so the last line is not a stray word. No line is wider
+    than ``width``: a single word that is gets cut."""
+    words: List[str] = []
+    for word in text.split():
+        words.extend(_split_token(word, font, width) if font.getlength(word) > width else [word])
     lines = _greedy(words, font, width)
     low, high = 0.0, float(width)
     for _ in range(12):

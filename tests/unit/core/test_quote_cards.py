@@ -56,6 +56,15 @@ def test_wrap_keeps_every_word_and_fits_the_width():
     assert len(lines[-1].split()) > 1
 
 
+def test_a_word_wider_than_the_column_is_cut_not_drawn_over_the_artwork():
+    font = _font("Newsreader.ttf", 40, 420)
+    url = "https://example.com/" + "averyveryverylongpathsegment" * 6
+    lines = wrap_balanced(f"See {url} for the details.", font, 500)
+    assert all(font.getlength(line) <= 500 for line in lines)
+    assert "".join(lines).replace(" ", "") == f"See{url}forthedetails."
+    assert _size(render_og(_card(quote=f"See {url} for the details."))) == OG_SIZE
+
+
 def test_what_may_become_a_card():
     assert card_eligible(QUOTE)
     assert not card_eligible("and then it trails in from a clause.")

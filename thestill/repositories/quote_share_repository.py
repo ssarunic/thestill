@@ -151,7 +151,55 @@ class QuoteShareRepository(ABC):
             [episode_id],
         )
 
+    def live_for_episode(self, episode_id: str) -> List[Dict[str, Any]]:
+        """The episode's shares that are not revoked, with their anchors."""
+        p = self.placeholder
+        return self._fetch(
+            f"SELECT id, segment_id, start_ms, end_ms, text, speaker_entity_id FROM quote_shares "
+            f"WHERE episode_id = {p} AND revoked_at IS NULL ORDER BY id",
+            [episode_id],
+        )
+
+    def ids_for_speaker(self, entity_id: str) -> List[str]:
+        """Every share whose cached speaker is this entity."""
+        p = self.placeholder
+        return [
+            row["id"] for row in self._fetch(f"SELECT id FROM quote_shares WHERE speaker_entity_id = {p}", [entity_id])
+        ]
+
+    def speakers_of_passage(self, episode_id: str, text: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
+        """Who speaks ``text`` inside the source span now (spec #114 §7).
+
+        A mention's excerpt is cut from its segment's text, so a mention
+        with exactly these words whose segment starts inside the span is
+        the passage in today's transcript; its segment's resolved speaking
+        row is the speaker. One row per distinct (speaker, segment).
+        """
+        p = self.placeholder
+        return self._fetch(
+            f"""
+            SELECT DISTINCT sp.entity_id AS speaker_entity_id, m.segment_id AS segment_id
+            FROM entity_mentions m
+            JOIN entity_mentions sp
+              ON sp.episode_id = m.episode_id AND sp.segment_id = m.segment_id
+             AND sp.role = 'speaking' AND sp.resolution_status = 'resolved' AND sp.entity_id IS NOT NULL
+            WHERE m.episode_id = {p}
+              AND (m.role IS NULL OR m.role <> 'speaking')
+              AND m.quote_excerpt = {p}
+              AND m.start_ms >= {p} AND m.start_ms <= {p}
+            """,
+            [episode_id, text, start_ms, end_ms],
+        )
+
     # ----- writes -----
+
+    def set_speaker(self, share_id: str, speaker_entity_id: Optional[str], segment_id: int) -> None:
+        """Rewrite a share's cached speaker and segment."""
+        p = self.placeholder
+        self._execute(
+            f"UPDATE quote_shares SET speaker_entity_id = {p}, segment_id = {p} WHERE id = {p}",
+            [speaker_entity_id, segment_id, share_id],
+        )
 
     def revoke(self, share_id: str, reason: Optional[str], *, now: Optional[datetime] = None) -> bool:
         """Revoke one share. False when it does not exist or already is."""

@@ -29,17 +29,19 @@ import base64
 import hashlib
 import re
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
 from structlog import get_logger
+from urllib3.util.retry import Retry
 
 from ..core.quote_cards import TEMPLATE_VERSION, QuoteCard, render_og
 from ..models.entities import display_name
 from ..repositories.quote_share_repository import QuoteShareRepository
-from ..utils.url_guard import UnsafeURLError, guarded_get
+from ..utils.url_guard import guarded_session, validate_public_url
 
 if TYPE_CHECKING:
     from ..services.abuse.actor import Actor
@@ -53,7 +55,10 @@ logger = get_logger(__name__)
 CARD_MAX_CHARS = 320
 SHARE_ID_RE = re.compile(r"^[a-z2-7]{10,12}$")
 _ARTWORK_MAX_BYTES = 8 * 1024 * 1024
-_ARTWORK_TIMEOUT_SECONDS = 6
+_ARTWORK_CONNECT_SECONDS = 3
+_ARTWORK_READ_SECONDS = 4
+#: The whole artwork download, however slowly the bytes arrive.
+_ARTWORK_TOTAL_SECONDS = 8
 #: At most this many cards render at once, process-wide (spec §8).
 _render_slots = threading.BoundedSemaphore(2)
 
@@ -245,7 +250,9 @@ class QuoteShareService:
                 return storage.read_bytes(key)
         except Exception:
             logger.exception("quote_card_read_failed", share_id=share.id)
-        if not self.rendering_enabled:
+        # Rendering fetches artwork and writes a file: paused by its own
+        # switch and by read-only mode. Cached cards above still serve.
+        if not self.rendering_enabled or self._setting("read_only", False):
             return None
         with _render_slots:
             shown = urlparse(self.short_url(share))
@@ -269,11 +276,22 @@ class QuoteShareService:
         if not share.image_url:
             return None
         try:
-            response = guarded_get(share.image_url, timeout=_ARTWORK_TIMEOUT_SECONDS, stream=True)
-            response.raise_for_status()
-            body = response.raw.read(_ARTWORK_MAX_BYTES + 1, decode_content=True)
-            return body if len(body) <= _ARTWORK_MAX_BYTES else None
-        except (UnsafeURLError, Exception) as exc:
+            validate_public_url(share.image_url)
+            # One attempt, no retries: the default session sleeps through an
+            # upstream's Retry-After, and this runs holding a render slot.
+            with guarded_session(retries=Retry(total=0, redirect=3), user_agent="Thestill/1.0") as session:
+                response = session.get(
+                    share.image_url, timeout=(_ARTWORK_CONNECT_SECONDS, _ARTWORK_READ_SECONDS), stream=True
+                )
+                response.raise_for_status()
+                deadline = time.monotonic() + _ARTWORK_TOTAL_SECONDS
+                body = b""
+                for chunk in response.iter_content(64 * 1024):
+                    body += chunk
+                    if len(body) > _ARTWORK_MAX_BYTES or time.monotonic() > deadline:
+                        return None
+                return body
+        except Exception as exc:
             logger.info("quote_card_artwork_unavailable", share_id=share.id, error=type(exc).__name__)
             return None
 
@@ -289,6 +307,49 @@ class QuoteShareService:
                     storage.delete_batch(keys)
             except Exception:
                 logger.exception("quote_card_delete_failed", share_id=one)
+
+    # ----- after a transcript or entity change -----
+
+    def reconcile_episode(self, episode_id: str) -> Dict[str, int]:
+        """Re-resolve the speaker of every share of an episode against its
+        mentions as they are now (spec §7). Called when the entity refresh
+        of an episode completes.
+
+        The anchor is the share's words inside its source span. Exactly one
+        speaker says them there: that is the speaker. None or several: the
+        share loses its name rather than guess. A changed share has its
+        cards deleted, so the next request renders the current name.
+        """
+        counts = {"checked": 0, "changed": 0, "unnamed": 0}
+        changed: List[str] = []
+        for share in self._repo.live_for_episode(episode_id):
+            counts["checked"] += 1
+            found = self._repo.speakers_of_passage(
+                episode_id, share["text"], int(share["start_ms"]), int(share["end_ms"])
+            )
+            speakers = {str(row["speaker_entity_id"]) for row in found}
+            if len(speakers) == 1:
+                speaker: Optional[str] = next(iter(speakers))
+                segment = min(int(row["segment_id"]) for row in found)
+            else:
+                speaker, segment = None, int(share["segment_id"])
+                counts["unnamed"] += 1
+            if speaker != share["speaker_entity_id"] or segment != int(share["segment_id"]):
+                self._repo.set_speaker(share["id"], speaker, segment)
+                if speaker != share["speaker_entity_id"]:
+                    changed.append(share["id"])
+        counts["changed"] = len(changed)
+        self.delete_assets(changed)
+        if counts["checked"]:
+            logger.info("quote_shares_reconciled", episode_id=episode_id, **counts)
+        return counts
+
+    def forget_speaker_cards(self, entity_id: str) -> int:
+        """Delete the cards of every share that names this entity (it was
+        hidden, so its shares now answer 410). Returns how many shares."""
+        ids = self._repo.ids_for_speaker(entity_id)
+        self.delete_assets(ids)
+        return len(ids)
 
     # ----- revoking -----
 

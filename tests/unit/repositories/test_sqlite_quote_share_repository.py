@@ -104,3 +104,17 @@ def test_hits_add_up_per_share(repo):
     repo.record_hit("aaaaaaaaaa", date(2026, 11, 24), "www.linkedin.com")
     repo.record_hit("aaaaaaaaaa", date(2026, 11, 25), "")
     assert repo.list_for_episode(EPISODE)[0]["opens"] == 3
+
+
+def test_reconcile_queries(repo):
+    repo.upsert_gated([_share()])
+    assert [row["id"] for row in repo.live_for_episode(EPISODE)] == ["aaaaaaaaaa"]
+    assert repo.ids_for_speaker("person:jane-doe") == ["aaaaaaaaaa"]
+    # No mention carries these words: nobody is found.
+    assert repo.speakers_of_passage(EPISODE, QUOTE, 120_000, 150_000) == []
+    repo.set_speaker("aaaaaaaaaa", None, 9)
+    row = repo.get("aaaaaaaaaa")
+    assert (row["speaker_entity_id"], row["segment_id"]) == (None, 9)
+    assert repo.ids_for_speaker("person:jane-doe") == []
+    repo.revoke("aaaaaaaaaa", "gone")
+    assert repo.live_for_episode(EPISODE) == []
