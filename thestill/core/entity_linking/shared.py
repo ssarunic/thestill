@@ -29,7 +29,8 @@ from structlog import get_logger
 
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
-from ..entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
+from ..entity_type_rules import PERSON_P31, classify_entity_type, is_ai_model, is_kind_of_person, person_superclasses
+from .candidates import _DETERMINERS
 
 logger = get_logger(__name__)
 
@@ -143,9 +144,12 @@ def linked_result(
       the link is wrong. It is dropped and the mention is an unlinked
       person, as if Wikidata had nothing. Before, the row was held as a
       person carrying the city's QID and description.
-    - Written as a common noun ("my wife", "wife" → the item wife): the
-      tag is wrong. The link stands and the row takes the type Wikidata
-      gives it, a topic unless a list says otherwise.
+    - Written as a common noun ("the wife", "wife" → the item wife): the
+      tag is wrong. The link stands and the row is a topic. When the
+      item is a work or a company ("mom" → the series Mom, "roommate" →
+      the video game) the link is wrong after all and is dropped: as a
+      product it would agree with its classes and no review would ever
+      look at it again.
 
     A kind of person (profession, title, kinship, age group) and a named
     AI model ("Sora", "Claude") are a wrong tag however they are written:
@@ -163,7 +167,7 @@ def linked_result(
             and classified not in (None, EntityType.PERSON)
             and not is_kind_of_person(p31_qids, qid)
             and not is_ai_model(p31_qids)
-            and not _spoken_as_common_noun(mention.surface_form)
+            and not (_spoken_as_common_noun(mention.surface_form) and classified is EntityType.TOPIC)
         ):
             logger.info(
                 "entity_person_link_dropped",
@@ -183,6 +187,11 @@ def linked_result(
                 p31=p31_qids,
             )
         entity_type = classified or fallback_type
+        if entity_type is EntityType.PERSON and p31_qids and superclasses and not set(p31_qids) & PERSON_P31:
+            # A person by a superclass (Zeus: "Greek deity" is a kind of
+            # mythological Greek character). Stored with the classes, so
+            # readers that classify from the stored list agree.
+            p31_qids = [*p31_qids, *person_superclasses(p31_qids, superclasses)]
     return ResolutionResult(
         mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
         entity=EntityRecord(
@@ -200,9 +209,14 @@ def linked_result(
 
 
 def _spoken_as_common_noun(surface_form: str) -> bool:
-    """No capital anywhere: "my wife", "the photographer". A name in a
-    script without case ("習近平") is not lower-case, so it counts as a name."""
-    return surface_form.islower()
+    """No capital in it: "wife", "the photographer". The capital of a
+    leading determiner is a sentence start ("My wife", "The wife"), as
+    ``is_generic_noun`` reads it. A name in a script without case ("習近平")
+    is not lower-case, so it counts as a name."""
+    words = surface_form.split()
+    if len(words) > 1 and words[0].lower() in _DETERMINERS | {"the"}:
+        words = words[1:]
+    return " ".join(words).islower()
 
 
 def _is_plausible_alias(surface_form: str, canonical_name: str) -> bool:

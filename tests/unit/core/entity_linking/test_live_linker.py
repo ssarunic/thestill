@@ -240,6 +240,68 @@ def test_a_capitalised_common_noun_tagged_person_is_never_a_linked_person(decisi
     assert result.status == "unresolvable" and result.entity.wikidata_qid is None
 
 
+def test_a_person_by_superclass_stores_the_person_class_it_was_accepted_by(decisions):
+    # Zeus: "Greek deity" is in no list; its superclass is a person class.
+    # The review queue and a cached-only backfill classify from the stored
+    # classes without a lookup, and must not call the row a topic.
+    from thestill.core.entity_retype import plan_backfill
+    from thestill.core.entity_type_rules import classify_entity_type
+
+    zeus = WikidataSearchHit("Q34201", "Zeus", "Greek god of the sky")
+    wikidata = FakeWikidata({"Zeus": [zeus]}, p31={"Q34201": ["Q22989102"]})
+    wikidata.fetch_superclasses = lambda qid: {"Q22989102": ["Q178885", "Q22988604"]}.get(qid, [])
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Zeus", label="person")], context=CTX)
+    assert result.status == "resolved" and result.entity.type == EntityType.PERSON
+    assert result.entity.wikidata_instance_of == ["Q22989102", "Q22988604"]
+    assert classify_entity_type(result.entity.wikidata_instance_of, EntityType.PERSON) is EntityType.PERSON
+    assert list(plan_backfill([result.entity], None)) == []
+
+
+def test_a_sentence_start_determiner_does_not_make_a_name(decisions):
+    # "the" is not looked past by the generic rule, so "The wife" is searched.
+    wikidata = FakeWikidata({"The wife": [WIFE]}, p31=WIFE_P31)
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "The wife", label="person")], context=CTX)
+    assert result.status == "resolved" and result.entity.type == EntityType.TOPIC
+
+
+@pytest.mark.parametrize(
+    "surface, common",
+    [
+        ("wife", True),
+        ("the wife", True),
+        ("The wife", True),
+        ("My older brother", True),
+        ("Wife", False),
+        ("the Wife", False),
+        ("Bellingham", False),
+        ("The Rock", False),
+        ("jude Bellingham", False),
+        ("習近平", False),
+    ],
+)
+def test_spoken_as_common_noun(surface, common):
+    from thestill.core.entity_linking.shared import _spoken_as_common_noun
+
+    assert _spoken_as_common_noun(surface) is common
+
+
+def test_a_common_noun_tagged_person_linked_to_a_work_loses_the_link(decisions):
+    # "mom" → the series Mom. Kept as a product it would agree with its
+    # classes, and neither the backfill nor the review queue would look again.
+    mom = WikidataSearchHit("Q13358120", "Mom", "American television series")
+    wikidata = FakeWikidata({"mom": [mom], "Truman": [FILM]}, p31={"Q13358120": ["Q5398426"], "Q214801": ["Q11424"]})
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    results = linker.resolve(
+        [mention(1, "mom", label="person"), mention(2, "Truman", label="person"), mention(3, "truman", label="person")],
+        context=CTX,
+    )
+    assert [(r.status, r.entity.type, r.entity.wikidata_qid) for r in results] == [
+        ("unresolvable", EntityType.PERSON, None)
+    ] * 3
+
+
 def test_a_described_person_is_never_searched_or_asked(decisions):
     # "my wife" names nobody; "wife" is in no word list and need not be.
     wikidata = FakeWikidata({"my wife": [WIFE], "his brother": [WIFE]}, p31=WIFE_P31)

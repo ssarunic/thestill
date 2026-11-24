@@ -68,6 +68,15 @@ PERSON_P31 = frozenset(
         "Q15711870",  # animated character
         "Q1114461",  # comics character
         "Q4271324",  # mythical character (Santa Claus)
+        "Q1569167",  # video game character
+        "Q22988604",  # mythological Greek character (Achilles)
+        "Q13002315",  # legendary figure
+        "Q124710051",  # legendary human figure
+        "Q20643955",  # human biblical figure (Moses: his only class)
+        "Q16017119",  # collective pseudonym (Nicolas Bourbaki)
+        # Two real humans on one item: the Coen brothers, the Wright brothers.
+        "Q125258836",  # brother duo
+        "Q14073567",  # sibling duo
     }
 )
 
@@ -377,6 +386,21 @@ def is_kind_of_person(p31_qids: Iterable[str], qid: Optional[str] = None) -> boo
     return qid in PERSON_P31 or bool({q for q in p31_qids if q} & KIND_OF_PERSON_P31)
 
 
+def person_superclasses(p31_qids: Iterable[str], superclasses: Callable[[str], List[str]]) -> List[str]:
+    """The person classes directly above any of ``p31_qids`` (P279), sorted.
+
+    An instance of "Greek deity" is an instance of its superclass
+    "mythological Greek character" too, so a caller that stores P31 may
+    store these beside it. ``linked_result`` does: the review queue and a
+    cached-only backfill classify from the stored list, with no lookup,
+    and would otherwise call the same row a topic.
+    """
+    found = set()
+    for qid in sorted({q for q in p31_qids if q}):
+        found |= set(superclasses(qid)) & PERSON_P31
+    return sorted(found)
+
+
 def is_ai_model(p31_qids: Iterable[str]) -> bool:
     """True when the item is a named AI model or chatbot ("Claude", "Sora").
 
@@ -426,15 +450,18 @@ def classify_entity_type(
        Exception: when the broad "organization" (Q43229) is the only topic
        class, the fallback is company and nothing marks a non-profit, it
        stays ``COMPANY`` (Sanofi, Framatome, XTX Markets).
-    7. Else if ``superclasses`` is given and any P31's direct superclass
-       (P279) is in ``SUPERCLASS_TOPIC_P31`` → ``TOPIC``. Catches
-       per-country place classes such as "town in Croatia".
-    8. Else if ``fallback`` is ``PERSON`` and there is any P31 at all →
-       ``TOPIC``. A person is what Wikidata calls a human, and nothing
-       else: the kinds-of-person list was extended three times and "wife"
-       (P31 "affinity", "term for a woman") still stood under People,
-       because an unlisted class meant "keep the person tag". Callers
-       decide whether that is a wrong tag or a wrong link.
+    7. Else if ``fallback`` is ``PERSON`` and there is any P31 at all:
+       ``PERSON`` when ``superclasses`` is given and a P31's direct
+       superclass (P279) is a person class ("fictional detective" is a
+       kind of fictional human), and otherwise ``TOPIC``. A person is
+       what Wikidata calls a human, and nothing else: the kinds-of-person
+       list was extended three times and "wife" (P31 "affinity", "term
+       for a woman") still stood under People, because an unlisted class
+       meant "keep the person tag". Callers decide whether that is a
+       wrong tag or a wrong link.
+    8. Else if ``superclasses`` is given and any P31's direct superclass
+       is in ``SUPERCLASS_TOPIC_P31`` → ``TOPIC``. Catches per-country
+       place classes such as "town in Croatia".
     9. Else → ``fallback`` (we have no signal to override the resolver).
 
     Returns ``None`` only when ``p31_qids`` is empty *and* ``fallback``
@@ -482,11 +509,15 @@ def classify_entity_type(
             return EntityType.PRODUCT
         return EntityType.TOPIC
 
+    if fallback is EntityType.PERSON and p31_set:
+        # Asked here, not with the topic superclasses below: for a person
+        # the answer to that lookup could only ever be "topic" again.
+        if superclasses is not None and person_superclasses(p31_set, superclasses):
+            return EntityType.PERSON
+        return EntityType.TOPIC
+
     if superclasses is not None and fallback != EntityType.TOPIC:
         if any(set(superclasses(q)) & SUPERCLASS_TOPIC_P31 for q in sorted(p31_set)):
             return EntityType.TOPIC
-
-    if fallback is EntityType.PERSON and p31_set:
-        return EntityType.TOPIC
 
     return fallback
