@@ -29,7 +29,7 @@ from structlog import get_logger
 
 from ...models.entities import EntityMention, EntityRecord, EntityType, ResolutionMethod
 from ...utils.slug import generate_slug
-from ..entity_type_rules import classify_entity_type, is_ai_model, is_kind_of_person
+from ..entity_type_rules import PERSON_P31, classify_entity_type, is_ai_model, is_kind_of_person, person_superclasses
 from .candidates import _DETERMINERS
 
 logger = get_logger(__name__)
@@ -187,6 +187,11 @@ def linked_result(
                 p31=p31_qids,
             )
         entity_type = classified or fallback_type
+        if entity_type is EntityType.PERSON and p31_qids and superclasses and not set(p31_qids) & PERSON_P31:
+            # A person by a superclass (Zeus: "Greek deity" is a kind of
+            # mythological Greek character). Stored with the classes, so
+            # readers that classify from the stored list agree.
+            p31_qids = [*p31_qids, *person_superclasses(p31_qids, superclasses)]
     return ResolutionResult(
         mention_id=mention.id,  # type: ignore[arg-type]  # always set when read from DB
         entity=EntityRecord(

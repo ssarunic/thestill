@@ -386,6 +386,21 @@ def is_kind_of_person(p31_qids: Iterable[str], qid: Optional[str] = None) -> boo
     return qid in PERSON_P31 or bool({q for q in p31_qids if q} & KIND_OF_PERSON_P31)
 
 
+def person_superclasses(p31_qids: Iterable[str], superclasses: Callable[[str], List[str]]) -> List[str]:
+    """The person classes directly above any of ``p31_qids`` (P279), sorted.
+
+    An instance of "Greek deity" is an instance of its superclass
+    "mythological Greek character" too, so a caller that stores P31 may
+    store these beside it. ``linked_result`` does: the review queue and a
+    cached-only backfill classify from the stored list, with no lookup,
+    and would otherwise call the same row a topic.
+    """
+    found = set()
+    for qid in sorted({q for q in p31_qids if q}):
+        found |= set(superclasses(qid)) & PERSON_P31
+    return sorted(found)
+
+
 def is_ai_model(p31_qids: Iterable[str]) -> bool:
     """True when the item is a named AI model or chatbot ("Claude", "Sora").
 
@@ -497,7 +512,7 @@ def classify_entity_type(
     if fallback is EntityType.PERSON and p31_set:
         # Asked here, not with the topic superclasses below: for a person
         # the answer to that lookup could only ever be "topic" again.
-        if superclasses is not None and any(set(superclasses(q)) & PERSON_P31 for q in sorted(p31_set)):
+        if superclasses is not None and person_superclasses(p31_set, superclasses):
             return EntityType.PERSON
         return EntityType.TOPIC
 

@@ -240,6 +240,24 @@ def test_a_capitalised_common_noun_tagged_person_is_never_a_linked_person(decisi
     assert result.status == "unresolvable" and result.entity.wikidata_qid is None
 
 
+def test_a_person_by_superclass_stores_the_person_class_it_was_accepted_by(decisions):
+    # Zeus: "Greek deity" is in no list; its superclass is a person class.
+    # The review queue and a cached-only backfill classify from the stored
+    # classes without a lookup, and must not call the row a topic.
+    from thestill.core.entity_retype import plan_backfill
+    from thestill.core.entity_type_rules import classify_entity_type
+
+    zeus = WikidataSearchHit("Q34201", "Zeus", "Greek god of the sky")
+    wikidata = FakeWikidata({"Zeus": [zeus]}, p31={"Q34201": ["Q22989102"]})
+    wikidata.fetch_superclasses = lambda qid: {"Q22989102": ["Q178885", "Q22988604"]}.get(qid, [])
+    linker, _ = make_linker(decisions, wikidata, [pick_first_candidate])
+    (result,) = linker.resolve([mention(1, "Zeus", label="person")], context=CTX)
+    assert result.status == "resolved" and result.entity.type == EntityType.PERSON
+    assert result.entity.wikidata_instance_of == ["Q22989102", "Q22988604"]
+    assert classify_entity_type(result.entity.wikidata_instance_of, EntityType.PERSON) is EntityType.PERSON
+    assert list(plan_backfill([result.entity], None)) == []
+
+
 def test_a_sentence_start_determiner_does_not_make_a_name(decisions):
     # "the" is not looked past by the generic rule, so "The wife" is searched.
     wikidata = FakeWikidata({"The wife": [WIFE]}, p31=WIFE_P31)
