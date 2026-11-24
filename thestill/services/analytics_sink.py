@@ -80,6 +80,14 @@ class PublicPageView(_Event):
     referrer_host: Optional[str] = Field(default=None, max_length=200)
 
 
+class PublicQuoteShared(_Event):
+    """A visitor used the share button on a public quote (spec #114,
+    browsers only): how, never which quote or its link."""
+
+    name: Literal["public_quote_shared"] = "public_quote_shared"
+    method: Literal["link", "share"]
+
+
 class LoginStarted(_Event):
     name: Literal["login_started"] = "login_started"
     from_kind: PageKindOrNone
@@ -187,6 +195,7 @@ class DriftAlignmentResult(_Event):
 
 AnalyticsEvent = Union[
     PublicPageView,
+    PublicQuoteShared,
     LoginStarted,
     LoginCompleted,
     LoginCancelled,

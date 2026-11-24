@@ -11,6 +11,7 @@ import {
   FilterChip,
   ListenOn,
   QuoteCard,
+  type QuoteCardQuote,
   QuoteSkeleton,
   SignInCard,
   Skeleton,
@@ -22,6 +23,7 @@ import {
   usePublicEpisode,
   usePublicEpisodeQuotes,
   usePublicPodcastEpisodes,
+  usePublicQuoteShare,
   usePublicSummary,
 } from '../../hooks/usePublicApi'
 import NotFound, { ModuleError } from './NotFound'
@@ -46,6 +48,11 @@ export default function Episode() {
   // links shared before.
   const q = deepLinkParam(location.search, location.hash, 't') ?? params.get('q')
   const linkedSeconds = q && /^\d{1,6}$/.test(q) ? Number(q) : null
+  // Spec #114: a quote short link lands here with its id (`#t=…&s=…`). The
+  // time alone cannot say which quote was shared: several excerpts of one
+  // turn start at the same second.
+  const s = deepLinkParam(location.search, location.hash, 's')
+  const shareId = s && /^[a-z2-7]{10,12}$/.test(s) ? s : null
   const tab = params.get('view') === 'transcript' ? 'transcript' : 'summary'
   const speaker = params.get('speaker')
 
@@ -72,15 +79,44 @@ export default function Episode() {
   const takingPart = mentioned.flatMap((entity) => (entity.role ? [{ ...entity, role: entity.role }] : []))
   const onlyMentioned = mentioned.filter((entity) => !entity.role)
 
-  const linked = firstPage?.linked ?? null
+  // The shared quote as it was shared, when the link names one of this
+  // episode; otherwise (no id, a withdrawn link, still loading) the quote
+  // at that time, as before.
+  const sharedQuery = usePublicQuoteShare(shareId)
+  const share = sharedQuery.data?.share
+  const shared: QuoteCardQuote | null =
+    share && share.podcast.slug === podcastSlug && share.episode.slug === episodeSlug
+      ? {
+          text: share.text,
+          start_seconds: share.start_seconds,
+          share_id: share.id,
+          speaker: share.speaker ?? { name: 'A guest', slug: null },
+          episode: { ...share.episode, pub_date: null, image_url: null },
+          podcast: share.podcast,
+        }
+      : null
+  const linked: QuoteCardQuote | null = shared ?? firstPage?.linked ?? null
   const linkedId = linked ? `quote-${linked.start_seconds}` : null
+  // A shared quote is matched by its words too: another excerpt of the
+  // same turn is not it.
+  const isLinkedQuote = (quote: { start_seconds: number; text: string }) =>
+    !!linked && quote.start_seconds === linked.start_seconds && (!shared || quote.text === shared.text)
+  const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
+  const linkedInList = shown.some(isLinkedQuote)
+  // The page scrolls to the linked quote once, when both the share lookup
+  // and the episode's quotes are in: before that, the quote at that time
+  // may not be the one that was shared, and the linked card may yet move
+  // from above the list into it. `linkedWords` and `linkedInList` re-run
+  // the scroll if either still changes afterwards.
+  const awaitingLinked = (!!shareId && sharedQuery.isLoading) || quotes.isLoading
+  const linkedWords = linked?.text ?? null
   useEffect(() => {
-    if (!linkedId) return
+    if (!linkedId || awaitingLinked) return
     const el = document.getElementById(linkedId)
     if (!el) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
     el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
-  }, [linkedId])
+  }, [linkedId, linkedWords, linkedInList, awaitingLinked])
 
   const speakers = firstPage?.speakers ?? []
   const quoteCount = speakers.reduce((n, s) => n + s.quotes, 0)
@@ -108,8 +144,6 @@ export default function Episode() {
   }
   const people = episode ? [...episode.hosts, ...episode.guests] : []
   const youtube = episode?.platform_links.find((l) => l.platform === 'youtube')?.url ?? null
-  const shown = quotes.data?.pages.flatMap((p) => p.quotes) ?? []
-  const linkedInList = linked && shown.some((quote) => quote.start_seconds === linked.start_seconds)
   const moreEpisodes = (more.data?.pages[0]?.episodes ?? []).filter((e) => e.slug !== episodeSlug).slice(0, 3)
 
   return (
@@ -235,7 +269,7 @@ export default function Episode() {
                   <QuoteCard quote={linked} variant="linked" label="Linked quote" showShow={false} showDate={false} youtubeUrl={youtube} id={linkedId ?? undefined} className="ts-highlight" />
                 )}
                 {shown.map((quote) => {
-                  const isLinked = linked && quote.start_seconds === linked.start_seconds
+                  const isLinked = isLinkedQuote(quote)
                   return (
                     <QuoteCard
                       key={`${quote.start_seconds}-${quote.about.id}`}

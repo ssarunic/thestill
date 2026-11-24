@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import type { PublicQuote } from '../../api/public'
 import { QuoteCard } from './ui'
@@ -36,5 +36,44 @@ describe('QuoteCard (spec #94)', () => {
     )
     expect(screen.queryByRole('link', { name: 'Scott Galloway' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Hear it on YouTube' })).toHaveAttribute('href', 'https://youtube.com/watch?v=abc&t=238')
+  })
+})
+
+describe('QuoteCard share (spec #114)', () => {
+  const writeText = vi.fn(async () => {})
+  const share = (q: PublicQuote) => {
+    vi.stubGlobal('fetch', fetchMock)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(
+      <MemoryRouter>
+        <QuoteCard quote={q} />
+      </MemoryRouter>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to this quote' }))
+  }
+  const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+  afterEach(() => {
+    writeText.mockClear()
+    fetchMock.mockClear()
+    vi.unstubAllGlobals()
+  })
+
+  it('hands out the short link, which previews as the quote, and reports the share without the URL', async () => {
+    share({ ...quote, share_id: 'k7m2xq3dpa' })
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/q/k7m2xq3dpa`))
+    // Counted through our own server (the public site has no analytics
+    // client): how it was shared, never the quote or its link.
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/public/quote-shared',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ method: 'link' }) }),
+    )
+    expect(await screen.findByRole('button', { name: 'Link copied' })).toBeInTheDocument()
+  })
+
+  it('keeps the link to the moment for a quote with no short link', async () => {
+    share({ ...quote, share_id: null })
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/podcasts/prof-g/episodes/portfolio#t=238`),
+    )
   })
 })

@@ -1,6 +1,6 @@
 # Quote Cards and Clips
 
-> **Status:** 🚧 Phase 0 in progress. Built (2026-11-24, branch `feat/114-quote-cards-phase0`): the tables, short link ids on public quotes, `/q/{id}` and its card, the shared-quote lookup, the `quote_cards_enabled` switch, `thestill quote-share revoke|list` and revocation when a show is made private. Phase 0 still to come: the share menu and the linked quote on the episode page (frontend), `ts_ref` attribution and the `/analytics` panel
+> **Status:** 🚧 Phase 0 in progress. Built (2026-11-24, branch `feat/114-quote-cards-phase0`): the tables, short link ids on public quotes, `/q/{id}` and its card, the shared-quote lookup, the `quote_cards_enabled` switch, `thestill quote-share revoke|list` and revocation when a show is made private. The frontend followed (branch `feat/114-quote-share-menu`): the share button on a public quote hands out the short link, and the episode page shows the shared quote from its id. Phase 0 still to come: `ts_ref` attribution and the `/analytics` panel
 > **Created:** 2026-11-05
 > **Updated:** 2026-11-23 (open questions decided: D9–D12; follow hook reuses spec #117; Q6 opened on D6)
 > **Priority:** Medium-high. The first readers arrive from public pages and leave without following anything (spec #111); this is the first feature built to bring *more* of them, so it ships together with the hook that keeps them.
@@ -416,7 +416,10 @@ on every frame; there is no unbranded export.
 
 ### 5. Where sharing happens
 
-**Public pages (anonymous and signed in).** `QuoteCard` gains a share
+**Public pages (anonymous and signed in).** In Phase 0 the existing
+share button stays one button: it hands out the short link (the share
+sheet on a phone, a copy elsewhere), because Phase 0 has nothing else to
+offer in a menu. From Phase 1 `QuoteCard` gains a share
 menu replacing the bare share button: *Copy link* (the short link),
 *Share…* (Web Share with the short link, files when `canShare({files})`
 and the image is ready, spec #91 §7's path), *Download image* (square),
@@ -482,7 +485,12 @@ usage-analytics opt-out like every measurement-only fact (spec #111 §1).
 | Clips rendered | `usage_events` kind `clip` (spec #104 ledger) | cost and quota tuning |
 | Sign-ins that followed a card | `ts_ref` cookie read by the OAuth callback → `login_completed.next_kind = quote` and a `users.acquired_via = 'quote:<id>'` column set once on first sign-in | the quote-referred cohort for the Scorecard |
 
-Client events (spec #95 names): `share` with `kind` = `quote` or `clip`
+Shares from the public site go through our own server, not the browser's
+analytics client, which runs only for signed-in readers (spec #95): the
+page posts `{method}` to `POST /api/public/quote-shared` and the server
+sends `public_quote_shared` for browsers, as it does page views. Client
+events for the signed-in share sheet (Phase 1; spec #95 names): `share`
+with `kind` = `quote` or `clip`
 and `method` = `link | files | download | caption`; `quote_sheet_open`;
 `clip_requested`. Server: `quote_link_open` with `referrer_host`, no id.
 

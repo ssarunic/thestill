@@ -314,3 +314,32 @@ def test_refresh_follows_the_words_through_a_split_and_ignores_a_repeat_elsewher
     assert shares.reconcile_episode(EPISODE_ID)["unnamed"] >= 1
     assert shares.resolve(sid).speaker_name is None
     assert "A guest on " in anon.get(f"/q/{sid}").text
+
+
+def test_a_share_is_reported_for_browsers_with_the_method_only(anon, app_state):
+    captured = []
+
+    class Sink:
+        enabled = True
+        browser_key = None
+
+        def capture(self, event, *, user=None, visitor_key=None, gpc=False):
+            captured.append(event)
+
+        def shutdown(self):
+            pass
+
+    app_state.analytics_sink = Sink()
+    assert anon.post("/api/public/quote-shared", json={"method": "link"}, headers=CHROME).status_code == 204
+    assert (
+        anon.post("/api/public/quote-shared", json={"method": "share"}, headers={"user-agent": "Googlebot"}).status_code
+        == 204
+    )
+    assert [(event.name, event.properties()) for event in captured] == [("public_quote_shared", {"method": "link"})]
+    # An extra field is dropped, never forwarded; an unknown method is refused.
+    assert (
+        anon.post("/api/public/quote-shared", json={"method": "share", "url": "x"}, headers=CHROME).status_code == 204
+    )
+    assert captured[-1].properties() == {"method": "share"}
+    assert anon.post("/api/public/quote-shared", json={"method": "email"}, headers=CHROME).status_code == 422
+    assert len(captured) == 2

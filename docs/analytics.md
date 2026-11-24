@@ -76,6 +76,7 @@ else.
 | `ad_break_expanded` | signed-in app, episode reader: a reader opens an ad break's text with "Show ad text" (spec #116 §6.1); not sent when a search or a jump opens the row | `state`: what the row said: `plain` (no map for this audio), `same`, `different`, `absent` or `unresolved` |
 | `skip_ahead` | signed-in app, mini player or Now Playing sheet: a listener taps "Skip ahead", shown only while an ad plays and a timeline map is in force (spec #116 §6.2) | `seconds`: how much of the listener's copy it jumped over, rounded |
 | `public_page_view` | server, from `POST /api/public/pageview` | `kind`, `referrer_host` |
+| `public_quote_shared` | server, from `POST /api/public/quote-shared`: a visitor used the share button on a public quote (spec #114); browsers only | `method`: `link` (copied) or `share` (the phone's share sheet). Never the quote or its link |
 | `login_started` | server, `/api/auth/google/login` | `from_kind` |
 | `login_completed` | server, OAuth callback (not for opted-out readers) | `next_kind` |
 | `login_cancelled` | server, OAuth callback, when Google returns no code | `reason`: `access_denied` (Cancel on Google's screen), `admin_policy_enforced`, `server_error`, `temporarily_unavailable`, `other`, `missing_code` |

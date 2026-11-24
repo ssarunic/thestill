@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
 from urllib.parse import urlsplit
 
 import anyio
@@ -49,7 +49,7 @@ from structlog import get_logger
 
 from ...models.entities import display_name
 from ...repositories.public_quotes import QuoteFilter, days_ago
-from ...services.analytics_sink import PublicPageView
+from ...services.analytics_sink import PublicPageView, PublicQuoteShared
 from ...services.podcast_service import PodcastWithIndex
 from ...services.quote_share_service import ShareGone, stands_alone
 from ...utils.duration import format_duration
@@ -1371,6 +1371,12 @@ class PageViewRequest(BaseModel):
     referrer: Optional[str] = Field(default=None, max_length=2048)
 
 
+class QuoteSharedRequest(BaseModel):
+    """What the public site reports when a quote's share button is used."""
+
+    method: Literal["link", "share"]
+
+
 def _external_referrer_host(referrer: Optional[str], request: Request, public_base_url: str) -> Optional[str]:
     """The referring site's host, or None for none, our own site or junk."""
     if not referrer:
@@ -1419,6 +1425,25 @@ def _count_public_view(state: AppState, path: str, kind: str) -> None:
             repository.increment(datetime.now(timezone.utc).date(), kind, object_id)
     except Exception:  # noqa: BLE001 - a counter never breaks the page it counts
         logger.warning("public_page_view_count_failed", kind=kind, exc_info=True)
+
+
+@router.post("/quote-shared", status_code=204)
+def public_quote_shared(
+    payload: QuoteSharedRequest, request: Request, state: AppState = Depends(get_app_state)
+) -> Response:
+    """Count one use of the share button on a public quote (spec #114).
+
+    The public site has no analytics client of its own (spec #95), so, like
+    a page view, the action is reported here and the server forwards it for
+    browsers, with the same daily visitor key and opt-outs. Only how it was
+    shared (``link`` copied, or the phone's ``share`` sheet): never the
+    quote or its link. Writes nothing. Always 204: fire-and-forget.
+    """
+    ua_class = classify_user_agent(request.headers.get("user-agent"))
+    logger.info("public_quote_shared", method=payload.method, ua_class=ua_class)
+    if ua_class == "browser":
+        capture_event(state, request, PublicQuoteShared(method=payload.method))
+    return Response(status_code=204)
 
 
 @router.post("/pageview", status_code=204)

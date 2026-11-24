@@ -8,7 +8,7 @@ The signed-out shell and shared UI kit of the spec #94 public pages (landing, sh
 
 - `PublicLayout` (default) — sticky header (Top podcasts, Sign in), footer with the model disclaimer and legal links, `<Outlet/>`, scroll restoration [src/components/public/PublicLayout.tsx:PublicLayout]
 - `useSignIn`, `returnPath` — sign-in link for an action and the return path after sign-in [src/components/public/helpers.ts:useSignIn]
-- `quoteUrl`, `groupByEpisode`, `typeLabel` — quote deep link, consecutive-episode grouping, entity type label [src/components/public/helpers.ts:quoteUrl]
+- `quoteUrl`, `quoteShareUrl` (spec #114: `/q/<share_id>` when the quote has one, else `quoteUrl`), `groupByEpisode`, `typeLabel` — quote deep link, consecutive-episode grouping, entity type label [src/components/public/helpers.ts:quoteUrl]
 - `PublicSummaryViewer` — preloadable lazy `SummaryViewer` [src/components/public/summaryViewer.ts:PublicSummaryViewer]
 - `Button` (`variant`, `size` `md|sm`), `GoogleG`, `EntityDot`, `FilterChip`, `QuoteCard`, `SignInCard`, `Avatar`, `EpisodeRow`, `EntityGroups`, `TakingPart` ("In this episode" people with their Guest / Host / Recurring role), `FactList`, `ListenOn`, `ActivitySparkline`, `Skeleton`, `QuoteSkeleton`, `EpisodeGroupHead` — public UI kit [src/components/public/ui.tsx:QuoteCard]
 
@@ -22,7 +22,7 @@ The signed-out shell and shared UI kit of the spec #94 public pages (landing, sh
 
 ## Side Effects
 
-- Quote share: `navigator.share` on touch (`(hover: none)`) devices, else `navigator.clipboard.writeText` with a 1.5 s "copied" timer [src/components/public/ui.tsx:QuoteCard]
+- Quote share hands out `quoteShareUrl` and calls `reportQuoteShared(method)` (a fire-and-forget `POST /api/public/quote-shared`; the public site has no analytics client): `navigator.share` on touch (`(hover: none)`) devices, else `navigator.clipboard.writeText` with a 1.5 s "copied" timer [src/components/public/ui.tsx:QuoteCard]
 - Imports `styles/public.css` and restores scroll on Back via `useScrollRestoration` [src/components/public/PublicLayout.tsx:PublicLayout]
 
 ## Verification
