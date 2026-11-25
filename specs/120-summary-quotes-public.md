@@ -1,6 +1,6 @@
 # Summary Quotes on Public Pages
 
-> **Status:** 🚧 Phase 1 implemented on `feat/120-summary-quotes-public` (2026-11-24); pending PR + merge. Phase 2 (person and entity pages) proposed
+> **Status:** 🚧 Phase 1 deployed (v1.54.0, v1.54.1); Phase 3 (summary prompt) implemented on `feat/120-phase3-quote-prompt` (2026-11-25), pending merge; Phase 2 (person and entity pages) proposed
 > **Created:** 2026-11-24
 > **Updated:** 2026-11-25 (v1.54.0 deployed; placement fix from the first prod check)
 > **Priority:** High. The public episode page is the first page most readers see (spec #111), and its quote list is mostly sentence fragments with a link to YouTube on every line.
@@ -264,11 +264,54 @@ because a per-request transcript load per episode does not scale to a person
 page. "About" has no summary equivalent: drop it, or show the episode list.
 The indexing rule needs a new count.
 
-### Phase 3: summarizer prompt (proposed)
+### Phase 3: summarizer prompt (implemented)
 
-Ask for verbatim words, the speaker's full name, and no quotes the speaker
-is only reading or relaying. Judge by the §2 table on the same episodes
-before and after, with the 10-random-episode check (prompt-change rule).
+**The prompt.** Slot 5 is shared by every genre profile
+([summary_profiles.py](../thestill/core/summary_profiles.py)), so all profile
+versions are bumped (`general` 5, the others 2). It now asks for:
+
+- the words exactly as the transcript has them, cut with "..." only inside
+  one speaker's turn, never reworded, reordered or joined across moments;
+- one speaker per quote, named in full as the transcript names them;
+- retold words marked in the attribution (`- Tom Holland, quoting Nelson
+  Mandela`), never credited to the reader alone or the original author alone;
+- the time of the line where the quote starts.
+
+**The checker.** An attribution that says the words are relayed ("quoting",
+"quoted by", "reading", "via", "paraphrasing", "recalling", in a clause or a
+parenthesis) is dropped as `relayed`. Before this, "Cal Newport (quoting
+Arvind Narayanan)" lost its parenthesis and matched Cal Newport, so someone
+else's words were shown under the reader's name. On the local set that was
+26 live quotes. The check applies to existing summaries at once, while the
+prompt change reaches only new ones.
+
+**Measured** with Gemini 3 Flash, the pipeline model, on 10 random local
+episodes plus two picked for retold quotes (Rest Is History: Franklin;
+Today in Focus: the firing squad). The new prompt ran three times on all 12,
+and the old prompt three times on the six episodes whose results moved.
+Every summary was re-scored by the same checker:
+
+| | Old prompt | New prompt |
+|---|---:|---:|
+| Quotes kept | 77 of 119 (65%) | 146 of 200 (73%) |
+| Runs keeping three or more | 18 of 24 | 28 of 36 |
+| Dropped as speaker mismatch | 28 | 1 |
+
+All nine sections were present in every summary, with lengths within about
+10% of the old ones. On the ten random episodes the new prompt was level or
+better on each.
+
+**History shows still get none.** When a history host reads sources aloud,
+the model picks the sources: on Franklin and on South Africa, every quote in
+six runs was a retold line. They are now marked honestly, so the signed-in
+summary reads "Tom Holland, quoting David Hume" rather than "David Hume",
+and the public page shows no quotes instead of wrong ones. Asking for "at
+least three of the speakers' own lines" changed nothing in six more runs,
+so it was left out. A history-profile rule, or showing relayed quotes
+publicly as "Tom Holland, quoting …", are the open options.
+
+Existing summaries keep their old quotes until they are summarized again
+(`thestill reprocess --from summarize`).
 
 ## Testing
 
