@@ -788,6 +788,7 @@ audio URL (host only).
 | `sync_track_reupload_realigned` | `old_generation`, `new_generation`, `blocks_total`, `blocks_matched`, `ber_median`, `inlier_share`, `spans`, `coverage`, `untranscribed_s`, `duration_ms` | the new upload was mapped onto the transcript, and how tightly |
 | `sync_track_reupload_unchanged` | `coverage` | the frame check found the current track still fits; nothing written |
 | `sync_track_reupload_unalignable` (warning) | the fields of `_realigned` | thresholds missed; no track written |
+| `sync_track_reupload_superseded` | `started_generation`, `current_generation` | a reprocess published a track while the realign ran; its track kept, nothing written |
 
 `sync_track_transcript_mismatch` is the key invariant. The audio the
 track was cut from and the audio the transcript came from must have the
@@ -1450,13 +1451,23 @@ priority, one per episode at a time:
    `sync_track_status` to `unalignable`.
 7. **Write a new generation**: frame anchors from the new download, the
    fitted spans as base spans, and the new copy's uncovered stretches as
-   untranscribed intervals. The reference is kept. Publish it, then
-   replace the cleaned transcript's `sync_track_generation` stamp, only
-   if the stamp still names the generation this realign started from
-   (otherwise a reprocess got there first, and its track wins). Between
-   the two writes a reader sees no usable track for a moment and shows
+   untranscribed intervals. The reference is kept. Publish it with one
+   repository step that inserts the new track and makes it current only
+   if the episode's current track is still the generation this realign
+   started from, checked in the same transaction as the switch (as
+   `promote(require_no_current=True)` does for the backfill). Today's
+   `promote()` removes whatever track is current, and the realign never
+   takes the pending slot (one per episode, which `put_pending` would
+   replace under a reprocess building its own track). When the check
+   fails, a reprocess got there first and its track wins: nothing is
+   written, the new file is deleted, and the task logs
+   `sync_track_reupload_superseded`. Then replace the cleaned
+   transcript's `sync_track_generation` stamp, again only if the stamp
+   still names the generation this realign started from. Between the
+   two writes a reader sees no usable track for a moment and shows
    approximate times; it never sees a track paired with the wrong
-   transcript.
+   transcript, and a reprocess that publishes inside that moment still
+   wins when its clean stage stamps its own generation.
 8. **New material.** When the untranscribed intervals outside the
    transcript's `ad_break` gaps add up to over 60 s (a runtime setting),
    also queue a #106 reprocess from transcribe at the lowest priority.
@@ -1489,6 +1500,10 @@ that accept 1 and 2 ship and deploy before any writer emits 2.
   within 0.05 s of the known offsets and one untranscribed interval at
   the inserted audio. A copy where only ads changed stops at the frame
   check and writes nothing.
+- Race test: a reprocess publishes a new track (and, in a second case,
+  holds a pending one) while the realign is matching. The realign
+  writes nothing, the reprocess's current and pending tracks and their
+  files survive, and the transcript stamp is the reprocess's.
 - Refresh test: a known episode whose feed duration moves by 19 s
   queues exactly one realign, and the next refresh of the same feed
   queues none.
