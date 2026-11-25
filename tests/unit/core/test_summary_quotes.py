@@ -198,3 +198,91 @@ def test_verify_applies_the_playback_offset():
         playback_offset_s=12.0,
     )
     assert kept[0].start_ms == 12_000 and kept[0].end_ms == 62_000
+
+
+ALICE = SpeakerRef("person:alice", "Alice Smith")
+BOB = SpeakerRef("person:bob", "Bob Jones")
+
+
+def test_a_quote_running_into_another_speakers_turn_is_dropped():
+    """Codex review on PR #561: the words of two people are not one quote."""
+    segments = [
+        AnnotatedSegment(id=1, start=0, end=2, speaker="Alice Smith", text="I think"),
+        AnnotatedSegment(
+            id=2, start=2, end=9, speaker="Bob Jones", text="we should never release untested software to our users."
+        ),
+    ]
+    kept, dropped = _verify(
+        [BestQuote("I think we should never release untested software to our users.", "Alice Smith", "c1", 0.0)],
+        segments,
+        {1: ALICE, 2: BOB},
+        {"c1": {"id": "c1", "segment_id_hint": 1}},
+    )
+    assert kept == [] and [d.reason for d in dropped] == ["speakers_differ"]
+
+
+def test_a_quote_over_one_speakers_split_turn_is_kept():
+    segments = [
+        AnnotatedSegment(id=1, start=0, end=4, speaker="Alice Smith", text="We should never release"),
+        AnnotatedSegment(id=2, start=4, end=9, speaker="Alice Smith", text="untested software to our users, ever."),
+        AnnotatedSegment(id=3, start=9, end=12, speaker="Bob Jones", text="Right, the users."),
+    ]
+    kept, _ = _verify(
+        [BestQuote("We should never release untested software to our users.", "Alice", "c1", 0.0)],
+        segments,
+        {1: ALICE, 2: ALICE, 3: BOB},
+        {"c1": {"id": "c1", "segment_id_hint": 1}},
+    )
+    assert [(q.segment_id, q.speaker) for q in kept] == [(1, ALICE)]
+
+
+def test_a_stray_common_word_in_a_neighbouring_turn_does_not_veto():
+    segments = [
+        AnnotatedSegment(id=1, start=0, end=3, speaker="Bob Jones", text="Okay, the next one."),
+        AnnotatedSegment(id=2, start=3, end=9, speaker="Alice Smith", text="Shipping is the only thing that matters."),
+    ]
+    kept, dropped = _verify(
+        [BestQuote("Shipping is the only thing that matters.", "Alice Smith", "c1", 3.0)],
+        segments,
+        {1: BOB, 2: ALICE},
+        {"c1": {"id": "c1", "segment_id_hint": 2}},
+    )
+    assert dropped == [] and [q.segment_id for q in kept] == [2]
+
+
+@pytest.mark.parametrize(
+    "spoken,quoted,said,entity",
+    [
+        # Codex review on PR #561: any script, not ASCII only.
+        (
+            "Ну, мы создаём больше противников, чем когда-либо.",
+            "Мы создаём больше противников, чем когда-либо.",
+            "Олег Петров",
+            "Олег Петров",
+        ),
+        (
+            "Λοιπόν, η δημοκρατία χρειάζεται υπομονή και χρόνο.",
+            "Η δημοκρατία χρειάζεται υπομονή και χρόνο.",
+            "Νίκος",
+            "Νίκος Παππάς",
+        ),
+        (
+            "つまり、私たちは毎日新しい攻撃者を生み出しています。",
+            "私たちは毎日新しい攻撃者を生み出しています。",
+            "山田太郎",
+            "山田太郎",
+        ),
+    ],
+)
+def test_quotes_in_other_scripts_are_checked_and_kept(spoken, quoted, said, entity):
+    speaker = SpeakerRef("person:x", entity)
+    segments = [AnnotatedSegment(id=1, start=0, end=9, speaker=entity, text=spoken)]
+    kept, dropped = _verify(
+        [BestQuote(quoted, said, "c1", 0.0)], segments, {1: speaker}, {"c1": {"id": "c1", "segment_id_hint": 1}}
+    )
+    assert dropped == [] and kept[0].coverage == 1.0
+
+
+def test_a_paraphrase_in_another_script_is_still_refused():
+    segments = [AnnotatedSegment(id=1, start=0, end=9, text="Мы создаём больше противников, чем когда-либо.")]
+    assert locate("Мир становится безопаснее с каждым годом, говорят эксперты.", segments, 0) is None

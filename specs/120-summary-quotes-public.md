@@ -121,20 +121,25 @@ whole transcript (`TranscriptIndex`), and the check runs again from each hit,
 looking no earlier than the hit. Content segments win: an intro that previews
 a line is never the line.
 
+Words are compared in any script: letters and digits of every alphabet,
+with accents folded, and scripts written without spaces (Han, kana, Hangul,
+Thai) split into single characters so a quote matches inside a longer run.
+
 Measured on 299 local episodes (the SQLite copy from 2026-07, its summaries
 and transcripts), 1,493 Best Quotes:
 
 | Outcome | Quotes | Share |
 |---------|-------:|------:|
-| Kept | 1,089 | 73% |
-| Not in the transcript (paraphrased or misplaced beyond reach) | 154 | 10% |
-| Speaker disagrees with the summary | 145 | 10% |
+| Kept | 1,070 | 72% |
+| Not in the transcript (paraphrased or misplaced beyond reach) | 161 | 11% |
+| Speaker disagrees with the summary | 120 | 8% |
 | Speaker has no resolved person | 85 | 6% |
+| The words span two speakers' turns (§3) | 37 | 2% |
 | No citation and not found by search | 18 | 1% |
 | In an intro, ad or outro | 2 | 0% |
 
 Per episode: 81% keep three or more quotes and 6% keep none. Checking takes
-about 3 ms per episode once the transcript is loaded. A random sample of 14
+about 10 ms per episode once the transcript is loaded. A random sample of 14
 kept quotes and 14 low-coverage ones (0.85-0.95) read correctly against
 their segments, with the right speaker. The `speaker_mismatch` rejections
 are mostly the summarizer attributing a line to the person quoted rather
@@ -143,8 +148,10 @@ are the cases this check exists for.
 
 ### 3. The speaker is who the summary says
 
-The segment where the words start must have a resolved `speaking` row for a
-person who is not `public_hidden` (`segment_speakers_sql` in
+Every segment that holds at least two of the quote's matched words is part of
+the quote (a single stray "the" in a neighbouring turn is not). Each of them
+must have a resolved `speaking` row for the same person, who is not
+`public_hidden` (`segment_speakers_sql` in
 [public_quotes.py](../thestill/repositories/public_quotes.py)). `names_match`
 accepts the entity's full name, a single first name or surname of three
 letters or more, or the full name with one extra word ("Dr. Jane Smith"). It
@@ -152,7 +159,16 @@ ignores a parenthetical ("Jason (host)"). It never accepts attributions that
 name no one or several people: "Anonymous …", "Speaker 4", "A & B", "host".
 A disagreement drops the quote; it is never shown under the transcript's
 name either, because the summarizer may know something the diarization got
-wrong. The page shows the entity's name, linked to their person page.
+wrong.
+
+Words that run from one speaker's turn into another's are dropped too
+(`speakers_differ`; Codex review on PR #561). In the local sample, about half
+are true stitches: a host's question joined to the guest's answer ("Moore's
+Law has been dead for years"). The other half are diarization moving a
+sentence's last words into the next turn ("I'm like Mr. | Pringles").
+Accepting a minority share of the words in another turn would recover the
+second kind, but it reopens the first, so it stays out until the cost is
+measured on prod. The page shows the entity's name, linked to their person page.
 
 ### 4. Where "Play from" starts
 

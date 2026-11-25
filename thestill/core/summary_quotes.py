@@ -59,6 +59,8 @@ _BULLET_RE = re.compile(
 _LINK_DEST_RE = re.compile(r"\]\(\?(?P<query>[^)]*)\)")
 _ELLIPSIS_RE = re.compile(r"\.\.\.|…")
 _EDITORIAL_RE = re.compile(r"\[[^\]]*\]")
+#: A run of letters or digits in any script (``\w`` without the underscore).
+_WORD_RE = re.compile(r"[^\W_]+")
 _PAREN_RE = re.compile(r"\s*\([^)]*\)")
 #: The summarizer's attributions that name no one, or several people.
 _NOT_A_NAME_RE = re.compile(r"\b(anonymous|unknown|unnamed|host|guest|speaker|narrator|both|all)\b|&|\band\b|,|/", re.I)
@@ -74,6 +76,9 @@ MIN_FRAGMENT_COVERAGE = 0.85
 #: A fragment shorter than this many words is not checked on its own (an
 #: ellipsis can leave "and" or "so" behind), but counts toward the total.
 MIN_FRAGMENT_WORDS = 3
+#: A segment holding at least this many of the quote's matched words is
+#: part of the quote, and its speaker must be the quote's speaker.
+MIN_VOICED_WORDS = 2
 #: The longest quote shown: the same limit as a quote card (spec #114 §1).
 MAX_QUOTE_CHARS = 320
 #: Inside a long turn the start is estimated from word position; playback
@@ -159,23 +164,54 @@ def _citation(link: str) -> Tuple[Optional[str], Optional[float]]:
     return cite, seconds
 
 
+def _is_unspaced(ch: str) -> bool:
+    """A character of a script written without spaces between words (Han,
+    kana, Hangul syllables, Thai): each one is matched on its own."""
+    code = ord(ch)
+    return (
+        0x3040 <= code <= 0x30FF  # hiragana, katakana
+        or 0x3400 <= code <= 0x4DBF  # CJK extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK unified
+        or 0xF900 <= code <= 0xFAFF  # CJK compatibility
+        or 0xAC00 <= code <= 0xD7AF  # Hangul syllables
+        or 0x0E00 <= code <= 0x0E7F  # Thai
+    )
+
+
 def normalize_words(text: str) -> List[str]:
-    """Lower-case words with punctuation, accents and apostrophes folded."""
+    """Lower-case words in any script, with punctuation, accents and
+    apostrophes folded. Scripts written without spaces are split into
+    single characters, so a quote can be matched inside a longer run."""
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    text = text.lower().replace("’", "'").replace("'", "")
-    return re.findall(r"[a-z0-9]+", text)
+    text = text.lower().replace("\u2019", "'").replace("'", "")
+    words: List[str] = []
+    for token in _WORD_RE.findall(text):
+        if any(_is_unspaced(ch) for ch in token):
+            run = ""
+            for ch in token:
+                if _is_unspaced(ch):
+                    if run:
+                        words.append(run)
+                        run = ""
+                    words.append(ch)
+                else:
+                    run += ch
+            if run:
+                words.append(run)
+        else:
+            words.append(token)
+    return words
 
 
-def _coverage(fragment: Sequence[str], window: Sequence[str]) -> Tuple[float, int]:
+def _coverage(fragment: Sequence[str], window: Sequence[str]) -> Tuple[float, List[Tuple[int, int]]]:
     """The share of ``fragment``'s words found in order in ``window``, and
-    the window index where the first matched word is."""
+    the matched runs as ``(window index, length)``."""
     if not fragment:
-        return 1.0, 0
+        return 1.0, []
     matcher = difflib.SequenceMatcher(None, list(fragment), list(window), autojunk=False)
-    blocks = [block for block in matcher.get_matching_blocks() if block.size]
-    matched = sum(block.size for block in blocks)
-    return matched / len(fragment), (blocks[0].b if blocks else 0)
+    blocks = [(block.b, block.size) for block in matcher.get_matching_blocks() if block.size]
+    return sum(size for _, size in blocks) / len(fragment), blocks
 
 
 def _fragments(text: str) -> List[List[str]]:
@@ -195,6 +231,10 @@ class Located:
     last: int
     #: How far into ``segments[first]`` the words start, 0-1, by word count.
     start_fraction: float
+    #: Every segment that holds a share of the words (see
+    #: :data:`MIN_VOICED_WORDS`), in order: all of them must have the
+    #: quote's speaker.
+    voiced: Tuple[int, ...] = ()
 
 
 def locate(
@@ -220,23 +260,30 @@ def locate(
         return None
     total = sum(len(fragment) for fragment in fragments)
     found = 0.0
-    first_at: Optional[int] = None
-    last: Optional[int] = None
+    matched: Dict[int, int] = {}
+    first_matched: Dict[int, int] = {}
     for fragment in fragments:
-        share, at = _coverage(fragment, window)
+        share, blocks = _coverage(fragment, window)
         if len(fragment) >= MIN_FRAGMENT_WORDS and share < MIN_FRAGMENT_COVERAGE:
             return None
         found += share * len(fragment)
-        if share > 0:
-            if first_at is None:
-                first_at = at
-            last = owner[min(len(owner) - 1, at + len(fragment) - 1)]
+        for at, size in blocks:
+            for position in range(at, at + size):
+                segment = owner[position]
+                matched[segment] = matched.get(segment, 0) + 1
+                first_matched.setdefault(segment, position)
     coverage = found / total
-    if coverage < MIN_FRAGMENT_COVERAGE or first_at is None or last is None:
+    if coverage < MIN_FRAGMENT_COVERAGE or not matched:
         return None
-    first = owner[first_at]
+    # A stray common word ("the") in a neighbouring turn does not make that
+    # turn part of the quote; a turn holding a real share of it does.
+    voiced = tuple(sorted(i for i, n in matched.items() if n >= MIN_VOICED_WORDS)) or (
+        max(matched, key=lambda i: matched[i]),
+    )
+    first, last = voiced[0], voiced[-1]
     in_segment = len(normalize_words(segments[first].text)) or 1
-    return Located(coverage, first, last, (first_at - first_word[first]) / in_segment)
+    fraction = (first_matched[first] - first_word[first]) / in_segment
+    return Located(coverage, first, last, fraction, voiced)
 
 
 class TranscriptIndex:
@@ -361,13 +408,19 @@ def verify_quotes(
             dropped.append(Rejection(quote, "not_in_transcript" if citation else "no_citation"))
             continue
         segment = segments[found.first]
-        if segment.kind != "content":
+        if any(segments[i].kind != "content" for i in found.voiced):
             dropped.append(Rejection(quote, "not_content"))
             continue
-        speaker = speakers.get(segment.id)
-        if speaker is None:
+        voices = [speakers.get(segments[i].id) for i in found.voiced]
+        if any(voice is None for voice in voices):
             dropped.append(Rejection(quote, "speaker_unresolved"))
             continue
+        # Every turn the words come from is the same person's: a quote that
+        # runs from one speaker into another is two people's words.
+        if len({voice.entity_id for voice in voices if voice is not None}) > 1:
+            dropped.append(Rejection(quote, "speakers_differ"))
+            continue
+        speaker = next(voice for voice in voices if voice is not None)
         if not names_match(quote.speaker, speaker.name):
             dropped.append(Rejection(quote, "speaker_mismatch"))
             continue
