@@ -346,3 +346,27 @@ def test_words_only_the_other_speaker_said_are_still_refused():
         {"c1": {"id": "c1", "segment_id_hint": 1}},
     )
     assert kept == [] and [d.reason for d in dropped] == ["speaker_mismatch"]
+
+
+@pytest.mark.parametrize(
+    "attribution",
+    [
+        "Tom Holland, quoting Nelson Mandela",
+        "Lex Fridman (quoting Ben Franklin)",
+        "Anonymous HR Manager (via George Kurtz)",
+        "Benjamin Franklin (quoted by Tom)",
+        "Tom Holland, reading a letter from Franklin",
+    ],
+)
+def test_relayed_words_are_never_shown_under_a_name(attribution):
+    """Spec #120 Phase 3: the prompt marks retold lines; the checker drops
+    them, even when the reader's name would otherwise match."""
+    holland = SpeakerRef("person:tom-holland", "Tom Holland")
+    segments = [AnnotatedSegment(id=1, start=0, end=9, speaker="Tom Holland", text="Only free men can negotiate.")]
+    kept, dropped = _verify(
+        [BestQuote("Only free men can negotiate.", attribution, "c1", 0.0)],
+        segments,
+        {1: holland},
+        {"c1": {"id": "c1", "segment_id_hint": 1}},
+    )
+    assert kept == [] and [d.reason for d in dropped] == ["relayed"]

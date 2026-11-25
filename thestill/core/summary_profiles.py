@@ -139,6 +139,10 @@ FIXED_SLOT_SPECS: Mapping[int, SlotSpec] = MappingProxyType(
             "💬",
             "Best Quotes",
             """* Pick 5-7 quotes that actually land (adjust based on episode length - fewer for short episodes, more for long ones).
+* **Words exactly as the transcript has them.** You may leave words out with "...", but only inside one speaker's turn. Never reword, reorder sentences, or join lines from different moments.
+* **One speaker per quote**, named as the transcript names them, in full ("Jason Calacanis", not "Jason" or "the host"). Never a line that runs from one speaker into the next.
+* **Whose words they are.** Prefer lines that are the speaker's own. When the speaker is reading out or retelling someone else's words (a letter, a historical figure, a colleague's remark, a caller's message), say so in the attribution: `- Tom Holland, quoting Nelson Mandela`. Never credit retold words to the reader alone, or to their original author alone.
+* **Timestamp:** the transcript time of the line where the quote starts.
 * **Format:** "Quote text..." - Speaker [timestamp]""",
         ),
         # Spec #92 parses this bullet shape and the English kind words.
@@ -175,7 +179,7 @@ _MADE_UP_EXAMPLE = (
 # with no drama to report.
 GENERAL = SummaryProfile(
     key="general",
-    version=4,  # v2: shared rules + format-aware Gist; v3: explicit interview / no-guest cases; v4: format-neutral sections
+    version=5,  # v2: shared rules + format-aware Gist; v3: explicit interview / no-guest cases; v4: format-neutral sections; v5: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**Read the format first:**",
@@ -272,7 +276,7 @@ Rhiannon reckons the four-day week works in offices and falls apart on hospital 
 
 NEWS = SummaryProfile(
     key="news",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules=f"""**News rules:**
 {_MADE_UP_EXAMPLE}
 * Say who said what: "the minister said", "according to the BBC", "Emily reckons". Keep what's reported apart from what the hosts think.
@@ -349,7 +353,7 @@ Northfield council's budget hole turns out to be twice what it told everyone in 
 
 SPORTS = SummaryProfile(
     key="sports",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules=f"""**Sports rules:**
 {_MADE_UP_EXAMPLE}
 * Scores, results, injuries and transfers are exactly what the episode says, as of the publication date. Never add or correct one from your own knowledge, never give a score the episode doesn't, and if the hosts aren't sure, say they aren't sure.""",
@@ -433,7 +437,7 @@ Ashford snatch it at the death to keep the title race alive, and the panel can't
 
 HISTORY = SummaryProfile(
     key="history",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules=f"""**History rules:**
 {_MADE_UP_EXAMPLE}
 * Keep to the history the episode tells. Use only the dates, numbers and names the hosts actually say: if you know a date they don't give, leave it out.
@@ -513,7 +517,7 @@ Part two of the siege of Harrowby, and the town is starving while General Ross w
 
 TRUE_CRIME = SummaryProfile(
     key="true_crime",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules=f"""**True crime rules (these override the tone and emoji guidance above):**
 {_MADE_UP_EXAMPLE}
 * Still a smart friend, but a sober one. These are real people and real harm: no jokes about victims, no emojis outside the section headings, no "temperature" ratings.
@@ -597,7 +601,7 @@ How Ellen Price's disappearance went cold for eleven years, and why one witness 
 
 COMEDY = SummaryProfile(
     key="comedy",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules=f"""**Comedy rules:**
 {_MADE_UP_EXAMPLE}
 * Playful is good: this is a comedy show, so have fun with it. But only report jokes and bits that actually happen, and credit each line to whoever said it.
@@ -684,7 +688,7 @@ _ATTRIBUTION_RULE = (
 
 HEALTH = SummaryProfile(
     key="health",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**This is a health show:**",
@@ -774,7 +778,7 @@ Tomasz walks through why shift workers sleep worse and what his clinic tries fir
 
 INVESTING = SummaryProfile(
     key="investing",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**This is an investing show:**",
@@ -862,7 +866,7 @@ Dev thinks UK small caps are cheap enough to buy now; Nell isn't convinced while
 
 FAITH = SummaryProfile(
     key="faith",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**This is a faith show:**",
@@ -951,7 +955,7 @@ Fr. Colm reads the day's two passages and stays with one line about the lost coi
 
 FICTION = SummaryProfile(
     key="fiction",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**This is a story (fiction or audio drama):**",
@@ -1036,7 +1040,7 @@ A lighthouse keeper on a small island starts getting letters addressed to someon
 
 LANGUAGE_LEARNING = SummaryProfile(
     key="language_learning",
-    version=1,
+    version=2,  # v2: verbatim, own-words Best Quotes (spec #120)
     rules="\n".join(
         [
             "**This is a language lesson:**",

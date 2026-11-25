@@ -61,6 +61,11 @@ _EDITORIAL_RE = re.compile(r"\[[^\]]*\]")
 #: A run of letters or digits in any script (``\w`` without the underscore).
 _WORD_RE = re.compile(r"[^\W_]+")
 _PAREN_RE = re.compile(r"\s*\([^)]*\)")
+#: An attribution that says the speaker is passing on someone else's words:
+#: "Tom Holland, quoting Nelson Mandela", "Lex Fridman (quoting Ben
+#: Franklin)", "Anonymous HR Manager (via George Kurtz)". The words are not
+#: the speaker's, so the quote is never shown under a name.
+_RELAYED_RE = re.compile(r"\b(quoting|quoted|reading|citing|via|paraphrasing|recalling|recounting|as told)\b", re.I)
 #: The summarizer's attributions that name no one, or several people.
 _NOT_A_NAME_RE = re.compile(r"\b(anonymous|unknown|unnamed|host|guest|speaker|narrator|both|all)\b|&|\band\b|,|/", re.I)
 
@@ -411,6 +416,9 @@ def verify_quotes(
     for quote in quotes:
         if len(quote.text) > MAX_QUOTE_CHARS:
             dropped.append(Rejection(quote, "too_long"))
+            continue
+        if _RELAYED_RE.search(quote.speaker):
+            dropped.append(Rejection(quote, "relayed"))
             continue
         citation = citations.get(quote.cite_id or "")
         hint = citation.get("segment_id_hint") if citation else None

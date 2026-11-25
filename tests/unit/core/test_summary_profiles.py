@@ -81,14 +81,39 @@ class _RecordingProvider:
 
 def test_general_keeps_the_v1_style_guide_and_fixed_slots():
     assert summary_profiles.STYLE_GUIDE in _FROZEN_GENERAL_V1
-    for number in (2, 5, 8):
+    for number in (2, 8):
         assert summary_profiles.FIXED_SLOT_SPECS[number].render(number) in _FROZEN_GENERAL_V1
+    # Spec #120 Phase 3: Best Quotes keeps its v1 pick and format lines and
+    # adds the rules that let a quote be checked against the transcript.
+    quotes = summary_profiles.FIXED_SLOT_SPECS[5].instructions.split("\n")
+    v1 = [line for line in quotes if line in _FROZEN_GENERAL_V1]
+    assert [line.split(" ")[1] for line in v1] == ["Pick", "**Format:**"]
+
+
+def test_best_quotes_asks_for_verbatim_own_words_with_full_names():
+    """Spec #120 Phase 3: public pages show only quotes whose words are in
+    the transcript and whose speaker said them."""
+    prompt = compose_system_prompt(GENERAL)
+    section = prompt[prompt.index("## 5. ") : prompt.index("## 6. ")]
+    for rule in (
+        "exactly as the transcript has them",
+        "only inside one speaker's turn",
+        "One speaker per quote",
+        "in full",
+        "Whose words they are",
+        ", quoting Nelson Mandela",
+        "Never credit retold words",
+    ):
+        assert rule in section, rule
+    # Every profile gets the same rules (slot 5 is fixed), plus its own guidance.
+    for profile in summary_profiles.PROFILES.values():
+        assert "Never credit retold words" in compose_system_prompt(profile)
 
 
 def test_general_v4_drops_the_sections_that_invited_invented_drama():
     prompt = compose_system_prompt(GENERAL)
 
-    assert GENERAL.version == 4
+    assert GENERAL.version == 5
     for title in ("The Drama", "Blog Ideas", "Social Snippets", 'The "BS" Test'):
         assert title not in prompt
     assert (
