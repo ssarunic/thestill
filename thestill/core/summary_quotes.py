@@ -40,7 +40,6 @@ from __future__ import annotations
 import difflib
 import re
 import unicodedata
-from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import parse_qs
@@ -287,42 +286,48 @@ def locate(
 
 
 class TranscriptIndex:
-    """Every content word of a transcript, for finding a quote whose
-    citation points at the wrong place (the summarizer's timestamp is off,
-    or it gave none)."""
+    """Every word of a transcript by its runs of :data:`SHINGLE_WORDS`, for
+    finding a quote whose citation points at the wrong place (the
+    summarizer's timestamp is off, or it gave none).
 
-    #: The shortest exact run of words that may place a quote on its own.
-    MIN_ANCHOR_WORDS = 5
+    A quote is placed by any run of its words found exactly in the
+    transcript, not only its longest fragment as a whole: the summarizer
+    tidies a word here and there ("we're" for "you're"), and one changed
+    word must not hide the rest.
+    """
+
+    #: The run of words that may place a quote on its own.
+    SHINGLE_WORDS = 5
+    #: The most places one quote is tried at, the best placed first.
+    MAX_ANCHORS = 6
 
     def __init__(self, segments: Sequence[AnnotatedSegment]) -> None:
-        self._starts: List[int] = []
         self._owner: List[int] = []
-        parts: List[str] = []
-        offset = 0
+        words: List[str] = []
         for index, segment in enumerate(segments):
             for word in normalize_words(segment.text):
-                self._starts.append(offset)
                 self._owner.append(index)
-                parts.append(word)
-                offset += len(word) + 1
-        self._joined = " ".join(parts)
+                words.append(word)
+        self._runs: Dict[Tuple[str, ...], List[int]] = {}
+        n = self.SHINGLE_WORDS
+        for position in range(len(words) - n + 1):
+            self._runs.setdefault(tuple(words[position : position + n]), []).append(position)
 
     def anchors(self, text: str) -> List[int]:
-        """Segment indices where the quote's longest fragment occurs word
-        for word, in transcript order (at most a few)."""
-        longest = max(_fragments(text), key=len, default=[])
-        if len(longest) < self.MIN_ANCHOR_WORDS:
-            return []
-        needle = " ".join(longest)
-        found: List[int] = []
-        at = self._joined.find(needle)
-        while at != -1 and len(found) < 3:
-            # Only a match that starts on a word boundary.
-            word = bisect_left(self._starts, at)
-            if word < len(self._starts) and self._starts[word] == at:
-                found.append(self._owner[word])
-            at = self._joined.find(needle, at + 1)
-        return found
+        """Segment indices where the quote may start, most runs of its
+        words agreeing first, then in transcript order."""
+        n = self.SHINGLE_WORDS
+        votes: Dict[int, int] = {}
+        offset = 0
+        for fragment in _fragments(text):
+            for k in range(len(fragment) - n + 1):
+                for position in self._runs.get(tuple(fragment[k : k + n]), ()):
+                    # Where the quote would start if this run is in place.
+                    start = self._owner[max(0, position - offset - k)]
+                    votes[start] = votes.get(start, 0) + 1
+            offset += len(fragment)
+        ranked = sorted(votes, key=lambda index: (-votes[index], index))
+        return ranked[: self.MAX_ANCHORS]
 
 
 def _name_tokens(name: str) -> List[str]:
@@ -364,6 +369,25 @@ def _estimated_start(segment: AnnotatedSegment, fraction: float) -> float:
     return max(segment.start, estimate)
 
 
+def _check_place(
+    quote: BestQuote, found: Located, segments: Sequence[AnnotatedSegment], speakers: Mapping[int, SpeakerRef]
+) -> Tuple[Optional[str], Optional[SpeakerRef]]:
+    """Why the words at ``found`` cannot be this quote, or its speaker."""
+    if any(segments[i].kind != "content" for i in found.voiced):
+        return "not_content", None
+    voices = [speakers.get(segments[i].id) for i in found.voiced]
+    if any(voice is None for voice in voices):
+        return "speaker_unresolved", None
+    # Every turn the words come from is the same person's: a quote that runs
+    # from one speaker into another is two people's words.
+    if len({voice.entity_id for voice in voices if voice is not None}) > 1:
+        return "speakers_differ", None
+    speaker = next(voice for voice in voices if voice is not None)
+    if not names_match(quote.speaker, speaker.name):
+        return "speaker_mismatch", None
+    return None, speaker
+
+
 def verify_quotes(
     quotes: Sequence[BestQuote],
     *,
@@ -391,39 +415,42 @@ def verify_quotes(
         citation = citations.get(quote.cite_id or "")
         hint = citation.get("segment_id_hint") if citation else None
         anchor = index_of.get(hint) if isinstance(hint, int) else None
-        found = locate(quote.text, segments, anchor) if anchor is not None else None
-        if found is None or segments[found.first].kind != "content":
-            # The words may be elsewhere: the label was off or missing, or
-            # it points at a cold open that previews the line said later.
+        # Where the words are: around the citation first, then wherever runs
+        # of them are found. The first place where the words, the content
+        # and the speaker all check out is the quote; the same line can be
+        # in a cold open, or repeated by the other speaker ("Why break in
+        # when you can log in?" said back by the host).
+        tried: List[Located] = []
+        accepted: Optional[Tuple[Located, SpeakerRef]] = None
+        first_reason: Optional[str] = None
+
+        def attempt(candidate: Optional[Located]) -> bool:
+            nonlocal accepted, first_reason
+            if candidate is None or any(candidate.voiced == seen_at.voiced for seen_at in tried):
+                return False
+            tried.append(candidate)
+            reason, voice = _check_place(quote, candidate, segments, speakers)
+            if reason is None and voice is not None:
+                accepted = (candidate, voice)
+                return True
+            first_reason = first_reason or reason
+            return False
+
+        if not (anchor is not None and attempt(locate(quote.text, segments, anchor))):
             if transcript_index is None:
                 transcript_index = TranscriptIndex(segments)
             for elsewhere in transcript_index.anchors(quote.text):
-                # An exact match starts here: look no earlier, or a
-                # preview of the same line just before would win again.
-                again = locate(quote.text, segments, elsewhere, before=0)
-                if again is not None and segments[again.first].kind == "content":
-                    found = again
+                # Look no earlier than the run's start, or a preview of the
+                # same line just before would be found again.
+                if attempt(locate(quote.text, segments, elsewhere, before=0)):
                     break
-        if found is None:
-            dropped.append(Rejection(quote, "not_in_transcript" if citation else "no_citation"))
+        if accepted is None:
+            if not tried:
+                first_reason = "not_in_transcript" if citation else "no_citation"
+            dropped.append(Rejection(quote, first_reason or "not_in_transcript"))
             continue
+        found, speaker = accepted
         segment = segments[found.first]
-        if any(segments[i].kind != "content" for i in found.voiced):
-            dropped.append(Rejection(quote, "not_content"))
-            continue
-        voices = [speakers.get(segments[i].id) for i in found.voiced]
-        if any(voice is None for voice in voices):
-            dropped.append(Rejection(quote, "speaker_unresolved"))
-            continue
-        # Every turn the words come from is the same person's: a quote that
-        # runs from one speaker into another is two people's words.
-        if len({voice.entity_id for voice in voices if voice is not None}) > 1:
-            dropped.append(Rejection(quote, "speakers_differ"))
-            continue
-        speaker = next(voice for voice in voices if voice is not None)
-        if not names_match(quote.speaker, speaker.name):
-            dropped.append(Rejection(quote, "speaker_mismatch"))
-            continue
         start_ms = int(round((_estimated_start(segment, found.start_fraction) + playback_offset_s) * 1000))
         if (start_ms, quote.text) in seen:
             continue

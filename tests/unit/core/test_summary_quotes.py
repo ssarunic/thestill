@@ -286,3 +286,63 @@ def test_quotes_in_other_scripts_are_checked_and_kept(spoken, quoted, said, enti
 def test_a_paraphrase_in_another_script_is_still_refused():
     segments = [AnnotatedSegment(id=1, start=0, end=9, text="Мы создаём больше противников, чем когда-либо.")]
     assert locate("Мир становится безопаснее с каждым годом, говорят эксперты.", segments, 0) is None
+
+
+def test_a_misplaced_quote_with_a_tidied_word_is_still_found():
+    """Prod, CrowdStrike episode: the citation pointed elsewhere and the
+    summary changed one word, so no long exact run matched."""
+    segments = _segments(
+        "Well I felt I needed some slides because you guys always have very good slides.",
+        "Unrelated chatter about the weather and the football and lunch plans.",
+        "So we're minting more adversaries and we're democratising destruction, frankly.",
+    )
+    kept, dropped = _verify(
+        [BestQuote("We're minting more adversaries and you're democratising destruction.", "George Kurtz", "c1", 0.0)],
+        segments,
+        {10: KURTZ, 11: KURTZ, 12: KURTZ},
+        {"c1": {"id": "c1", "segment_id_hint": 10}},
+    )
+    assert dropped == [] and [q.segment_id for q in kept] == [12]
+
+
+def test_a_line_said_back_by_the_other_speaker_is_found_where_its_speaker_said_it():
+    """Prod, CrowdStrike episode: the host repeats the guest's line first."""
+    jason = SpeakerRef("person:jason-calacanis", "Jason Calacanis")
+    segments = [
+        AnnotatedSegment(
+            id=1, start=0, end=5, speaker="Jason Calacanis", text="Why break in when you can log in? Say more."
+        ),
+        AnnotatedSegment(
+            id=2, start=5, end=60, speaker="Jason Calacanis", text="Filler about the sponsors and the weather today."
+        ),
+        AnnotatedSegment(
+            id=3, start=60, end=70, speaker="Jason Calacanis", text="More chatter, nothing quoted here at all."
+        ),
+        AnnotatedSegment(
+            id=4, start=70, end=80, speaker="Jason Calacanis", text="Still the host talking about other things."
+        ),
+        AnnotatedSegment(
+            id=5, start=80, end=90, speaker="George Kurtz", text="Like I always say, why break in when you can log in?"
+        ),
+    ]
+    kept, dropped = _verify(
+        [BestQuote("Why break in when you can log in?", "George Kurtz", "c1", 0.0)],
+        segments,
+        {1: jason, 2: jason, 3: jason, 4: jason, 5: KURTZ},
+        {"c1": {"id": "c1", "segment_id_hint": 1}},
+    )
+    assert dropped == [] and [(q.segment_id, q.speaker) for q in kept] == [(5, KURTZ)]
+
+
+def test_words_only_the_other_speaker_said_are_still_refused():
+    jason = SpeakerRef("person:jason-calacanis", "Jason Calacanis")
+    segments = [
+        AnnotatedSegment(id=1, start=0, end=5, speaker="Jason Calacanis", text="Why break in when you can log in?")
+    ]
+    kept, dropped = _verify(
+        [BestQuote("Why break in when you can log in?", "George Kurtz", "c1", 0.0)],
+        segments,
+        {1: jason},
+        {"c1": {"id": "c1", "segment_id_hint": 1}},
+    )
+    assert kept == [] and [d.reason for d in dropped] == ["speaker_mismatch"]
