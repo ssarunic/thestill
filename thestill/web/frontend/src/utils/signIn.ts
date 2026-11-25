@@ -4,9 +4,10 @@
 // a URL alone).
 import { safeNextPath } from './safeNext'
 
-export type SignInIntent = 'follow' | 'transcript' | 'summary'
+// Spec #120: ``play`` is a quote's "Play from" on a public episode page.
+export type SignInIntent = 'follow' | 'transcript' | 'summary' | 'play'
 
-const INTENTS: readonly SignInIntent[] = ['follow', 'transcript', 'summary']
+const INTENTS: readonly SignInIntent[] = ['follow', 'transcript', 'summary', 'play']
 const PENDING_FOLLOW_KEY = 'thestill.pendingFollow'
 const PENDING_FOLLOW_MAX_AGE_MS = 15 * 60_000
 

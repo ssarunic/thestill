@@ -326,6 +326,7 @@ class QuoteShareService:
                 "end_ms": int(row.get("turn_end_ms") or start_ms),
                 "text": text,
                 "speaker_entity_id": str(row["speaker_id"]) if row.get("speaker_id") else None,
+                "source": row.get("source") or "gated",
             }
             by_mention[row["mention_id"]] = new_id
         if not candidates or self._setting("read_only", False):
@@ -513,6 +514,11 @@ class QuoteShareService:
         counts = {"checked": 0, "changed": 0, "unnamed": 0}
         changed: List[str] = []
         for share in self._repo.live_for_episode(episode_id):
+            if (share.get("source") or "gated") != "gated":
+                # Spec #120: a summary quote's words are the summary's, not
+                # an excerpt, so they cannot anchor it. Building the
+                # episode's quotes re-mints it with the speaker it has now.
+                continue
             counts["checked"] += 1
             found = self._repo.speakers_of_passage(
                 episode_id, share["text"], int(share["start_ms"]), int(share["end_ms"])

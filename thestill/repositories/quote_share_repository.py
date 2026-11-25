@@ -29,7 +29,28 @@ def _comparable(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
-_INSERT_COLUMNS = ("id", "episode_id", "podcast_id", "segment_id", "start_ms", "end_ms", "text", "speaker_entity_id")
+_INSERT_COLUMNS = (
+    "id",
+    "episode_id",
+    "podcast_id",
+    "segment_id",
+    "start_ms",
+    "end_ms",
+    "text",
+    "speaker_entity_id",
+    "source",
+)
+#: Where a share's quote came from: a transcript excerpt (spec #114) or the
+#: summary's Best Quotes (spec #120). Only ``gated`` shares are re-anchored
+#: by their words after an entity refresh; a summary share is re-minted with
+#: its current speaker whenever the episode's quotes are built.
+SOURCES = ("gated", "summary")
+
+
+def _insert_value(share: Dict[str, Any], column: str) -> Any:
+    if column == "source":
+        return share.get("source") or "gated"
+    return share[column]
 
 
 class QuoteShareRepository(ABC):
@@ -91,7 +112,7 @@ class QuoteShareRepository(ABC):
         """.replace(
             "IS NOT EXCLUDED", self._is_distinct_from
         )
-        self._executemany(sql, [tuple(share[column] for column in _INSERT_COLUMNS) for share in shares])
+        self._executemany(sql, [tuple(_insert_value(share, column) for column in _INSERT_COLUMNS) for share in shares])
         wanted = {share["id"]: share for share in shares}
         marks = ", ".join(p for _ in wanted)
         rows = self._fetch(
@@ -161,7 +182,7 @@ class QuoteShareRepository(ABC):
         """The episode's shares that are not revoked, with their anchors."""
         p = self.placeholder
         return self._fetch(
-            f"SELECT id, segment_id, start_ms, end_ms, text, speaker_entity_id FROM quote_shares "
+            f"SELECT id, segment_id, start_ms, end_ms, text, speaker_entity_id, source FROM quote_shares "
             f"WHERE episode_id = {p} AND revoked_at IS NULL ORDER BY id",
             [episode_id],
         )

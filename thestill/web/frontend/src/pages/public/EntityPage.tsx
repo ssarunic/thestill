@@ -55,7 +55,7 @@ function QuoteStream({
           <EpisodeGroupHead quote={group.quotes[0]} />
           {(expanded.has(group.key) ? group.quotes : group.quotes.slice(0, 2)).map((quote) => (
             <QuoteCard
-              key={`${quote.episode.slug}-${quote.start_seconds}-${quote.about.id}`}
+              key={`${quote.episode.slug}-${quote.start_seconds}-${quote.about?.id ?? ""}`}
               quote={quote}
               showSpeaker={showSpeaker}
               showShow={false}

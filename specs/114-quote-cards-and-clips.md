@@ -117,7 +117,9 @@ more visitors without a hook only makes that number bigger.
 - Public transcripts, public search. Unchanged.
 - Server-side "supercuts" of several quotes (spec #45 T2 lists one).
 - A per-episode "best quotes" selection by an LLM. Spec #100's
-  deterministic score picks; an LLM rerank is #100's call.
+  deterministic score picks; an LLM rerank is #100's call. (Superseded on
+  the episode page by spec #120: the summary's Best Quotes, checked against
+  the transcript and its speakers, are the public quotes there.)
 - Automated posting from an operator account (the "Most quoted this week"
   thread). Listed under ideas in §9, not built here.
 - Cards for private content: briefings, inbox, transcripts of shows with

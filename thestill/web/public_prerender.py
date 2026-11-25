@@ -473,10 +473,15 @@ def _quote(
     show_show: bool = False,
     show_date: bool = False,
     featured: bool = False,
+    play: bool = False,
 ) -> str:
     """One quote as ``QuoteCard`` shows it: the text, then speaker, show and
-    date as the page's variant does, and an ``#t=`` link (never ``?t=``)."""
-    href = f"{episode_path(quote['podcast']['slug'], quote['episode']['slug'])}#t={int(quote['start_seconds'])}"
+    date as the page's variant does, and an ``#t=`` link (never ``?t=``).
+    ``play`` (spec #120, the episode page) is "Play from" instead, through
+    sign-in to the signed-in reader at that moment (``playFromPath``)."""
+    episode = episode_path(quote["podcast"]["slug"], quote["episode"]["slug"])
+    seconds = int(quote["start_seconds"])
+    href = f"{episode}#t={seconds}"
     meta: List[str] = []
     if show_speaker:
         meta.append(
@@ -490,7 +495,13 @@ def _quote(
         meta.append(el("a", text(quote["podcast"]["title"]), href=f"/podcasts/{quote['podcast']['slug']}"))
     if show_date and quote["episode"].get("pub_date"):
         meta.append(_date(quote["episode"]["pub_date"]))
-    meta.append(text("at") + " " + el("a", text(_timestamp(quote["start_seconds"])), href=href))
+    if play:
+        reader = f"{episode}?{urlencode({'view': 'transcript', 't': seconds})}"
+        meta.append(
+            el("a", text(f"Play from {_timestamp(seconds)}"), href=sign_in_path(reader, "play"), rel="nofollow")
+        )
+    else:
+        meta.append(text("at") + " " + el("a", text(_timestamp(quote["start_seconds"])), href=href))
     body = text(quote["text"]) if featured else text(f"\u201c{quote['text']}\u201d")
     return el(
         "figure",
@@ -660,7 +671,7 @@ def episode_fallback(state: "AppState", podcast_slug: str, episode_slug: str, he
             main.append(
                 _section(
                     "Quotes from this episode",
-                    el("div", *(_quote(q) for q in quotes["quotes"]), class_="ts-quote-list"),
+                    el("div", *(_quote(q, play=True) for q in quotes["quotes"]), class_="ts-quote-list"),
                     class_="ts-section",
                 )
             )

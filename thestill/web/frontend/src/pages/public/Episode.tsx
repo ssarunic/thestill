@@ -1,5 +1,7 @@
 // Spec #94 — a public episode: the summary, who spoke and their best
-// lines. The transcript exists behind sign-in; the tab says so.
+// lines. The transcript exists behind sign-in; the tab says so. Spec #120:
+// the lines are the summary's Best Quotes, and "Play from" signs in and
+// plays them in the signed-in reader; nothing here sends a visitor away.
 import { Suspense, useEffect } from 'react'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PublicNotFound, entityPath, episodePath, formatDate } from '../../api/public'
@@ -267,13 +269,13 @@ export default function Episode() {
                   </>
                 )}
                 {linked && !linkedInList && !speaker && (
-                  <QuoteCard quote={linked} variant="linked" label="Linked quote" showShow={false} showDate={false} youtubeUrl={youtube} id={linkedId ?? undefined} className="ts-highlight" />
+                  <QuoteCard quote={linked} variant="linked" label="Linked quote" showShow={false} showDate={false} play id={linkedId ?? undefined} className="ts-highlight" />
                 )}
                 {shown.map((quote) => {
                   const isLinked = isLinkedQuote(quote)
                   return (
                     <QuoteCard
-                      key={`${quote.start_seconds}-${quote.about.id}`}
+                      key={`${quote.start_seconds}-${quote.share_id ?? quote.text.slice(0, 32)}`}
                       // The shared quote shows the words that were shared
                       // (the card's), wherever in the list it sits.
                       quote={isLinked && shared ? shared : quote}
@@ -281,7 +283,7 @@ export default function Episode() {
                       label={isLinked ? 'Linked quote' : undefined}
                       showShow={false}
                       showDate={false}
-                      youtubeUrl={youtube}
+                      play
                       id={isLinked ? linkedId ?? undefined : undefined}
                       className={isLinked ? 'ts-highlight' : undefined}
                     />

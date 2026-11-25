@@ -261,6 +261,22 @@ def presence_sql(entity_id: str, p: str) -> Tuple[str, List[Any]]:
     return sql, [entity_id]
 
 
+def segment_speakers_sql(episode_id: str, p: str) -> Tuple[str, List[Any]]:
+    """Spec #120: each segment of one episode whose ``speaking`` row resolves
+    to a person who may appear on public pages: ``(segment_id, speaker_id,
+    speaker_name)`` rows. The summary's quotes are attributed through it."""
+    sql = f"""
+        SELECT sp.segment_id AS segment_id, sp.entity_id AS speaker_id, spe.canonical_name AS speaker_name
+        FROM entity_mentions sp
+        JOIN entities spe ON spe.id = sp.entity_id AND spe.type = 'person'
+        WHERE sp.episode_id = {p} AND sp.role = 'speaking'
+          AND sp.resolution_status = 'resolved' AND sp.entity_id IS NOT NULL
+          AND NOT spe.public_hidden
+        ORDER BY sp.segment_id
+    """
+    return sql, [episode_id]
+
+
 Fetch = Callable[[str, Sequence[Any]], List[Dict[str, Any]]]
 
 
@@ -300,6 +316,10 @@ class PublicQuoteQueries:
 
     def presence(self, entity_id: str) -> List[Dict[str, Any]]:
         sql, params = presence_sql(entity_id, self._p)
+        return self._fetch(sql, params)
+
+    def segment_speakers(self, episode_id: str) -> List[Dict[str, Any]]:
+        sql, params = segment_speakers_sql(episode_id, self._p)
         return self._fetch(sql, params)
 
 

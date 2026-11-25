@@ -27,7 +27,6 @@ from structlog import get_logger
 
 from ...models.entities import display_name
 from ...models.user import User
-from ...repositories.public_quotes import QuoteFilter
 from ...repositories.sqlite_podcast_repository import SYNTHETIC_AUDIO_IMPORTS_ID
 from ...services.analytics_sink import DriftAlignmentResult, DriftOutcome, DriftSwState, Follow, Unfollow, follow_source
 from ...services.audio_address import resolver as audio_address_resolver
@@ -35,6 +34,7 @@ from ...services.follower_service import AlreadyFollowingError, NotFollowingErro
 from ...services.playback import build_playback_manifest
 from ...services.podcast_add import add_podcast_and_auto_follow
 from ...services.podcast_service import PodcastWithIndex
+from ...services.public_summary_quotes import episode_summary_quotes
 from ...services.quote_share_service import card_text
 from ...utils.duration import format_duration
 from ...utils.episode_origin import derive_episode_origin
@@ -493,9 +493,6 @@ def get_episode_transcript_by_slugs(
 
 
 #: More than any one episode has public quotes (spec #94 caps its own list the same way).
-_QUOTE_SHARES_MAX = 1000
-
-
 @router.get("/{podcast_slug}/episodes/{episode_slug}/quote-shares")
 def get_episode_quote_shares(
     podcast_slug: str,
@@ -504,35 +501,37 @@ def get_episode_quote_shares(
 ) -> dict:
     """The episode's quotes a reader can share from the transcript (spec #114).
 
-    Only quotes that are already public (the spec #94 quote gate: a public
-    show, an episode with a summary, a named speaker, no sponsor read, a
-    quote that reads on its own), each with its short link id and the
-    transcript turn it comes from, so the reader can put a share icon on
-    that turn. Sharing one makes nothing public that was not already.
-    Empty where there are no public pages to share to.
+    Only quotes that are already public (spec #120: the public episode
+    page's quotes, the summary's Best Quotes checked against the transcript
+    and its speakers, and that read on their own), each with its short link
+    id and the transcript turn it comes from, so the reader can put a share
+    icon on that turn. Sharing one makes nothing public that was not
+    already. Empty where there are no public pages to share to.
     """
     result = state.repository.get_episode_by_slug(podcast_slug, episode_slug)
     if not result:
         not_found("Episode", f"{podcast_slug}/{episode_slug}")
-    _, episode = result
+    podcast, episode = result
     service = getattr(state, "quote_share_service", None)
     if service is None or not (state.config.multi_user and state.config.public_pages_enabled):
         return api_response({"shares": []})
-    rows, _ = state.entity_repository.public_quote_queries().quotes(
-        QuoteFilter(episode_id=str(episode.id)), order="episode", limit=_QUOTE_SHARES_MAX
-    )
-    ids = service.mint(rows)
+    from ..public_access import get_public_visibility
+
+    if not get_public_visibility(state).episode_is_public(podcast.id, episode):
+        return api_response({"shares": []})
+    # Spec #120: the public quotes are the summary's checked Best Quotes.
+    found = episode_summary_quotes(state.podcast_service, state.entity_repository, service, podcast, episode)
     shares = [
         {
-            "id": ids[row["mention_id"]],
-            "segment_id": int(row["segment_id"]),
+            "id": item.share_id,
+            "segment_id": item.quote.segment_id,
             # The card's words, as the card, the landing and a share sheet show them.
-            "text": card_text(row.get("quote") or "") or "",
-            "start_seconds": int(row.get("start_ms") or 0) // 1000,
-            "speaker": display_name(row["speaker_name"]),
+            "text": card_text(item.quote.text) or item.quote.text,
+            "start_seconds": item.quote.start_ms // 1000,
+            "speaker": display_name(item.quote.speaker.name),
         }
-        for row in rows
-        if row.get("mention_id") in ids
+        for item in found
+        if item.share_id
     ]
     return api_response({"shares": shares})
 
