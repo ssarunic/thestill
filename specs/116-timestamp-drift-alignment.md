@@ -1,8 +1,8 @@
 # Timestamp Drift Alignment: Map the Transcript onto the Listener's Copy
 
-> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins until v1.50.0; every signed-in user from the next release, through the `drift_alignment_audience` runtime setting): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Built, not released: Skip ahead in the player (section 6.2, Phase 2c), for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check)
+> **Status:** 🚧 Phase 1 in production (v1.38.0, 2026-11-11): tracks are written at transcription, 629 recent episodes backfilled. Phase 2 built for sessions holding `drift.align` (admins until v1.50.0; every signed-in user from the next release, through the `drift_alignment_audience` runtime setting): the browser aligns on first play, checks the playing audio through a service worker, and applies the map to seeks, the clock and karaoke when both checks pass. Not built: resuming on the same sentence when a copy's ads changed, the audit command, the per-show ad profile. Built, not released: ad breaks as one row in the reader (section 6.1, Phase 2b); the row itself is for every reader, its map-aware text for sessions with a map. Built, not released: Skip ahead in the player (section 6.2, Phase 2c), for sessions with a map. Phase 0 run on desktop Chrome and desktop Safari (see Browser check and Safari check). Phase 3 redesigned 2026-11-25 after a publisher re-upload: a re-uploaded episode is realigned on the server from a stored perceptual reference, without re-transcribing; not built
 > **Created:** 2026-11-10
-> **Updated:** 2026-11-12
+> **Updated:** 2026-11-25
 > **Priority:** High. Every timestamp feature (click-to-seek, karaoke,
 > summary citations, chapters, clips) lands in the wrong place on any
 > episode whose ads changed since transcription. Today the reader only
@@ -49,8 +49,9 @@ the banner stays as it is today.
    right word.
 2. Karaoke highlighting follows the audio across ad breaks, and pauses
    while an ad that is not in the transcript plays.
-3. Storage stays under 250 KB per hour of audio (36 KB until the
-   perceptual track of Phase 3). No episode audio is retained.
+3. Storage stays under 250 KB per hour of audio: 36 KB of frame
+   anchors, plus 155 KB of perceptual reference from Phase 3 that only
+   the server reads. No episode audio is retained.
 4. Every failure (no CORS, unknown codec, variant mismatch, low
    confidence) falls back to today's banner. A wrong map is never
    applied.
@@ -142,6 +143,32 @@ Findings:
 
 Not tested: Chromaprint (the `fpcalc` binary was not available) and AAC
 enclosures.
+
+### Publisher re-upload (2026-11-25)
+
+The Econoclasts (Acast) episode of 2026-11-25 was transcribed soon after
+publication. A Safari play that evening reported `low_confidence`:
+3 of 2,813 frame anchors found, coverage 0, nothing applied. Every
+timestamp stayed approximate.
+
+- The feed now gives the episode as 46:39 (2,799 s) with an enclosure
+  length of 44,798,537 bytes. Thestill stored 2,780 s at discovery.
+  Refresh does not update either value for a known episode, so nothing
+  noticed the change. The previous episode's stored duration still
+  matched its feed.
+- Fresh downloads under five user agents (Safari, Chrome, httpx,
+  urllib, AppleCoreMedia) shared their content frames with each other
+  at 93–100% coverage, with ad offsets of +34.8 s and +69.5 s. The
+  urllib copy was within 320 bytes of the feed's length: Acast's copy
+  without stitched ads.
+
+So the publisher replaced the file with a new cut, 19 s longer, and
+Acast encoded it afresh. Frame anchors cannot survive that: every frame
+of the new encode differs, including where the audio is the same. The
+aligner refused, as section 4 intends. Before this, the only fix was
+a reprocess from transcribe (#106): minutes of transcription, a
+regenerated summary, and a rewritten transcript under any quote links
+and transcript edits. Phase 3 is redesigned around this case.
 
 ### Browser check (Phase 0, 2026-11-10)
 
@@ -266,7 +293,11 @@ Firefox, more than one play per episode, and private browsing.
 3. **Why frame hashes first, perceptual fingerprint second?** Frame
    hashes are exact, need no audio decoding, and worked on every tested
    host. They break when a publisher re-encodes or re-uploads. The
-   perceptual fingerprint survives that, and costs a decode.
+   perceptual fingerprint survives that, and costs a decode. Since
+   2026-11-25 (Phase 3) that decode runs only on the server, once per
+   re-upload, never in the browser: the server turns a re-upload back
+   into a frame-anchor track, so every listener stays on the cheap
+   path.
 
 4. **Why does Thestill compute the track on the Dalston path, and not
    Dalston?** (Decided 2026-11-10.) The sync track is a playback concern
@@ -288,8 +319,8 @@ One binary artefact per episode, written once, never changed:
 |---|---|
 | Header | algorithm version, transcript generation, codec, sample rate, frame count, byte length, duration of the transcribed copy |
 | Frame anchors | one per second: start time in milliseconds (4 bytes) + digest of 4 consecutive compressed frames (6 bytes) |
-| Base spans (Phase 5 only) | a short list of `{src_start, src_end, offset}` mapping transcript time onto the copy the anchors were taken from; empty when that copy is the transcribed one |
-| Perceptual track (Phase 3, flagged shows only) | Haitsma-Kalker sub-fingerprints, every 8th frame, about 155 KB per hour |
+| Base spans (Phases 3 and 5) | a short list of `{src_start, src_end, offset}` mapping transcript time onto the copy the anchors were taken from; empty when that copy is the transcribed one |
+| Untranscribed intervals (Phase 3, version 2) | stretches of the anchors' copy that no base span covers: new material of a re-upload, or ads of the server's download. Never treated as ads by the reader |
 
 Rules for frame anchors:
 
@@ -298,10 +329,21 @@ Rules for frame anchors:
 - An anchor whose hash appears more than once in the transcribed copy is
   dropped at write time. This removes silence and repeated stings.
 - If fewer than half the seconds yield a unique anchor, the track is
-  written with `frame_anchors: none` and only the perceptual track
-  applies.
+  written with `frame_anchors: none` and the reader keeps approximate
+  times. (The perceptual reference of Phase 3 is read by the server
+  only; it does not stand in for frame anchors in the browser.)
 
 At 10 bytes per anchor a one-hour episode is 36 KB before compression.
+
+From Phase 3 each episode also has a **perceptual reference**, stored
+next to the track and never served to browsers: Haitsma-Kalker
+sub-fingerprints (5,512 Hz mono, 32 bits per 11.6 ms frame), every
+8th frame kept, about 155 KB per hour. It is cut from the transcribed
+copy and, with the spans that map transcript time onto that copy
+(empty at ingest), it is the ruler for every later re-upload. A realign
+writes a new track and keeps the reference, so a second re-upload is
+measured against the transcribed copy again, not against the first
+re-upload.
 
 The digest uses only CRC-32 and Adler-32, so the browser can compute the
 same value without a crypto library and each byte is hashed once:
@@ -315,11 +357,11 @@ An anchor stores a time, not a frame index, because a spliced file can
 mix sample rates. The binary layout is defined by `SyncTrack.to_bytes`
 in [sync_track.py](../thestill/core/sync_track.py).
 
-The track is written for every episode, including shows that have never
-carried ads. A publisher can switch on ad insertion for a back catalogue
-at any time, and 36 KB is cheaper than finding out later. The
-perceptual track is different: at 155 KB per hour it is written only for
-shows flagged `needs_perceptual_track` (section 8).
+The track and the reference are written for every episode, including
+shows that have never carried ads. A publisher can switch on ad
+insertion for a back catalogue, or replace an episode, at any time, and
+the transcribed copy is gone once the episode is processed. Under
+200 KB per hour is cheaper than finding out later.
 
 ### 2. Pipeline: write the track from the bytes that were transcribed
 
@@ -380,7 +422,12 @@ In both paths:
   correction is applied.
 - A failure logs `sync_track_failed` with `episode_id` and does not fail
   the stage. The episode simply has no track.
-- Non-MP3 enclosures get no frame anchors until Phase 3.
+- Non-MP3 enclosures get no frame anchors until Phase 3b.
+- From Phase 3 the same pass also writes the perceptual reference: the
+  bytes go to the frame parser and, in the same stream, to an `ffmpeg`
+  decode (the `prod` image is built on the `full` target, which ships
+  `ffmpeg`). A failed decode logs `sync_track_reference_failed` and
+  leaves the frame track in place.
 
 Schema: a table `episode_sync_tracks` (Alembic 0028, SQLite and
 Postgres), not a column on `episodes`. One row per stored track:
@@ -732,10 +779,16 @@ audio URL (host only).
 
 | Event | Fields | What it confirms |
 |---|---|---|
-| `sync_track_written` | `source` (`local`, `dalston`, `realign`), `frames`, `anchors_kept`, `anchors_dropped_duplicate`, `unique_ratio`, `audio_bytes`, `audio_duration_s`, `track_bytes`, `duration_ms` | a track exists and how dense it is |
+| `sync_track_written` | `source` (`local`, `dalston`, `reupload`, `realign`), `frames`, `anchors_kept`, `anchors_dropped_duplicate`, `unique_ratio`, `audio_bytes`, `audio_duration_s`, `track_bytes`, `duration_ms` | a track exists and how dense it is |
 | `sync_track_transcript_mismatch` (error) | `audio_duration_s`, `transcribed_input_duration_s`, `delta_s` | the track and the transcript do **not** describe the same bytes |
 | `sync_track_failed` | `source`, `reason`, `exc_info` | no track, and why |
 | `sync_track_switched` | `old_generation`, `new_generation` | transcript and track changed together |
+| `sync_track_reference_written` | `frames`, `reference_bytes`, `decode_ms`, `fingerprint_ms` | a re-upload of this episode can be realigned (Phase 3) |
+| `sync_track_reupload_detected` | `trigger` (`refresh`, `client`), `stored_duration_s`, `feed_duration_s`, `stored_bytes`, `feed_bytes` | why a realign was queued |
+| `sync_track_reupload_realigned` | `old_generation`, `new_generation`, `blocks_total`, `blocks_matched`, `ber_median`, `inlier_share`, `spans`, `coverage`, `untranscribed_s`, `duration_ms` | the new upload was mapped onto the transcript, and how tightly |
+| `sync_track_reupload_unchanged` | `coverage` | the frame check found the current track still fits; nothing written |
+| `sync_track_reupload_unalignable` (warning) | the fields of `_realigned` | thresholds missed; no track written |
+| `sync_track_reupload_superseded` | `started_generation`, `current_generation` | a reprocess published a track while the realign ran; its track kept, nothing written |
 
 `sync_track_transcript_mismatch` is the key invariant. The audio the
 track was cut from and the audio the transcript came from must have the
@@ -845,13 +898,14 @@ worker check of step 6 is what ties a map to a listener.
 
 ### 8. Per-show ad profile
 
-Two facts are kept per podcast so that shows without ads cost nothing at
-playback and little at ingest:
+One fact is kept per podcast so that shows without ads cost nothing at
+playback. (A second, `needs_perceptual_track`, was dropped on
+2026-11-25: Phase 3 writes the perceptual reference for every episode,
+because a re-upload cannot be predicted per show.)
 
 | Field | Set when | Used for |
 |---|---|---|
 | `ads_seen_at` | the ingest probe sees two sizes, or a client reports `aligned` with a non-zero offset | client eagerness |
-| `needs_perceptual_track` | clients report `low_confidence` on episodes that do have frame anchors, above a threshold; or set by hand | writing the 155 KB perceptual track (Phase 3) |
 
 - **Ingest probe (not built, by decision of 2026-11-11).** At download,
   two `Range: bytes=0-1` requests with different user agents would read
@@ -859,8 +913,9 @@ playback and little at ingest:
   ads. Until that decision changes, `ads_seen_at` is set by client
   reports only.
 - **Client report.** `POST /api/episodes/{id}/drift-outcome` carries the
-  outcome of section 4. It updates the two fields and, in Phase 5,
-  enqueues alignment for an old episode.
+  outcome of section 4. It sets `ads_seen_at`, in Phase 3 enqueues a
+  realign of a re-uploaded episode, and in Phase 5 enqueues alignment
+  for an old episode.
 - **Client eagerness.** For a show with `ads_seen_at` set, the worker
   starts when playback starts. For a show without it, the worker waits
   until the listener first uses a timestamp (a segment click, a
@@ -882,8 +937,16 @@ from the track header runs the full pass regardless of the profile.
 - **Variable bit rate.** Frame parsing reads each header, so VBR is
   handled. Range offsets for the cheap check are estimates; a miss
   falls through to the full pass.
-- **Publisher re-uploaded the episode.** No frame anchors match. Outcome
-  `low_confidence` until the perceptual track of Phase 3 exists.
+- **Publisher re-uploaded the episode.** No frame anchors match, and the
+  client reports `low_confidence`. Phase 3 realigns it on the server
+  from the perceptual reference, usually before anyone plays it (the
+  refresh trigger), and at the latest a minute or so after the first
+  play reports it. Until then the times stay approximate. An episode
+  with no reference goes to Phase 5.
+- **A re-upload with new material.** The new audio has no transcript.
+  It is an untranscribed interval: karaoke holds the last word, and
+  Skip ahead is not offered, because it is not an ad. Over 60 s of it
+  also queues a background reprocess (Phase 3, step 8).
 - **Same ad in both copies at different positions.** Ads are not in the
   unique-anchor set often enough to form a run of 5, and a run that
   breaks monotonic source order is rejected by the fitter.
@@ -1324,22 +1387,142 @@ button state follows ticks and the map; and a Playwright test in
 `tests/drift-alignment.spec.ts` that taps Skip ahead inside the
 listener copy's own 10 s ad and lands just past it.
 
-### Phase 3: perceptual fallback and AAC
+### Phase 3: realign a re-uploaded episode on the server
 
-Add the Haitsma-Kalker track at ingest for shows flagged
-`needs_perceptual_track`, and a client path that decodes with WebCodecs
-`AudioDecoder` when frame anchors fail. Add ADTS and MP4 frame parsing
-for AAC enclosures. Scope this from Phase 2's `low_confidence` and
-`unsupported_codec` rates.
+Redesigned 2026-11-25 (see Publisher re-upload under Background
+findings). The earlier plan decoded the listener's copy in the browser
+with WebCodecs `AudioDecoder`, for flagged shows only. It is replaced:
+the browser never decodes, and the work happens once per re-upload
+instead of once per play. No re-transcription, no re-clean, no LLM
+call. The transcript, summary, citations, quote links and the edit log
+of #110 are not touched.
 
-Episodes ingested before their show was flagged already have a
-frame-only track and no original audio, so ingest alone never repairs
-them. They are upgraded lazily through Phase 5's task: a client report
-of `low_confidence` on an episode whose track has no perceptual data, in
-a flagged show, enqueues `BUILD_SYNC_TRACK`. Phase 5 aligns against the
-stored raw transcript, not the old track, so it writes a new generation
-with a perceptual track and base spans. This repair path ships with
-Phase 5.
+**What is stored.** At transcription, the perceptual reference of
+section 1, next to the frame track, for every episode. Backfill:
+`thestill sync-track backfill --reference` builds it for episodes whose
+Dalston job still holds the original audio (about four weeks); older
+episodes have none and go to Phase 5 when they are re-uploaded.
+
+**Triggers.** A realign is queued as `REALIGN_SYNC_TRACK`, lowest
+priority, one per episode at a time:
+
+- **Refresh.** Refresh already re-syncs the artwork and enclosure URL of
+  known episodes from the parsed feed, with a guarded UPDATE that only
+  writes rows that drifted. It also compares the feed's enclosure
+  `length` and `itunes:duration` with the stored `audio_file_size` and
+  `duration`, writes the new values, and queues a realign for an
+  episode with a current track when the duration moved by 2 s or more,
+  or the length by more than 1%. Writing the values first means one
+  change queues one realign. This usually runs before anyone plays the
+  episode.
+- **Client report.** A `low_confidence` report with under 5% of anchors
+  found, on an episode with a reference, queues the same task. The
+  first play after an unannounced re-upload gets approximate times; the
+  next one gets the map.
+- **By hand.** `thestill sync-track realign --podcast-id X --episode
+  <slug> [--dry-run]`.
+- A daily cap (a runtime setting) bounds the task, so a host whose feed
+  length changes on every fetch cannot keep the worker busy.
+
+**The task.**
+
+1. Download the enclosure as the server, once.
+2. **Frame check first.** Run the section 4 aligner on that download
+   against the current track. Coverage of 90% or more means only ads
+   changed (or nothing did): log `sync_track_reupload_unchanged` and
+   stop. This costs under 2 s, with no decode, and absorbs hosts whose
+   feed values change without a re-upload.
+3. Decode the download with `ffmpeg` to 5,512 Hz mono and compute its
+   fingerprint at the full rate.
+4. **Match.** Cut the reference into 3 s blocks, one per second, and
+   find each block in the new fingerprint over the whole file, scored
+   by bit-error rate. Accept a hit at 0.20 or below (measured 2026-11-10:
+   at most 0.10 on true matches, about 0.46 on unrelated audio, also
+   against a 48 kbps re-encode).
+5. **Fit.** Single blocks false-match (silence, jingles, the same ad in
+   another slot), so the hits go through the section 4 fitter: runs of
+   at least 5 agreeing blocks, the heaviest forward chain, each span's
+   offset the median of its samples. Compose with the reference's own
+   spans to get transcript time → new copy.
+6. **Accept** at the Phase 5 thresholds: spans cover at least 90% of the
+   transcript's non-`ad_break` duration, and at least 90% of matched
+   blocks agree with their span. Otherwise log
+   `sync_track_reupload_unalignable`, write nothing, and set
+   `sync_track_status` to `unalignable`.
+7. **Write a new generation**: frame anchors from the new download, the
+   fitted spans as base spans, and the new copy's uncovered stretches as
+   untranscribed intervals. The reference is kept. Publish it with one
+   repository step that inserts the new track and makes it current only
+   if the episode's current track is still the generation this realign
+   started from, checked in the same transaction as the switch (as
+   `promote(require_no_current=True)` does for the backfill). Today's
+   `promote()` removes whatever track is current, and the realign never
+   takes the pending slot (one per episode, which `put_pending` would
+   replace under a reprocess building its own track). When the check
+   fails, a reprocess got there first and its track wins: nothing is
+   written, the new file is deleted, and the task logs
+   `sync_track_reupload_superseded`. Then replace the cleaned
+   transcript's `sync_track_generation` stamp, again only if the stamp
+   still names the generation this realign started from. Between the
+   two writes a reader sees no usable track for a moment and shows
+   approximate times; it never sees a track paired with the wrong
+   transcript, and a reprocess that publishes inside that moment still
+   wins when its clean stage stamps its own generation.
+8. **New material.** When the untranscribed intervals outside the
+   transcript's `ad_break` gaps add up to over 60 s (a runtime setting),
+   also queue a #106 reprocess from transcribe at the lowest priority.
+   The realigned map covers the episode while it runs.
+
+Failure domain as Phase 5: the task never changes the episode's
+processing state, and its outcome lives in `sync_track_status`.
+
+Cost per re-upload: one download, under 2 s of frame hashing, and the
+decode and fingerprint (16 s for 74 minutes in unoptimised numpy on a
+Mac; on the EC2 worker, to be measured). Per episode at ingest: the same
+decode and fingerprint inside the transcribe task.
+
+**Client changes.** The track gains untranscribed intervals, so its
+version becomes 2. Both parsers reject an unknown version, so readers
+that accept 1 and 2 ship and deploy before any writer emits 2.
+
+- Compose base spans with the fitted map. `syncTrack.ts` parses base
+  spans today and nothing uses them; Phase 5 needs the same.
+- The identity shortcut (section 4, step 2) gives the base spans, not
+  the identity, when the track has them.
+- A stretch the map places inside an untranscribed interval is not an
+  ad of the listener's own: no Skip ahead, no "Ad" tag. Karaoke holds
+  the last word as it does over an ad.
+
+**Acceptance.**
+
+- Fixture: Phase 2's fixture re-encoded at 96 kbps, with 19 s of new
+  audio inserted and one ad swapped. The realign gives base spans
+  within 0.05 s of the known offsets and one untranscribed interval at
+  the inserted audio. A copy where only ads changed stops at the frame
+  check and writes nothing.
+- Race test: a reprocess publishes a new track (and, in a second case,
+  holds a pending one) while the realign is matching. The realign
+  writes nothing, the reprocess's current and pending tracks and their
+  files survive, and the transcript stamp is the reprocess's.
+- Refresh test: a known episode whose feed duration moves by 19 s
+  queues exactly one realign, and the next refresh of the same feed
+  queues none.
+- Shared test vectors for the composed map in Python and TypeScript, as
+  for section 4.
+- Playwright (`tests/drift-alignment.spec.ts`): playing the re-encoded
+  copy, a segment click lands within 0.5 s of its word, and Skip ahead
+  is not offered over the inserted audio.
+- A real case before release: the 2026-11-25 Econoclasts episode, while
+  its Dalston job still holds the original. Build its reference,
+  realign against the current upload, check 12 transcript points by
+  PCM cross-correlation as in Phase 1's local verification, then read
+  back the playing position after a click in desktop Safari and Chrome.
+
+### Phase 3b: AAC
+
+ADTS and MP4 frame parsing for AAC enclosures, so they get frame
+anchors (section 2) and the client's frame pass. Scope this from the
+`unsupported_codec` rate.
 
 ### Phase 4: ad map of our own copy
 
@@ -1374,7 +1557,10 @@ of #106 (which would run on through clean and summarize):
    between ad breaks, so each span takes the median of its samples.
    Single-word timing error (about 0.1–0.2 s) averages out.
 5. Write the sync track from the new download, with the fitted spans as
-   its base spans. Delete the scratch transcript and the audio.
+   its base spans, and the perceptual reference of the same download
+   with the same spans (section 1), so a later re-upload is realigned
+   by Phase 3 instead of coming back here. Delete the scratch
+   transcript and the audio.
 
 Acceptance thresholds: at least 60% of the old words matched, and spans
 covering at least 90% of the old transcript's non-`ad_break` duration.
@@ -1414,6 +1600,22 @@ with #110 Phase 4 and is not required here.
 
 ## Alternatives considered
 
+- **Decode in the browser** (Phase 3 as written until 2026-11-25): a
+  WebCodecs `AudioDecoder` pass over the listener's copy when frame
+  anchors fail. It repeats the decode on every play, on phones too,
+  depends on MP3 support in each browser's `AudioDecoder` (unverified
+  in Safari), and as written covered only shows flagged in advance. A
+  re-upload is one event per episode; the server handles it once.
+- **Re-transcribe every re-upload** (a #106 reprocess, queued by
+  refresh). Exact, including new material, and it takes minutes per
+  episode, regenerates the summary and rewrites the transcript under
+  quote links and transcript edits. Kept only for re-uploads with over
+  60 s of new material (Phase 3, step 8).
+- **A second server download under another user agent**, to tell the
+  new copy's ads from its new material. Open question 6 decided against
+  presenting as other clients. Without it, the server copy's ads are
+  untranscribed intervals too, which is the safe side: no Skip ahead
+  over them.
 - **Chromaprint anchors with a bounded search window.** Plausible and
   untested. It needs a decode on both sides, a WebAssembly build in the
   browser, and its 124 ms hop limits precision. A bounded window is
@@ -1487,6 +1689,14 @@ For the ad rows of section 6.1:
    a phone? **Decided 2026-11-11:** no further standalone probes; the
    outcome reports of admin plays on thestill.me answer it, and each
    browser is switched on separately (Phase 2, rollout).
+9. **New material threshold.** At what amount of new material does a
+   re-upload deserve a full reprocess, given that it rewrites the
+   transcript under quote links and edits? **Proposed 2026-11-25:**
+   60 s, a runtime setting.
+10. **Ingest cost on the EC2 worker.** The reference adds a decode of the
+    whole episode to every transcribe task. Measured at 16 s per 74
+    minutes on a Mac; measure on the t4g.large before backfilling, and
+    move it to its own low-priority task if it slows the queue.
 
 ## Rollback plan
 
