@@ -161,6 +161,33 @@ describe('public episode page', () => {
       expect(scroll.mock.instances[0]).toHaveTextContent('Shared words here.')
     })
 
+    it('shows the card\u2019s words for a shared quote found in the list by its id', () => {
+      // The list has the quote as spoken; the share trimmed it.
+      const spoken = { ...inList, text: 'And so the shared words are here, with a spoken opener.', share_id: 'aaaaaaaaaa' }
+      vi.mocked(usePublicEpisodeQuotes).mockReturnValue({
+        data: { pages: [{ ...quotesPage.data.pages[0], quotes: [spoken] }] },
+        isLoading: false,
+      } as never)
+      vi.mocked(usePublicQuoteShare).mockReturnValue({
+        data: {
+          share: {
+            id: 'aaaaaaaaaa',
+            text: 'The shared words are here, with a spoken opener.',
+            start_seconds: 125,
+            speaker: inList.speaker,
+            episode,
+            podcast: show,
+          },
+        },
+        isLoading: false,
+      } as never)
+      open('#t=125&s=aaaaaaaaaa')
+      expect(screen.getAllByText('Linked quote')).toHaveLength(1)
+      const linked = screen.getByText('Linked quote').closest('figure')
+      expect(linked).toHaveTextContent('The shared words are here, with a spoken opener.')
+      expect(linked).not.toHaveTextContent('And so')
+    })
+
     it('names "A guest" without a link when the speaker could not be kept', () => {
       vi.mocked(usePublicEpisodeQuotes).mockReturnValue(quotesPage as never)
       vi.mocked(usePublicQuoteShare).mockReturnValue({

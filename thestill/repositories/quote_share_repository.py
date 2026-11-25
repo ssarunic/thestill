@@ -23,6 +23,12 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+
+def _comparable(text: str) -> str:
+    """Text as the speaker re-check compares it: whitespace collapsed, lower case."""
+    return " ".join(text.split()).lower()
+
+
 _INSERT_COLUMNS = ("id", "episode_id", "podcast_id", "segment_id", "start_ms", "end_ms", "text", "speaker_entity_id")
 
 
@@ -180,26 +186,38 @@ class QuoteShareRepository(ABC):
     def speakers_of_passage(self, episode_id: str, text: str, start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
         """Who speaks ``text`` inside the source span now (spec #114 §7).
 
-        A mention's excerpt is cut from its segment's text, so a mention
-        with exactly these words whose segment starts inside the span is
-        the passage in today's transcript; its segment's resolved speaking
-        row is the speaker. One row per distinct (speaker, segment).
+        A share's text is its mention's excerpt, trimmed to whole sentences
+        for the card (``card_text``): first letter possibly capitalised,
+        whitespace collapsed. So a mention whose excerpt contains these
+        words, compared the same way, in a segment that starts inside the
+        span, is the passage in today's transcript; its segment's resolved
+        speaking row is the speaker. One row per distinct (speaker, segment).
+
+        The comparison runs here rather than in SQL: collapsing whitespace
+        the same way on both backends is simpler in Python, and a span
+        holds a handful of mentions.
         """
         p = self.placeholder
-        return self._fetch(
+        rows = self._fetch(
             f"""
-            SELECT DISTINCT sp.entity_id AS speaker_entity_id, m.segment_id AS segment_id
+            SELECT sp.entity_id AS speaker_entity_id, m.segment_id AS segment_id, m.quote_excerpt AS excerpt
             FROM entity_mentions m
             JOIN entity_mentions sp
               ON sp.episode_id = m.episode_id AND sp.segment_id = m.segment_id
              AND sp.role = 'speaking' AND sp.resolution_status = 'resolved' AND sp.entity_id IS NOT NULL
             WHERE m.episode_id = {p}
               AND (m.role IS NULL OR m.role <> 'speaking')
-              AND m.quote_excerpt = {p}
               AND m.start_ms >= {p} AND m.start_ms <= {p}
             """,
-            [episode_id, text, start_ms, end_ms],
+            [episode_id, start_ms, end_ms],
         )
+        wanted = _comparable(text)
+        found: Dict[tuple, Dict[str, Any]] = {}
+        for row in rows:
+            if wanted and wanted in _comparable(row.get("excerpt") or ""):
+                key = (str(row["speaker_entity_id"]), int(row["segment_id"]))
+                found[key] = {"speaker_entity_id": key[0], "segment_id": key[1]}
+        return list(found.values())
 
     # ----- writes -----
 

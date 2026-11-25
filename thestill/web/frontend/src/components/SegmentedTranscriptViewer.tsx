@@ -1173,7 +1173,9 @@ export default function SegmentedTranscriptViewer({
   const sharesBySegmentId = useMemo(() => {
     const byId = new Map<number, QuoteShareItem>()
     if (!quoteShares?.length) return byId
-    const squash = (text: string) => text.replace(/\s+/g, ' ').trim()
+    // Case-insensitive: a card's words may start with a capital the
+    // transcript does not have ("and so how do I..." shared as "How do I...").
+    const squash = (text: string) => text.replace(/\s+/g, ' ').trim().toLowerCase()
     const textById = new Map(transcript.segments.map((seg) => [seg.id, squash(seg.text)]))
     for (const share of quoteShares) {
       const text = textById.get(share.segment_id)
