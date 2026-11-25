@@ -2,7 +2,7 @@
 
 > **Status:** 🚧 Phase 1 implemented on `feat/120-summary-quotes-public` (2026-11-24); pending PR + merge. Phase 2 (person and entity pages) proposed
 > **Created:** 2026-11-24
-> **Updated:** 2026-11-24
+> **Updated:** 2026-11-25 (v1.54.0 deployed; placement fix from the first prod check)
 > **Priority:** High. The public episode page is the first page most readers see (spec #111), and its quote list is mostly sentence fragments with a link to YouTube on every line.
 > **Author:** Product & Engineering
 > **Related:** [94-public-pages.md](94-public-pages.md) (the page and its "no anonymous playback" non-goal), [100-quote-ranking-and-featured-quotes.md](100-quote-ranking-and-featured-quotes.md) (the quote gate this replaces on the episode page), [114-quote-cards-and-clips.md](114-quote-cards-and-clips.md) (short links, Rule A), [54-summary-segment-citations.md](54-summary-segment-citations.md) (the citations sidecar), [116-timestamp-drift-alignment.md](116-timestamp-drift-alignment.md) (why playback stays signed-in), [105-server-rendered-public-pages.md](105-server-rendered-public-pages.md) (the server-written copy), [102-sign-in-page.md](102-sign-in-page.md) (sign-in intents)
@@ -115,11 +115,21 @@ words found in order (`difflib` matching blocks), and so must the quote as a
 whole. Verbatim quotes score 1.0, a tidied word or two about 0.9, paraphrases
 well under 0.7.
 
-When the cited segment fails, or the words sit in a cold open, the quote's
-longest fragment (five words or more) is searched word for word across the
-whole transcript (`TranscriptIndex`), and the check runs again from each hit,
-looking no earlier than the hit. Content segments win: an intro that previews
-a line is never the line.
+When the cited segment fails any check (words, content or speaker), the quote
+is placed again from every run of five of its words found exactly in the
+transcript (`TranscriptIndex`). Each run votes for where the quote would start,
+and up to six places are tried, most votes first, each looking no earlier
+than its start. The first place where the words, the content and the speaker
+all check out is the quote. So an intro that previews a line is never the
+line, and a line the host says back to the guest is found where the guest
+said it, if they did.
+
+Searching only for the longest fragment as a whole, the first version shipped
+in v1.54.0, missed quotes with one tidied word. On prod, the CrowdStrike
+episode kept one of five quotes and lost its quotes section. Of the four
+dropped there, two were correct drops even after the fix: "Why break in when
+you can log in?" is only ever said by the host, quoting the guest, and "The
+bill's come due now…" splices two of the guest's sentences in reverse order.
 
 Words are compared in any script: letters and digits of every alphabet,
 with accents folded, and scripts written without spaces (Han, kana, Hangul,
@@ -130,16 +140,18 @@ and transcripts), 1,493 Best Quotes:
 
 | Outcome | Quotes | Share |
 |---------|-------:|------:|
-| Kept | 1,070 | 72% |
-| Not in the transcript (paraphrased or misplaced beyond reach) | 161 | 11% |
+| Kept | 1,134 | 76% |
 | Speaker disagrees with the summary | 120 | 8% |
-| Speaker has no resolved person | 85 | 6% |
-| The words span two speakers' turns (§3) | 37 | 2% |
-| No citation and not found by search | 18 | 1% |
-| In an intro, ad or outro | 2 | 0% |
+| Not in the transcript (paraphrased, spliced or reworded) | 106 | 7% |
+| Speaker has no resolved person | 83 | 6% |
+| The words span two speakers' turns (§3) | 28 | 2% |
+| Only in an intro, ad or outro | 21 | 1% |
+| No citation and not found by search | 1 | 0% |
 
-Per episode: 81% keep three or more quotes and 6% keep none. Checking takes
-about 10 ms per episode once the transcript is loaded. A random sample of 14
+Per episode: 84% keep three or more quotes and 5% keep none. Checking takes
+about 17 ms per episode once the transcript is loaded. Against the v1.54.0
+matcher, the 64 quotes that changed were all gains: none kept before is lost,
+and a sample of 16 read correctly against their segments. A random sample of 14
 kept quotes and 14 low-coverage ones (0.85-0.95) read correctly against
 their segments, with the right speaker. The `speaker_mismatch` rejections
 are mostly the summarizer attributing a line to the person quoted rather
